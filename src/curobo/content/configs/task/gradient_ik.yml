@@ -1,0 +1,81 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+model:
+  horizon: 1
+  state_filter_cfg:
+    filter_coeff:
+      position: 1.0
+      velocity: 1.0
+      acceleration: 0.0
+
+    enable: False
+  dt_traj_params:
+    base_dt: 0.02
+    base_ratio: 1.0
+    max_dt: 0.25
+  vel_scale: 1.0
+  control_space: 'POSITION'
+  teleport_mode: True
+cost:
+  pose_cfg:
+    vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    #weight: [100, 500, 10, 20] 
+    weight: [500, 5000, 30, 30]
+    vec_convergence: [0.00, 0.000] 
+    terminal: False
+    use_metric: True
+    
+  cspace_cfg:
+    weight: 0.000
+  bound_cfg:
+    weight: 50.0
+    activation_distance: [0.1]
+    null_space_weight: [1.0]
+  primitive_collision_cfg:
+    weight: 1000.0
+    use_sweep: False
+    classify: False
+    activation_distance: 0.025
+  self_collision_cfg:
+    weight: 1000.0
+    classify: False
+
+
+lbfgs:
+  n_iters: 80 #60
+  inner_iters: 20
+  cold_start_n_iters: 80
+  min_iters: 20
+  line_search_scale:  [0.01, 0.3, 0.7, 1.0] #[0.01,0.4, 0.9, 1.0] # # 
+  fixed_iters: True
+  cost_convergence: 1e-7
+  cost_delta_threshold: 1e-6 #0.0001
+  cost_relative_threshold: 1.0
+  epsilon: 0.01 # used only in stable_mode
+  history: 4
+  horizon: 1
+  use_cuda_graph: True
+  n_envs: 1
+  store_debug: False
+  use_cuda_kernel: True
+  stable_mode: True
+  line_search_type: "approx_wolfe" #"wolfe"
+  use_cuda_line_search_kernel: True
+  use_cuda_update_best_kernel: True
+  sync_cuda_time: True
+  step_scale: 1.0 
+  use_coo_sparse: True
+  last_best: 10
+  debug_info:
+    visual_traj       : null #'ee_pos_seq'
+  
+

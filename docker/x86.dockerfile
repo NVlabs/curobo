@@ -1,0 +1,93 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+FROM nvcr.io/nvidia/pytorch:23.08-py3 AS torch_cuda_base
+
+LABEL maintainer "User Name"
+
+# add GL:
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+        libglvnd-dev \
+        libgl1-mesa-dev \
+        libegl1-mesa-dev \
+        libgles2-mesa-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV NVIDIA_VISIBLE_DEVICES all
+ENV NVIDIA_DRIVER_CAPABILITIES graphics,utility,compute
+
+
+RUN apt-get update &&\
+    apt-get install -y sudo git bash unattended-upgrades glmark2 &&\
+    rm -rf /var/lib/apt/lists/*
+
+
+# Deal with getting tons of debconf messages
+# See: https://github.com/phusion/baseimage-docker/issues/58
+RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+
+# Set timezone info
+RUN apt-get update && apt-get install -y \
+  tzdata \
+  software-properties-common \
+  && rm -rf /var/lib/apt/lists/* \
+  && ln -fs /usr/share/zoneinfo/America/Los_Angeles /etc/localtime \
+  && echo "America/Los_Angeles" > /etc/timezone \
+  && dpkg-reconfigure -f noninteractive tzdata \
+  && add-apt-repository -y ppa:git-core/ppa
+
+RUN apt-get update && apt-get install -y \
+  curl \
+  lsb-core \
+  wget \
+  build-essential \
+  cmake \
+  git \
+  git-lfs \
+  iputils-ping \
+  make \
+  openssh-server \
+  openssh-client \
+  libeigen3-dev \
+  libssl-dev \
+  python3-pip \
+  python3-ipdb \
+  python3-tk \
+  python3-wstool \
+  sudo git bash unattended-upgrades \
+  apt-utils \
+  terminator \
+  && rm -rf /var/lib/apt/lists/*
+
+# push defaults to bashrc:
+RUN apt-get update && apt-get install --reinstall -y \
+  libmpich-dev \
+  hwloc-nox libmpich12 mpich \
+  && rm -rf /var/lib/apt/lists/*
+
+# This is required to enable mpi lib access:
+ENV PATH="${PATH}:/opt/hpcx/ompi/bin"
+ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/opt/hpcx/ompi/lib"
+
+
+
+ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
+ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+
+
+# copy pkgs directory: clone curobo into docker/pkgs folder.
+COPY pkgs /pkgs
+
+RUN pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
+
+
+RUN cd /pkgs/curobo && pip3 install .[dev,usd] --no-build-isolation
+

@@ -1,0 +1,36 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+blox:
+  world_map:
+    pose: [-0.38, 0.280, 1.05,0.043, -0.471, 0.284, 0.834]
+    map_path: "scene/nvblox/srl_ur10_bins.nvblx"
+    mesh_file_path: "scene/nvblox/srl_ur10_bins.obj"
+
+cuboid:
+  case:
+    dims: [0.9, 0.7, 0.4] # x, y, z
+    pose: [0.0, 0.0, -0.6, 1, 0, 0, 0.0] # x, y, z, qx, qy, qz, qw
+
+  stand:
+    dims: [0.3, 0.3, 0.8] # x, y, z
+    pose: [0.0, 0.0, -0.4, 1, 0, 0, 0.0] # x, y, z, qx, qy, qz, qw
+  table:
+    dims: [4.0, 4.0, 0.2] # x, y, z
+    pose: [0.0, 0.0, -0.85, 1, 0, 0, 0.0] # x, y, z, qx, qy, qz, qw
+  
+  safety_wall:
+    dims: [2.0, 0.2, 2.0] # x, y, z
+    pose: [0.0, -1.2, 0.0, 1, 0, 0, 0.0] # x, y, z, qx, qy, qz, qw
+
+  
+  #safety_wall_ceiling:
+  #  dims: [2.0, 2.0, 0.1] # x, y, z
+  #  pose: [0.0, 0.0, 1.4, 1, 0, 0, 0.0] # x, y, z, qx, qy, qz, qw

@@ -1,0 +1,39 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+cuboid:
+  #cube1:
+  #  dims: [0.7, 0.1, 0.4] # x, y, z
+  #  pose: [0.6, 0.2, 0.1, 0, 0, 0, 1.0] # x
+  cube2:
+    dims: [0.3, 0.1, 0.5] # x, y, z
+    pose: [0.4, -0.3, 0.2, 1, 0, 0, 0.0] # x
+  cube3:
+    dims: [2.0, 2.0, 0.2] # x, y, z
+    pose: [0.0, 0.0, -0.1, 1, 0, 0, 0.0] # x
+sphere:
+  sphere1:
+    position: [0.5,0.1,0.1]
+    radius: 0.1
+  sphere2:
+    position: [-0.5,0.1,0.1]
+    radius: 0.1
+        
+capsule:
+  capsule1:
+    radius: 0.1
+    base: [0.0,0.0,0.1]
+    tip: [0.0,0.0,0.5]
+    pose: [0.5,0.0,0.0,1.0,0.0,0.0,0.0]
+  capsule2:
+    radius: 0.1
+    base: [0.0,0.0,0.1]
+    tip: [0.0,0.0,0.5]
+    pose: [0.0,0.5,0.0,1.0,0.0,0.0,0.0]

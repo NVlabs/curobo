@@ -1,0 +1,14 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+mesh:
+  base_scene:
+    pose: [1.5, 0.080, 1.6, 0.043, -0.471, 0.284, 0.834]
+    file_path: "scene/nvblox/srl_ur10_bins.obj"

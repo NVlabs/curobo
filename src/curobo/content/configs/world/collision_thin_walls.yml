@@ -1,0 +1,72 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+##
+cuboid:
+  table:
+    dims: [2.2, 2.2, 0.2] # x, y, z
+    pose: [0.0, 0.0, -0.1, 1, 0, 0, 0.0] #
+
+  cube6:
+    dims:
+    - 0.05
+    - 0.01
+    - 1.5
+    pose:
+    - 0.4
+    - -0.1
+    - 0.3
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+ 
+  cube62:
+    dims:
+    - 0.05
+    - 0.01
+    - 1.5
+    pose:
+    - 0.0
+    - 0.4
+    - 0.3
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  cube63:
+    dims:
+    - 0.05
+    - 0.01
+    - 1.5
+    pose:
+    - 0.0
+    - -0.4
+    - 0.3
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+ 
+  #cube8:
+  #  dims:
+  #  - 0.9
+  #  - 0.1
+  #  - 0.02
+  #  pose:
+  #  - 0.0
+  #  - 0.0
+  #  - 0.9
+  #  - 1.0
+  #  - 0.0
+  #  - 0.0
+  #  - 0.0
+ 

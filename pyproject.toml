@@ -1,0 +1,66 @@
+# Copyright (c) 2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# NVIDIA CORPORATION and its licensors retain all intellectual property
+# and proprietary rights in and to this software, related documentation
+# and any modifications thereto. Any use, reproduction, disclosure or
+# distribution of this software and related documentation without an express
+# license agreement from NVIDIA CORPORATION is strictly prohibited.
+
+[build-system]
+requires = ["setuptools>=45", "setuptools_scm>=6.2", "wheel", "torch"]
+
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+extend-exclude = "deprecated/"
+
+# See the `setuptools_scm` documentation for the description of the schemes used below.
+# https://pypi.org/project/setuptools-scm/
+# NOTE: If these values are updated, they need to be also updated in `__init__.py`.
+[tool.setuptools_scm]
+version_scheme = "no-guess-dev"
+local_scheme = "dirty-tag"
+
+[tool.isort]
+# see https://github.com/PyCQA/isort#multi-line-output-modes
+multi_line_output = 2
+import_heading_stdlib = "Standard Library"
+import_heading_thirdparty = "Third Party"
+import_heading_firstparty = "CuRobo"
+import_heading_localfolder = "Local Folder"
+import_heading_isaacgym = "Loading isaacgym before pytorch"
+known_first_party = "CuRobo"
+known_isaacgym = "isaacgym"
+line_length = 100
+sections = "FUTURE, STDLIB, ISAACGYM, THIRDPARTY, FIRSTPARTY, LOCALFOLDER"
+
+[tool.pytest.ini_options]
+norecursedirs = [".git", ".venv", "deprecated", "dist"]
+python_files = ["*_test.py"]
+
+
+#[tool.pylint.TYPECHECK]
+# List of members which are set dynamically and missed by Pylint inference
+# system, and so shouldn't trigger E1101 when accessed.
+# generated-members=numpy.*, torch.*
+
+
+
+[tool.coverage.report]
+# NOTE: Single-quoted strings are required in TOML for regular expressions
+exclude_lines = [
+	"pragma: no cover", # Need to re-enable the standard no cover match
+	'^\s*pass\s*$',  # Skip any pass lines
+    "wp.kernel",
+    "torch.jit.script",
+    "abstractmethod",
+    "def backward",
+]
+omit = [
+    "src/curobo/util/error_metrics.py",
+    "src/curobo/rollout/cost/straight_line_cost.py",
+    "src/curobo/rollout/cost/projected_dist_cost.py",
+    "src/curobo/rollout/cost/manipulability_cost.py",
+]
+

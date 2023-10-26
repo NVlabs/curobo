@@ -1,0 +1,214 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+robot: 'UR10'
+collision_spheres:
+  shoulder_link:
+    - center: [0, 0, 0]
+      radius: 0.05
+    - center: [0.0, -0.18, 0]
+      radius: 0.05
+  upper_arm_link:
+    - center: [-0.102167, 0,  0.18]
+      radius: 0.05
+    - center: [-0.204333, -8.88178e-19, 0.18]
+      radius: 0.05
+    - center: [-0.3065, -1.33227e-18, 0.18]
+      radius: 0.05
+    - center: [-0.408667, -1.77636e-18, 0.18]
+      radius: 0.05
+    - center: [-0.510833, 0, 0.18]
+      radius: 0.05
+    - center: [ -0.613, 0,0.18]
+      radius: 0.07
+  forearm_link:
+    - center: [-0, 0, 0.03]
+      radius: 0.05
+    - center: [-0.0951667, 0, 0.03]
+      radius: 0.05
+    - center: [-0.190333, 0, 0.03]
+      radius: 0.05
+    - center: [-0.2855, 0, 0.03]
+      radius: 0.05
+    - center: [-0.380667, 0,0.03]
+      radius: 0.05
+    - center: [-0.475833, 0,0.03]
+      radius: 0.05
+    - center: [-0.571, -1.19904e-17, 0.03]
+      radius: 0.05
+  wrist_1_link:
+    - center: [0, 0, 0]
+      radius: 0.05
+  wrist_2_link:
+    - center: [0, 0, 0]
+      radius: 0.05
+  wrist_3_link:
+    - center: [0, 0, 0]
+      radius: 0.05
+    - center: [0, 0, 0.06]
+      radius: 0.08
+  tool0:
+    - center: [0, 0, 0.03]
+      radius: 0.05
+ 
+
+  shoulder_link_1:
+    - center: [0, 0, 0]
+      radius: 0.05
+    - center: [0.0, -0.18, 0]
+      radius: 0.05
+  upper_arm_link_1:
+    - center: [-0.102167, 0,  0.18]
+      radius: 0.05
+    - center: [-0.204333, -8.88178e-19, 0.18]
+      radius: 0.05
+    - center: [-0.3065, -1.33227e-18, 0.18]
+      radius: 0.05
+    - center: [-0.408667, -1.77636e-18, 0.18]
+      radius: 0.05
+    - center: [-0.510833, 0, 0.18]
+      radius: 0.05
+    - center: [ -0.613, 0,0.18]
+      radius: 0.07
+  forearm_link_1:
+    - center: [-0, 0, 0.03]
+      radius: 0.05
+    - center: [-0.0951667, 0, 0.03]
+      radius: 0.05
+    - center: [-0.190333, 0, 0.03]
+      radius: 0.05
+    - center: [-0.2855, 0, 0.03]
+      radius: 0.05
+    - center: [-0.380667, 0,0.03]
+      radius: 0.05
+    - center: [-0.475833, 0,0.03]
+      radius: 0.05
+    - center: [-0.571, -1.19904e-17, 0.03]
+      radius: 0.05
+  wrist_1_link_1:
+    - center: [0, 0, 0]
+      radius: 0.05
+  wrist_2_link_1:
+    - center: [0, 0, 0]
+      radius: 0.05
+  wrist_3_link_1:
+    - center: [0, 0, 0]
+      radius: 0.05
+    - center: [0, 0, 0.06]
+      radius: 0.08
+    
+  tool1:
+    - center: [0, 0, 0.03]
+      radius: 0.05
+  
+
+  
+  shoulder_link_2:
+    - center: [0, 0, 0]
+      radius: 0.05
+    - center: [0.0, -0.18, 0]
+      radius: 0.05
+  upper_arm_link_2:
+    - center: [-0.102167, 0,  0.18]
+      radius: 0.05
+    - center: [-0.204333, -8.88178e-19, 0.18]
+      radius: 0.05
+    - center: [-0.3065, -1.33227e-18, 0.18]
+      radius: 0.05
+    - center: [-0.408667, -1.77636e-18, 0.18]
+      radius: 0.05
+    - center: [-0.510833, 0, 0.18]
+      radius: 0.05
+    - center: [ -0.613, 0,0.18]
+      radius: 0.07
+  forearm_link_2:
+    - center: [-0, 0, 0.03]
+      radius: 0.05
+    - center: [-0.0951667, 0, 0.03]
+      radius: 0.05
+    - center: [-0.190333, 0, 0.03]
+      radius: 0.05
+    - center: [-0.2855, 0, 0.03]
+      radius: 0.05
+    - center: [-0.380667, 0,0.03]
+      radius: 0.05
+    - center: [-0.475833, 0,0.03]
+      radius: 0.05
+    - center: [-0.571, -1.19904e-17, 0.03]
+      radius: 0.05
+  wrist_1_link_2:
+    - center: [0, 0, 0]
+      radius: 0.05
+  wrist_2_link_2:
+    - center: [0, 0, 0]
+      radius: 0.05
+  wrist_3_link_2:
+    - center: [0, 0, 0]
+      radius: 0.05
+    - center: [0, 0, 0.06]
+      radius: 0.08
+    
+  tool2:
+    - center: [0, 0, 0.03]
+      radius: 0.05
+  
+
+  
+  shoulder_link_3:
+    - center: [0, 0, 0]
+      radius: 0.05
+    - center: [0.0, -0.18, 0]
+      radius: 0.05
+  upper_arm_link_3:
+    - center: [-0.102167, 0,  0.18]
+      radius: 0.05
+    - center: [-0.204333, -8.88178e-19, 0.18]
+      radius: 0.05
+    - center: [-0.3065, -1.33227e-18, 0.18]
+      radius: 0.05
+    - center: [-0.408667, -1.77636e-18, 0.18]
+      radius: 0.05
+    - center: [-0.510833, 0, 0.18]
+      radius: 0.05
+    - center: [ -0.613, 0,0.18]
+      radius: 0.07
+  forearm_link_3:
+    - center: [-0, 0, 0.03]
+      radius: 0.05
+    - center: [-0.0951667, 0, 0.03]
+      radius: 0.05
+    - center: [-0.190333, 0, 0.03]
+      radius: 0.05
+    - center: [-0.2855, 0, 0.03]
+      radius: 0.05
+    - center: [-0.380667, 0,0.03]
+      radius: 0.05
+    - center: [-0.475833, 0,0.03]
+      radius: 0.05
+    - center: [-0.571, -1.19904e-17, 0.03]
+      radius: 0.05
+  wrist_1_link_3:
+    - center: [0, 0, 0]
+      radius: 0.05
+  wrist_2_link_3:
+    - center: [0, 0, 0]
+      radius: 0.05
+  wrist_3_link_3:
+    - center: [0, 0, 0]
+      radius: 0.05
+    - center: [0, 0, 0.06]
+      radius: 0.08
+    
+  tool3:
+    - center: [0, 0, 0.03]
+      radius: 0.05
+  
+
+  

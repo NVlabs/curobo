@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+<robot name="mug">
+  <link name="base"/>
+  <link name="base1"/>
+  <link name="base2"/>
+  <link name="base3"/>
+  <link name="base4"/>
+  <link name="base5"/>
+  <joint name="x_joint" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base"/>
+    <child link="base1"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
+
+  <joint name="y_joint" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base1"/>
+    <child link="base2"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
+
+  <joint name="z_joint" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base2"/>
+    <child link="base3"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
+  <joint name="rx_joint" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base3"/>
+    <child link="base4"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
+  <joint name="ry_joint" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base4"/>
+    <child link="base5"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
+  <joint name="rz_joint" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="base5"/>
+    <child link="gripper"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
+  </joint>
+  <link name="gripper">
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0 0"/>
+      <geometry>
+         <mesh filename="meshes/visual/hand.obj"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.0 0.0 0.0"/>
+      <geometry>
+          <mesh filename="meshes/visual/hand.obj"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.0"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0" iyy="0.0001" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+</robot>

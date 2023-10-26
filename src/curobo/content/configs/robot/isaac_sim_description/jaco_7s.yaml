@@ -1,0 +1,146 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+# The robot description defines the generalized coordinates and how to map those
+# to the underlying URDF dofs.
+
+api_version: 1.0
+
+# Defines the generalized coordinates. Each generalized coordinate is assumed
+# to have an entry in the URDF.
+# Lula will only use these joints to control the robot position.
+cspace:
+    - j2s7s300_joint_1
+    - j2s7s300_joint_2
+    - j2s7s300_joint_3
+    - j2s7s300_joint_4
+    - j2s7s300_joint_5
+    - j2s7s300_joint_6
+    - j2s7s300_joint_7
+default_q: [
+    0.0,1.7,0.0,0.5236,0.0,1.1345,0.0
+]
+
+# Most dimensions of the cspace have a direct corresponding element
+# in the URDF. This list of rules defines how unspecified coordinates
+# should be extracted or how values in the URDF should be overwritten.
+
+cspace_to_urdf_rules:
+    - {name: j2s7s300_joint_finger_1, rule: fixed, value: 0.0}
+    - {name: j2s7s300_joint_finger_2, rule: fixed, value: 1e-04}
+    - {name: j2s7s300_joint_finger_3, rule: fixed, value: 0.0}
+    - {name: j2s7s300_joint_finger_tip_1, rule: fixed, value: 0.0}
+    - {name: j2s7s300_joint_finger_tip_2, rule: fixed, value: 0.0}
+    - {name: j2s7s300_joint_finger_tip_3, rule: fixed, value: 0.0}
+
+# Lula uses collision spheres to define the robot geometry in order to avoid
+# collisions with external obstacles.  If no spheres are specified, Lula will
+# not be able to avoid obstacles.
+
+collision_spheres:
+  - j2s7s300_link_base:
+    - "center": [0.0, -0.003, 0.103]
+      "radius": 0.048
+    - "center": [0.0, -0.0, 0.162]
+      "radius": 0.047
+  - j2s7s300_link_1:
+    - "center": [-0.004, -0.002, -0.056]
+      "radius": 0.05
+    - "center": [0.0, 0.001, -0.119]
+      "radius": 0.05
+  - j2s7s300_link_2:
+    - "center": [0.0, -0.162, -0.001]
+      "radius": 0.049
+    - "center": [-0.0, -0.0, 0.0]
+      "radius": 0.05
+    - "center": [0.0, -0.108, -0.001]
+      "radius": 0.049
+    - "center": [0.0, -0.054, -0.0]
+      "radius": 0.05
+  - j2s7s300_link_3:
+    - "center": [-0.004, -0.0, -0.202]
+      "radius": 0.05
+    - "center": [0.0, 0.0, 0.0]
+      "radius": 0.05
+    - "center": [-0.003, -0.0, -0.161]
+      "radius": 0.05
+    - "center": [-0.002, -0.0, -0.121]
+      "radius": 0.05
+    - "center": [-0.001, -0.0, -0.081]
+      "radius": 0.05
+    - "center": [-0.001, -0.0, -0.04]
+      "radius": 0.05
+  - j2s7s300_link_4:
+    - "center": [0.002, 0.21, -0.013]
+      "radius": 0.04
+    - "center": [0.0, 0.0, 0.0]
+      "radius": 0.05
+    - "center": [0.001, 0.172, -0.01]
+      "radius": 0.042
+    - "center": [0.001, 0.132, -0.008]
+      "radius": 0.044
+    - "center": [0.001, 0.09, -0.005]
+      "radius": 0.046
+    - "center": [0.0, 0.046, -0.003]
+      "radius": 0.048
+  - j2s7s300_link_5:
+    - "center": [-0.001, 0.013, -0.106]
+      "radius": 0.04
+    - "center": [-0.003, 0.003, -0.044]
+      "radius": 0.04
+    - "center": [-0.002, 0.008, -0.075]
+      "radius": 0.04
+  - j2s7s300_link_6:
+    - "center": [-0.001, 0.094, 0.0]
+      "radius": 0.04
+    - "center": [0.0, -0.0, -0.017]
+      "radius": 0.04
+    - "center": [-0.001, 0.047, -0.008]
+      "radius": 0.04
+  - j2s7s300_link_7:
+    - "center": [-0.01, -0.017, -0.069]
+      "radius": 0.045
+    - "center": [0.001, 0.023, -0.076]
+      "radius": 0.038
+    - "center": [0.016, -0.022, -0.071]
+      "radius": 0.038
+    - "center": [-0.0, 0.0, -0.031]
+      "radius": 0.04
+  - j2s7s300_link_finger_tip_1:
+    - "center": [0.009, -0.004, -0.0]
+      "radius": 0.017
+    - "center": [0.03, -0.007, -0.002]
+      "radius": 0.015
+  - j2s7s300_link_finger_tip_2:
+    - "center": [0.009, -0.004, -0.0]
+      "radius": 0.017
+    - "center": [0.032, -0.002, -0.001]
+      "radius": 0.015
+  - j2s7s300_link_finger_2:
+    - "center": [0.011, -0.01, -0.0]
+      "radius": 0.021
+    - "center": [0.032, -0.01, 0.001]
+      "radius": 0.02
+  - j2s7s300_link_finger_3:
+    - "center": [0.011, -0.01, -0.0]
+      "radius": 0.021
+    - "center": [0.032, -0.01, 0.001]
+      "radius": 0.02
+  - j2s7s300_link_finger_tip_3:
+    - "center": [0.032, -0.004, 0.001]
+      "radius": 0.015
+    - "center": [0.015, -0.006, -0.002]
+      "radius": 0.015
+  - j2s7s300_link_finger_1:
+    - "center": [0.011, -0.01, -0.0]
+      "radius": 0.021
+    - "center": [0.032, -0.01, 0.001]
+      "radius": 0.02
