@@ -167,12 +167,6 @@ experiments/
 *.tar
 examples/*.pt
 
-curobo.*
-docs/modules.rst
-docs/setup.rst
-docs/install_instructions.rst
-docs/_api/*
-
 # VIM
 *swp
 *swo
@@ -202,11 +196,6 @@ nvidia_curobo*/
 *.pdf
 #*.png
 *.usd
-*.obj
-*.STL
-*.dae
-*.stl
-*.mtl
 *.SLDPRT
 
 *tfevents*
