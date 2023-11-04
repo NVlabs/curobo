@@ -34,6 +34,10 @@ elif [ ${arch} == "x86" ]; then
     echo "Building for X86 Architecture"
     dockerfile="x86.dockerfile"
     image_tag="x86"
+elif [ ${arch} == "x86_64" ]; then
+    echo "Building for x86_64 Architecture"
+    dockerfile="x86.dockerfile"
+    image_tag="x86_64"
 elif [ ${arch} = "aarch64" ]; then
     echo "Building for ARM Architecture"
     dockerfile="aarch64.dockerfile"
