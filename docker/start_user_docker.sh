@@ -10,7 +10,6 @@
 ## its affiliates is strictly prohibited.
 ##
 
-echo "deprecated, use start_user_docker.sh instead"
 
 input_arg="$1"
 
@@ -42,7 +41,7 @@ if [ "$input_arg" == "x86" ]; then
     --env DISPLAY=unix$DISPLAY \
     --volume /tmp/.X11-unix:/tmp/.X11-unix \
     --volume /dev:/dev \
-    curobo_docker:user_$input_arg
+    curobo_docker:user_$1
 
 elif [ "$input_arg" == "aarch64" ]; then
 
@@ -57,7 +56,7 @@ elif [ "$input_arg" == "aarch64" ]; then
     --volume /tmp/.X11-unix:/tmp/.X11-unix \
     --volume /dev/input:/dev/input \
     --mount type=bind,src=/home/$USER/code,target=/home/$USER/code \
-    curobo_docker:user_$input_arg
+    curobo_docker:user_$1
 
 elif [[ "$input_arg" == *isaac_sim* ]] ; then
    echo "Isaac Sim User Docker is not supported" 

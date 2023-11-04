@@ -10,7 +10,21 @@
 ## its affiliates is strictly prohibited.
 ##
 
-if [ $1 == "x86" ]; then
+input_arg="$1"
+
+if [ -z "$input_arg" ]; then
+    echo "Argument empty, trying to run based on architecture"
+    arch=$(uname -m)
+    if [ "$arch" == "x86_64" ]; then
+        input_arg="x86"
+    elif [ "$arch" == "arm64" ]; then
+        input_arg="aarch64"
+    elif [ "$arch" == "aarch64" ]; then
+        input_arg="aarch64"
+    fi
+fi
+
+if [ "$input_arg" == "x86" ]; then
 
     docker run --rm -it \
     --privileged \
@@ -23,9 +37,9 @@ if [ $1 == "x86" ]; then
     --env DISPLAY=unix$DISPLAY \
     --volume /tmp/.X11-unix:/tmp/.X11-unix \
     --volume /dev:/dev \
-    curobo_docker:$1
+    curobo_docker:$input_arg
 
-elif [ $1 == "aarch64" ]; then
+elif [ "$input_arg" == "aarch64" ]; then
 
     docker run --rm -it \
     --runtime nvidia \
@@ -37,11 +51,11 @@ elif [ $1 == "aarch64" ]; then
     --env DISPLAY=$DISPLAY \
     --volume /tmp/.X11-unix:/tmp/.X11-unix \
     --volume /dev/input:/dev/input \
-    curobo_docker:$1
+    curobo_docker:$input_arg
 
-elif [[ $1 == *isaac_sim* ]] ; then
+elif [[ "$input_arg" == *isaac_sim* ]] ; then
 
-    docker run --name container_$1 --entrypoint bash -it --gpus all -e "ACCEPT_EULA=Y" --rm --network=host \
+    docker run --name container_$input_arg --entrypoint bash -it --gpus all -e "ACCEPT_EULA=Y" --rm --network=host \
         --privileged \
         -e "PRIVACY_CONSENT=Y" \
         -v $HOME/.Xauthority:/root/.Xauthority \
@@ -55,7 +69,7 @@ elif [[ $1 == *isaac_sim* ]] ; then
         -v ~/docker/isaac-sim/data:/root/.local/share/ov/data:rw \
         -v ~/docker/isaac-sim/documents:/root/Documents:rw \
         --volume /dev:/dev \
-        curobo_docker:$1
+        curobo_docker:$input_arg
 
 else
     echo "Unknown docker"

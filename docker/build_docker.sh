@@ -15,7 +15,6 @@
 # If you want to build a isaac sim docker, run this script with `bash build_dev_docker.sh isaac_sim_2022.2.1`
 
 # Check architecture to build:
-echo "deprecated, use build_docker.sh instead"
 
 image_tag="x86"
 isaac_sim_version=""
