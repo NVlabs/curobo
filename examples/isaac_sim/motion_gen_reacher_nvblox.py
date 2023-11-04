@@ -18,21 +18,13 @@ a = torch.zeros(4, device="cuda:0")
 # Standard Library
 import argparse
 
-# CuRobo
-# from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
-from curobo.geom.sdf.world import CollisionCheckerType
-from curobo.geom.types import WorldConfig
-from curobo.types.base import TensorDeviceType
-from curobo.types.math import Pose
-from curobo.types.robot import JointState, RobotConfig
-from curobo.types.state import JointState
-from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
-from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
-from curobo.wrap.reacher.mpc import MpcSolver, MpcSolverConfig
-
 parser = argparse.ArgumentParser()
+
 parser.add_argument(
-    "--headless", action="store_true", help="When True, enables headless mode", default=False
+    "--headless_mode",
+    type=str,
+    default=None,
+    help="To run headless, use one of [native, websocket], webrtc might not work.",
 )
 parser.add_argument(
     "--visualize_spheres",
@@ -51,23 +43,21 @@ from omni.isaac.kit import SimulationApp
 
 simulation_app = SimulationApp(
     {
-        "headless": args.headless,
+        "headless": args.headless_mode is not None,
         "width": "1920",
         "height": "1080",
     }
 )
-# Third Party
-from omni.isaac.core.utils.extensions import enable_extension
-
 # CuRobo
-from curobo.util_file import (
-    get_assets_path,
-    get_filename,
-    get_path_of_dir,
-    get_robot_configs_path,
-    join_path,
-    load_yaml,
-)
+# from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
+from curobo.geom.sdf.world import CollisionCheckerType
+from curobo.geom.types import WorldConfig
+from curobo.types.base import TensorDeviceType
+from curobo.types.math import Pose
+from curobo.types.robot import JointState
+from curobo.types.state import JointState
+from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
+from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
 ext_list = [
     "omni.kit.asset_converter",
@@ -78,19 +68,15 @@ ext_list = [
 # [enable_extension(x) for x in ext_list]
 # simulation_app.update()
 
-# Standard Library
-from typing import Dict
 
 # Third Party
 import carb
 import numpy as np
-from helper import add_robot_to_scene
+from helper import add_extensions, add_robot_to_scene
 from omni.isaac.core import World
 from omni.isaac.core.objects import cuboid, sphere
-from omni.isaac.core.robots import Robot
 
 ########### OV #################
-from omni.isaac.core.utils.extensions import enable_extension
 from omni.isaac.core.utils.types import ArticulationAction
 
 # CuRobo
@@ -177,6 +163,7 @@ def main():
     motion_gen.warmup(enable_graph=True, warmup_js_trajopt=False)
 
     print("Curobo is Ready")
+    add_extensions(simulation_app, args.headless_mode)
     plan_config = MotionGenPlanConfig(
         enable_graph=False, enable_graph_attempt=4, max_attempts=2, enable_finetune_trajopt=True
     )

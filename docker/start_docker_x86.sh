@@ -8,8 +8,9 @@
 ## without an express license agreement from NVIDIA CORPORATION or
 ## its affiliates is strictly prohibited.
 ##
+
 docker run --rm -it \
---privileged --mount type=bind,src=/home/$USER/code,target=/home/$USER/code \
+--privileged \
 -e NVIDIA_DISABLE_REQUIRE=1 \
 -e NVIDIA_DRIVER_CAPABILITIES=all  --device /dev/dri \
 --hostname ros1-docker \
@@ -19,4 +20,4 @@ docker run --rm -it \
 --env DISPLAY=unix$DISPLAY \
 --volume /tmp/.X11-unix:/tmp/.X11-unix \
 --volume /dev:/dev \
-curobo_user_docker:latest
+curobo_docker:x86

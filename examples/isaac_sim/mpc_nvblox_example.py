@@ -24,15 +24,16 @@ a = torch.zeros(4, device="cuda:0")
 
 # Standard Library
 import argparse
-import pickle
-import shutil
-import sys
 
 ## import curobo:
 
 parser = argparse.ArgumentParser()
+
 parser.add_argument(
-    "--headless", action="store_true", help="When True, enables headless mode", default=False
+    "--headless_mode",
+    type=str,
+    default=None,
+    help="To run headless, use one of [native, websocket], webrtc might not work.",
 )
 parser.add_argument(
     "--visualize_spheres",
@@ -50,87 +51,47 @@ args = parser.parse_args()
 from omni.isaac.kit import SimulationApp
 
 simulation_app = SimulationApp(
-    {"headless": False, "width": 1920, "height": 1080}
-)  # _make_simulation_app({"headless": False})
-# Third Party
-# Enable the layers and stage windows in the UI
-from omni.isaac.core.utils.extensions import enable_extension
-
-ext_list = [
-    "omni.kit.asset_converter",
-    # "omni.kit.livestream.native",
-    "omni.kit.tool.asset_importer",
-    "omni.isaac.asset_browser",
-]
-[enable_extension(x) for x in ext_list]
-simulation_app.update()
+    {
+        "headless": args.headless_mode is not None,
+        "width": "1920",
+        "height": "1080",
+    }
+)
 # Standard Library
 import os
 
 # Third Party
 import carb
 import numpy as np
-from helper import add_robot_to_scene
+from helper import add_extensions, add_robot_to_scene
 from omni.isaac.core import World
-from omni.isaac.core.objects import DynamicCuboid, VisualCuboid, cuboid, sphere
-from omni.isaac.core.prims.xform_prim import XFormPrim
-
-########### OV #################
-from omni.isaac.core.utils.extensions import enable_extension
-
-# from omni.isaac.cortex.motion_commander import MotionCommand, PosePq, open_gripper, close_gripper
-from omni.isaac.core.utils.rotations import euler_angles_to_quat
+from omni.isaac.core.objects import cuboid
 
 ########### frame prim #################
-from omni.isaac.core.utils.stage import get_stage_units
 from omni.isaac.core.utils.types import ArticulationAction
-from omni.isaac.cortex.cortex_object import CortexObject
-from omni.isaac.franka import KinematicsSolver
-from omni.isaac.franka.franka import Franka
-from omni.isaac.franka.tasks import FollowTarget
-from pxr import Gf
-from scipy.spatial.transform import Rotation as R
 
 # CuRobo
+# from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
+from curobo.geom.sdf.world import CollisionCheckerType
+from curobo.geom.types import WorldConfig
+from curobo.rollout.rollout_base import Goal
+from curobo.types.base import TensorDeviceType
+from curobo.types.math import Pose
+from curobo.types.robot import JointState
+from curobo.types.state import JointState
 from curobo.util.logger import setup_curobo_logger
 from curobo.util.usd_helper import UsdHelper
+from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
+from curobo.wrap.reacher.mpc import MpcSolver, MpcSolverConfig
+
+########### OV #################
+
 
 ############################################################
 
 
 ########### OV #################;;;;;
 
-
-###########
-EXT_DIR = os.path.abspath(os.path.join(os.path.abspath(os.path.dirname(__file__))))
-DATA_DIR = os.path.join(EXT_DIR, "data")
-########### frame prim #################;;;;;
-
-
-# Standard Library
-from typing import Optional
-
-# Third Party
-from helper import add_robot_to_scene
-from omni.isaac.core.materials import PhysicsMaterial, VisualMaterial
-from omni.isaac.core.utils.prims import add_reference_to_stage, get_prim_at_path
-from pxr import Sdf, UsdShade
-
-# CuRobo
-from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
-from curobo.curobolib import geom_cu
-
-# from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
-from curobo.geom.sdf.world import CollisionCheckerType
-from curobo.geom.types import WorldConfig
-from curobo.rollout.cost.self_collision_cost import SelfCollisionCost, SelfCollisionCostConfig
-from curobo.rollout.rollout_base import Goal
-from curobo.types.base import TensorDeviceType
-from curobo.types.math import Pose
-from curobo.types.robot import JointState, RobotConfig
-from curobo.types.state import JointState
-from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
-from curobo.wrap.reacher.mpc import MpcSolver, MpcSolverConfig
 
 ############################################################
 
@@ -187,12 +148,9 @@ def main():
 
     setup_curobo_logger("warn")
     past_pose = None
-    n_obstacle_cuboids = 30
-    n_obstacle_mesh = 10
 
     # warmup curobo instance
     usd_help = UsdHelper()
-    target_pose = None
 
     tensor_args = TensorDeviceType()
 
@@ -202,7 +160,7 @@ def main():
     default_config = robot_cfg["kinematics"]["cspace"]["retract_config"]
     robot_cfg["kinematics"]["collision_sphere_buffer"] += 0.02
 
-    robot, robot_prim_path = add_robot_to_scene(robot_cfg, my_world)
+    robot, _ = add_robot_to_scene(robot_cfg, my_world)
 
     articulation_controller = robot.get_articulation_controller()
 
@@ -260,12 +218,16 @@ def main():
     goal_buffer = mpc.setup_solve_single(goal, 1)
     mpc.update_goal(goal_buffer)
 
+    mpc_result = mpc.step(current_state, max_attempts=2)
+
+    add_extensions(simulation_app, args.headless_mode)
     usd_help.load_stage(my_world.stage)
     usd_help.add_world_to_stage(world_cfg.get_mesh_world(), base_frame="/World")
 
     init_world = False
     cmd_state_full = None
     step = 0
+    add_extensions(simulation_app, args.headless_mode)
     while simulation_app.is_running():
         if not init_world:
             for _ in range(10):

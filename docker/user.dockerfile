@@ -10,7 +10,8 @@
 ##
 
 # Check architecture and load:
-FROM curobo_docker:latest
+ARG IMAGE_TAG 
+FROM curobo_docker:${IMAGE_TAG}
 # Set variables
 ARG USERNAME
 ARG USER_ID
@@ -24,11 +25,13 @@ RUN useradd -l -u $USER_ID -g users $USERNAME
 RUN /sbin/adduser $USERNAME sudo
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
+
 # Set user
 USER $USERNAME
 WORKDIR /home/$USERNAME
 ENV USER=$USERNAME
 ENV PATH="${PATH}:/home/${USER}/.local/bin"
+
 
 RUN echo 'completed'
 

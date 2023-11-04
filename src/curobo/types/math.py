@@ -83,10 +83,16 @@ class Pose(Sequence):
             self.quaternion = normalize_quaternion(self.quaternion)
 
     @staticmethod
-    def from_matrix(matrix: np.ndarray):
+    def from_matrix(matrix: Union[np.ndarray, torch.Tensor]):
+        if not isinstance(matrix, torch.Tensor):
+            tensor_args = TensorDeviceType()
+            matrix = torch.as_tensor(matrix, device=tensor_args.device, dtype=tensor_args.dtype)
+
         if len(matrix.shape) == 2:
             matrix = matrix.view(-1, 4, 4)
-        return Pose(position=matrix[..., :3, 3], rotation=matrix[..., :3, :3])
+        return Pose(
+            position=matrix[..., :3, 3], rotation=matrix[..., :3, :3], normalize_rotation=True
+        )
 
     def get_rotation(self):
         if self.rotation is not None:

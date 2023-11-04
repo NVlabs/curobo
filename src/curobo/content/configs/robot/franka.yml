@@ -13,7 +13,7 @@ robot_cfg:
   kinematics:
     use_usd_kinematics: False
     isaac_usd_path: "/Isaac/Robots/Franka/franka.usd"
-    usd_path: "robot/non_shipping/franka/franka_panda_meters1.usda"
+    usd_path: "robot/non_shipping/franka/franka_panda_meters.usda"
     usd_robot_root: "/panda"
     usd_flip_joints: ["panda_joint1","panda_joint2","panda_joint3","panda_joint4", "panda_joint5",
       "panda_joint6","panda_joint7","panda_finger_joint1", "panda_finger_joint2"]

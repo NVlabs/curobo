@@ -12,6 +12,11 @@ FROM nvcr.io/nvidia/pytorch:23.08-py3 AS torch_cuda_base
 
 LABEL maintainer "User Name"
 
+
+# Deal with getting tons of debconf messages
+# See: https://github.com/phusion/baseimage-docker/issues/58
+RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+
 # add GL:
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
@@ -24,16 +29,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV NVIDIA_VISIBLE_DEVICES all
 ENV NVIDIA_DRIVER_CAPABILITIES graphics,utility,compute
 
-
-RUN apt-get update &&\
-    apt-get install -y sudo git bash unattended-upgrades glmark2 &&\
-    rm -rf /var/lib/apt/lists/*
-
-
-# Deal with getting tons of debconf messages
-# See: https://github.com/phusion/baseimage-docker/issues/58
-RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
-
 # Set timezone info
 RUN apt-get update && apt-get install -y \
   tzdata \
@@ -42,9 +37,8 @@ RUN apt-get update && apt-get install -y \
   && ln -fs /usr/share/zoneinfo/America/Los_Angeles /etc/localtime \
   && echo "America/Los_Angeles" > /etc/timezone \
   && dpkg-reconfigure -f noninteractive tzdata \
-  && add-apt-repository -y ppa:git-core/ppa
-
-RUN apt-get update && apt-get install -y \
+  && add-apt-repository -y ppa:git-core/ppa \
+  && apt-get update && apt-get install -y \
   curl \
   lsb-core \
   wget \
@@ -65,6 +59,7 @@ RUN apt-get update && apt-get install -y \
   sudo git bash unattended-upgrades \
   apt-utils \
   terminator \
+  glmark2 \
   && rm -rf /var/lib/apt/lists/*
 
 # push defaults to bashrc:
@@ -83,11 +78,43 @@ ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
 ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 
 
-# copy pkgs directory: clone curobo into docker/pkgs folder.
-COPY pkgs /pkgs
-
 RUN pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
+# if you want to use a different version of curobo, create folder as docker/pkgs and put your
+# version of curobo there. Then uncomment below line and comment the next line that clones from 
+# github
+
+# COPY pkgs /pkgs
+
+RUN mkdir /pkgs && cd /pkgs && git clone https://github.com/NVlabs/curobo.git
 
 RUN cd /pkgs/curobo && pip3 install .[dev,usd] --no-build-isolation
 
+WORKDIR /pkgs/curobo
+
+# Optionally install nvblox:
+
+# we require this environment variable to  render images in unit test curobo/tests/nvblox_test.py
+
+ENV PYOPENGL_PLATFORM=egl
+
+# add this file to enable EGL for rendering
+
+RUN echo '{"file_format_version": "1.0.0", "ICD": {"library_path": "libEGL_nvidia.so.0"}}' >> /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+RUN apt-get update && \
+    apt-get install -y libgoogle-glog-dev libgtest-dev curl libsqlite3-dev && \
+    cd /usr/src/googletest && cmake . && cmake --build . --target install && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN cd /pkgs &&  git clone https://github.com/valtsblukis/nvblox.git && \
+    cd nvblox && cd nvblox && mkdir build && cd build && \
+    cmake .. -DPRE_CXX11_ABI_LINKABLE=ON && \
+    make -j32 && \
+    make install
+
+RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
+    cd nvblox_torch && \
+    sh install.sh
+
+RUN python -m pip install pyrealsense2 opencv-python transforms3d

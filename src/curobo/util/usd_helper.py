@@ -38,6 +38,7 @@ from curobo.types.state import JointState
 from curobo.util.logger import log_error, log_warn
 from curobo.util_file import (
     file_exists,
+    get_assets_path,
     get_filename,
     get_files_from_dir,
     get_robot_configs_path,
@@ -314,7 +315,6 @@ def get_sphere_attrs(prim, cache=None, transform=None) -> Sphere:
         size = 1.0
     radius = prim.GetAttribute("radius").Get()
     scale = prim.GetAttribute("xformOp:scale").Get()
-    print(radius, scale)
     if scale is not None:
         radius = radius * max(list(scale)) * size
 
@@ -620,7 +620,7 @@ class UsdHelper:
         root_path = join_path(base_frame, obstacle.name)
         obj_geom = UsdGeom.Mesh.Define(self.stage, root_path)
         obj_prim = self.stage.GetPrimAtPath(root_path)
-
+        # obstacle.update_material() # This does not get the correct materials
         set_geom_mesh_attrs(obj_geom, obstacle, timestep=timestep)
 
         obj_prim.CreateAttribute("physics:rigidBodyEnabled", Sdf.ValueTypeNames.Bool, custom=False)
@@ -664,10 +664,20 @@ class UsdHelper:
         )
         for i, i_val in enumerate(prim_names):
             curr_prim = self.stage.GetPrimAtPath(i_val)
-            form = UsdGeom.Xformable(curr_prim).GetOrderedXformOps()[0]
+            form = UsdGeom.Xformable(curr_prim).GetOrderedXformOps()
+            if len(form) < 2:
+                log_warn("Pose transformation not found" + i_val)
+                continue
+
+            pos_form = form[0]
+            quat_form = form[1]
+            use_float = True  # default is float
             for t in range(pose.batch):
-                c_t = get_transform(pose.get_index(t, i).tolist())
-                form.Set(time=t * self.interpolation_steps, value=c_t)
+                c_p, c_q = get_position_quat(pose.get_index(t, i).tolist(), use_float)
+                pos_form.Set(time=t * self.interpolation_steps, value=c_p)
+                quat_form.Set(time=t * self.interpolation_steps, value=c_q)
+                # c_t = get_transform(pose.get_index(t, i).tolist())
+                # form.Set(time=t * self.interpolation_steps, value=c_t)
 
     def create_obstacle_animation(
         self,
@@ -785,33 +795,64 @@ class UsdHelper:
         save_path: str = "out.usd",
         tensor_args: TensorDeviceType = TensorDeviceType(),
         interpolation_steps: float = 1.0,
-        robot_color: List[float] = [0.8, 0.8, 0.8, 1.0],
+        robot_base_frame="robot",
+        base_frame="/world",
+        kin_model: Optional[CudaRobotModel] = None,
+        visualize_robot_spheres: bool = True,
+        robot_color: Optional[List[float]] = None,
     ):
-        config_file = load_yaml(join_path(get_robot_configs_path(), robot_model_file))
-        config_file["robot_cfg"]["kinematics"]["load_link_names_with_mesh"] = True
-        robot_cfg = CudaRobotModelConfig.from_data_dict(
-            config_file["robot_cfg"]["kinematics"], tensor_args=tensor_args
-        )
-        kin_model = CudaRobotModel(robot_cfg)
+        if kin_model is None:
+            config_file = load_yaml(join_path(get_robot_configs_path(), robot_model_file))
+            config_file["robot_cfg"]["kinematics"]["load_link_names_with_mesh"] = True
+            robot_cfg = CudaRobotModelConfig.from_data_dict(
+                config_file["robot_cfg"]["kinematics"], tensor_args=tensor_args
+            )
+            kin_model = CudaRobotModel(robot_cfg)
 
-        m = kin_model.get_robot_as_mesh(q_start.position)
-
+        m = kin_model.get_robot_link_meshes()
+        offsets = [x.pose for x in m]
         robot_mesh_model = WorldConfig(mesh=m)
-        robot_mesh_model.add_color(robot_color)
-        robot_mesh_model.add_material(Material(metallic=0.4))
+        if robot_color is not None:
+            robot_mesh_model.add_color(robot_color)
+            robot_mesh_model.add_material(Material(metallic=0.4))
         usd_helper = UsdHelper()
         usd_helper.create_stage(
             save_path,
             timesteps=q_traj.position.shape[0],
             dt=dt,
             interpolation_steps=interpolation_steps,
+            base_frame=base_frame,
         )
-        usd_helper.add_world_to_stage(world_model)
+        if world_model is not None:
+            usd_helper.add_world_to_stage(world_model, base_frame=base_frame)
 
-        animation_links = kin_model.mesh_link_names
+        animation_links = kin_model.kinematics_config.mesh_link_names
         animation_poses = kin_model.get_link_poses(q_traj.position, animation_links)
-        usd_helper.create_animation(robot_mesh_model, animation_poses)
-        usd_helper.write_stage_to_file(save_path + ".usd")
+        # add offsets for visual mesh:
+        for i, ival in enumerate(offsets):
+            offset_pose = Pose.from_list(ival)
+            new_pose = Pose(
+                animation_poses.position[:, i, :], animation_poses.quaternion[:, i, :]
+            ).multiply(offset_pose)
+            animation_poses.position[:, i, :] = new_pose.position
+            animation_poses.quaternion[:, i, :] = new_pose.quaternion
+
+        robot_base_frame = join_path(base_frame, robot_base_frame)
+
+        usd_helper.create_animation(
+            robot_mesh_model, animation_poses, base_frame, robot_frame=robot_base_frame
+        )
+        if visualize_robot_spheres:
+            # visualize robot spheres:
+            sphere_traj = kin_model.get_robot_as_spheres(q_traj.position)
+            # change color:
+            for s in sphere_traj:
+                for k in s:
+                    k.color = [0, 0.27, 0.27, 1.0]
+            usd_helper.create_obstacle_animation(
+                sphere_traj, base_frame=base_frame, obstacles_frame="curobo/robot_collision"
+            )
+        usd_helper.write_stage_to_file(save_path)
 
     @staticmethod
     def load_robot(
@@ -848,7 +889,11 @@ class UsdHelper:
         kin_model: Optional[CudaRobotModel] = None,
         visualize_robot_spheres: bool = True,
         robot_asset_prim_path=None,
+        robot_color: Optional[List[float]] = None,
     ):
+        usd_exists = False
+        # if usd file doesn't exist, fall back to urdf animation script
+
         if kin_model is None:
             config_file = load_yaml(join_path(get_robot_configs_path(), robot_model_file))
             if "robot_cfg" in config_file:
@@ -856,6 +901,36 @@ class UsdHelper:
             config_file["kinematics"]["load_link_names_with_mesh"] = True
             config_file["kinematics"]["use_usd_kinematics"] = True
 
+            usd_exists = file_exists(
+                join_path(get_assets_path(), config_file["kinematics"]["usd_path"])
+            )
+        else:
+            if kin_model.generator_config.usd_path is not None:
+                usd_exists = file_exists(kin_model.generator_config.usd_path)
+        if robot_color is not None:
+            log_warn(
+                "robot_color is not supported when using robot from usd, "
+                + "using urdf mode instead to write usd file"
+            )
+            usd_exists = False
+        if not usd_exists:
+            log_warn("robot usd not found, using urdf animation instead")
+            return UsdHelper.write_trajectory_animation(
+                robot_model_file,
+                world_model,
+                q_start,
+                q_traj,
+                dt,
+                save_path,
+                tensor_args,
+                interpolation_steps,
+                robot_base_frame=robot_base_frame,
+                base_frame=base_frame,
+                kin_model=kin_model,
+                visualize_robot_spheres=visualize_robot_spheres,
+                robot_color=robot_color,
+            )
+        if kin_model is None:
             robot_cfg = CudaRobotModelConfig.from_data_dict(
                 config_file["kinematics"], tensor_args=tensor_args
             )
@@ -1064,9 +1139,17 @@ class UsdHelper:
         write_robot_usd_path="assets/",
         robot_asset_prim_path="/panda",
     ):
-        # if goal_object is None:
-        #    log_warn("Using franka gripper as goal object")
-        #    goal_object =
+        if goal_object is None:
+            log_warn("Using franka gripper as goal object")
+            goal_object = Mesh(
+                name="target_gripper",
+                file_path=join_path(
+                    get_assets_path(),
+                    "robot/franka_description/meshes/visual/hand.dae",
+                ),
+                color=[0.0, 0.8, 0.1, 1.0],
+                pose=goal_pose.to_list(),
+            )
         if goal_object is not None:
             goal_object.pose = np.ravel(goal_pose.tolist()).tolist()
             world_config = world_config.clone()

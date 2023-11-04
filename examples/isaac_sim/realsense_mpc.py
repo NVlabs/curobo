@@ -13,13 +13,23 @@
 import torch
 
 a = torch.zeros(4, device="cuda:0")
+
+# Third Party
+from omni.isaac.kit import SimulationApp
+
+simulation_app = SimulationApp(
+    {
+        "headless": False,
+        "width": "1920",
+        "height": "1080",
+    }
+)
 # Third Party
 import cv2
 import numpy as np
 import torch
 from matplotlib import cm
 from nvblox_torch.datasets.realsense_dataset import RealsenseDataloader
-from omni.isaac.kit import SimulationApp
 
 # CuRobo
 from curobo.geom.sdf.world import CollisionCheckerType
@@ -33,13 +43,6 @@ from curobo.util_file import get_robot_configs_path, get_world_configs_path, joi
 from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
-simulation_app = SimulationApp(
-    {
-        "headless": False,
-        "width": "1920",
-        "height": "1080",
-    }
-)
 simulation_app.update()
 # Standard Library
 import argparse

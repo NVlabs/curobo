@@ -43,9 +43,9 @@ try:
     # CuRobo
     from curobo.cuda_robot_model.usd_kinematics_parser import UsdKinematicsParser
 except ImportError:
-    log_warn(
+    log_info(
         "USDParser failed to import, install curobo with pip install .[usd] "
-        + "or pip install usd-core"
+        + "or pip install usd-core, NOTE: Do not install this if using with ISAAC SIM."
     )
 
 

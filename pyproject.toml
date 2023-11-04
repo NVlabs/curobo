@@ -56,6 +56,7 @@ exclude_lines = [
     "torch.jit.script",
     "abstractmethod",
     "def backward",
+    "staticmethod\ndef forward",
 ]
 omit = [
     "src/curobo/util/error_metrics.py",

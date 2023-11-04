@@ -20,21 +20,41 @@ import numpy as np
 
 np.set_printoptions(suppress=True)
 # Standard Library
-import os.path as osp
+
+# Standard Library
+import argparse
+
+## import curobo:
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--headless_mode",
+    type=str,
+    default=None,
+    help="To run headless, use one of [native, websocket], webrtc might not work.",
+)
+args = parser.parse_args()
 
 # Third Party
 from omni.isaac.kit import SimulationApp
 
-simulation_app = SimulationApp({"headless": False})  # This adds paths for the following importing
+simulation_app = SimulationApp(
+    {
+        "headless": args.headless_mode is not None,
+        "width": "1920",
+        "height": "1080",
+    }
+)
 # Standard Library
 from typing import Optional
 
 # Third Party
 import carb
+from helper import add_extensions
 from omni.isaac.core import World
 from omni.isaac.core.controllers import BaseController
 from omni.isaac.core.tasks import Stacking as BaseStacking
-from omni.isaac.core.utils.extensions import enable_extension
 from omni.isaac.core.utils.prims import is_prim_path_valid
 from omni.isaac.core.utils.stage import get_stage_units
 from omni.isaac.core.utils.string import find_unique_string_name
@@ -43,14 +63,13 @@ from omni.isaac.core.utils.viewports import set_camera_view
 from omni.isaac.franka import Franka
 
 # CuRobo
-from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
 from curobo.geom.sdf.world import CollisionCheckerType
 from curobo.geom.sphere_fit import SphereFitType
 from curobo.geom.types import WorldConfig
 from curobo.rollout.rollout_base import Goal
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
-from curobo.types.robot import JointState, RobotConfig
+from curobo.types.robot import JointState
 from curobo.types.state import JointState
 from curobo.util.usd_helper import UsdHelper
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
@@ -60,18 +79,6 @@ from curobo.wrap.reacher.motion_gen import (
     MotionGenPlanConfig,
     MotionGenResult,
 )
-from curobo.wrap.reacher.mpc import MpcSolver, MpcSolverConfig
-
-ext_list = [
-    "omni.kit.asset_converter",
-    "omni.kit.livestream.native",
-    "omni.kit.tool.asset_importer",
-    "omni.isaac.asset_browser",
-    # "omni.kit.window.sequencer.scripts.sequencer_extension",
-    "omni.kit.window.movie_capture",
-]
-[enable_extension(x) for x in ext_list]  # toggle this for remote streaming
-simulation_app.update()
 
 
 class CuroboController(BaseController):
@@ -85,6 +92,7 @@ class CuroboController(BaseController):
         self._save_log = False
         self.my_world = my_world
         self.my_task = my_task
+        self._step_idx = 0
         n_obstacle_cuboids = 20
         n_obstacle_mesh = 2
         # warmup curobo instance
@@ -111,7 +119,7 @@ class CuroboController(BaseController):
         ] = "panda_hand"  # controls which frame the controller is controlling
         # self.robot_cfg["kinematics"]["cspace"]["max_acceleration"] = 10.0 # controls how fast robot moves
         self.robot_cfg["kinematics"]["extra_collision_spheres"] = {"attached_object": 100}
-        self.robot_cfg["kinematics"]["collision_sphere_buffer"] = 0.0
+        # @self.robot_cfg["kinematics"]["collision_sphere_buffer"] = 0.0
         self.robot_cfg["kinematics"]["collision_spheres"] = "spheres/franka_collision_mesh.yml"
 
         world_cfg_table = WorldConfig.from_dict(
@@ -133,16 +141,13 @@ class CuroboController(BaseController):
             trajopt_tsteps=32,
             collision_checker_type=CollisionCheckerType.MESH,
             use_cuda_graph=True,
-            num_ik_seeds=40,
-            num_trajopt_seeds=10,
-            num_graph_seeds=10,
             interpolation_dt=0.01,
             collision_cache={"obb": n_obstacle_cuboids, "mesh": n_obstacle_mesh},
             store_ik_debug=self._save_log,
             store_trajopt_debug=self._save_log,
             state_finite_difference_mode="CENTRAL",
             minimize_jerk=True,
-            acceleration_scale=0.3,
+            acceleration_scale=0.5,
             fixed_iters_trajopt=True,
         )
         self.motion_gen = MotionGen(motion_gen_config)
@@ -159,6 +164,7 @@ class CuroboController(BaseController):
         self.usd_help.load_stage(self.my_world.stage)
         self.cmd_plan = None
         self.cmd_idx = 0
+        self._step_idx = 0
         self.idx_list = None
 
     def attach_obj(
@@ -233,6 +239,7 @@ class CuroboController(BaseController):
 
         if self.cmd_plan is None:
             self.cmd_idx = 0
+            self._step_idx = 0
             # Set EE goals
             ee_translation_goal = self.my_task.target_position
             ee_orientation_goal = np.array([0, 0, -1, 0])
@@ -246,19 +253,22 @@ class CuroboController(BaseController):
             else:
                 carb.log_warn("Plan did not converge to a solution.")
                 return None
+        if self._step_idx % 3 == 0:
+            cmd_state = self.cmd_plan[self.cmd_idx]
+            self.cmd_idx += 1
 
-        cmd_state = self.cmd_plan[self.cmd_idx]
-        self.cmd_idx += 1
-        # get full dof state
-        art_action = ArticulationAction(
-            cmd_state.position.cpu().numpy(),
-            # cmd_state.velocity.cpu().numpy(),
-            joint_indices=self.idx_list,
-        )
-        if self.cmd_idx >= len(self.cmd_plan.position):
-            self.cmd_idx = 0
-            self.cmd_plan = None
-
+            # get full dof state
+            art_action = ArticulationAction(
+                cmd_state.position.cpu().numpy(),
+                # cmd_state.velocity.cpu().numpy(),
+                joint_indices=self.idx_list,
+            )
+            if self.cmd_idx >= len(self.cmd_plan.position):
+                self.cmd_idx = 0
+                self.cmd_plan = None
+        else:
+            art_action = None
+        self._step_idx += 1
         return art_action
 
     def reached_target(self, observations: dict) -> bool:
@@ -413,9 +423,39 @@ articulation_controller = my_franka.get_articulation_controller()
 set_camera_view(eye=[2, 0, 1], target=[0.00, 0.00, 0.00], camera_prim_path="/OmniverseKit_Persp")
 wait_steps = 8
 
-initial_steps = 10
+my_franka.set_solver_velocity_iteration_count(4)
+my_franka.set_solver_position_iteration_count(124)
+my_world._physics_context.set_solver_type("TGS")
+initial_steps = 100
 ################################################################
 print("Start simulation...")
+robot = my_franka
+print(
+    my_world._physics_context.get_solver_type(),
+    robot.get_solver_position_iteration_count(),
+    robot.get_solver_velocity_iteration_count(),
+)
+print(my_world._physics_context.use_gpu_pipeline)
+print(articulation_controller.get_gains())
+print(articulation_controller.get_max_efforts())
+robot = my_franka
+print("**********************")
+robot.enable_gravity()
+articulation_controller.set_gains(
+    kps=np.array(
+        [100000000, 6000000.0, 10000000, 600000.0, 25000.0, 15000.0, 50000.0, 6000.0, 6000.0]
+    )
+)
+
+
+articulation_controller.set_max_efforts(
+    values=np.array([100000, 52.199997, 100000, 52.199997, 7.2, 7.2, 7.2, 50.0, 50])
+)
+
+print("Updated gains:")
+print(articulation_controller.get_gains())
+print(articulation_controller.get_max_efforts())
+# exit()
 my_franka.gripper.open()
 for _ in range(wait_steps):
     my_world.step(render=True)
@@ -423,18 +463,11 @@ my_task.reset()
 task_finished = False
 observations = my_world.get_observations()
 my_task.get_pick_position(observations)
-robot = my_franka
-print("**********************")
-# print(robot.get_solver_position_iteration_count(), robot.get_solver_velocity_iteration_count())
-robot.enable_gravity()
-robot._articulation_view.set_gains(
-    kps=np.array([100000000, 10000000]), joint_indices=np.array([0, 2])
-)
 
-robot._articulation_view.set_max_efforts(
-    values=np.array([10000, 10000]), joint_indices=np.array([0, 2])
-)
 i = 0
+
+add_extensions(simulation_app, args.headless_mode)
+
 while simulation_app.is_running():
     my_world.step(render=True)  # necessary to visualize changes
     i += 1
@@ -481,7 +514,7 @@ while simulation_app.is_running():
         art_action = my_controller.forward(sim_js, my_franka.dof_names)
         if art_action is not None:
             articulation_controller.apply_action(art_action)
-            for _ in range(2):
-                my_world.step(render=False)
+            # for _ in range(2):
+            #    my_world.step(render=False)
 
 simulation_app.close()

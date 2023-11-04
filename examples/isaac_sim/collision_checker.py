@@ -17,8 +17,39 @@ a = torch.zeros(4, device="cuda:0")
 
 # Standard Library
 
+# Standard Library
+import argparse
+
 # Third Party
 from omni.isaac.kit import SimulationApp
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--nvblox", action="store_true", help="When True, enables headless mode", default=False
+)
+
+parser.add_argument(
+    "--headless_mode",
+    type=str,
+    default=None,
+    help="To run headless, use one of [native, websocket], webrtc might not work.",
+)
+args = parser.parse_args()
+
+simulation_app = SimulationApp(
+    {
+        "headless": args.headless_mode is not None,
+        "width": "1920",
+        "height": "1080",
+    }
+)
+# Third Party
+import carb
+import numpy as np
+from helper import add_extensions
+from omni.isaac.core import World
+from omni.isaac.core.materials import OmniPBR
+from omni.isaac.core.objects import sphere
 
 # CuRobo
 # from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
@@ -26,51 +57,12 @@ from curobo.geom.sdf.world import CollisionCheckerType
 from curobo.geom.types import WorldConfig
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
-from curobo.util_file import get_world_configs_path, join_path, load_yaml
-from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
-
-simulation_app = SimulationApp(
-    {
-        "headless": False,
-        "width": "1920",
-        "height": "1080",
-    }
-)
-# Third Party
-from omni.isaac.core.utils.extensions import enable_extension
-
-ext_list = [
-    "omni.kit.asset_converter",
-    # "omni.kit.livestream.native",
-    "omni.kit.tool.asset_importer",
-    "omni.isaac.asset_browser",
-]
-[enable_extension(x) for x in ext_list]
-
-
-# Standard Library
-import argparse
-
-# Third Party
-import carb
-import numpy as np
-from omni.isaac.core import World
-from omni.isaac.core.materials import OmniPBR
-from omni.isaac.core.objects import cuboid, sphere
 
 ########### OV #################
-from omni.isaac.core.utils.extensions import enable_extension
-from omni.isaac.core.utils.types import ArticulationAction
-
-# CuRobo
 from curobo.util.logger import setup_curobo_logger
 from curobo.util.usd_helper import UsdHelper
-
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--nvblox", action="store_true", help="When True, enables headless mode", default=False
-)
-args = parser.parse_args()
+from curobo.util_file import get_world_configs_path, join_path, load_yaml
+from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
 
 
 def draw_line(start, gradient):
@@ -154,6 +146,7 @@ def main():
     x_sph = torch.zeros((1, 1, 1, 4), device=tensor_args.device, dtype=tensor_args.dtype)
     x_sph[..., 3] = radius
 
+    add_extensions(simulation_app, args.headless_mode)
     while simulation_app.is_running():
         my_world.step(render=True)
         if not my_world.is_playing():

@@ -21,6 +21,7 @@ from curobo.cuda_robot_model.kinematics_parser import KinematicsParser, LinkPara
 from curobo.cuda_robot_model.types import JointType
 from curobo.geom.types import Mesh as CuroboMesh
 from curobo.types.base import TensorDeviceType
+from curobo.types.math import Pose
 from curobo.util.logger import log_error, log_warn
 from curobo.util_file import join_path
 
@@ -164,4 +165,16 @@ class UrdfKinematicsParser(KinematicsParser):
 
     def get_link_mesh(self, link_name):
         m = self._robot.link_map[link_name].visuals[0].geometry.mesh
-        return CuroboMesh(name=link_name, pose=None, scale=m.scale, file_path=m.filename)
+        mesh_pose = self._robot.link_map[link_name].visuals[0].origin
+        # read visual material:
+        if mesh_pose is None:
+            mesh_pose = [0, 0, 0, 1, 0, 0, 0]
+        else:
+            # convert to list:
+            mesh_pose = Pose.from_matrix(mesh_pose).to_list()
+        return CuroboMesh(
+            name=link_name,
+            pose=mesh_pose,
+            scale=m.scale,
+            file_path=m.filename,
+        )

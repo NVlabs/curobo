@@ -252,12 +252,19 @@ class CudaRobotModel(CudaRobotModelConfig):
         )
         return state
 
+    def get_robot_link_meshes(self):
+        m_list = [self.get_link_mesh(l) for l in self.kinematics_config.mesh_link_names]
+
+        return m_list
+
     def get_robot_as_mesh(self, q: torch.Tensor):
         # get all link meshes:
-        m_list = [self.get_link_mesh(l) for l in self.mesh_link_names]
-        pose = self.get_link_poses(q, self.mesh_link_names)
-        for li, l in enumerate(self.mesh_link_names):
-            m_list[li].pose = pose.get_index(0, li).tolist()
+        m_list = self.get_robot_link_meshes()
+        pose = self.get_link_poses(q, self.kinematics_config.mesh_link_names)
+        for li, l in enumerate(self.kinematics_config.mesh_link_names):
+            m_list[li].pose = (
+                Pose.from_list(m_list[li].pose).multiply(pose.get_index(0, li)).tolist()
+            )
 
         return m_list
 
@@ -344,7 +351,6 @@ class CudaRobotModel(CudaRobotModelConfig):
 
     def get_link_mesh(self, link_name: str) -> Mesh:
         mesh = self.kinematics_parser.get_link_mesh(link_name)
-        mesh.pose = [0, 0, 0, 1, 0, 0, 0]
         return mesh
 
     def get_link_transform(self, link_name: str) -> Pose:

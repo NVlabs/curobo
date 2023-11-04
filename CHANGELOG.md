@@ -10,6 +10,14 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
-## Version 0.0.0
+## Version 0.6.1
+
+- Added changes to `examples/isaac_sim` to support Isaac Sim 2023.1.0
+- Added dockerfiles and notes to run cuRobo from a docker
+- Minor cleanup of examples
+- Added option to generate log with UsdHelper from URDF file (check `examples/usd_example.py`)
+- Fix typos in robot sphere generation tutorial (thanks @cedricgoubard)
+
+## Version 0.6.0
 
 - First version of CuRobo.

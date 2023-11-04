@@ -21,6 +21,13 @@ from matplotlib import cm
 from nvblox_torch.datasets.realsense_dataset import RealsenseDataloader
 from omni.isaac.kit import SimulationApp
 
+simulation_app = SimulationApp(
+    {
+        "headless": False,
+        "width": "1920",
+        "height": "1080",
+    }
+)
 # CuRobo
 from curobo.geom.sdf.world import CollisionCheckerType
 from curobo.geom.types import Cuboid, WorldConfig
@@ -30,13 +37,6 @@ from curobo.types.math import Pose
 from curobo.util_file import get_world_configs_path, join_path, load_yaml
 from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
 
-simulation_app = SimulationApp(
-    {
-        "headless": False,
-        "width": "1920",
-        "height": "1080",
-    }
-)
 simulation_app.update()
 # Third Party
 from omni.isaac.core import World

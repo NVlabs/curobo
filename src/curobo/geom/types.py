@@ -381,7 +381,6 @@ class Mesh(Obstacle):
             m = trimesh.load(self.file_path, process=process, force="mesh")
             if isinstance(m, trimesh.Scene):
                 m = m.dump(concatenate=True)
-
             if isinstance(m.visual, trimesh.visual.texture.TextureVisuals):
                 m.visual = m.visual.to_color()
         else:
@@ -396,6 +395,26 @@ class Mesh(Obstacle):
         #    m.vertices = np.ravel(self.scale) * m.vertices
 
         return m
+
+    def update_material(self):
+        if (
+            self.color is None
+            and self.vertex_colors is None
+            and self.face_colors is None
+            and self.file_path is not None
+        ):
+            # try to load material:
+            m = trimesh.load(self.file_path, process=False, force="mesh")
+            if isinstance(m, trimesh.Scene):
+                m = m.dump(concatenate=True)
+            if isinstance(m.visual, trimesh.visual.texture.TextureVisuals):
+                m.visual = m.visual.to_color()
+            if isinstance(m.visual, trimesh.visual.color.ColorVisuals):
+                if isinstance(m.visual.vertex_colors[0], np.ndarray):
+                    self.vertex_colors = m.visual.vertex_colors
+                    self.face_colors = m.visual.face_colors
+                else:
+                    self.vertex_colors = [m.visual.vertex_colors for x in range(len(m.vertices))]
 
     def get_mesh_data(self, process: bool = True):
         verts = faces = None

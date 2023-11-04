@@ -23,7 +23,7 @@ import torch.autograd.profiler as profiler
 # CuRobo
 from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel, CudaRobotModelState
 from curobo.geom.sdf.utils import create_collision_checker
-from curobo.geom.sdf.world import WorldCollision, WorldCollisionConfig
+from curobo.geom.sdf.world import CollisionCheckerType, WorldCollision, WorldCollisionConfig
 from curobo.geom.types import WorldConfig
 from curobo.opt.newton.lbfgs import LBFGSOpt, LBFGSOptConfig
 from curobo.opt.newton.newton_base import NewtonOptBase, NewtonOptConfig
@@ -104,6 +104,7 @@ class TrajOptSolverConfig:
         num_seeds: int = 2,
         seed_ratio: Dict[str, int] = {"linear": 1.0, "bias": 0.0, "start": 0.0, "end": 0.0},
         use_particle_opt: bool = True,
+        collision_checker_type: Optional[CollisionCheckerType] = CollisionCheckerType.PRIMITIVE,
         traj_evaluator_config: TrajEvaluatorConfig = TrajEvaluatorConfig(),
         traj_evaluator: Optional[TrajEvaluator] = None,
         minimize_jerk: Optional[bool] = None,
@@ -143,6 +144,9 @@ class TrajOptSolverConfig:
             self_collision_opt = False
         if not minimize_jerk:
             filter_robot_command = False
+
+        if collision_checker_type is not None:
+            base_config_data["world_collision_checker_cfg"]["checker_type"] = collision_checker_type
 
         if world_coll_checker is None and world_model is not None:
             world_cfg = WorldCollisionConfig.load_from_dict(

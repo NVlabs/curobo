@@ -24,15 +24,16 @@ a = torch.zeros(4, device="cuda:0")
 
 # Standard Library
 import argparse
-import pickle
-import shutil
-import sys
 
 ## import curobo:
 
 parser = argparse.ArgumentParser()
+
 parser.add_argument(
-    "--headless", action="store_true", help="When True, enables headless mode", default=False
+    "--headless_mode",
+    type=str,
+    default=None,
+    help="To run headless, use one of [native, websocket], webrtc might not work.",
 )
 parser.add_argument(
     "--visualize_spheres",
@@ -50,20 +51,15 @@ args = parser.parse_args()
 from omni.isaac.kit import SimulationApp
 
 simulation_app = SimulationApp(
-    {"headless": False, "width": 1920, "height": 1080}
-)  # _make_simulation_app({"headless": False})
+    {
+        "headless": args.headless_mode is not None,
+        "width": "1920",
+        "height": "1080",
+    }
+)
+
 # Third Party
 # Enable the layers and stage windows in the UI
-from omni.isaac.core.utils.extensions import enable_extension
-
-ext_list = [
-    "omni.kit.asset_converter",
-    # "omni.kit.livestream.native",
-    "omni.kit.tool.asset_importer",
-    "omni.isaac.asset_browser",
-]
-[enable_extension(x) for x in ext_list]
-simulation_app.update()
 # Standard Library
 import os
 
@@ -72,24 +68,8 @@ import carb
 import numpy as np
 from helper import add_robot_to_scene
 from omni.isaac.core import World
-from omni.isaac.core.objects import DynamicCuboid, VisualCuboid, cuboid, sphere
-from omni.isaac.core.prims.xform_prim import XFormPrim
-
-########### OV #################
-from omni.isaac.core.utils.extensions import enable_extension
-
-# from omni.isaac.cortex.motion_commander import MotionCommand, PosePq, open_gripper, close_gripper
-from omni.isaac.core.utils.rotations import euler_angles_to_quat
-
-########### frame prim #################
-from omni.isaac.core.utils.stage import get_stage_units
+from omni.isaac.core.objects import cuboid
 from omni.isaac.core.utils.types import ArticulationAction
-from omni.isaac.cortex.cortex_object import CortexObject
-from omni.isaac.franka import KinematicsSolver
-from omni.isaac.franka.franka import Franka
-from omni.isaac.franka.tasks import FollowTarget
-from pxr import Gf
-from scipy.spatial.transform import Rotation as R
 
 # CuRobo
 from curobo.util.logger import setup_curobo_logger
@@ -111,23 +91,16 @@ DATA_DIR = os.path.join(EXT_DIR, "data")
 from typing import Optional
 
 # Third Party
-from helper import add_robot_to_scene
-from omni.isaac.core.materials import PhysicsMaterial, VisualMaterial
-from omni.isaac.core.utils.prims import add_reference_to_stage, get_prim_at_path
-from pxr import Sdf, UsdShade
+from helper import add_extensions, add_robot_to_scene
 
 # CuRobo
-from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
-from curobo.curobolib import geom_cu
-
 # from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
 from curobo.geom.sdf.world import CollisionCheckerType
 from curobo.geom.types import WorldConfig
-from curobo.rollout.cost.self_collision_cost import SelfCollisionCost, SelfCollisionCostConfig
 from curobo.rollout.rollout_base import Goal
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
-from curobo.types.robot import JointState, RobotConfig
+from curobo.types.robot import JointState
 from curobo.types.state import JointState
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
 from curobo.wrap.reacher.mpc import MpcSolver, MpcSolverConfig
@@ -271,11 +244,13 @@ def main():
 
     goal_buffer = mpc.setup_solve_single(goal, 1)
     mpc.update_goal(goal_buffer)
+    mpc_result = mpc.step(current_state, max_attempts=2)
 
     usd_help.load_stage(my_world.stage)
     init_world = False
     cmd_state_full = None
     step = 0
+    add_extensions(simulation_app, args.headless_mode)
     while simulation_app.is_running():
         if not init_world:
             for _ in range(10):
@@ -289,7 +264,7 @@ def main():
 
         step_index = my_world.current_time_step_index
 
-        if step_index == 0:
+        if step_index <= 2:
             my_world.reset()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)

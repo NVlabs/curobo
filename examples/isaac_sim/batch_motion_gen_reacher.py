@@ -17,62 +17,18 @@ a = torch.zeros(4, device="cuda:0")
 
 # Standard Library
 
-# Third Party
-from omni.isaac.kit import SimulationApp
-
-# CuRobo
-# from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
-from curobo.geom.sdf.world import CollisionCheckerType
-from curobo.geom.types import WorldConfig
-from curobo.types.base import TensorDeviceType
-from curobo.types.math import Pose
-from curobo.types.state import JointState
-from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
-from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
-from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
-
-simulation_app = SimulationApp(
-    {
-        "headless": False,
-        "width": "1920",
-        "height": "1080",
-    }
-)
-# Third Party
-from omni.isaac.core.utils.extensions import enable_extension
-
-ext_list = [
-    "omni.kit.asset_converter",
-    # "omni.kit.livestream.native",
-    "omni.kit.tool.asset_importer",
-    "omni.isaac.asset_browser",
-]
-[enable_extension(x) for x in ext_list]
-
-
 # Standard Library
 import argparse
 
-# Third Party
-import carb
-import numpy as np
-from helper import add_robot_to_scene
-from omni.isaac.core import World
-from omni.isaac.core.materials import OmniPBR
-from omni.isaac.core.objects import cuboid, sphere
-
-########### OV #################
-from omni.isaac.core.utils.extensions import enable_extension
-from omni.isaac.core.utils.types import ArticulationAction
-
-# CuRobo
-from curobo.util.logger import setup_curobo_logger
-from curobo.util.usd_helper import UsdHelper
-
 parser = argparse.ArgumentParser()
+
 parser.add_argument(
-    "--headless", action="store_true", help="When True, enables headless mode", default=False
+    "--headless_mode",
+    type=str,
+    default=None,
+    help="To run headless, use one of [native, websocket], webrtc might not work.",
 )
+
 parser.add_argument(
     "--visualize_spheres",
     action="store_true",
@@ -82,6 +38,37 @@ parser.add_argument(
 
 parser.add_argument("--robot", type=str, default="franka.yml", help="robot configuration to load")
 args = parser.parse_args()
+
+simulation_app = SimulationApp(
+    {
+        "headless": args.headless_mode is not None,
+        "width": "1920",
+        "height": "1080",
+    }
+)
+# Third Party
+import carb
+import numpy as np
+from helper import add_extensions, add_robot_to_scene
+from omni.isaac.core import World
+from omni.isaac.core.objects import cuboid
+
+########### OV #################
+from omni.isaac.core.utils.types import ArticulationAction
+from omni.isaac.kit import SimulationApp
+
+# CuRobo
+# from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
+from curobo.geom.sdf.world import CollisionCheckerType
+from curobo.geom.types import WorldConfig
+from curobo.types.base import TensorDeviceType
+from curobo.types.math import Pose
+from curobo.types.state import JointState
+from curobo.util.logger import setup_curobo_logger
+from curobo.util.usd_helper import UsdHelper
+from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
+from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
+from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
 
 def main():
@@ -180,6 +167,7 @@ def main():
         enable_graph=False, warmup_js_trajopt=False, batch=n_envs, batch_env_mode=True
     )
 
+    add_extensions(simulation_app, args.headless_mode)
     config = RobotWorldConfig.load_from_config(
         robot_file, world_cfg_list, collision_activation_distance=act_distance
     )

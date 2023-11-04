@@ -8,8 +8,15 @@
 ## without an express license agreement from NVIDIA CORPORATION or
 ## its affiliates is strictly prohibited.
 ##
-
-echo $1
-echo $2
-
-docker build --build-arg USERNAME=$USER --no-cache --build-arg USER_ID=$1 --build-arg IMAGE_TAG=$2 -f user.dockerfile --tag curobo_docker:user_$2 . 
+docker run --rm -it \
+--runtime nvidia \
+--mount type=bind,src=/home/$USER/code,target=/home/$USER/code \
+--hostname ros1-docker \
+--add-host ros1-docker:127.0.0.1 \
+--network host \
+--gpus all \
+--env ROS_HOSTNAME=localhost \
+--env DISPLAY=$DISPLAY \
+--volume /tmp/.X11-unix:/tmp/.X11-unix \
+--volume /dev/input:/dev/input \
+curobo_docker:aarch64

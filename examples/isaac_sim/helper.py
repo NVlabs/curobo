@@ -20,13 +20,41 @@ from omni.isaac.core.materials import OmniPBR
 from omni.isaac.core.objects import cuboid
 from omni.isaac.core.robots import Robot
 
+# CuRobo
+from curobo.util.logger import log_warn
+
+ISAAC_SIM_23 = False
 try:
     # Third Party
     from omni.isaac.urdf import _urdf  # isaacsim 2022.2
 except ImportError:
+    # Third Party
     from omni.importer.urdf import _urdf  # isaac sim 2023.1
+
+    ISAAC_SIM_23 = True
+# Standard Library
+from typing import Optional
+
+# Third Party
+from omni.isaac.core.utils.extensions import enable_extension
+
 # CuRobo
 from curobo.util_file import get_assets_path, get_filename, get_path_of_dir, join_path
+
+
+def add_extensions(simulation_app, headless_mode: Optional[str] = None):
+    ext_list = [
+        "omni.kit.asset_converter",
+        "omni.kit.tool.asset_importer",
+        "omni.isaac.asset_browser",
+    ]
+    if headless_mode is not None:
+        log_warn("Running in headless mode: " + headless_mode)
+        ext_list += ["omni.kit.livestream." + headless_mode]
+    [enable_extension(x) for x in ext_list]
+    simulation_app.update()
+
+    return True
 
 
 ############################################################
@@ -72,14 +100,18 @@ def add_robot_to_scene(
     # print(prim_path)
     # robot_prim = my_world.scene.stage.OverridePrim(prim_path)
     # robot_prim.GetReferences().AddReference(dest_path)
-
-    robot = my_world.scene.add(
-        Robot(
-            prim_path=robot_path,
-            name=robot_name,
-            position=position,
-        )
+    robot_p = Robot(
+        prim_path=robot_path,
+        name=robot_name,
+        position=position,
     )
+    if ISAAC_SIM_23:
+        robot_p.set_solver_velocity_iteration_count(4)
+        robot_p.set_solver_position_iteration_count(44)
+
+        my_world._physics_context.set_solver_type("PGS")
+
+    robot = my_world.scene.add(robot_p)
 
     return robot, robot_path
 

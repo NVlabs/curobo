@@ -70,17 +70,7 @@ def get_trajectory(robot_file="franka.yml", dt=1.0 / 60.0):
 
     retract_pose = Pose(state.ee_pos_seq.squeeze(), quaternion=state.ee_quat_seq.squeeze())
     start_state = JointState.from_position(retract_cfg.view(1, -1).clone() + 0.5)
-    # start_state.position[0,2] = 0.5
-    # start_state.position[0,1] = 0.5
-    # start_state.position[0,0] = 0.5
-    # print(start_state.position)
     result = motion_gen.plan_single(start_state, retract_pose)
-    # print(result.plan_state.position)
-    print(result.success)
-    # print(result.position_error)
-    # result = motion_gen.plan(
-    #    start_state, retract_pose, enable_graph=False, enable_opt=True, max_attempts=10
-    # )
     traj = result.get_interpolated_plan()  # optimized plan
     return traj
 
@@ -94,11 +84,18 @@ def save_curobo_robot_world_to_usd(robot_file="franka.yml"):
     dt = 1 / 60.0
 
     q_traj = get_trajectory(robot_file, dt)
-    q_start = q_traj[0]
+    if q_traj is not None:
+        q_start = q_traj[0]
 
-    UsdHelper.write_trajectory_animation_with_robot_usd(
-        robot_file, world_model, q_start, q_traj, save_path="test.usd"
-    )
+        UsdHelper.write_trajectory_animation_with_robot_usd(
+            robot_file,
+            world_model,
+            q_start,
+            q_traj,
+            save_path="test.usda",
+            robot_color=[0.5, 0.5, 0.2, 1.0],
+            base_frame="/grid_world_1",
+        )
 
 
 def save_curobo_robot_to_usd(robot_file="franka.yml"):
@@ -168,4 +165,6 @@ def read_robot_from_usd(robot_file: str = "franka.yml"):
 
 
 if __name__ == "__main__":
-    save_curobo_world_to_usd()
+    # save_curobo_world_to_usd()
+
+    save_curobo_robot_world_to_usd("franka.yml")
