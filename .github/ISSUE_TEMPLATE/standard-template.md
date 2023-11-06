@@ -1,6 +1,6 @@
 ---
 name: Standard Template
-about: Use https://github.com/NVlabs/curobo/discussions if it's not a bug
+about: standard issue template
 title: ''
 labels: ''
 assignees: balakumar-s
