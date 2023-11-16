@@ -43,35 +43,35 @@ RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selectio
 
 # Set timezone info
 RUN apt-get update && apt-get install -y \
-    tzdata \
-    software-properties-common \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -fs /usr/share/zoneinfo/America/Los_Angeles /etc/localtime \
-    && echo "America/Los_Angeles" > /etc/timezone \
-    && dpkg-reconfigure -f noninteractive tzdata \
-    && add-apt-repository -y ppa:git-core/ppa \
-    && apt-get update && apt-get install -y \
-    curl \
-    lsb-core \
-    wget \
-    build-essential \
-    cmake \
-    git \
-    git-lfs \
-    iputils-ping \
-    make \
-    openssh-server \
-    openssh-client \
-    libeigen3-dev \
-    libssl-dev \
-    python3-pip \
-    python3-ipdb \
-    python3-tk \
-    python3-wstool \
-    sudo git bash unattended-upgrades \
-    apt-utils \
-    terminator \
-    && rm -rf /var/lib/apt/lists/*
+  tzdata \
+  software-properties-common \
+  && rm -rf /var/lib/apt/lists/* \
+  && ln -fs /usr/share/zoneinfo/America/Los_Angeles /etc/localtime \
+  && echo "America/Los_Angeles" > /etc/timezone \
+  && dpkg-reconfigure -f noninteractive tzdata \
+  && add-apt-repository -y ppa:git-core/ppa \
+  && apt-get update && apt-get install -y \
+  curl \
+  lsb-core \
+  wget \
+  build-essential \
+  cmake \
+  git \
+  git-lfs \
+  iputils-ping \
+  make \
+  openssh-server \
+  openssh-client \
+  libeigen3-dev \
+  libssl-dev \
+  python3-pip \
+  python3-ipdb \
+  python3-tk \
+  python3-wstool \
+  sudo git bash unattended-upgrades \
+  apt-utils \
+  terminator \
+  && rm -rf /var/lib/apt/lists/*
 
 
 # https://catalog.ngc.nvidia.com/orgs/nvidia/containers/cudagl
@@ -91,9 +91,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl1.1 \
     wget \
     vulkan-utils \
-    && apt-get -y autoremove \
-    && apt-get clean autoclean \
-    && rm -rf /var/lib/apt/lists/*
+&& apt-get -y autoremove \
+&& apt-get clean autoclean \
+&& rm -rf /var/lib/apt/lists/*
 
 
 
@@ -122,15 +122,15 @@ ENV NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=all
 
 # Open ports for live streaming
 EXPOSE 47995-48012/udp \
-    47995-48012/tcp \
-    49000-49007/udp \
-    49000-49007/tcp \
-    49100/tcp \
-    8011/tcp \
-    8012/tcp \
-    8211/tcp \
-    8899/tcp \
-    8891/tcp
+       47995-48012/tcp \
+       49000-49007/udp \
+       49000-49007/tcp \
+       49100/tcp \
+       8011/tcp \
+       8012/tcp \
+       8211/tcp \
+       8899/tcp \
+       8891/tcp
 
 ENV OMNI_SERVER http://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/${ISAAC_SIM_VERSION}
 # ENV OMNI_SERVER omniverse://localhost/NVIDIA/Assets/Isaac/2022.1
