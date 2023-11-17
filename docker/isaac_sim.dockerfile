@@ -171,7 +171,7 @@ RUN mkdir /pkgs && cd /pkgs && git clone https://github.com/NVlabs/curobo.git
 RUN $omni_python -m pip install ninja wheel tomli
 
 
-RUN cd /pkgs/curobo && $omni_python -m pip install .[dev, isaac_sim] --no-build-isolation
+RUN cd /pkgs/curobo && $omni_python -m pip install .[dev,isaac_sim] --no-build-isolation
 
 # Optionally install nvblox:
 
