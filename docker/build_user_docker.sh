@@ -10,6 +10,6 @@
 ##
 
 echo $1
-echo $2
+USER_ID=$(id -g "$USER")
 
-docker build --build-arg USERNAME=$USER --no-cache --build-arg USER_ID=$1 --build-arg IMAGE_TAG=$2 -f user.dockerfile --tag curobo_docker:user_$2 . 
+docker build --build-arg USERNAME="$USER" --no-cache --build-arg USER_ID="$USER_ID" --build-arg IMAGE_TAG="$1" -f user.dockerfile --tag curobo_docker:user_"$1" . 
