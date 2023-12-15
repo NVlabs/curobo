@@ -170,7 +170,7 @@ RUN cd /pkgs &&  git clone https://github.com/valtsblukis/nvblox.git && \
 
 RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
     cd nvblox_torch && \
-    sh install.sh $(python -c 'import torch.utils; print(torch.utils.cmake_prefix_path)') && \
+    sh install.sh $(python3 -c 'import torch.utils; print(torch.utils.cmake_prefix_path)') && \
     python3 -m pip install -e .
   
 RUN python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
