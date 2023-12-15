@@ -128,6 +128,9 @@ RUN pip3 install trimesh \
   rosdep \
   empy
 
+# Add cache date to avoid using cached layers older than this
+ARG CACHE_DATE=2023-12-15 
+
 # warp from https://github.com/NVIDIA/warp needs to be compiled locally and then 
 # placed in curobo/docker/pkgs. 
 # Run the following from your terminal:
@@ -149,10 +152,12 @@ ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
 
 RUN cd /pkgs/curobo && pip3 install . --no-build-isolation
 
+WORKDIR /pkgs/curobo
+
 # Optionally install nvblox:
 
 RUN apt-get update && \
-    apt-get install -y libgoogle-glog-dev libgtest-dev curl libsqlite3-dev && \
+    apt-get install -y libgoogle-glog-dev libgtest-dev curl libsqlite3-dev libbenchmark-dev && \
     cd /usr/src/googletest && cmake . && cmake --build . --target install && \
     rm -rf /var/lib/apt/lists/*
 
@@ -164,5 +169,9 @@ RUN cd /pkgs &&  git clone https://github.com/valtsblukis/nvblox.git && \
 
 RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
     cd nvblox_torch && \
-    sh install.sh
+    sh install.sh $(python -c 'import torch.utils; print(torch.utils.cmake_prefix_path)')
+  
+RUN python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
+# upgrade typing extensions:
+RUN python3 -m pip install typing-extensions --upgrade

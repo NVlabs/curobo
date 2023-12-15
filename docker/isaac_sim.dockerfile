@@ -159,6 +159,10 @@ ENV omni_python='/isaac-sim/python.sh'
 
 RUN echo "alias omni_python='/isaac-sim/python.sh'" >> /.bashrc
 
+
+# Add cache date to avoid using cached layers older than this
+ARG CACHE_DATE=2023-12-15 
+
 RUN $omni_python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
 # if you want to use a different version of curobo, create folder as docker/pkgs and put your
@@ -173,6 +177,8 @@ RUN $omni_python -m pip install ninja wheel tomli
 
 
 RUN cd /pkgs/curobo && $omni_python -m pip install .[dev] --no-build-isolation
+
+WORKDIR /pkgs/curobo
 
 # Optionally install nvblox:
 
@@ -246,4 +252,5 @@ RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
 # install realsense for nvblox demos:
 RUN $omni_python -m pip install pyrealsense2 opencv-python transforms3d
 
+RUN $omni_python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
