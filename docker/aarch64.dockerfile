@@ -150,11 +150,12 @@ RUN cd /pkgs && git clone https://github.com/NVlabs/curobo.git
 
 ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
 
-RUN cd /pkgs/curobo && pip3 install . --no-build-isolation
+RUN cd /pkgs/curobo && pip3 install .[dev] --no-build-isolation
 
 WORKDIR /pkgs/curobo
 
 # Optionally install nvblox:
+ENV  PYOPENGL_PLATFORM=egl
 
 RUN apt-get update && \
     apt-get install -y libgoogle-glog-dev libgtest-dev curl libsqlite3-dev libbenchmark-dev && \
@@ -169,9 +170,13 @@ RUN cd /pkgs &&  git clone https://github.com/valtsblukis/nvblox.git && \
 
 RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
     cd nvblox_torch && \
-    sh install.sh $(python -c 'import torch.utils; print(torch.utils.cmake_prefix_path)')
+    sh install.sh $(python -c 'import torch.utils; print(torch.utils.cmake_prefix_path)') && \
+    python3 -m pip install -e .
   
 RUN python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
 # upgrade typing extensions:
 RUN python3 -m pip install typing-extensions --upgrade
+
+# numpy can regress to an older version, upgrading.
+RUN python3 -m pip install numpy --upgrade
