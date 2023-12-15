@@ -176,6 +176,7 @@ class KinematicModel(KinematicModelConfig):
         self._use_clique_kernel = True
         self.d_state = 4 * self.n_dofs  # + 1
         self.d_action = self.n_dofs
+        self.d_dof = self.n_dofs
 
         # Variables for enforcing joint limits
         self.joint_names = self.robot_model.joint_names
@@ -190,7 +191,7 @@ class KinematicModel(KinematicModelConfig):
                 device=self.tensor_args.device,
                 dtype=self.tensor_args.dtype,
             ),
-            dof=int(self.d_state / 3),
+            dof=int(self.d_dof),
         )
         self.Z = torch.tensor([0.0], device=self.tensor_args.device, dtype=self.tensor_args.dtype)
 
@@ -204,10 +205,18 @@ class KinematicModel(KinematicModelConfig):
             # self._cmd_step_fn = TensorStepAcceleration(self.tensor_args, self.traj_dt)
 
             self._rollout_step_fn = TensorStepAccelerationKernel(
-                self.tensor_args, self.traj_dt, self.n_dofs
+                self.tensor_args,
+                self.traj_dt,
+                self.n_dofs,
+                self.batch_size,
+                self.horizon,
             )
             self._cmd_step_fn = TensorStepAccelerationKernel(
-                self.tensor_args, self.traj_dt, self.n_dofs
+                self.tensor_args,
+                self.traj_dt,
+                self.n_dofs,
+                self.batch_size,
+                self.horizon,
             )
         elif self.control_space == StateType.VELOCITY:
             raise NotImplementedError()
@@ -215,8 +224,12 @@ class KinematicModel(KinematicModelConfig):
             raise NotImplementedError()
         elif self.control_space == StateType.POSITION:
             if self.teleport_mode:
-                self._rollout_step_fn = TensorStepPositionTeleport(self.tensor_args)
-                self._cmd_step_fn = TensorStepPositionTeleport(self.tensor_args)
+                self._rollout_step_fn = TensorStepPositionTeleport(
+                    self.tensor_args, self.batch_size, self.horizon
+                )
+                self._cmd_step_fn = TensorStepPositionTeleport(
+                    self.tensor_args, self.batch_size, self.horizon
+                )
             else:
                 if self._use_clique:
                     if self._use_clique_kernel:
@@ -237,6 +250,8 @@ class KinematicModel(KinematicModelConfig):
                             filter_velocity=False,
                             filter_acceleration=False,
                             filter_jerk=False,
+                            batch_size=self.batch_size,
+                            horizon=self.horizon,
                         )
                         self._cmd_step_fn = TensorStepPositionCliqueKernel(
                             self.tensor_args,
@@ -246,17 +261,36 @@ class KinematicModel(KinematicModelConfig):
                             filter_velocity=False,
                             filter_acceleration=self.filter_robot_command,
                             filter_jerk=self.filter_robot_command,
+                            batch_size=self.batch_size,
+                            horizon=self.horizon,
                         )
 
                     else:
                         self._rollout_step_fn = TensorStepPositionClique(
-                            self.tensor_args, self.traj_dt
+                            self.tensor_args,
+                            self.traj_dt,
+                            batch_size=self.batch_size,
+                            horizon=self.horizon,
                         )
-                        self._cmd_step_fn = TensorStepPositionClique(self.tensor_args, self.traj_dt)
+                        self._cmd_step_fn = TensorStepPositionClique(
+                            self.tensor_args,
+                            self.traj_dt,
+                            batch_size=self.batch_size,
+                            horizon=self.horizon,
+                        )
                 else:
-                    self._rollout_step_fn = TensorStepPosition(self.tensor_args, self.traj_dt)
-                    self._cmd_step_fn = TensorStepPosition(self.tensor_args, self.traj_dt)
-
+                    self._rollout_step_fn = TensorStepPosition(
+                        self.tensor_args,
+                        self.traj_dt,
+                        batch_size=self.batch_size,
+                        horizon=self.horizon,
+                    )
+                    self._cmd_step_fn = TensorStepPosition(
+                        self.tensor_args,
+                        self.traj_dt,
+                        batch_size=self.batch_size,
+                        horizon=self.horizon,
+                    )
         self.update_batch_size(self.batch_size)
 
         self.state_filter = JointStateFilter(self.state_filter_cfg)
@@ -542,10 +576,10 @@ class KinematicModel(KinematicModelConfig):
         # output should be d_action * horizon
         if self.control_space == StateType.POSITION:
             # use joint limits:
-            return self.retract_config.unsqueeze(0).repeat(self.horizon, 1)
+            return self.retract_config.unsqueeze(0).repeat(self.action_horizon, 1)
         if self.control_space == StateType.VELOCITY or self.control_space == StateType.ACCELERATION:
             # use joint limits:
-            return self.retract_config.unsqueeze(0).repeat(self.horizon, 1) * 0.0
+            return self.retract_config.unsqueeze(0).repeat(self.action_horizon, 1) * 0.0
 
     @property
     def retract_config(self):
@@ -566,6 +600,10 @@ class KinematicModel(KinematicModelConfig):
     @property
     def max_jerk(self):
         return self.get_state_bounds().jerk[1, 0].item()
+
+    @property
+    def action_horizon(self):
+        return self._rollout_step_fn.action_horizon
 
     def get_state_bounds(self):
         joint_limits = self.robot_model.get_joint_limits()

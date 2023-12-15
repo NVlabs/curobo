@@ -27,7 +27,8 @@ robot_cfg:
     extra_links: null
 
     
-    collision_link_names: ['shoulder_link','upper_arm_link', 'forearm_link', 'wrist_1_link', 'wrist_2_link' ,'wrist_3_link'] # List[str]
+    collision_link_names: ['shoulder_link','upper_arm_link', 'forearm_link', 'wrist_1_link', 
+    'wrist_2_link' ,'wrist_3_link', 'tool0'] # List[str]
     collision_spheres:
       shoulder_link:
         - "center": [0.0, 0.0, 0.0]
@@ -89,14 +90,19 @@ robot_cfg:
       wrist_3_link:
         - "center": [0.001, 0.001, -0.029]
           "radius": 0.043
+      tool0:
+        - "center": [0.001, 0.001, 0.05]
+          "radius": 0.05
+
 
     collision_sphere_buffer: 0.005
     extra_collision_spheres: {}
     self_collision_ignore: {
       "upper_arm_link": ["forearm_link", "shoulder_link"],
       "forearm_link": ["wrist_1_link", "wrist_2_link", "wrist_3_link"],
-      "wrist_1_link": ["wrist_2_link","wrist_3_link"],
-      "wrist_2_link": ["wrist_3_link"],
+      "wrist_1_link": ["wrist_2_link","wrist_3_link","tool0"],
+      "wrist_2_link": ["wrist_3_link", "tool0"],
+      "wrist_3_link": ["tool0"],
       }
     self_collision_buffer: {'upper_arm_link': 0, 
       'forearm_link': 0, 
@@ -106,7 +112,8 @@ robot_cfg:
       } 
       
     use_global_cumul: True
-    mesh_link_names: null # List[str]
+    mesh_link_names:  ['shoulder_link','upper_arm_link', 'forearm_link', 'wrist_1_link', 
+    'wrist_2_link' ,'wrist_3_link'] # List[str]
 
     cspace:
       joint_names: ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
@@ -114,4 +121,5 @@ robot_cfg:
       null_space_weight:  [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
       cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
       max_jerk: 500.0
-      max_acceleration: 15.0
+      max_acceleration: 12.0
+      position_limit_clip: 0.1

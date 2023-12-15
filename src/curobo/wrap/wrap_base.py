@@ -42,6 +42,7 @@ class WrapResult:
     metrics: Optional[RolloutMetrics] = None
     debug: Any = None
     js_action: Optional[State] = None
+    raw_action: Optional[torch.Tensor] = None
 
     def clone(self):
         return WrapResult(
@@ -155,6 +156,7 @@ class WrapBase(WrapConfig):
             solve_time=self.opt_dt,
             metrics=metrics,
             debug={"steps": self.get_debug_data(), "cost": self.get_debug_cost()},
+            raw_action=act_seq,
         )
         return result
 

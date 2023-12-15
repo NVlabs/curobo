@@ -136,6 +136,9 @@ class CudaRobotGeneratorConfig:
 
     use_external_assets: bool = False
 
+    external_asset_path: Optional[str] = None
+    external_robot_configs_path: Optional[str] = None
+
     #: Create n collision spheres for links with name
     extra_collision_spheres: Optional[Dict[str, int]] = None
 
@@ -144,18 +147,20 @@ class CudaRobotGeneratorConfig:
 
     def __post_init__(self):
         # add root path:
-        if self.urdf_path is not None:
-            self.urdf_path = join_path(get_assets_path(), self.urdf_path)
-        if self.usd_path is not None:
-            self.usd_path = join_path(get_assets_path(), self.usd_path)
-        if self.asset_root_path != "":
-            if self.use_external_assets:
-                with importlib_resources.files("content") as path:
-                    content_dir_posix = path
-                self.asset_root_path = join_path(content_dir_posix, self.asset_root_path)
+        # Check if an external asset path is provided:
+        asset_path = get_assets_path()
+        robot_path = get_robot_configs_path()
+        if self.external_asset_path is not None:
+            asset_path = self.external_asset_path
+        if self.external_robot_configs_path is not None:
+            robot_path = self.external_robot_configs_path
 
-            else:
-                self.asset_root_path = join_path(get_assets_path(), self.asset_root_path)
+        if self.urdf_path is not None:
+            self.urdf_path = join_path(asset_path, self.urdf_path)
+        if self.usd_path is not None:
+            self.usd_path = join_path(asset_path, self.usd_path)
+        if self.asset_root_path != "":
+            self.asset_root_path = join_path(asset_path, self.asset_root_path)
         elif self.urdf_path is not None:
             self.asset_root_path = os.path.dirname(self.urdf_path)
 
@@ -178,7 +183,7 @@ class CudaRobotGeneratorConfig:
             self.link_names.append(self.ee_link)
         if self.collision_spheres is not None:
             if isinstance(self.collision_spheres, str):
-                coll_yml = join_path(get_robot_configs_path(), self.collision_spheres)
+                coll_yml = join_path(robot_path, self.collision_spheres)
                 coll_params = load_yaml(coll_yml)
 
                 self.collision_spheres = coll_params["collision_spheres"]
@@ -399,7 +404,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
 
         joint_map = [
             -1 if i not in self._controlled_joints else i for i in range(len(self._bodies))
-        ]
+        ]  #
         joint_map_type = [
             -1 if i not in self._controlled_joints else i for i in range(len(self._bodies))
         ]
@@ -885,4 +890,11 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 self.cspace.max_acceleration.unsqueeze(0),
             ]
         )
+        # clip joint position:
+        # TODO: change this to be per joint
+        joint_limits["position"][0] += self.cspace.position_limit_clip
+        joint_limits["position"][1] -= self.cspace.position_limit_clip
+        joint_limits["velocity"][0] *= self.cspace.velocity_scale
+        joint_limits["velocity"][1] *= self.cspace.velocity_scale
+
         self._joint_limits = JointLimits(joint_names=self.joint_names, **joint_limits)

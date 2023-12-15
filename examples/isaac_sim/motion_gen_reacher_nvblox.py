@@ -145,18 +145,12 @@ def main():
         tensor_args,
         trajopt_tsteps=32,
         collision_checker_type=CollisionCheckerType.BLOX,
+        collision_activation_distance=0.005,
         use_cuda_graph=True,
         num_trajopt_seeds=12,
         num_graph_seeds=12,
         interpolation_dt=0.03,
-        collision_activation_distance=0.025,
-        acceleration_scale=1.0,
-        self_collision_check=True,
-        maximum_trajectory_dt=0.25,
-        finetune_dt_scale=1.05,
-        fixed_iters_trajopt=True,
-        finetune_trajopt_iters=500,
-        minimize_jerk=False,
+        # fixed_iters_trajopt=True,
     )
     motion_gen = MotionGen(motion_gen_config)
     print("warming up...")
@@ -188,7 +182,7 @@ def main():
 
         step_index = my_world.current_time_step_index
         # print(step_index)
-        if step_index == 0:
+        if step_index <= 2:
             my_world.reset()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
@@ -240,7 +234,7 @@ def main():
         if (
             np.linalg.norm(cube_position - target_pose) > 1e-3
             and np.linalg.norm(past_pose - cube_position) == 0.0
-            and np.linalg.norm(sim_js.velocities) < 0.2
+            and np.max(np.abs(sim_js.velocities)) < 0.2
         ):
             # Set EE teleop goals, use cube for simple non-vr init:
             ee_translation_goal = cube_position

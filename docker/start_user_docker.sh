@@ -11,23 +11,23 @@
 ##
 
 
-input_arg="$1"
+input_arg=$1
 
 
 if [ -z "$input_arg" ]; then
     echo "Argument empty, trying to run based on architecture"
-    arch=$(uname -m)
-    if [ "$arch" == "x86_64" ]; then
+    arch=`uname -m`
+    if [ $arch == "x86_64" ]; then
         input_arg="x86"
-    elif [ "$arch" == "arm64" ]; then
+    elif [ $arch == "arm64" ]; then
         input_arg="aarch64"
-    elif [ "$arch" == "aarch64" ]; then
+    elif [ $arch == "aarch64" ]; then
         input_arg="aarch64"
     fi
 fi
 
 
-if [ "$input_arg" == "x86" ]; then
+if [ $input_arg == "x86" ]; then
 
     docker run --rm -it \
     --privileged \
@@ -41,9 +41,9 @@ if [ "$input_arg" == "x86" ]; then
     --env DISPLAY=unix$DISPLAY \
     --volume /tmp/.X11-unix:/tmp/.X11-unix \
     --volume /dev:/dev \
-    curobo_docker:user_$1
+    curobo_docker:user_$input_arg
 
-elif [ "$input_arg" == "aarch64" ]; then
+elif [ $input_arg == "aarch64" ]; then
 
     docker run --rm -it \
     --runtime nvidia \
@@ -56,10 +56,23 @@ elif [ "$input_arg" == "aarch64" ]; then
     --volume /tmp/.X11-unix:/tmp/.X11-unix \
     --volume /dev/input:/dev/input \
     --mount type=bind,src=/home/$USER/code,target=/home/$USER/code \
-    curobo_docker:user_$1
+    curobo_docker:user_$input_arg
 
-elif [[ "$input_arg" == *isaac_sim* ]] ; then
-   echo "Isaac Sim User Docker is not supported" 
+elif [[ $input_arg == *isaac_sim* ]] ; then
+   echo "Isaac Sim Dev Docker is not supported" 
 else
-    echo "Unknown docker"
+    echo "Unknown docker, launching blindly"
+    docker run --rm -it \
+    --privileged \
+    -e NVIDIA_DISABLE_REQUIRE=1 \
+    -e NVIDIA_DRIVER_CAPABILITIES=all  --device /dev/dri \
+    --mount type=bind,src=/home/$USER/code,target=/home/$USER/code \
+    --hostname ros1-docker \
+    --add-host ros1-docker:127.0.0.1 \
+    --gpus all \
+    --network host \
+    --env DISPLAY=unix$DISPLAY \
+    --volume /tmp/.X11-unix:/tmp/.X11-unix \
+    --volume /dev:/dev \
+    curobo_docker:user_$input_arg
 fi

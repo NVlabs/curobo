@@ -11,21 +11,32 @@
 
 # Standard Library
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 # Third Party
 import numpy as np
-from robometrics.statistics import Statistic, TrajectoryGroupMetrics, TrajectoryMetrics
+from robometrics.statistics import (
+    Statistic,
+    TrajectoryGroupMetrics,
+    TrajectoryMetrics,
+    percent_true,
+)
 
 
 @dataclass
 class CuroboMetrics(TrajectoryMetrics):
     time: float = np.inf
+    cspace_path_length: float = 0.0
+    perception_success: bool = False
+    perception_interpolated_success: bool = False
 
 
 @dataclass
 class CuroboGroupMetrics(TrajectoryGroupMetrics):
     time: float = np.inf
+    cspace_path_length: Optional[Statistic] = None
+    perception_success: float = 0.0
+    perception_interpolated_success: float = 0.0
 
     @classmethod
     def from_list(cls, group: List[CuroboMetrics]):
@@ -33,4 +44,10 @@ class CuroboGroupMetrics(TrajectoryGroupMetrics):
         successes = [m for m in unskipped if m.success]
         data = super().from_list(group)
         data.time = Statistic.from_list([m.time for m in successes])
+        data.cspace_path_length = Statistic.from_list([m.cspace_path_length for m in successes])
+        data.perception_success = percent_true([m.perception_success for m in group])
+        data.perception_interpolated_success = percent_true(
+            [m.perception_interpolated_success for m in group]
+        )
+
         return data

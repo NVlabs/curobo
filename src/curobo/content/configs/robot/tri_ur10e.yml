@@ -56,6 +56,9 @@ robot_cfg:
       'shoulder_link_2': 0.05,
        }
     lock_joints: null
+    mesh_link_names: ['shoulder_link','upper_arm_link', 'forearm_link', 'wrist_1_link', 'wrist_2_link' ,'wrist_3_link',
+      'shoulder_link_1','upper_arm_link_1', 'forearm_link_1', 'wrist_1_link_1', 'wrist_2_link_1' ,'wrist_3_link_1', 
+      'shoulder_link_2','upper_arm_link_2', 'forearm_link_2', 'wrist_1_link_2', 'wrist_2_link_2' ,'wrist_3_link_2']
 
     cspace:
       joint_names: [

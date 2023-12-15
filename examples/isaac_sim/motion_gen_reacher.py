@@ -26,6 +26,18 @@ parser.add_argument(
     help="To run headless, use one of [native, websocket], webrtc might not work.",
 )
 parser.add_argument("--robot", type=str, default="franka.yml", help="robot configuration to load")
+parser.add_argument(
+    "--external_asset_path",
+    type=str,
+    default=None,
+    help="Path to external assets when loading an externally located robot",
+)
+parser.add_argument(
+    "--external_robot_configs_path",
+    type=str,
+    default=None,
+    help="Path to external robot config when loading an external robot",
+)
 
 parser.add_argument(
     "--visualize_spheres",
@@ -33,7 +45,12 @@ parser.add_argument(
     help="When True, visualizes robot spheres",
     default=False,
 )
-
+parser.add_argument(
+    "--reactive",
+    action="store_true",
+    help="When True, runs in reactive mode",
+    default=False,
+)
 args = parser.parse_args()
 
 ############################################################
@@ -69,7 +86,7 @@ from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.robot import JointState
 from curobo.types.state import JointState
-from curobo.util.logger import setup_curobo_logger
+from curobo.util.logger import log_error, setup_curobo_logger
 from curobo.util.usd_helper import UsdHelper
 from curobo.util_file import (
     get_assets_path,
@@ -114,16 +131,22 @@ def main():
     setup_curobo_logger("warn")
     past_pose = None
     n_obstacle_cuboids = 30
-    n_obstacle_mesh = 10
+    n_obstacle_mesh = 100
 
     # warmup curobo instance
     usd_help = UsdHelper()
     target_pose = None
 
     tensor_args = TensorDeviceType()
+    robot_cfg_path = get_robot_configs_path()
+    if args.external_robot_configs_path is not None:
+        robot_cfg_path = args.external_robot_configs_path
+    robot_cfg = load_yaml(join_path(robot_cfg_path, args.robot))["robot_cfg"]
 
-    robot_cfg = load_yaml(join_path(get_robot_configs_path(), args.robot))["robot_cfg"]
-
+    if args.external_asset_path is not None:
+        robot_cfg["kinematics"]["external_asset_path"] = args.external_asset_path
+    if args.external_robot_configs_path is not None:
+        robot_cfg["kinematics"]["external_robot_configs_path"] = args.external_robot_configs_path
     j_names = robot_cfg["kinematics"]["cspace"]["joint_names"]
     default_config = robot_cfg["kinematics"]["cspace"]["retract_config"]
 
@@ -143,35 +166,45 @@ def main():
 
     world_cfg = WorldConfig(cuboid=world_cfg_table.cuboid, mesh=world_cfg1.mesh)
 
+    trajopt_dt = None
+    optimize_dt = True
+    trajopt_tsteps = 32
+    trim_steps = None
+    max_attempts = 4
+    if args.reactive:
+        trajopt_tsteps = 36
+        trajopt_dt = 0.05
+        optimize_dt = False
+        max_attemtps = 1
+        trim_steps = [1, None]
     motion_gen_config = MotionGenConfig.load_from_robot_config(
         robot_cfg,
         world_cfg,
         tensor_args,
-        trajopt_tsteps=32,
         collision_checker_type=CollisionCheckerType.MESH,
-        use_cuda_graph=True,
         num_trajopt_seeds=12,
         num_graph_seeds=12,
-        interpolation_dt=0.03,
+        interpolation_dt=0.05,
         collision_cache={"obb": n_obstacle_cuboids, "mesh": n_obstacle_mesh},
-        collision_activation_distance=0.025,
-        acceleration_scale=1.0,
-        self_collision_check=True,
-        maximum_trajectory_dt=0.25,
-        fixed_iters_trajopt=True,
-        finetune_dt_scale=1.05,
-        velocity_scale=[0.25, 1, 1, 1, 1.0, 1.0, 1.0, 1.0, 1.0],
+        optimize_dt=optimize_dt,
+        trajopt_dt=trajopt_dt,
+        trajopt_tsteps=trajopt_tsteps,
+        trim_steps=trim_steps,
     )
     motion_gen = MotionGen(motion_gen_config)
     print("warming up...")
-    motion_gen.warmup(enable_graph=False, warmup_js_trajopt=False)
+    motion_gen.warmup(enable_graph=True, warmup_js_trajopt=False, parallel_finetune=True)
 
     print("Curobo is Ready")
 
     add_extensions(simulation_app, args.headless_mode)
 
     plan_config = MotionGenPlanConfig(
-        enable_graph=False, enable_graph_attempt=4, max_attempts=2, enable_finetune_trajopt=True
+        enable_graph=False,
+        enable_graph_attempt=2,
+        max_attempts=max_attempts,
+        enable_finetune_trajopt=True,
+        parallel_finetune=True,
     )
 
     usd_help.load_stage(my_world.stage)
@@ -182,7 +215,7 @@ def main():
     my_world.scene.add_default_ground_plane()
     i = 0
     spheres = None
-
+    past_cmd = None
     while simulation_app.is_running():
         my_world.step(render=True)
         if not my_world.is_playing():
@@ -219,6 +252,7 @@ def main():
                     "/curobo",
                 ],
             ).get_collision_check_world()
+            print(len(obstacles.objects))
 
             motion_gen.update_world(obstacles)
             print("Updated World")
@@ -234,13 +268,24 @@ def main():
 
         sim_js = robot.get_joints_state()
         sim_js_names = robot.dof_names
+        if np.any(np.isnan(sim_js.positions)):
+            log_error("isaac sim has returned NAN joint position values.")
         cu_js = JointState(
             position=tensor_args.to_device(sim_js.positions),
-            velocity=tensor_args.to_device(sim_js.velocities) * 0.0,
+            velocity=tensor_args.to_device(sim_js.velocities),  # * 0.0,
             acceleration=tensor_args.to_device(sim_js.velocities) * 0.0,
             jerk=tensor_args.to_device(sim_js.velocities) * 0.0,
             joint_names=sim_js_names,
         )
+
+        if not args.reactive:
+            cu_js.velocity *= 0.0
+            cu_js.acceleration *= 0.0
+
+        if args.reactive and past_cmd is not None:
+            cu_js.position[:] = past_cmd.position
+            cu_js.velocity[:] = past_cmd.velocity
+            cu_js.acceleration[:] = past_cmd.acceleration
         cu_js = cu_js.get_ordered_joint_state(motion_gen.kinematics.joint_names)
 
         if args.visualize_spheres and step_index % 2 == 0:
@@ -260,12 +305,17 @@ def main():
                     spheres.append(sp)
             else:
                 for si, s in enumerate(sph_list[0]):
-                    spheres[si].set_world_pose(position=np.ravel(s.position))
-                    spheres[si].set_radius(float(s.radius))
+                    if not np.isnan(s.position[0]):
+                        spheres[si].set_world_pose(position=np.ravel(s.position))
+                        spheres[si].set_radius(float(s.radius))
+
+        robot_static = False
+        if (np.max(np.abs(sim_js.velocities)) < 0.2) or args.reactive:
+            robot_static = True
         if (
             np.linalg.norm(cube_position - target_pose) > 1e-3
             and np.linalg.norm(past_pose - cube_position) == 0.0
-            and np.linalg.norm(sim_js.velocities) < 0.2
+            and robot_static
         ):
             # Set EE teleop goals, use cube for simple non-vr init:
             ee_translation_goal = cube_position
@@ -303,7 +353,7 @@ def main():
         past_pose = cube_position
         if cmd_plan is not None:
             cmd_state = cmd_plan[cmd_idx]
-
+            past_cmd = cmd_state.clone()
             # get full dof state
             art_action = ArticulationAction(
                 cmd_state.position.cpu().numpy(),
@@ -318,6 +368,7 @@ def main():
             if cmd_idx >= len(cmd_plan.position):
                 cmd_idx = 0
                 cmd_plan = None
+                past_cmd = None
     simulation_app.close()
 
 

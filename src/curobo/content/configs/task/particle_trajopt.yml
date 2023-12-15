@@ -31,6 +31,15 @@ cost:
   pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     run_vec_weight: [1.0,1.0,1.0,1.0,1.0,1.0] # running weight 
+    weight: [250.0, 5000.0, 20, 20]
+    vec_convergence: [0.0,0.0,1000.0,1000.0] 
+    terminal: True
+    run_weight: 0.00 
+    use_metric: True
+  
+  link_pose_cfg:
+    vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    run_vec_weight: [1.0,1.0,1.0,1.0,1.0,1.0] # running weight 
     weight: [250.0, 5000.0, 40, 40]
     vec_convergence: [0.0,0.0,1000.0,1000.0] 
     terminal: True
@@ -38,14 +47,14 @@ cost:
     use_metric: True
  
   cspace_cfg:
-    weight: 500.0
+    weight: 10000.0
     terminal: True
-    run_weight: 0.001
+    run_weight: 0.0
 
   bound_cfg:
     weight: [0.1, 0.1,0.0,0.0]
     activation_distance: [0.0,0.0,0.0,0.0] #-#0.01
-    smooth_weight: [0.0,100.0,1.0,0.0]
+    smooth_weight: [0.0,20.0,0.0,0.0]
     run_weight_velocity: 0.0
     run_weight_acceleration: 1.0
     run_weight_jerk: 1.0
@@ -68,7 +77,7 @@ cost:
 
 
 mppi:
-  init_cov          : 0.1 #0.5 
+  init_cov          : 0.5
   gamma             : 1.0
   n_iters           : 2
   cold_start_n_iters: 2

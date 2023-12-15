@@ -691,8 +691,6 @@ class PoseCost(CostBase, PoseCostConfig):
             )
 
         cost = distance
-
-        # print(cost.shape)
         return cost
 
     def forward_pose(

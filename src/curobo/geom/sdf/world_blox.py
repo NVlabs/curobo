@@ -76,8 +76,8 @@ class WorldBloxCollision(WorldMeshCollision):
                 self._blox_mapper = Mapper(
                     voxel_sizes=voxel_sizes,
                     integrator_types=integrator_types,
-                    cuda_device_id=self.tensor_args.device.index,
                     free_on_destruction=False,
+                    cuda_device_id=self.tensor_args.device.index,
                 )
                 self._blox_voxel_sizes = voxel_sizes
             # load map from file if it exists:
@@ -412,6 +412,8 @@ class WorldBloxCollision(WorldMeshCollision):
         index = self._blox_names.index(layer_name)
         pose_mat = camera_observation.pose.get_matrix().view(4, 4)
         if camera_observation.rgb_image is not None:
+            if camera_observation.rgb_image.shape[-1] != 4:
+                log_error("nvblox color should be of shape HxWx4")
             with profiler.record_function("world_blox/add_color_frame"):
                 self._blox_mapper.add_color_frame(
                     camera_observation.rgb_image,
@@ -472,6 +474,11 @@ class WorldBloxCollision(WorldMeshCollision):
                 voxel_size=0.03,
             )
         return mesh
+
+    def save_layer(self, layer_name: str, file_name: str) -> bool:
+        index = self._blox_names.index(layer_name)
+        status = self._blox_mapper.save_map(file_name, index)
+        return status
 
     def decay_layer(self, layer_name: str):
         index = self._blox_names.index(layer_name)

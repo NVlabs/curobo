@@ -39,24 +39,22 @@ def demo_motion_gen():
         robot_file,
         world_file,
         tensor_args,
-        trajopt_tsteps=32,
+        trajopt_tsteps=44,
         collision_checker_type=CollisionCheckerType.PRIMITIVE,
         use_cuda_graph=False,
-        num_trajopt_seeds=4,
-        num_graph_seeds=1,
+        num_trajopt_seeds=24,
+        num_graph_seeds=24,
         evaluate_interpolated_trajectory=True,
-        interpolation_dt=0.01,
+        interpolation_dt=0.02,
     )
     motion_gen = MotionGen(motion_gen_config)
 
     # st_time = time.time()
-    motion_gen.warmup(batch=50, enable_graph=False, warmup_js_trajopt=False)
+    motion_gen.warmup(enable_graph=True, warmup_js_trajopt=False)
     print("motion gen time:", time.time() - st_time)
 
     # print(time.time() - st_time)
-    return
-    robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"]
-    robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
+    # return
     retract_cfg = motion_gen.get_retract_config()
     print(retract_cfg)
     state = motion_gen.rollout_fn.compute_kinematics(
@@ -66,8 +64,14 @@ def demo_motion_gen():
     retract_pose = Pose(state.ee_pos_seq.squeeze(), quaternion=state.ee_quat_seq.squeeze())
     start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3)
     result = motion_gen.plan(
-        start_state, retract_pose, enable_graph=True, enable_opt=False, max_attempts=1
+        start_state,
+        retract_pose,
+        enable_graph=True,
+        enable_opt=True,
+        max_attempts=1,
+        need_graph_success=True,
     )
+    print(result.status)
     print(result.optimized_plan.position.shape)
     traj = result.get_interpolated_plan()  # $.position.view(-1, 7)  # optimized plan
     print("Trajectory Generated: ", result.success, result.optimized_dt.item())
@@ -137,9 +141,14 @@ if __name__ == "__main__":
         "--kinematics",
         action="store_true",
         help="When True, runs startup for kinematics",
-        default=True,
+        default=False,
     )
-
+    parser.add_argument(
+        "--motion_gen_once",
+        action="store_true",
+        help="When True, runs startup for kinematics",
+        default=False,
+    )
     args = parser.parse_args()
 
     # cProfile.run('demo_motion_gen()')
@@ -162,6 +171,9 @@ if __name__ == "__main__":
             demo_full_config_robot(config_file)
         filename = join_path(args.save_path, args.file_name) + "_kinematics_trace.json"
         prof.export_chrome_trace(filename)
+
+    if args.motion_gen_once:
+        demo_motion_gen()
 
     if args.motion_gen:
         for _ in range(5):

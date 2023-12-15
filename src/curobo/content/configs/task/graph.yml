@@ -33,7 +33,7 @@ graph:
   sample_pts: 1500
   node_similarity_distance: 0.1
   
-  rejection_ratio: 20 #$20
+  rejection_ratio: 20 
   k_nn: 15
   max_buffer: 10000
   max_cg_buffer: 1000

@@ -49,12 +49,16 @@ class TensorStepType(Enum):
 
 
 class TensorStepBase:
-    def __init__(self, tensor_args: TensorDeviceType) -> None:
+    def __init__(
+        self, tensor_args: TensorDeviceType, batch_size: int = 1, horizon: int = 1
+    ) -> None:
         self.batch_size = -1
         self.horizon = -1
         self.tensor_args = tensor_args
         self._diag_dt = None
         self._inv_dt_h = None
+        self.action_horizon = horizon
+        self.update_batch_size(batch_size, horizon)
 
     def update_dt(self, dt: float):
         self._dt_h[:] = dt
@@ -83,8 +87,14 @@ class TensorStepBase:
 
 
 class TensorStepAcceleration(TensorStepBase):
-    def __init__(self, tensor_args: TensorDeviceType, dt_h: torch.Tensor) -> None:
-        super().__init__(tensor_args)
+    def __init__(
+        self,
+        tensor_args: TensorDeviceType,
+        dt_h: torch.Tensor,
+        batch_size: int = 1,
+        horizon: int = 1,
+    ) -> None:
+        super().__init__(tensor_args, batch_size=batch_size, horizon=horizon)
         self._dt_h = dt_h
         self._diag_dt_h = torch.diag(self._dt_h)
         self._integrate_matrix_pos = None
@@ -138,8 +148,13 @@ class TensorStepAcceleration(TensorStepBase):
 
 
 class TensorStepPositionTeleport(TensorStepBase):
-    def __init__(self, tensor_args: TensorDeviceType) -> None:
-        super().__init__(tensor_args)
+    def __init__(
+        self,
+        tensor_args: TensorDeviceType,
+        batch_size: int = 1,
+        horizon: int = 1,
+    ) -> None:
+        super().__init__(tensor_args, batch_size=batch_size, horizon=horizon)
 
     def forward(
         self,
@@ -153,8 +168,14 @@ class TensorStepPositionTeleport(TensorStepBase):
 
 
 class TensorStepPosition(TensorStepBase):
-    def __init__(self, tensor_args: TensorDeviceType, dt_h: torch.Tensor) -> None:
-        super().__init__(tensor_args)
+    def __init__(
+        self,
+        tensor_args: TensorDeviceType,
+        dt_h: torch.Tensor,
+        batch_size: int = 1,
+        horizon: int = 1,
+    ) -> None:
+        super().__init__(tensor_args, batch_size=batch_size, horizon=horizon)
 
         self._dt_h = dt_h
         # self._diag_dt_h = torch.diag(1 / self._dt_h)
@@ -185,7 +206,6 @@ class TensorStepPosition(TensorStepBase):
             )
             self._fd_matrix = torch.diag(1.0 / self._dt_h) @ self._fd_matrix
 
-            # self._fd_matrix = self._diag_dt_h @ self._fd_matrix
         return super().update_batch_size(batch_size, horizon)
 
     def forward(
@@ -205,8 +225,14 @@ class TensorStepPosition(TensorStepBase):
 
 
 class TensorStepPositionClique(TensorStepBase):
-    def __init__(self, tensor_args: TensorDeviceType, dt_h: torch.Tensor) -> None:
-        super().__init__(tensor_args)
+    def __init__(
+        self,
+        tensor_args: TensorDeviceType,
+        dt_h: torch.Tensor,
+        batch_size: int = 1,
+        horizon: int = 1,
+    ) -> None:
+        super().__init__(tensor_args, batch_size=batch_size, horizon=horizon)
 
         self._dt_h = dt_h
         self._inv_dt_h = 1.0 / dt_h
@@ -281,12 +307,20 @@ class TensorStepPositionClique(TensorStepBase):
 
 
 class TensorStepAccelerationKernel(TensorStepBase):
-    def __init__(self, tensor_args: TensorDeviceType, dt_h: torch.Tensor, dof: int) -> None:
-        super().__init__(tensor_args)
+    def __init__(
+        self,
+        tensor_args: TensorDeviceType,
+        dt_h: torch.Tensor,
+        dof: int,
+        batch_size: int = 1,
+        horizon: int = 1,
+    ) -> None:
+        self.dof = dof
+
+        super().__init__(tensor_args, batch_size=batch_size, horizon=horizon)
 
         self._dt_h = dt_h
         self._u_grad = None
-        self.dof = dof
 
     def update_batch_size(
         self,
@@ -363,13 +397,15 @@ class TensorStepPositionCliqueKernel(TensorStepBase):
         filter_velocity: bool = False,
         filter_acceleration: bool = False,
         filter_jerk: bool = False,
+        batch_size: int = 1,
+        horizon: int = 1,
     ) -> None:
-        super().__init__(tensor_args)
+        self.dof = dof
+        self._fd_mode = finite_difference_mode
+        super().__init__(tensor_args, batch_size=batch_size, horizon=horizon)
         self._dt_h = dt_h
         self._inv_dt_h = 1.0 / dt_h
         self._u_grad = None
-        self.dof = dof
-        self._fd_mode = finite_difference_mode
         self._filter_velocity = filter_velocity
         self._filter_acceleration = filter_acceleration
         self._filter_jerk = filter_jerk
@@ -381,10 +417,6 @@ class TensorStepPositionCliqueKernel(TensorStepBase):
             weights = kernel
             self._sma_kernel = weights
 
-            # self._sma = torch.nn.AvgPool1d(kernel_size=5, stride=2, padding=1).to(
-            #    device=self.tensor_args.device
-            # )
-
     def update_batch_size(
         self,
         batch_size: Optional[int] = None,
@@ -392,8 +424,11 @@ class TensorStepPositionCliqueKernel(TensorStepBase):
         force_update: bool = False,
     ) -> None:
         if batch_size != self.batch_size or horizon != self.horizon:
+            self.action_horizon = horizon
+            if self._fd_mode == 0:
+                self.action_horizon = horizon - 4
             self._u_grad = torch.zeros(
-                (batch_size, horizon, self.dof),
+                (batch_size, self.action_horizon, self.dof),
                 device=self.tensor_args.device,
                 dtype=self.tensor_args.dtype,
             )

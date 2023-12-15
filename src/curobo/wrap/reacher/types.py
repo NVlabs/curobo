@@ -63,6 +63,22 @@ class ReacherSolveState:
         if self.num_seeds is None:
             self.num_seeds = self.num_mpc_seeds
 
+    def clone(self):
+        return ReacherSolveState(
+            solve_type=self.solve_type,
+            n_envs=self.n_envs,
+            batch_size=self.batch_size,
+            n_goalset=self.n_goalset,
+            batch_env=self.batch_env,
+            batch_retract=self.batch_retract,
+            batch_mode=self.batch_mode,
+            num_seeds=self.num_seeds,
+            num_ik_seeds=self.num_ik_seeds,
+            num_graph_seeds=self.num_graph_seeds,
+            num_trajopt_seeds=self.num_trajopt_seeds,
+            num_mpc_seeds=self.num_mpc_seeds,
+        )
+
     def get_batch_size(self):
         return self.num_seeds * self.batch_size
 

@@ -130,7 +130,6 @@ class HaltonSampleLib(BaseSampleLib):
             else:
                 self.samples = self.filter_samples(self.samples)
         if self.samples.shape[0] != sample_shape[0]:
-            print(self.samples.shape, sample_shape)
             log_error("sampling failed")
         return self.samples
 
@@ -312,6 +311,7 @@ class StompSampleLib(BaseSampleLib):
                 raise ValueError
             # seed = self.seed if base_seed is None else base_seed
             self.sample_shape = sample_shape
+
             # self.seed = seed
             # torch.manual_seed(self.seed)
             halton_samples = self.halton_generator.get_gaussian_samples(sample_shape[0])
@@ -327,6 +327,8 @@ class StompSampleLib(BaseSampleLib):
             halton_samples = halton_samples / torch.max(torch.abs(halton_samples))
             # halton_samples[:, 0, :] = 0.0
             halton_samples[:, -1:, :] = 0.0
+            if torch.any(torch.isnan(halton_samples)):
+                log_error("Nan values found in samplelib, installation could have been corrupted")
             self.samples = halton_samples
         return self.samples
 

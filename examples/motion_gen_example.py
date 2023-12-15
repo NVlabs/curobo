@@ -91,7 +91,7 @@ def plot_iters_traj_3d(trajectory, d_id=1, dof=7, seed=0):
 
 
 def demo_motion_gen_mesh():
-    PLOT = True
+    PLOT = False
     tensor_args = TensorDeviceType()
     world_file = "collision_mesh_scene.yml"
     robot_file = "franka.yml"
@@ -99,7 +99,7 @@ def demo_motion_gen_mesh():
         robot_file,
         world_file,
         tensor_args,
-        trajopt_tsteps=40,
+        # trajopt_tsteps=40,
         collision_checker_type=CollisionCheckerType.MESH,
         use_cuda_graph=False,
     )
@@ -129,9 +129,9 @@ def demo_motion_gen_mesh():
         plot_traj(traj.cpu().numpy())
 
 
-def demo_motion_gen():
+def demo_motion_gen(js=False):
     # Standard Library
-    PLOT = False
+    PLOT = True
     tensor_args = TensorDeviceType()
     world_file = "collision_table.yml"
     robot_file = "franka.yml"
@@ -144,7 +144,7 @@ def demo_motion_gen():
 
     motion_gen = MotionGen(motion_gen_config)
 
-    motion_gen.warmup(enable_graph=False)
+    motion_gen.warmup(enable_graph=True, warmup_js_trajopt=js)
     robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"]
     robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
     retract_cfg = motion_gen.get_retract_config()
@@ -153,11 +153,24 @@ def demo_motion_gen():
     )
 
     retract_pose = Pose(state.ee_pos_seq.squeeze(), quaternion=state.ee_quat_seq.squeeze())
-    start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3)
-    result = motion_gen.plan_single(start_state, retract_pose, MotionGenPlanConfig(max_attempts=1))
+    start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.1)
+    goal_state = start_state.clone()
+    goal_state.position[..., 3] -= 0.1
+    if js:
+        result = motion_gen.plan_single_js(
+            start_state,
+            goal_state,
+            MotionGenPlanConfig(
+                max_attempts=1, enable_graph=False, enable_opt=True, enable_finetune_trajopt=True
+            ),
+        )
+    else:
+        result = motion_gen.plan_single(
+            start_state, retract_pose, MotionGenPlanConfig(max_attempts=1)
+        )
     traj = result.get_interpolated_plan()
-    print("Trajectory Generated: ", result.success, result.optimized_dt.item())
-    if PLOT:
+    print("Trajectory Generated: ", result.success, result.solve_time, result.status)
+    if PLOT and result.success.item():
         plot_traj(traj, result.interpolation_dt)
         # plt.save("test.png")
         # plt.close()
@@ -215,10 +228,9 @@ def demo_motion_gen_batch():
         robot_file,
         world_file,
         tensor_args,
-        trajopt_tsteps=30,
         collision_checker_type=CollisionCheckerType.PRIMITIVE,
         use_cuda_graph=True,
-        num_trajopt_seeds=4,
+        num_trajopt_seeds=12,
         num_graph_seeds=1,
         num_ik_seeds=30,
     )
@@ -235,12 +247,13 @@ def demo_motion_gen_batch():
 
     retract_pose = retract_pose.repeat_seeds(2)
     retract_pose.position[0, 0] = -0.3
-    for _ in range(2):
-        result = motion_gen.plan_batch(
-            start_state.repeat_seeds(2),
-            retract_pose,
-            MotionGenPlanConfig(enable_graph=False, enable_opt=True),
-        )
+    result = motion_gen.plan_batch(
+        start_state.repeat_seeds(2),
+        retract_pose,
+        MotionGenPlanConfig(
+            max_attempts=5, enable_graph=False, enable_graph_attempt=1, enable_opt=True
+        ),
+    )
     traj = result.optimized_plan.position.view(2, -1, 7)  # optimized plan
     print("Trajectory Generated: ", result.success)
     if PLOT:
@@ -360,7 +373,8 @@ def demo_motion_gen_batch_env(n_envs: int = 10):
 
 if __name__ == "__main__":
     setup_curobo_logger("error")
-    demo_motion_gen()
-    n = [2, 10]
-    for n_envs in n:
-        demo_motion_gen_batch_env(n_envs=n_envs)
+    # demo_motion_gen(js=True)
+    demo_motion_gen_batch()
+    # n = [2, 10]
+    # for n_envs in n:
+    #    demo_motion_gen_batch_env(n_envs=n_envs)

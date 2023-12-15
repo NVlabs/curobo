@@ -330,7 +330,7 @@ if __name__ == "__main__":
         if cmd_step_idx == 0:
             draw_rollout_points(mpc.get_visual_rollouts(), clear=not args.use_debug_draw)
 
-        if step_index == 0:
+        if step_index < 2:
             my_world.reset()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)

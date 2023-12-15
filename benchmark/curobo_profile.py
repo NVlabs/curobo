@@ -50,7 +50,7 @@ def load_curobo(
     n_cubes: int, enable_log: bool = False, mesh_mode: bool = False, cuda_graph: bool = False
 ):
     robot_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
-    robot_cfg["kinematics"]["collision_sphere_buffer"] = -0.015
+    robot_cfg["kinematics"]["collision_sphere_buffer"] = -0.0
     world_cfg = WorldConfig.from_dict(
         load_yaml(join_path(get_world_configs_path(), "collision_table.yml"))
     ).get_obb_world()
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_path",
         type=str,
-        default="log/trace",
+        default="benchmark/log/trace",
         help="path to save file",
     )
     parser.add_argument(

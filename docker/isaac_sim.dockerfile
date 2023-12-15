@@ -18,6 +18,7 @@ FROM nvcr.io/nvidia/isaac-sim:${ISAAC_SIM_VERSION} AS isaac-sim
 
 FROM nvcr.io/nvidia/cudagl:${CUDA_VERSION}-devel-${BASE_DIST}
 
+
 # this does not work for 2022.2.1
 #$FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-${BASE_DIST} 
 
@@ -171,7 +172,7 @@ RUN mkdir /pkgs && cd /pkgs && git clone https://github.com/NVlabs/curobo.git
 RUN $omni_python -m pip install ninja wheel tomli
 
 
-RUN cd /pkgs/curobo && $omni_python -m pip install .[dev,isaac_sim] --no-build-isolation
+RUN cd /pkgs/curobo && $omni_python -m pip install .[dev] --no-build-isolation
 
 # Optionally install nvblox:
 
@@ -183,17 +184,32 @@ RUN apt-get update && \
 
 # install gflags and glog statically, instructions from: https://github.com/nvidia-isaac/nvblox/blob/public/docs/redistributable.md
 
+
+RUN cd /pkgs && wget https://cmake.org/files/v3.27/cmake-3.27.1.tar.gz && \
+    tar -xvzf cmake-3.27.1.tar.gz && \
+    apt update &&  apt install -y build-essential checkinstall zlib1g-dev libssl-dev && \
+    cd cmake-3.27.1 && ./bootstrap && \
+    make -j8 && \
+    make install &&  rm -rf /var/lib/apt/lists/*
+
+
+ENV USE_CX11_ABI=0
+ENV PRE_CX11_ABI=ON
+
+
+
 RUN cd /pkgs && git clone https://github.com/sqlite/sqlite.git -b version-3.39.4 && \
     cd /pkgs/sqlite && CFLAGS=-fPIC ./configure --prefix=/pkgs/sqlite/install/ && \
     make && make install
 
 
-RUN cd /pkgs && git clone https://github.com/google/glog.git -b v0.4.0 && \
+
+RUN cd /pkgs && git clone https://github.com/google/glog.git -b v0.6.0 && \
     cd glog && \
     mkdir build && cd build && \
     cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_INSTALL_PREFIX=/pkgs/glog/install/ \
-    -DWITH_GFLAGS=OFF -DBUILD_SHARED_LIBS=OFF \ 
+    -DWITH_GFLAGS=OFF -DWITH_GTEST=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=${USE_CX11_ABI} \
     && make -j8 && make install
 
 
@@ -202,39 +218,25 @@ RUN cd /pkgs && git clone https://github.com/gflags/gflags.git -b v2.2.2 && \
     mkdir build && cd build && \
     cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_INSTALL_PREFIX=/pkgs/gflags/install/ \
-    -DGFLAGS_BUILD_STATIC_LIBS=ON -DGFLAGS=google \
+    -DGFLAGS_BUILD_STATIC_LIBS=ON -DCMAKE_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=${USE_CX11_ABI} \
     && make -j8 && make install
 
-RUN cd /pkgs && git clone https://github.com/google/googletest.git -b v1.14.0 && \
-    cd googletest && mkdir build && cd build && cmake .. && make -j8 && make install
-
-RUN cd /pkgs &&  git clone https://github.com/valtsblukis/nvblox.git
-
-RUN cd /pkgs/nvblox/nvblox && mkdir build && cd build && \
-    cmake .. -DPRE_CXX11_ABI_LINKABLE=ON -DBUILD_REDISTRIBUTABLE=ON -DSQLITE3_BASE_PATH="/pkgs/sqlite/install/" -DGLOG_BASE_PATH="/pkgs/glog/install/" -DGFLAGS_BASE_PATH="/pkgs/gflags/install/" && \
+RUN cd /pkgs &&  git clone https://github.com/valtsblukis/nvblox.git && cd /pkgs/nvblox/nvblox && \
+    mkdir build && cd build && \
+    cmake ..  -DBUILD_REDISTRIBUTABLE=ON \
+    -DCMAKE_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=${USE_CX11_ABI}  -DPRE_CXX11_ABI_LINKABLE=${PRE_CX11_ABI} \
+    -DSQLITE3_BASE_PATH="/pkgs/sqlite/install/" -DGLOG_BASE_PATH="/pkgs/glog/install/" \
+    -DGFLAGS_BASE_PATH="/pkgs/gflags/install/" -DCMAKE_CUDA_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=${USE_CX11_ABI} \
+    -DBUILD_TESTING=OFF && \
     make -j32 && \
     make install
 
-# install newer cmake and glog for pytorch:
-# TODO: use libgoogle from source that was compiled instead.
-
-RUN apt-get update && \
-    apt-get install -y libgoogle-glog-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN cd /pkgs && wget https://cmake.org/files/v3.19/cmake-3.19.5.tar.gz && \
-    tar -xvzf cmake-3.19.5.tar.gz && \
-    apt update &&  apt install -y build-essential checkinstall zlib1g-dev libssl-dev && \
-    cd cmake-3.19.5 && ./bootstrap && \
-    make -j8 && \
-    make install &&  rm -rf /var/lib/apt/lists/*
-
-
-ENV cudnn_version=8.2.4.15
-ENV cuda_version=cuda11.4
-RUN apt update && apt-get install -y libcudnn8=${cudnn_version}-1+${cuda_version} libcudnn8-dev=${cudnn_version}-1+${cuda_version} && \
-    rm -rf /var/lib/apt/lists/*
-
+# we also need libglog for pytorch:
+RUN cd /pkgs/glog && \
+    mkdir build_isaac && cd build_isaac && \
+    cmake .. -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DWITH_GFLAGS=OFF -DWITH_GTEST=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=${USE_CX11_ABI} \
+    && make -j8 && make install
 
 RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
     cd /pkgs/nvblox_torch && \

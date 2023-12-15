@@ -28,8 +28,13 @@ model:
 cost:
   pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    #weight: [100, 500, 10, 20] 
-    weight: [500, 5000, 30, 30]
+    weight: [1000, 20000, 30, 50]
+    vec_convergence: [0.0, 0.00] 
+    terminal: False
+    use_metric: True
+  link_pose_cfg:
+    vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    weight: [1000, 20000, 30, 50]
     vec_convergence: [0.00, 0.000] 
     terminal: False
     use_metric: True
@@ -37,31 +42,31 @@ cost:
   cspace_cfg:
     weight: 0.000
   bound_cfg:
-    weight: 50.0
+    weight: 100.0
     activation_distance: [0.1]
     null_space_weight: [1.0]
   primitive_collision_cfg:
-    weight: 1000.0
+    weight: 50000.0
     use_sweep: False
     classify: False
-    activation_distance: 0.025
+    activation_distance: 0.01
   self_collision_cfg:
-    weight: 1000.0
+    weight: 500.0
     classify: False
 
 
 lbfgs:
-  n_iters: 80 #60
-  inner_iters: 20
-  cold_start_n_iters: 80
+  n_iters: 100 #60
+  inner_iters: 25
+  cold_start_n_iters: 100
   min_iters: 20
-  line_search_scale:  [0.01, 0.3, 0.7, 1.0] #[0.01,0.4, 0.9, 1.0] # # 
+  line_search_scale:  [0.01, 0.3, 0.7,  1.0]
   fixed_iters: True
   cost_convergence: 1e-7
   cost_delta_threshold: 1e-6 #0.0001
   cost_relative_threshold: 1.0
-  epsilon: 0.01 # used only in stable_mode
-  history: 4
+  epsilon: 0.01 #0.01 # used only in stable_mode
+  history: 6
   horizon: 1
   use_cuda_graph: True
   n_envs: 1

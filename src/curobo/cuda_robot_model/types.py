@@ -34,6 +34,12 @@ class JointType(Enum):
     X_ROT = 3
     Y_ROT = 4
     Z_ROT = 5
+    X_PRISM_NEG = 6
+    Y_PRISM_NEG = 7
+    Z_PRISM_NEG = 8
+    X_ROT_NEG = 9
+    Y_ROT_NEG = 10
+    Z_ROT_NEG = 11
 
 
 @dataclass
@@ -82,6 +88,7 @@ class CSpaceConfig:
     velocity_scale: Union[float, List[float]] = 1.0
     acceleration_scale: Union[float, List[float]] = 1.0
     jerk_scale: Union[float, List[float]] = 1.0
+    position_limit_clip: Union[float, List[float]] = 0.01
 
     def __post_init__(self):
         if self.retract_config is not None:

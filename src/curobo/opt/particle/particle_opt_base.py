@@ -259,7 +259,7 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
             # generate random simulated trajectories
             trajectory = self.generate_rollouts()
             trajectory.actions = trajectory.actions.view(
-                self.n_envs, self.particles_per_env, self.horizon, self.d_action
+                self.n_envs, self.particles_per_env, self.action_horizon, self.d_action
             )
             trajectory.costs = trajectory.costs.view(
                 self.n_envs, self.particles_per_env, self.horizon
@@ -295,7 +295,7 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
         if self.null_per_env > 0:
             self.null_act_seqs = torch.zeros(
                 self.null_per_env,
-                self.horizon,
+                self.action_horizon,
                 self.d_action,
                 device=self.tensor_args.device,
                 dtype=self.tensor_args.dtype,

@@ -222,6 +222,21 @@ class Goal(Sequence):
             links_goal_pose=links_goal_pose,
         )
 
+    def clone(self):
+        return Goal(
+            goal_state=self.goal_state,
+            goal_pose=self.goal_pose,
+            current_state=self.current_state,
+            retract_state=self.retract_state,
+            batch_pose_idx=self.batch_pose_idx,
+            batch_world_idx=self.batch_world_idx,
+            batch_enable_idx=self.batch_enable_idx,
+            batch_current_state_idx=self.batch_current_state_idx,
+            batch_retract_state_idx=self.batch_retract_state_idx,
+            batch_goal_state_idx=self.batch_goal_state_idx,
+            links_goal_pose=self.links_goal_pose,
+        )
+
     def _tensor_repeat_seeds(self, tensor, num_seeds):
         return tensor_repeat_seeds(tensor, num_seeds)
 
@@ -497,6 +512,10 @@ class RolloutBase:
     @property
     def horizon(self) -> int:
         raise NotImplementedError
+
+    @property
+    def action_horizon(self) -> int:
+        return self.horizon
 
     def update_start_state(self, start_state: torch.Tensor):
         if self.start_state is None:

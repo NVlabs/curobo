@@ -89,7 +89,7 @@ class ParallelMPPIConfig(ParticleOptConfig):
         child_dict["squash_fn"] = SquashType[child_dict["squash_fn"]]
         child_dict["cov_type"] = CovType[child_dict["cov_type"]]
         child_dict["sample_params"]["d_action"] = rollout_fn.d_action
-        child_dict["sample_params"]["horizon"] = child_dict["horizon"]
+        child_dict["sample_params"]["horizon"] = rollout_fn.action_horizon
         child_dict["sample_params"]["tensor_args"] = tensor_args
         child_dict["sample_params"] = SampleConfig(**child_dict["sample_params"])
 
@@ -112,7 +112,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         # initialize covariance types:
         if self.cov_type == CovType.FULL_HA:
             self.I = torch.eye(
-                self.horizon * self.d_action,
+                self.action_horizon * self.d_action,
                 device=self.tensor_args.device,
                 dtype=self.tensor_args.dtype,
             )
@@ -124,7 +124,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
 
         self.Z_seq = torch.zeros(
             1,
-            self.horizon,
+            self.action_horizon,
             self.d_action,
             device=self.tensor_args.device,
             dtype=self.tensor_args.dtype,
@@ -145,7 +145,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
 
         self.mean_lib = HaltonSampleLib(
             SampleConfig(
-                self.horizon,
+                self.action_horizon,
                 self.d_action,
                 tensor_args=self.tensor_args,
                 **{"fixed_samples": False, "seed": 2567, "filter_coeffs": None}
@@ -330,7 +330,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
             (cat_list),
             dim=-3,
         )
-        act_seq = act_seq.reshape(self.total_num_particles, self.horizon, self.d_action)
+        act_seq = act_seq.reshape(self.total_num_particles, self.action_horizon, self.d_action)
         act_seq = scale_ctrl(act_seq, self.action_lows, self.action_highs, squash_fn=self.squash_fn)
 
         # if not copy_tensor(act_seq, self.act_seq):
@@ -399,7 +399,8 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
             act_seq = self.mean_action  # .clone()  # [self.mean_idx]#.clone()
         elif mode == SampleMode.SAMPLE:
             delta = self.generate_noise(
-                shape=torch.Size((1, self.horizon)), base_seed=self.seed + 123 * self.num_steps
+                shape=torch.Size((1, self.action_horizon)),
+                base_seed=self.seed + 123 * self.num_steps,
             )
             act_seq = self.mean_action + torch.matmul(delta, self.full_scale_tril)
         elif mode == SampleMode.BEST:
@@ -426,9 +427,11 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
             Tensor: dimension is (d_action, d_action)
         """
         if self.cov_type == CovType.SIGMA_I:
-            return self.scale_tril.unsqueeze(-2).unsqueeze(-2).expand(-1, -1, self.horizon, -1)
+            return (
+                self.scale_tril.unsqueeze(-2).unsqueeze(-2).expand(-1, -1, self.action_horizon, -1)
+            )
         elif self.cov_type == CovType.DIAG_A:
-            return self.scale_tril.unsqueeze(-2).expand(-1, -1, self.horizon, -1)  # .cl
+            return self.scale_tril.unsqueeze(-2).expand(-1, -1, self.action_horizon, -1)  # .cl
         elif self.cov_type == CovType.FULL_A:
             return self.scale_tril
         elif self.cov_type == CovType.FULL_HA:
@@ -486,10 +489,10 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
     def full_scale_tril(self):
         if self.cov_type == CovType.SIGMA_I:
             return (
-                self.scale_tril.unsqueeze(-2).unsqueeze(-2).expand(-1, -1, self.horizon, -1)
+                self.scale_tril.unsqueeze(-2).unsqueeze(-2).expand(-1, -1, self.action_horizon, -1)
             )  # .cl
         elif self.cov_type == CovType.DIAG_A:
-            return self.scale_tril.unsqueeze(-2).expand(-1, -1, self.horizon, -1)  # .cl
+            return self.scale_tril.unsqueeze(-2).expand(-1, -1, self.action_horizon, -1)  # .cl
         elif self.cov_type == CovType.FULL_A:
             return self.scale_tril
         elif self.cov_type == CovType.FULL_HA:
@@ -504,7 +507,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         self.sample_lib = SampleLib(self.sample_params)
         self.mean_lib = HaltonSampleLib(
             SampleConfig(
-                self.horizon,
+                self.action_horizon,
                 self.d_action,
                 tensor_args=self.tensor_args,
                 **{"fixed_samples": False, "seed": 2567, "filter_coeffs": None}
@@ -530,7 +533,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
                         n_iters,
                         self.n_envs,
                         self.sampled_particles_per_env,
-                        self.horizon,
+                        self.action_horizon,
                         self.d_action,
                     )
                     .clone()
@@ -541,7 +544,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
                     base_seed=self.seed,
                 )
                 s_set = s_set.view(
-                    n_iters, 1, self.sampled_particles_per_env, self.horizon, self.d_action
+                    n_iters, 1, self.sampled_particles_per_env, self.action_horizon, self.d_action
                 )
                 s_set = s_set.repeat(1, self.n_envs, 1, 1, 1).clone()
             s_set[:, :, -1, :, :] = 0.0

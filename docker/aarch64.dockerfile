@@ -107,7 +107,7 @@ RUN apt-get update && \
 
 
 #
-# download/build the ROS source
+# Optionally download/build the ROS source
 #
 RUN mkdir ros_catkin_ws && \
     cd ros_catkin_ws && \
@@ -139,12 +139,13 @@ COPY pkgs /pkgs
 
 # install warp:
 # 
-RUN cd /pkgs/warp && python3 build_lib.py && pip3 install .
+RUN cd /pkgs/warp && pip3 install .
 
 # install curobo:
 
 RUN cd /pkgs && git clone https://github.com/NVlabs/curobo.git
 
+ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
 
 RUN cd /pkgs/curobo && pip3 install . --no-build-isolation
 

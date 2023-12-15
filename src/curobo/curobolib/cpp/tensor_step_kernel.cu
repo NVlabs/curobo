@@ -319,14 +319,16 @@ __device__ __forceinline__ void compute_central_difference(scalar_t *out_positio
     
   const float dt = traj_dt[0]; // assume same dt across traj TODO: Implement variable dt
   // dt here is actually 1/dt;
-
+  const float dt_inv = 1.0 / dt;
+  const float st_jerk = 0.0; // Note: start jerk can also be passed from global memory
   // read start state:
   float out_pos=0.0, out_vel=0.0, out_acc=0.0, out_jerk=0.0;
   float st_pos=0.0, st_vel=0.0, st_acc = 0.0;
 
   const int b_addrs = b_idx * horizon * dof;
+  const int b_addrs_action = b_idx * (horizon-4) * dof;
   float in_pos[5]; // create a 5 value scalar
-
+  const float acc_scale = 1.0;
   #pragma unroll 5
   for (int i=0; i< 5; i ++){
     in_pos[i] = 0.0;
@@ -337,92 +339,108 @@ __device__ __forceinline__ void compute_central_difference(scalar_t *out_positio
     st_acc = start_acceleration[b_offset * dof + d_idx];
   }
   
-  if (h_idx > 3 && h_idx < horizon - 4)
-    {
-      in_pos[0] = u_position[b_addrs + (h_idx - 4) * dof + d_idx];
-      in_pos[1] = u_position[b_addrs + (h_idx - 3) * dof + d_idx];
-      in_pos[2] = u_position[b_addrs + (h_idx - 2 ) * dof + d_idx];
-      in_pos[3] = u_position[b_addrs + (h_idx - 1) * dof + d_idx];
-      in_pos[4] = u_position[b_addrs + (h_idx) * dof + d_idx];
+  if (h_idx > 3 && h_idx < horizon - 4){
+      in_pos[0] = u_position[b_addrs_action + (h_idx - 4) * dof + d_idx];
+      in_pos[1] = u_position[b_addrs_action + (h_idx - 3) * dof + d_idx];
+      in_pos[2] = u_position[b_addrs_action + (h_idx - 2 ) * dof + d_idx];
+      in_pos[3] = u_position[b_addrs_action + (h_idx - 1) * dof + d_idx];
+      in_pos[4] = u_position[b_addrs_action + (h_idx) * dof + d_idx];
       
     }
 
     
   else if (h_idx == 0)
   {
-    in_pos[0] = st_pos - 3 * dt * ( st_vel + (0.5 * st_acc * dt)); // start -1, start, u0, u1
-    in_pos[1] = st_pos - 2 * dt * ( st_vel + (0.5 * st_acc * dt)); 
-    in_pos[2] = st_pos - dt * ( st_vel + (0.5 * st_acc * dt)); 
+    
+    
+
+    
+    in_pos[0] = (3.0f/2) * ( - 1 * st_acc * (dt_inv * dt_inv) - (dt_inv * dt_inv * dt_inv) * st_jerk ) - 3.0f * dt_inv * st_vel + st_pos;
+    in_pos[1] = -2.0f * st_acc * dt_inv * dt_inv - (4.0f/3) * dt_inv * dt_inv * dt_inv * st_jerk - 2.0 * dt_inv * st_vel + st_pos;
+    in_pos[2] = -(3.0f/2) * st_acc * dt_inv * dt_inv - (7.0f/6) * dt_inv * dt_inv * dt_inv * st_jerk - dt_inv * st_vel + st_pos;
     in_pos[3] = st_pos;
-    in_pos[4] = u_position[b_addrs + (h_idx) * dof + d_idx];
+    in_pos[4] = u_position[b_addrs_action + (h_idx) * dof + d_idx];
+   
+
+    
+    
+
+
   }
     
   else if (h_idx == 1)
   {
-    in_pos[0] = st_pos - 2 * dt * ( st_vel + (0.5 * st_acc * dt)); // start -1, start, u0, u1
-    in_pos[1] = st_pos - dt * ( st_vel + (0.5 * st_acc * dt)); 
+    
+    in_pos[0] = -2.0f * st_acc * dt_inv * dt_inv - (4.0f/3) * dt_inv * dt_inv * dt_inv * st_jerk - 2.0 * dt_inv * st_vel + st_pos;
+    in_pos[1] = -(3.0f/2) * st_acc * dt_inv * dt_inv - (7.0f/6) * dt_inv * dt_inv * dt_inv * st_jerk - dt_inv * st_vel + st_pos;
+  
+    
     in_pos[2] = st_pos; 
-    in_pos[3] = u_position[b_addrs + (h_idx - 1) * dof + d_idx];
-    in_pos[4] = u_position[b_addrs + (h_idx) * dof + d_idx];
+    in_pos[3] = u_position[b_addrs_action + (h_idx - 1) * dof + d_idx];
+    in_pos[4] = u_position[b_addrs_action + (h_idx) * dof + d_idx];
+
+    
   }
   
   else if (h_idx == 2)
   {
-    in_pos[0] = st_pos - dt * ( st_vel + (0.5 * st_acc * dt)); // start -1, start, u0, u1
+    in_pos[0] = -(3.0f/2) * st_acc * dt_inv * dt_inv - (7.0f/6) * dt_inv * dt_inv * dt_inv * st_jerk - dt_inv * st_vel + st_pos;
     in_pos[1] = st_pos; 
-    in_pos[2] = u_position[b_addrs + (h_idx - 2) * dof + d_idx];
-    in_pos[3] = u_position[b_addrs + (h_idx - 1) * dof + d_idx];
-    in_pos[4] = u_position[b_addrs + (h_idx) * dof + d_idx];
+    in_pos[2] = u_position[b_addrs_action + (h_idx - 2) * dof + d_idx];
+    in_pos[3] = u_position[b_addrs_action + (h_idx - 1) * dof + d_idx];
+    in_pos[4] = u_position[b_addrs_action + (h_idx) * dof + d_idx];
+
       
   }
   else if (h_idx == 3)
   {
     in_pos[0] = st_pos;
-    in_pos[1] = u_position[b_addrs + (h_idx - 3) * dof + d_idx];
-    in_pos[2] = u_position[b_addrs + (h_idx - 2 ) * dof + d_idx];
-    in_pos[3] = u_position[b_addrs + (h_idx - 1 ) * dof + d_idx];
-    in_pos[4] = u_position[b_addrs + (h_idx) * dof + d_idx];
+    in_pos[1] = u_position[b_addrs_action + (h_idx - 3) * dof + d_idx];
+    in_pos[2] = u_position[b_addrs_action + (h_idx - 2 ) * dof + d_idx];
+    in_pos[3] = u_position[b_addrs_action + (h_idx - 1 ) * dof + d_idx];
+    in_pos[4] = u_position[b_addrs_action + (h_idx) * dof + d_idx];
   
   }
   
   else if (h_idx == horizon - 4)
   {
-    in_pos[0] = u_position[b_addrs + (h_idx -4) * dof + d_idx];
-    in_pos[1] = u_position[b_addrs + (h_idx - 3) * dof + d_idx];
-    in_pos[2] = u_position[b_addrs + (h_idx - 2 ) * dof + d_idx];
-    in_pos[3] = u_position[b_addrs + (h_idx - 1) * dof + d_idx];
-    in_pos[4] = in_pos[3];//in_pos[3]; //u_position[b_addrs + (h_idx - 1 + 2) * dof + d_idx];
+    in_pos[0] = u_position[b_addrs_action + (h_idx -4) * dof + d_idx];
+    in_pos[1] = u_position[b_addrs_action + (h_idx - 3) * dof + d_idx];
+    in_pos[2] = u_position[b_addrs_action + (h_idx - 2 ) * dof + d_idx];
+    in_pos[3] = u_position[b_addrs_action + (h_idx - 1) * dof + d_idx];
+    in_pos[4] = in_pos[3];//in_pos[3]; //u_position[b_addrs_action + (h_idx - 1 + 2) * dof + d_idx];
 
   }
   
   else if (h_idx == horizon - 3)
   {
-    in_pos[0] = u_position[b_addrs + (h_idx - 4) * dof + d_idx];
-    in_pos[1] = u_position[b_addrs + (h_idx - 3) * dof + d_idx];
-    in_pos[2] = u_position[b_addrs + (h_idx - 2) * dof + d_idx];
-    in_pos[3] = in_pos[2];//u_position[b_addrs + (h_idx - 1 + 1) * dof + d_idx];
-    in_pos[4] = in_pos[2];//in_pos[3]; //u_position[b_addrs + (h_idx - 1 + 2) * dof + d_idx];
+    in_pos[0] = u_position[b_addrs_action + (h_idx - 4) * dof + d_idx];
+    in_pos[1] = u_position[b_addrs_action + (h_idx - 3) * dof + d_idx];
+    in_pos[2] = u_position[b_addrs_action + (h_idx - 2) * dof + d_idx];
+    in_pos[3] = in_pos[2];//u_position[b_addrs_action + (h_idx - 1 + 1) * dof + d_idx];
+    in_pos[4] = in_pos[2];//in_pos[3]; //u_position[b_addrs_action + (h_idx - 1 + 2) * dof + d_idx];
 
   }
   else if (h_idx == horizon - 2)
   {
-    in_pos[0] = u_position[b_addrs + (h_idx - 4) * dof + d_idx];
-    in_pos[1] = u_position[b_addrs + (h_idx - 3) * dof + d_idx];
+    in_pos[0] = u_position[b_addrs_action + (h_idx - 4) * dof + d_idx];
+    in_pos[1] = u_position[b_addrs_action + (h_idx - 3) * dof + d_idx];
     in_pos[2] = in_pos[1];
-    in_pos[3] = in_pos[1];//u_position[b_addrs + (h_idx - 1 + 1) * dof + d_idx];
-    in_pos[4] = in_pos[1];//in_pos[3]; //u_position[b_addrs + (h_idx - 1 + 2) * dof + d_idx];
+    in_pos[3] = in_pos[1];//u_position[b_addrs_action + (h_idx - 1 + 1) * dof + d_idx];
+    in_pos[4] = in_pos[1];//in_pos[3]; //u_position[b_addrs_action + (h_idx - 1 + 2) * dof + d_idx];
 
   }
   
-  else if (h_idx == horizon -1)
+  else if (h_idx == horizon - 1)
   {
-    in_pos[0] = u_position[b_addrs + (h_idx - 4) * dof + d_idx];
+    in_pos[0] = u_position[b_addrs_action + (h_idx - 4) * dof + d_idx];
     in_pos[1] = in_pos[0];
-    in_pos[2] = in_pos[0];//u_position[b_addrs + (h_idx - 1 ) * dof + d_idx];
-    in_pos[3] = in_pos[0];//u_position[b_addrs + (h_idx - 1 + 1) * dof + d_idx];
-    in_pos[4] = in_pos[0];//in_pos[3]; //u_position[b_addrs + (h_idx - 1 + 2) * dof + d_idx];
+    in_pos[2] = in_pos[0];//u_position[b_addrs_action + (h_idx - 1 ) * dof + d_idx];
+    in_pos[3] = in_pos[0];//u_position[b_addrs_action + (h_idx - 1 + 1) * dof + d_idx];
+    in_pos[4] = in_pos[0];//in_pos[3]; //u_position[b_addrs_action + (h_idx - 1 + 2) * dof + d_idx];
   }
   out_pos = in_pos[2];
+  
   // out_vel = (0.5 * in_pos[3] - 0.5 * in_pos[1]) * dt;
   out_vel = ((0.083333333f) * in_pos[0] - (0.666666667f) * in_pos[1] + (0.666666667f) * in_pos[3] + (-0.083333333f) * in_pos[4]) * dt;
 
@@ -693,8 +711,9 @@ __global__ void backward_position_clique_loop_central_difference_kernel2(
     return;
   }
   const int b_addrs = b_idx * horizon * dof;
+  const int b_addrs_action = b_idx * (horizon-4) * dof;
 
-  if (h_idx < 2 || h_idx > horizon - 2)
+  if (h_idx < 2 || h_idx >= horizon - 2)
   {
     return;
   }
@@ -717,7 +736,7 @@ __global__ void backward_position_clique_loop_central_difference_kernel2(
     g_jerk[i] = 0.0;
   }
 
-  int hid = h_idx;
+  const int hid = h_idx;
 
   g_pos[0] = grad_position[b_addrs + (hid)*dof + d_idx];
   g_pos[1] = 0.0;
@@ -745,30 +764,35 @@ __global__ void backward_position_clique_loop_central_difference_kernel2(
           (0.5f * g_jerk[0] - g_jerk[1] + g_jerk[3] - 0.5f * g_jerk[4]) * dt * dt * dt);
     
   }
-  else if (hid == horizon -3)
+  else if (hid == horizon - 3) 
   {
+    //The below can cause oscilatory gradient steps.
+    
+    /*
     #pragma unroll
-    for (int i=0; i< 4; i++)
+    for (int i=0; i< 5; i++)
     {
     g_vel[i] = grad_velocity[b_addrs + ((hid - 2) + i)*dof + d_idx];
     g_acc[i] = grad_acceleration[b_addrs + ((hid -2) + i)*dof + d_idx];
     g_jerk[i] = grad_jerk[b_addrs + ((hid -2) + i)*dof + d_idx];
     }
+    */
     g_pos[1] = grad_position[b_addrs + (hid + 1)*dof + d_idx];
     g_pos[2] = grad_position[b_addrs + (hid + 2)*dof + d_idx];
 
-    out_grad = (g_pos[0] + g_pos[1] + g_pos[2] +  
+    out_grad = (g_pos[0] + g_pos[1] + g_pos[2]);
+          /* +  
           //((0.5) * g_vel[1] + (0.5) * g_vel[2]) * dt + 
           ((-0.083333333f) * g_vel[0] + (0.583333333f) * g_vel[1] + (0.583333333f) * g_vel[2] + (-0.083333333f) * g_vel[3]) * dt  +
           ((-0.083333333f) * g_acc[0] + (1.25f) * g_acc[1] + (-1.25f) * g_acc[2] + (0.083333333f) * g_acc[3]) * dt * dt +
           //( g_acc[1] - g_acc[2]) * dt * dt +
           (0.5f * g_jerk[0] - 0.5f * g_jerk[1] -0.5f * g_jerk[2] + 0.5f * g_jerk[3]) * dt * dt * dt);
+          */
   }
-  
-   
+ 
   
   // write out:
-  out_grad_position[b_addrs + (h_idx-2)*dof + d_idx] = out_grad;
+  out_grad_position[b_addrs_action + (h_idx-2)*dof + d_idx] = out_grad;
 }
 
 // for MPPI:
@@ -1389,6 +1413,8 @@ std::vector<torch::Tensor> step_position_clique2(
   }
   else if (mode == CENTRAL_DIFF)
   {
+      assert(u_position.sizes()[1] == horizon - 4);
+
      AT_DISPATCH_FLOATING_TYPES(
       out_position.scalar_type(), "step_position_clique", ([&] {
         position_clique_loop_kernel2<scalar_t, CENTRAL_DIFF>
@@ -1436,7 +1462,7 @@ std::vector<torch::Tensor> step_position_clique2_idx(
   if (mode == BWD_DIFF)
   {
 
-  
+  assert(false);
   AT_DISPATCH_FLOATING_TYPES(
       out_position.scalar_type(), "step_position_clique", ([&] {
         position_clique_loop_idx_kernel2<scalar_t, BWD_DIFF>
@@ -1455,6 +1481,8 @@ std::vector<torch::Tensor> step_position_clique2_idx(
  
   else if (mode == CENTRAL_DIFF)
   {  
+  assert(u_position.sizes()[1] == horizon - 4);
+
   AT_DISPATCH_FLOATING_TYPES(
       out_position.scalar_type(), "step_position_clique", ([&] {
         position_clique_loop_idx_kernel2<scalar_t, CENTRAL_DIFF>
@@ -1538,7 +1566,7 @@ std::vector<torch::Tensor> backward_step_position_clique2(
   if (mode == BWD_DIFF)
   {
 
-  
+  assert(false); // not supported anymore
   AT_DISPATCH_FLOATING_TYPES(
       out_grad_position.scalar_type(), "backward_step_position_clique", ([&] {
         backward_position_clique_loop_backward_difference_kernel2<scalar_t>
@@ -1554,7 +1582,7 @@ std::vector<torch::Tensor> backward_step_position_clique2(
   }
   else if (mode == CENTRAL_DIFF)
   {
-
+  assert(out_grad_position.sizes()[1] == horizon - 4);
   AT_DISPATCH_FLOATING_TYPES(
       out_grad_position.scalar_type(), "backward_step_position_clique", ([&] {
         backward_position_clique_loop_central_difference_kernel2<scalar_t>

@@ -324,9 +324,9 @@ class ArmBase(RolloutBase, ArmBaseConfig):
         # set start state:
         start_state = torch.randn((1, self.dynamics_model.d_state), **vars(self.tensor_args))
         self._start_state = JointState(
-            position=start_state[:, : self.dynamics_model.d_action],
-            velocity=start_state[:, : self.dynamics_model.d_action],
-            acceleration=start_state[:, : self.dynamics_model.d_action],
+            position=start_state[:, : self.dynamics_model.d_dof],
+            velocity=start_state[:, : self.dynamics_model.d_dof],
+            acceleration=start_state[:, : self.dynamics_model.d_dof],
         )
         self.update_cost_dt(self.dynamics_model.dt_traj_params.base_dt)
         return RolloutBase._init_after_config_load(self)
@@ -679,6 +679,10 @@ class ArmBase(RolloutBase, ArmBaseConfig):
     @property
     def horizon(self):
         return self.dynamics_model.horizon
+
+    @property
+    def action_horizon(self):
+        return self.dynamics_model.action_horizon
 
     def get_init_action_seq(self) -> torch.Tensor:
         act_seq = self.dynamics_model.init_action_mean.unsqueeze(0).repeat(self.batch_size, 1, 1)

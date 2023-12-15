@@ -19,11 +19,13 @@ import torch
 
 # CuRobo
 from curobo.types.math import Pose
+from curobo.util.logger import log_error, log_warn
 
 
 @dataclass
 class CameraObservation:
     name: str = "camera_image"
+    #: rgb image format is BxHxWxchannels
     rgb_image: Optional[torch.Tensor] = None
     depth_image: Optional[torch.Tensor] = None
     image_segmentation: Optional[torch.Tensor] = None

@@ -10,7 +10,7 @@
 ##
 
 model:
-  horizon: 40
+  horizon: 30
   state_filter_cfg:
     filter_coeff:
       position: 0.0
@@ -18,9 +18,9 @@ model:
       acceleration: 0.0
     enable: True
   dt_traj_params:
-    base_dt: 0.02
+    base_dt: 0.05
     base_ratio: 0.5
-    max_dt: 0.02
+    max_dt: 0.05
   vel_scale: 1.0
   control_space: 'POSITION'
   teleport_mode: False
@@ -72,16 +72,16 @@ cost:
     max_nlimit: 0.5 #0.2
 
 lbfgs:
-  n_iters: 150 #125 #@200 #250 #250 # 150 #25
+  n_iters: 500 #125 #@200 #250 #250 # 150 #25
   inner_iters: 25
   cold_start_n_iters: 500 #125 #200 #250 #$150 #25
   min_iters: 50
-  line_search_scale: [0.01,0.25, 0.75,1.0] #[0.01,0.25,0.7, 1.0]  # [0.01, 0.8, 1.0] #
+  line_search_scale: [0.01,0.3, 0.7,1.0] #[0.01,0.25,0.7, 1.0]  # [0.01, 0.8, 1.0] #
   fixed_iters: True
   cost_convergence: 0.01
   cost_delta_threshold: 0.0001
   epsilon: 0.01
-  history: 6 #15
+  history: 15 #15
   use_cuda_graph: True
   n_envs: 1
   store_debug: False
@@ -92,7 +92,7 @@ lbfgs:
   use_cuda_update_best_kernel: True
   sync_cuda_time: True
   use_temporal_smooth: False
-  last_best: 26
+  last_best: 10
   step_scale: 1.0
   use_coo_sparse: True
   debug_info:

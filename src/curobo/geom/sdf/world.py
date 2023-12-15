@@ -848,13 +848,13 @@ class WorldPrimitiveCollision(WorldCollision):
         trange = [h - l for l, h in zip(low, high)]
 
         x = torch.linspace(
-            -bounds[0], bounds[0], int(trange[0] // voxel_size), device=self.tensor_args.device
+            -bounds[0], bounds[0], int(trange[0] // voxel_size) + 1, device=self.tensor_args.device
         )
         y = torch.linspace(
-            -bounds[1], bounds[1], int(trange[1] // voxel_size), device=self.tensor_args.device
+            -bounds[1], bounds[1], int(trange[1] // voxel_size) + 1, device=self.tensor_args.device
         )
         z = torch.linspace(
-            -bounds[2], bounds[2], int(trange[2] // voxel_size), device=self.tensor_args.device
+            -bounds[2], bounds[2], int(trange[2] // voxel_size) + 1, device=self.tensor_args.device
         )
         w, l, h = x.shape[0], y.shape[0], z.shape[0]
         xyz = (
@@ -893,8 +893,11 @@ class WorldPrimitiveCollision(WorldCollision):
         voxel_size: float = 0.02,
     ) -> Mesh:
         voxels = self.get_voxels_in_bounding_box(cuboid, voxel_size)
+        # voxels = voxels.cpu().numpy()
+        # cuboids = [Cuboid(name="c_"+str(x), pose=[voxels[x,0],voxels[x,1],voxels[x,2], 1,0,0,0], dims=[voxel_size, voxel_size, voxel_size]) for x in range(voxels.shape[0])]
+        # mesh = WorldConfig(cuboid=cuboids).get_mesh_world(True).mesh[0]
         mesh = Mesh.from_pointcloud(
             voxels[:, :3].detach().cpu().numpy(),
-            pitch=voxel_size,
+            pitch=voxel_size * 1.1,
         )
         return mesh
