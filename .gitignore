@@ -201,3 +201,6 @@ nvidia_curobo*/
 *tfevents*
 
 *.csv
+
+#don't ignore devcontainer files
+!.devcontainer/*
