@@ -1,0 +1,85 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+robot_cfg:
+  kinematics:
+    use_usd_kinematics: False
+    urdf_path: "robot/sr_hand_ur10e_right/sr_hand_ur10e_right.urdf"
+    asset_root_path: "robot/sr_hand_ur10e_right"
+    usd_flip_joints: {}
+    usd_flip_joint_limits: []
+
+    # isaac_usd_path: "/Isaac/Robots/UR10/ur10_long_suction.usd"
+    # usd_robot_root: "/srhand_ur10e_right"
+    # usd_path: "robot/sr_hand_ur10e_right/sr_hand_ur10e_right.usd"
+
+    base_link: "ra_base_link"
+    ee_link: "rh_manipulator"
+    link_names: null 
+    lock_joints: null
+    extra_links: null
+
+    collision_link_names: [
+    "ra_shoulder_link",
+    "ra_upper_arm_link", 
+    "ra_forearm_link", 
+    "ra_wrist_1_link", 
+    "ra_wrist_2_link" ,
+    "ra_wrist_3_link", 
+    "rh_forearm", 
+    "rh_palm",
+    ]
+    collision_spheres: "spheres/sr_hand_ur10e_right.yml"
+    collision_sphere_buffer: 0.002
+    self_collision_ignore: {
+      "ra_upper_arm_link": ["ra_shoulder_link", "ra_forearm_link"],
+      "ra_forearm_link": ["ra_wrist_1_link"],
+      "ra_wrist_1_link": ["ra_wrist_2_link","ra_wrist_3_link"],
+      "ra_wrist_2_link": ["ra_wrist_3_link", "rh_forearm", "rh_palm"],
+      "ra_wrist_3_link": ["rh_forearm", "rh_palm"],
+      }
+    self_collision_buffer: {
+      "ra_shoulder_link": 0,
+      "ra_upper_arm_link": 0, 
+      "ra_forearm_link": 0, 
+      "ra_wrist_1_link": 0, 
+      "ra_wrist_2_link": 0,
+      "ra_wrist_3_link" : 0, 
+      "rh_forearm": 0,
+      "rh_palm": 0,
+    }
+    mesh_link_names: [ 
+    "ra_shoulder_link",
+    "ra_upper_arm_link", 
+    "ra_forearm_link", 
+    "ra_wrist_1_link", 
+    "ra_wrist_2_link" ,
+    "ra_wrist_3_link",
+    "rh_forearm", 
+    "rh_palm",
+    ]
+
+    cspace:
+      joint_names: [
+        "ra_shoulder_pan_joint", 
+        "ra_shoulder_lift_joint", 
+        "ra_elbow_joint",
+        "ra_wrist_1_joint",
+        "ra_wrist_2_joint", 
+        "ra_wrist_3_joint", 
+        "rh_WRJ1",
+        "rh_WRJ2",
+      ]
+      retract_config: [0.0, -1.25, 2.0, -1.0, 1.57, -2.0, 0.0, 0.0]
+      null_space_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] #[2.5, 1.75, 1.5, 1.25, 0.7, 0.4]
+      max_jerk: 500.0
+      max_acceleration: 15.0
