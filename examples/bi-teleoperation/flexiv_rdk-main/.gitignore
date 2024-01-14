@@ -1,0 +1,7 @@
+.vscode
+.vs
+.DS_Store
+config.h
+build/
+html/
+__pycache__

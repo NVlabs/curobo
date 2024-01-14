@@ -1,0 +1,474 @@
+<?xml version="1.0"?>
+<!-- ======================================================================== -->
+<!-- | Flexiv Rizon4 Arm (with approximated dynamic parameters)             | -->
+<!-- ======================================================================== -->
+<robot name="A02L-MP">
+  <joint name="joint0" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0" />
+    <parent link="world" />
+    <child link="base_link" />
+  </joint>
+  <joint name="joint1" type="revolute">
+    <parent link="base_link" />
+    <child link="link1" />
+    <origin rpy="0 0 3.141592653589793" xyz="0.0 0.0 0.155" />
+    <axis xyz="0 0 1" />
+    <limit effort="123" lower="-2.7925" upper="2.7925" velocity="2.0944" />
+  </joint>
+  <joint name="joint2" type="revolute">
+    <parent link="link1" />
+    <child link="link2" />
+    <origin rpy="0 0 0" xyz="0.0 0.03 0.210" />
+    <axis xyz="0 1 0" />
+    <limit effort="123" lower="-2.2689" upper="2.2689" velocity="2.0944" />
+  </joint>
+  <joint name="joint3" type="revolute">
+    <parent link="link2" />
+    <child link="link3" />
+    <origin rpy="0 0 0" xyz="0.0 0.035 0.205" />
+    <axis xyz="0 0 1" />
+    <limit effort="64" lower="-2.9671" upper="2.9671" velocity="2.4435" />
+  </joint>
+  <joint name="joint4" type="revolute">
+    <parent link="link3" />
+    <child link="link4" />
+    <origin rpy="0 0 -3.141592653589793" xyz="-0.02 -0.03 0.19" />
+    <axis xyz="0 1 0" />
+    <limit effort="64" lower="-1.8675" upper="2.6878" velocity="2.4435" />
+  </joint>
+  <joint name="joint5" type="revolute">
+    <parent link="link4" />
+    <child link="link5" />
+    <origin rpy="0 0 -3.141592653589793" xyz="-0.02 0.025 0.195" />
+    <axis xyz="0 0 1" />
+    <limit effort="39" lower="-2.9671" upper="2.9671" velocity="4.8869" />
+  </joint>
+  <joint name="joint6" type="revolute">
+    <parent link="link5" />
+    <child link="link6" />
+    <origin rpy="0 0 0" xyz="0.0 0.03 0.19" />
+    <axis xyz="0 1 0" />
+    <limit effort="39" lower="-1.3963" upper="4.5379" velocity="4.8869" />
+  </joint>
+  <joint name="joint7" type="revolute">
+    <parent link="link6" />
+    <child link="link7" />
+    <origin rpy="0 -1.5707963267948966 0" xyz="-0.055 0.070 0.11" />
+    <axis xyz="0 0 1" />
+    <limit effort="39" lower="-2.9671" upper="2.9671" velocity="4.8869" />
+  </joint>
+  <joint name="link7_to_flange" type="fixed">
+    <parent link="link7" />
+    <child link="flange" />
+    <origin rpy="0 0 -3.141592653589793" xyz="0.0 0.0 0.081" />
+  </joint>
+
+  <link name="world" />
+  <link name="base_link">
+    <inertial>
+      <mass value="3.7" />
+      <origin rpy="0 0 0" xyz="0.0 -0.0 0.09" />
+      <inertia ixx="0.019" ixy="0.0" ixz="0.0" iyy="0.02" iyz="0.0" izz="0.009" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/visual/link0.stl" />
+      </geometry>
+      <material name="rizon_light_grey" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/collision/link0.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link1">
+    <inertial>
+      <mass value="3.7" />
+      <origin rpy="0 0 0" xyz="0.0 0.01 0.15" />
+      <inertia ixx="0.028" ixy="0.0" ixz="0.0" iyy="0.027" iyz="0.002" izz="0.008" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/visual/link1.stl" />
+      </geometry>
+      <material name="rizon_light_grey" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/collision/link1.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link2">
+    <inertial>
+      <mass value="2.7" />
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.1" />
+      <inertia ixx="0.023" ixy="0.0" ixz="0.0" iyy="0.024" iyz="-0.0" izz="0.004" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/visual/link2.stl" />
+      </geometry>
+      <material name="rizon_light_grey" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/collision/link2.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link3">
+    <inertial>
+      <mass value="2.4" />
+      <origin rpy="0 0 0" xyz="-0.01 -0.0 0.13" />
+      <inertia ixx="0.014" ixy="0.0" ixz="-0.001" iyy="0.014" iyz="-0.001" izz="0.004" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/visual/link3.stl" />
+      </geometry>
+      <material name="rizon_light_grey" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/collision/link3.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link4">
+    <inertial>
+      <mass value="2.4" />
+      <origin rpy="0 0 0" xyz="-0.01 0.03 0.1" />
+      <inertia ixx="0.018" ixy="0.0" ixz="-0.002" iyy="0.019" iyz="-0.001" izz="0.003" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/visual/link4.stl" />
+      </geometry>
+      <material name="rizon_light_grey" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/collision/link4.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link5">
+    <inertial>
+      <mass value="2.4" />
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.13" />
+      <inertia ixx="0.014" ixy="0.0" ixz="0.0" iyy="0.013" iyz="0.001" izz="0.004" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/visual/link5.stl" />
+      </geometry>
+      <material name="rizon_light_grey" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/collision/link5.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link6">
+    <inertial>
+      <mass value="2.1" />
+      <origin rpy="0 0 0" xyz="-0.01 0.06 0.07" />
+      <inertia ixx="0.008" ixy="-0.0" ixz="-0.001" iyy="0.009" iyz="0.002" izz="0.004" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/visual/link6.stl" />
+      </geometry>
+      <material name="rizon_light_grey" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/collision/link6.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="link7">
+    <inertial>
+      <mass value="0.8" />
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.03" />
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001" />
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/visual/link7.stl" />
+      </geometry>
+      <material name="rizon_light_grey" />
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_meshes/collision/link7.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="flange" />
+  <joint name="flange_fixed" type="fixed">
+        <origin rpy="0 0 1.5707" xyz="0 0 0" />
+        <parent link="flange" />
+        <child link="gripper_root_link" />
+  </joint>
+	<link name="gripper_root_link" />
+	<joint name="rightgripper_base_joint" type="fixed">
+	<parent link="gripper_root_link" />
+	<child link="rightgripper_base_link" />
+	<origin rpy="0 0 0" xyz="0 0 0" />
+	</joint>
+	<link name="rightgripper_base_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/base_link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/base_link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.83416" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="0.0013016" ixy="-6.9374e-07" ixz="5.9848e-07" iyx="0.000000" iyy="0.00049972" iyz="2.0244E-07" izx="0.000000" izy="0.000000" izz="0.001498" />
+	</inertial>
+	</link>
+
+	<joint name="rightgripper_finger1_joint" type="revolute">
+	<parent link="rightgripper_base_link" />
+	<child link="rightgripper_finger1_knuckle_link" />
+	<axis xyz="0 -1 0" />
+	<origin rpy="0.0 0.0 3.141592653589793" xyz="-0.016 0 0.10586" />
+	<limit effort="1000" lower="0.0" upper="0.65" velocity="2.0" />
+	</joint>
+	<joint name="rightgripper_finger2_joint" type="revolute">
+	<parent link="rightgripper_base_link" />
+	<child link="rightgripper_finger2_knuckle_link" />
+	<axis xyz="0 -1 0" />
+	<origin rpy="0.0 0.0 0.0" xyz="0.016  0 0.10586 " />
+	<limit effort="1000" lower="-3.14" upper="3.14" velocity="100.0" />
+	<mimic joint="rightgripper_finger1_joint" />
+	</joint>
+	<link name="rightgripper_finger1_knuckle_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/crank_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/crank_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.011111" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="3.88172e-06" ixy="-2.29456e-13" ixz="8.33e-07" iyx="0.000000" iyy="1.92174e-06" iyz="2.04435e-13" izx="0.000000" izy="0.000000" izz="4.32374e-06" />
+	</inertial>
+	</link>
+
+	<link name="rightgripper_finger2_knuckle_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/crank_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/crank_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.011111" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="3.88172e-06" ixy="-2.29456e-13" ixz="8.33e-07" iyx="0.000000" iyy="1.92174e-06" iyz="2.04435e-13" izx="0.000000" izy="0.000000" izz="4.32374e-06" />
+	</inertial>
+	</link>
+
+	<joint name="rightgripper_finger1_finger_joint" type="continuous">
+	<parent link="rightgripper_finger1_knuckle_link" />
+	<child link="rightgripper_finger1_finger_link" />
+	<axis xyz="0 -1 0" />
+	<origin rpy="0 0 0" xyz="0.0292080077784 0.0 -0.0227132622407" />
+	<limit effort="0.1" lower="-3.14" upper="3.14" velocity="100.0" />
+	<mimic joint="rightgripper_finger1_joint" multiplier="0.4563942" offset="0" />
+	</joint>
+	<joint name="rightgripper_finger2_finger_joint" type="continuous">
+	<parent link="rightgripper_finger2_knuckle_link" />
+	<child link="rightgripper_finger2_finger_link" />
+	<axis xyz="0 -1 0" />
+	<origin rpy="0 0 0" xyz="0.0292080077784 0.0 -0.0227132622407" />
+	<limit effort="0.1" lower="-3.14" upper="3.14" velocity="100.0" />
+	<mimic joint="rightgripper_finger1_joint" multiplier="0.4563942" offset="0" />
+	</joint>
+	<link name="rightgripper_finger1_finger_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/rod_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/rod_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.0222871" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="8.72836e-06" ixy="7.0843e-15" ixz="-2.18833e-06" iyx="-0.000002" iyy="7.26157e-06" iyz="7.6579e-15" izx="0.000000" izy="0.000000" izz="3.3425e-06" />
+	</inertial>
+	</link>
+	<link name="rightgripper_finger2_finger_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/rod_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/rod_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.0222871" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="8.72836e-06" ixy="7.0843e-15" ixz="-2.18833e-06" iyx="-0.000002" iyy="7.26157e-06" iyz="7.6579e-15" izx="0.000000" izy="0.000000" izz="3.3425e-06" />
+	</inertial>
+	</link>
+
+	<joint name="rightgripper_finger1_inner_knuckle_joint" type="continuous">
+	<parent link="rightgripper_base_link" />
+	<child link="rightgripper_finger1_inner_knuckle_link" />
+	<axis xyz="0 -1 0" />
+	<origin rpy="0.0 0.0 3.141592653589793" xyz="-0.016 0 0.10586" />
+	<limit effort="0.1" lower="-3.14" upper="3.14" velocity="100.0" />
+	<mimic joint="rightgripper_finger1_joint" multiplier="1.49462955" offset="0" />
+	</joint>
+	<joint name="rightgripper_finger2_inner_knuckle_joint" type="continuous">
+	<parent link="rightgripper_base_link" />
+	<child link="rightgripper_finger2_inner_knuckle_link" />
+	<axis xyz="0 -1 0" />
+	<origin rpy="0.0 0.0 0.0" xyz="0.016 0 0.10586" />
+	<limit effort="0.1" lower="-3.14" upper="3.14" velocity="100.0" />
+	<mimic joint="rightgripper_finger1_joint" multiplier="1.49462955" offset="0" />
+	</joint>
+	<link name="rightgripper_finger1_inner_knuckle_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/proximal_phalanx_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/proximal_phalanx_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.0318004" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="1.39848e-05" ixy="-9.54763e-15" ixz="-5.01422e-06" iyx="0.000000" iyy="1.04943e-05" iyz="8.94585e-16" izx="0.000000" izy="0.000000" izz="1.36183e-05" />
+	</inertial>
+	</link>
+
+	<link name="rightgripper_finger2_inner_knuckle_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/proximal_phalanx_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/proximal_phalanx_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.0318004" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="1.39848e-05" ixy="-9.54763e-15" ixz="-5.01422e-06" iyx="0.000000" iyy="1.04943e-05" iyz="8.94585e-16" izx="0.000000" izy="0.000000" izz="1.36183e-05" />
+	</inertial>
+	</link>
+
+	<joint name="rightgripper_finger1_finger_tip_joint" type="continuous">
+	<parent link="rightgripper_finger1_inner_knuckle_link" />
+	<child link="rightgripper_finger1_finger_tip_link" />
+	<axis xyz="0 1 0" />
+	<origin rpy="0.0 0.0 0.0" xyz="0.0394969463769 0.0 0.0382752038125 " />
+	<limit effort="0.1" lower="-3.14" upper="3.14" velocity="100.0" />
+	<mimic joint="rightgripper_finger1_joint" multiplier="1.49462955" />
+	</joint>
+	<joint name="rightgripper_finger2_finger_tip_joint" type="continuous">
+	<parent link="rightgripper_finger2_inner_knuckle_link" />
+	<child link="rightgripper_finger2_finger_tip_link" />
+	<axis xyz="0 1 0" />
+	<origin rpy="0.0 0.0 0.0" xyz="0.0394969463769  0.0 0.0382752038125  " />
+	<limit effort="0.1" lower="-3.14" upper="3.14" velocity="100.0" />
+	<mimic joint="rightgripper_finger1_joint" multiplier="1.49462955" />
+	</joint>
+	<link name="rightgripper_finger1_finger_tip_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/distal_phalanx_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/distal_phalanx_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.0124305" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="2.84217e-06" ixy="-2.48048e-15" ixz="8.24539e-07" iyx="0.000000" iyy="3.03961e-06" iyz="2.16427e-13" izx="0.000000" izy="0.000000" izz="1.11815e-06" />
+	</inertial>
+	</link>
+	<link name="rightgripper_finger2_finger_tip_link">
+	<visual>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/distal_phalanx_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</visual>
+	<collision>
+	    <geometry>
+		<mesh filename="package://DH_gripper_meshes/dhag95/visual/distal_phalanx_Link.STL" scale="0.001 0.001 0.001" />
+	    </geometry>
+	</collision>
+	<inertial>
+	    <mass value="0.0124305" />
+	    <origin xyz="0.0 0.0 0.0" rpy="0 0 0" />
+	    <inertia ixx="2.84217e-06" ixy="-2.48048e-15" ixz="8.24539e-07" iyx="0.000000" iyy="3.03961e-06" iyz="2.16427e-13" izx="0.000000" izy="0.000000" izz="1.11815e-06" />
+	</inertial>
+	</link>
+  <!-- material -->
+  <material name="rizon_blue">
+    <color rgba="0. 0. 1. 0.5" />
+  </material>
+  <material name="rizon_light_grey">
+    <color rgba="0.7 0.7 0.7 1" />
+  </material>
+  <material name="rizon_dark_grey">
+    <color rgba="0.2 0.2 0.2 1" />
+  </material>
+  <material name="rizon_white">
+    <color rgba="1 1 1 1" />
+  </material>
+</robot>

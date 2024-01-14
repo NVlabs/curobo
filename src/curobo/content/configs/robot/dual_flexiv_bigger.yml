@@ -1,0 +1,83 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+robot_cfg:
+  kinematics:
+    usd_path: "robot/flexiv_description/dual_flexiv.usd"
+    usd_robot_root: "/robot"
+    isaac_usd_path: ""
+    usd_flip_joints: {}
+    usd_flip_joint_limits: []
+
+    urdf_path: "robot/flexiv_description/dual_flexiv.urdf"
+    asset_root_path: "robot/flexiv_description"
+    
+    base_link: "world"
+    ee_link: "ee_target"
+    link_names: ["ee_target_1", "ee_target"]
+    extra_links: null
+
+    
+    collision_link_names: ["base_link","link1","link2","link3","link4","link5","link6","link7","base_link_1","link1_1","link2_1","link3_1","link4_1","link5_1","link6_1","link7_1"]
+    collision_spheres: "spheres/dual_flexiv_raw_spheres_bigger.yaml"
+      
+    collision_sphere_buffer: 0.005
+    extra_collision_spheres: {}
+    self_collision_ignore: {
+    "base_link":["link1"],
+    "link1":["base_link","link2"],
+    "link2":["link1","link3"],
+    "link3":["link2","link4"],
+    "link4":["link3","link5"],
+    "link5":["link4","link6"],
+    "link6":["link5","link7"],
+    "link7":["link6"],
+    "base_link_1":["link1_1"],
+    "link1_1":["base_link_1","link2_1"],
+    "link2_1":["link1_1","link3_1"],
+    "link3_1":["link2_1","link4_1"],
+    "link4_1":["link3_1","link5_1"],
+    "link5_1":["link4_1","link6_1"],
+    "link6_1":["link5_1","link7_1"],
+    "link7_1":["link6_1"],
+    }
+    self_collision_buffer: {
+    "base_link": 0.05,
+    "link1":0,
+    "link2":0,
+    "link3":0,
+    "link4":0,
+    "link5":0,
+    "link6":0,
+    "link7":0,
+    "base_link_1": 0.05,
+    "link1_1":0,
+    "link2_1":0,
+    "link3_1":0,
+    "link4_1":0,
+    "link5_1":0,
+    "link6_1":0,
+    "link7_1":0,
+    }
+
+    use_global_cumul: True
+    mesh_link_names: null # List[str]
+    lock_joints: null
+    cspace:
+      joint_names: ["joint1","joint2","joint3","joint4","joint5","joint6","joint7","joint1_1","joint2_1","joint3_1","joint4_1","joint5_1","joint6_1","joint7_1",]
+      
+      #retract_config: [0.0, -0.698, 0.0, 1.5708, 0.0, 0.698, -1.5708, 0.0, -0.698, 0.0, 1.5708, 0.0, 0.698, 1.5708,]
+      #retract_config: [0.1, -1.06, 0.35, 1.57, -1.5, -0.047, -0.761, -0.1438, -0.858, -0.16, 1.393, 1.283, 0.2, 1.2,]
+      retract_config: [0.40417057275772095, -0.9850670695304871, 0.04237251728773117, 1.6709798574447632, -1.3102929592132568, -0.048906899988651276, -0.16715091466903687, -0.4967884123325348, -0.8780576586723328, 0.08119309693574905, 1.4811341762542725, 1.2486426830291748, -0.06149272248148918, 0.5619035363197327]
+      null_space_weight: [1.0,1.0,1.0,1.0,1.0,1.0,1.0, 1.0,1.0,1.0,1.0,1.0,1.0,1.0,] 
+      cspace_distance_weight: [1.0,1.0,1.0,1.0,1.0,1.0,1.0, 1.0,1.0,1.0,1.0,1.0,1.0,1.0,] 
+      max_jerk: 500.0
+      max_acceleration: 15.0

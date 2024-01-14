@@ -1,0 +1,115 @@
+name: CMake
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: Release
+
+jobs:
+  build-ubuntu-22:
+    # The CMake configure and build commands are platform agnostic and should work equally
+    # well on Windows or Mac.  You can convert this to a matrix build if you need
+    # cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Build and install library
+        # Configure CMake, then build and install the flexiv_rdk INTERFACE library to an external directory.
+        run: |
+          cd ${{github.workspace}}
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          make install
+
+      - name: Build examples
+        # Find and link to the flexiv_rdk INTERFACE library, then build all examples.
+        run: |
+          cd ${{github.workspace}}/example
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          make -j$(nproc)
+
+      - name: Build tests
+        # Find and link to the flexiv_rdk INTERFACE library, then build all tests.
+        run: |
+          cd ${{github.workspace}}/test
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          make -j$(nproc)
+
+  build-ubuntu-20:
+    # The CMake configure and build commands are platform agnostic and should work equally
+    # well on Windows or Mac.  You can convert this to a matrix build if you need
+    # cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    runs-on: ubuntu-20.04
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Build and install library
+        # Configure CMake, then build and install the flexiv_rdk INTERFACE library to an external directory.
+        run: |
+          cd ${{github.workspace}}
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          make install
+
+      - name: Build examples
+        # Find and link to the flexiv_rdk INTERFACE library, then build all examples.
+        run: |
+          cd ${{github.workspace}}/example
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          make -j$(nproc)
+
+      - name: Build tests
+        # Find and link to the flexiv_rdk INTERFACE library, then build all tests.
+        run: |
+          cd ${{github.workspace}}/test
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          make -j$(nproc)
+
+  build-windows-2022:
+    # The CMake configure and build commands are platform agnostic and should work equally
+    # well on Windows or Mac.  You can convert this to a matrix build if you need
+    # cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Build and install library
+        # Configure CMake, then build and install the flexiv_rdk INTERFACE library to an external directory.
+        run: |
+          cd ${{github.workspace}}
+          mkdir build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          cmake --build . --target install --config Release
+
+      - name: Build examples
+        # Find and link to the flexiv_rdk INTERFACE library, then build all examples.
+        run: |
+          cd ${{github.workspace}}/example
+          mkdir build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          cmake --build . --config Release
+
+      - name: Build tests
+        # Find and link to the flexiv_rdk INTERFACE library, then build all tests.
+        run: |
+          cd ${{github.workspace}}/test
+          mkdir build && cd build
+          cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+          cmake --build . --config Release
