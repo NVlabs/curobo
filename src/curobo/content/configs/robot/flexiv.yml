@@ -28,7 +28,7 @@ robot_cfg:
 
     
     collision_link_names: ["link1","link2","link3","link4","link5","link6","link7"]
-    collision_spheres: "spheres/flexiv.yaml"
+    collision_spheres: "spheres/flexiv_raw_spheres.yaml"
       
     collision_sphere_buffer: 0.005
     extra_collision_spheres: {}

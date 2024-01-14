@@ -49,10 +49,12 @@ class BiFlexivController():
                                       local_ip="192.168.2.223",
                                       robot_ip="192.168.2.100",
                                       origin_offset=[0,0.313,0])
+        self.left_robot.init_mpc()
         self.right_robot = FlexivController(world_model=get_custom_world_model(),
                                       local_ip="192.168.2.223",
                                       robot_ip="192.168.2.101",
                                       origin_offset=[0,-0.313,0])
+        self.right_robot.init_mpc()
         self.joint_names = [f"joint{i}" for i in range(1,8)]+[f"joint{i}_1" for i in range(1,8)]
         print("current q: ", self.left_robot.get_current_q()+self.right_robot.get_current_q())
 

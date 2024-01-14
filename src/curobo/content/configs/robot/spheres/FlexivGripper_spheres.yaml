@@ -1,0 +1,93 @@
+collision_spheres:
+  base_link:
+    - "center": [0.001, -0.001, 0.071]
+      "radius": 0.101
+  link1:
+  - "center": [-0.002, -0.002, 0.071]
+    "radius": 0.084
+  - "center": [-0.004, -0.011, 0.173]
+    "radius": 0.077
+  - "center": [0.003, -0.015, 0.22]
+    "radius": 0.073
+  link2:
+  - "center": [0.001, 0.036, 0.126]
+    "radius": 0.076
+  - "center": [0.005, 0.041, 0.031]
+    "radius": 0.073
+  - "center": [-0.007, 0.042, -0.008]
+    "radius": 0.071
+  - "center": [-0.004, 0.035, 0.151]
+    "radius": 0.074
+  link3:
+  - "center": [-0.005, 0.002, 0.06]
+    "radius": 0.069
+  - "center": [-0.012, 0.008, 0.144]
+    "radius": 0.065
+  - "center": [-0.018, 0.012, 0.197]
+    "radius": 0.062
+  link4:
+  - "center": [-0.018, 0.026, 0.139]
+    "radius": 0.07
+  - "center": [-0.003, 0.034, 0.039]
+    "radius": 0.066
+  - "center": [-0.006, 0.038, 0.001]
+    "radius": 0.064
+  link5:
+  - "center": [0.001, -0.003, 0.069]
+    "radius": 0.068
+  - "center": [0.003, -0.01, 0.169]
+    "radius": 0.064
+  - "center": [-0.003, -0.006, 0.112]
+    "radius": 0.067
+  - "center": [-0.0, -0.012, 0.195]
+    "radius": 0.062
+  - "center": [0.004, 0.001, 0.046]
+    "radius": 0.066
+  link6:
+  - "center": [0.014, 0.069, 0.107]
+    "radius": 0.065
+  - "center": [0.002, 0.049, 0.035]
+    "radius": 0.064
+  - "center": [-0.001, 0.043, -0.005]
+    "radius": 0.058
+  - "center": [-0.001, 0.067, 0.106]
+    "radius": 0.064
+  - "center": [0.016, 0.055, 0.067]
+    "radius": 0.063
+  - "center": [0.021, 0.07, 0.11]
+    "radius": 0.064
+  link7:
+  - "center": [-0.005, -0.006, 0.041]
+    "radius": 0.07
+  rightgripper_base_link:
+    - "center": [0.0, 0.0, 0.0]
+      "radius": 0.05
+    - "center": [0.0, 0.0, 0.09]
+      "radius": 0.05
+    - "center": [0.0, 0.0, 0.045]
+      "radius": 0.05
+  rightgripper_finger1_finger_tip_link:
+    - "center": [0.01, 0.0, -0.01]
+      "radius": 0.02
+    - "center": [0.0, 0.0, 0.025]
+      "radius": 0.02
+    - "center": [0.0, 0.0, 0.0]
+      "radius": 0.02
+    - "center": [0.01, 0.0, -0.03]
+      "radius": 0.02
+    - "center": [-0.015, 0.0, -0.015]
+      "radius": 0.03
+  rightgripper_finger2_finger_tip_link:
+    - "center": [0.01, 0.0, -0.01]
+      "radius": 0.02
+    - "center": [0.0, 0.0, 0.025]
+      "radius": 0.02
+    - "center": [0.0, 0.0, 0.0]
+      "radius": 0.02
+    - "center": [0.01, 0.0, -0.03]
+      "radius": 0.02
+    - "center": [-0.015, 0.0, -0.015]
+      "radius": 0.03
+      
+        
+    
