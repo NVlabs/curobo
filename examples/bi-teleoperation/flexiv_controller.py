@@ -11,6 +11,7 @@ import numpy as np
 import transforms3d as t3d
 import time
 from typing import List
+import threading
 
 from curobo.types.robot import JointState, RobotConfig
 from curobo.util_file import get_robot_configs_path, join_path, load_yaml
@@ -65,6 +66,7 @@ class FlexivController():
         self.single_joint_names = [f"joint{i}" for i in range(1,8)]
         
         self.DOF=7
+        self.lock = threading.Lock()
 
         try:
             self.robot_states = flexivrdk.RobotStates()
@@ -165,6 +167,68 @@ class FlexivController():
         self.start_real_tcp = self.get_current_tcp()
         self.start_unity_tcp = np.zeros(7)
         self.start_unity_tcp[4] = 1
+
+        self.past_pose = None
+        self.target_pose = None
+        self.target_quat = None
+
+        self.cmd_plan = None
+        self.cmd_idx = 0
+        self.past_cmd = None
+        t = threading.Thread(target=self.motion_gen_excute_thread)
+        t.start()
+
+    def motion_gen_excute_thread(self):
+        print("excuting..")
+        while True:
+            if self.tracking_state:
+                with self.lock:
+                    if self.cmd_plan is not None:
+                        cmd_state = self.cmd_plan[self.cmd_idx]
+                        self.past_cmd = cmd_state.clone()
+                        self.move(cmd_state.position.cpu().numpy()[:self.DOF])
+                        self.cmd_idx+=1
+                        if self.cmd_idx >= len(self.cmd_plan.position):
+                            self.cmd_idx = 0
+                            self.cmd_plan = None
+                            self.past_cmd = None
+            time.sleep(0.02)
+
+    def motion_gen_receive(self, target):
+        if self.past_pose is None:
+            self.past_pose = target[:3]
+        if self.target_pose is None:
+            self.target_pose = target[:3]
+        if self.target_quat is None:
+            self.target_quat = target[3:]
+
+        cu_js = self.get_current_jointstate()
+        with self.lock:
+            if self.past_cmd is not None:
+                cu_js.position[:] = self.past_cmd.position
+                cu_js.velocity[:] = self.past_cmd.velocity
+                cu_js.acceleration[:] = self.past_cmd.acceleration
+
+        if (
+            (np.linalg.norm(target[:3] - self.target_pose) > 1e-3
+            or np.linalg.norm(target[3:] - self.target_quat) > 1e-3)
+            #and np.linalg.norm(self.past_pose - target[:3]) == 0.0
+        ):
+            ik_goal = Pose(
+                position=self.tensor_args.to_device(target[:3]),
+                quaternion=self.tensor_args.to_device(target[3:]),
+            )
+            result = self.motion_gen.plan_single(cu_js.unsqueeze(0), ik_goal, self.plan_config)
+            succ = result.success.item()  # ik_result.success.item()
+            if succ:
+                with self.lock :
+                    self.cmd_plan = result.get_interpolated_plan()
+                    self.cmd_idx = 0
+            else:
+                print("planning failed")
+            self.target_pose = target[:3]
+            self.target_quat = target[3:]
+        self.past_pose = target[:3]
 
     def init_retract(self,tensor):
         self.retract_cfg = tensor 

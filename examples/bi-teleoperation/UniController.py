@@ -68,14 +68,14 @@ class UniController(Thread):
 
             if not self.controller.homing_state:
                 right_target = self.controller.get_relative_target(r_pos_from_unity)
-                if np.linalg.norm(right_target[:3]-self.controller.get_current_tcp()[:3])>0.5:
-                    if self.controller.tracking_state:
-                        print("robot lost sync")
-                    self.controller.tracking_state=False
-                if not self.controller.tracking_state:
-                    right_target =self.controller.get_current_tcp()
+                # if np.linalg.norm(right_target[:3]-self.controller.get_current_tcp()[:3])>0.5:
+                #     if self.controller.tracking_state:
+                #         print("robot lost sync")
+                #     self.controller.tracking_state=False
+                # if not self.controller.tracking_state:
+                #     right_target =self.controller.get_current_tcp()
 
-                #self.controller.mpc_excute(left_target,right_target)
+                self.controller.motion_gen_receive(right_target)
             return True
         except:
             #print("error in udp")
