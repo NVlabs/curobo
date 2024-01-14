@@ -84,8 +84,9 @@ class UniController(Thread):
 if __name__ == "__main__":
 
     FC = FlexivController(world_model=get_custom_world_model(),
-                          robot_ip="192.168.1.101",
+                          robot_ip="192.168.2.101",
                           origin_offset=[0.0,0.0,0.0])
     FC.init_motion_gen()
+    FC.robot_go_home()
     r = UniController(controller=FC)
     r.run()

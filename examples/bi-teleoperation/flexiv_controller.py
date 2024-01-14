@@ -62,7 +62,9 @@ class FlexivController():
 
         self.tensor_args = TensorDeviceType()
         self.world_model = world_model
+        self.single_joint_names = [f"joint{i}" for i in range(1,8)]
         
+        self.DOF=7
 
         try:
             self.robot_states = flexivrdk.RobotStates()
@@ -96,9 +98,7 @@ class FlexivController():
             self.log.error("Error occurred while connecting to robot server: %s" % str(e))
             return None
         
-        self.start_real_tcp = self.get_current_tcp()
-        self.start_unity_tcp = np.zeros(7)
-        self.start_unity_tcp[4] = 1
+        
     
     def init_mpc(self,config_name="flexiv.yml"):
         single_robot_cfg = load_yaml(join_path(get_robot_configs_path(), config_name))["robot_cfg"]
@@ -116,9 +116,13 @@ class FlexivController():
             step_dt=0.02,
         )
         self.single_mpc = MpcSolver(self.single_mpc_config)
-        self.single_joint_names = [f"joint{i}" for i in range(1,8)]
+        
 
         self.init_retract(self.single_mpc.rollout_fn.dynamics_model.retract_config.unsqueeze(0))
+
+        self.start_real_tcp = self.get_current_tcp()
+        self.start_unity_tcp = np.zeros(7)
+        self.start_unity_tcp[4] = 1
 
     def init_motion_gen(self,config_name="flexiv.yml"):
         robot_cfg = load_yaml(join_path(get_robot_configs_path(), config_name))["robot_cfg"]
@@ -156,18 +160,29 @@ class FlexivController():
             enable_finetune_trajopt=True,
             parallel_finetune=True,
         )
-        self.init_retract(self.motion_gen.get_retract_config().view(1, -1))
+        self.init_retract(self.motion_gen.get_retract_config().unsqueeze(0))
+
+        self.start_real_tcp = self.get_current_tcp()
+        self.start_unity_tcp = np.zeros(7)
+        self.start_unity_tcp[4] = 1
 
     def init_retract(self,tensor):
-        self.retract_cfg = tensor #self.single_mpc.rollout_fn.dynamics_model.retract_config.unsqueeze(0)#tensor
-        #print(self.retract_cfg)
-        self.retract_state = JointState.from_position(self.retract_cfg, 
-                                                      joint_names=self.single_mpc.rollout_fn.joint_names)
-        state = self.single_mpc.rollout_fn.compute_kinematics(self.retract_state)
-        new_pos = state.ee_pos_seq.cpu().numpy()+self.origin_offset#+np.array([0,0,-0.04])
-        #print(new_pos)
+        self.retract_cfg = tensor 
+        if hasattr(self, 'single_mpc'):
+            self.retract_state = JointState.from_position(self.tensor_args.to_device(self.retract_cfg), 
+                                                        joint_names=self.single_mpc.rollout_fn.joint_names)
+            state = self.single_mpc.rollout_fn.compute_kinematics(self.retract_state)
+            new_pos = state.ee_pos_seq.cpu().numpy()+self.origin_offset
+            new_quat = state.ee_quat_seq
+        elif hasattr(self, 'motion_gen'):
+            state = self.motion_gen.kinematics.get_state(self.tensor_args.to_device(self.retract_cfg).view(1,self.DOF))
+            new_pos = np.ravel(state.ee_pose.to_list())[:3]+self.origin_offset
+            new_quat = np.ravel(state.ee_pose.to_list())[3:]
+        else:
+            raise NotImplementedError
+
         self.retract_pose = Pose(position=self.tensor_args.to_device(new_pos), 
-                                 quaternion=state.ee_quat_seq)
+                                 quaternion=self.tensor_args.to_device(new_quat))
 
     def get_current_q(self) -> List[float]:
         self.robot.getRobotStates(self.robot_states)
@@ -178,13 +193,22 @@ class FlexivController():
         return JointState.from_position(self.tensor_args.to_device(q), joint_names=self.single_joint_names)
 
     def get_current_tcp(self) -> np.ndarray:
-        state = self.single_mpc.rollout_fn.compute_kinematics(
-            self.get_current_jointstate()
-        )
-        pos = state.ee_pos_seq.cpu().numpy().flatten()
-        pos += self.origin_offset
-        tcp = np.array(pos.tolist() + state.ee_quat_seq.cpu().numpy().flatten().tolist())
-        return tcp
+        if hasattr(self, 'single_mpc'):
+            state = self.single_mpc.rollout_fn.compute_kinematics(
+                self.get_current_jointstate()
+            )
+            pos = state.ee_pos_seq.cpu().numpy().flatten()
+            pos += self.origin_offset
+            tcp = np.array(pos.tolist() + state.ee_quat_seq.cpu().numpy().flatten().tolist())
+            return tcp
+        elif hasattr(self, 'motion_gen'):
+            state = self.motion_gen.kinematics.get_state(self.tensor_args.to_device(self.get_current_q()).view(1,self.DOF))
+            tcp = np.ravel(state.ee_pose.to_list())
+            tcp += np.array(self.origin_offset.tolist()+[0.0]*4)
+            return tcp
+        else:
+            raise NotImplementedError
+        
     
     def get_current_Pose(self):
         temp = self.get_current_tcp()
@@ -197,13 +221,13 @@ class FlexivController():
         return (not self.locked) and (self.homing_state or self.tracking_state)
 
     def move(self, target_q):
-        v = [1.5]*7
-        a = [0.8]*7
+        v = [1.5]*self.DOF
+        a = [0.8]*self.DOF
         if self.can_move():
             self.robot.sendJointPosition(
                     target_q, 
-                    [0.0]*7, 
-                    [0.0]*7, 
+                    [0.0]*self.DOF, 
+                    [0.0]*self.DOF, 
                     v, 
                     a)
     
@@ -235,7 +259,7 @@ class FlexivController():
             cmd_plan = self.motion_gen.get_full_js(traj)
             for i in range(len(cmd_plan.position)):
                 cmd_state = cmd_plan[i]
-                self.move(cmd_state.position.cpu().numpy().flatten()[:7])
+                self.move(cmd_state.position.cpu().numpy().flatten()[:self.DOF])
                 time.sleep(0.05)
         else:
             print("go home plan failed")
