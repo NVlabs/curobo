@@ -10,15 +10,32 @@ transforms3d
 ---------------------------------
 ---------------------------------
 ## 运行
+python examples/bi-teleoperation/receiver.py
 
-见receiver.py main函数
+构建BiFlexivControl类对象，设置各个ip
+
+构建Receiver类对象，传入BiFlexivControl类对象
+
+运行Receiver类对象的run函数
+
+详见receiver.py main函数
+
+---------------------------------
+---------------------------------
+## 操作指南
+
+手柄左键各自控制对应机械臂是否开启跟随
+
+任意手柄右键让双臂系统go home
+
+扳机线性控制夹爪(响应很慢)
 
 ---------------------------------
 ---------------------------------
 ## 文档
 ---------------------------------
 ### receiver.py
-Receiver类：
+Receiver类：(基于UDP通信)
 
 1. 初始化：
 
@@ -97,5 +114,24 @@ FlexivController类：
 
 ---------------------------------
 
+## Unity(VR端)
+向接收端ip端口发送数据，格式如下：
 
+```json
+{
+    "leftHand":{
+        "pos":[x,y,z],
+        "quat":[w,x,y,z],
+        "squeeze":float, #扳机值
+    },
+    "rightHand":{
+        "pos":[x,y,z],
+        "quat":[w,x,y,z],
+        "squeeze":float, #扳机值
+    },
+}
+```
+传输数据参考系为unity左手坐标系。
+
+VR房间标定时，因为机械臂面朝东，因此VR头显面朝东标定，此时Unity左手坐标系z为东，y为上，curobo右手坐标系x为东，z为上。
 
