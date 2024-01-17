@@ -45,6 +45,8 @@ def get_custom_world_model(table_height=0.02, y_offset=0.54+0.313, up_height=1.3
 
 class BiFlexivController():
     def __init__(self) -> None:
+        self.other_end_name="flange_1"
+
         self.left_robot = FlexivController(world_model=get_custom_world_model(),
                                       local_ip="192.168.2.223",
                                       robot_ip="192.168.2.100",
@@ -59,7 +61,9 @@ class BiFlexivController():
         print("current q: ", self.left_robot.get_current_q()+self.right_robot.get_current_q())
 
         self.tensor_args = TensorDeviceType()
+        print(join_path(get_robot_configs_path(), 'dual_flexiv.yml'))
         robot_cfg = load_yaml(join_path(get_robot_configs_path(), 'dual_flexiv.yml'))["robot_cfg"]
+        print(robot_cfg["kinematics"]["link_names"])
         bigger_robot_cfg = load_yaml(join_path(get_robot_configs_path(), 'dual_flexiv_bigger.yml'))["robot_cfg"]
         self.robot_cfg = RobotConfig.from_dict(robot_cfg, self.tensor_args)
         self.bigger_robot_cfg = RobotConfig.from_dict(bigger_robot_cfg, self.tensor_args)
@@ -116,7 +120,7 @@ class BiFlexivController():
             current_state=self.get_current_jointstate(),
             goal_state=self.get_current_jointstate(),
             goal_pose=self.left_robot.get_current_Pose(),
-            links_goal_pose={"ee_target_1": self.right_robot.get_current_Pose()},
+            links_goal_pose={self.other_end_name: self.right_robot.get_current_Pose()},
         )
         self.goal_buffer = self.mpc.setup_solve_single(goal, 1)
         self.mpc.update_goal(self.goal_buffer)
@@ -139,7 +143,7 @@ class BiFlexivController():
                                             #      position=self.tensor_args.to_device([0.6,-0.1+0.313,0.4]),
                                             #      quaternion=self.tensor_args.to_device([1,0,0,0]),
                                             #  ),
-                                             link_poses={"ee_target_1":self.right_robot.retract_pose},
+                                             link_poses={self.other_end_name:self.right_robot.retract_pose},
                                              plan_config=MotionGenPlanConfig(
                                                                                 enable_graph=False, 
                                                                                 enable_graph_attempt=4, 
@@ -180,7 +184,7 @@ class BiFlexivController():
                 position=self.tensor_args.to_device(target_position_r),
                 quaternion=self.tensor_args.to_device(target_orientation_r),
             )
-            self.goal_buffer.links_goal_pose["ee_target_1"].copy_(link_pose)
+            self.goal_buffer.links_goal_pose[self.other_end_name].copy_(link_pose)
             ik_goal = Pose(
                 position=self.tensor_args.to_device(target_position_l),
                 quaternion=self.tensor_args.to_device(target_orientation_l),

@@ -21,8 +21,8 @@ robot_cfg:
     asset_root_path: "robot/flexiv_description"
     
     base_link: "world"
-    ee_link: "ee_target"
-    link_names: ["ee_target_1", "ee_target"]
+    ee_link: "flange" #"ee_target"
+    link_names: ["flange_1", "flange"] #["ee_target_1", "ee_target"]
     extra_links: null
 
     
