@@ -22,8 +22,8 @@ def unity2zup_right_frame(pos_quat):
         return target
 
 class Receiver(Thread):
-    def __init__(self, controller:BiFlexivController, port=8082):
-        self.address = ("192.168.2.223", port)
+    def __init__(self, controller:BiFlexivController, local_ip= "192.168.2.223",port=8082):
+        self.address = (local_ip, port)
         self.socket_obj = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         #self.socket_obj.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket_obj.setblocking(0)

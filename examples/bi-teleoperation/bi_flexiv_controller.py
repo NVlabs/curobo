@@ -44,26 +44,32 @@ def get_custom_world_model(table_height=0.02, y_offset=0.54+0.313, up_height=1.3
 
 
 class BiFlexivController():
-    def __init__(self) -> None:
-        self.other_end_name="flange_1"
+    def __init__(self, local_ip="192.168.2.223", 
+                 left_robot_ip="192.168.2.100", 
+                 right_robot_ip="192.168.2.101",
+                 left_origin_offset=[0,0.313,0],
+                 right_origin_offset=[0,-0.313,0]) -> None:
+        
 
         self.left_robot = FlexivController(world_model=get_custom_world_model(),
-                                      local_ip="192.168.2.223",
-                                      robot_ip="192.168.2.100",
-                                      origin_offset=[0,0.313,0])
+                                      local_ip=local_ip,
+                                      robot_ip=left_robot_ip,
+                                      origin_offset=left_origin_offset)
         self.left_robot.init_mpc()
         self.right_robot = FlexivController(world_model=get_custom_world_model(),
-                                      local_ip="192.168.2.223",
-                                      robot_ip="192.168.2.101",
-                                      origin_offset=[0,-0.313,0])
+                                      local_ip=local_ip,
+                                      robot_ip=right_robot_ip,
+                                      origin_offset=right_origin_offset)
         self.right_robot.init_mpc()
         self.joint_names = [f"joint{i}" for i in range(1,8)]+[f"joint{i}_1" for i in range(1,8)]
         print("current q: ", self.left_robot.get_current_q()+self.right_robot.get_current_q())
 
         self.tensor_args = TensorDeviceType()
-        print(join_path(get_robot_configs_path(), 'dual_flexiv.yml'))
         robot_cfg = load_yaml(join_path(get_robot_configs_path(), 'dual_flexiv.yml'))["robot_cfg"]
-        print(robot_cfg["kinematics"]["link_names"])
+        for link in robot_cfg["kinematics"]["link_names"]:
+            if link is not robot_cfg["kinematics"]["ee_link"]:
+                self.other_end_name=link
+                break
         bigger_robot_cfg = load_yaml(join_path(get_robot_configs_path(), 'dual_flexiv_bigger.yml'))["robot_cfg"]
         self.robot_cfg = RobotConfig.from_dict(robot_cfg, self.tensor_args)
         self.bigger_robot_cfg = RobotConfig.from_dict(bigger_robot_cfg, self.tensor_args)
