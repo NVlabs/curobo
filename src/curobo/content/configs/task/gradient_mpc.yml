@@ -30,7 +30,7 @@ cost:
   pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0] # orientation, position for all timesteps
     run_vec_weight: [1.00,1.00,1.00,1.0,1.0,1.0] # running weight orientation, position
-    weight: [500,2000.0,10,10] #[150.0, 2000.0, 30, 40]
+    weight: [800,2000.0,10,10] #[150.0, 2000.0, 30, 40]
     vec_convergence: [0.0,0.0] #[0.001,0.0001] #[0.01, 0.001] # orientation, position
     terminal: True
     run_weight: 0.1
