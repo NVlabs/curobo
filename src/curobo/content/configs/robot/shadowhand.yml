@@ -1,0 +1,170 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+robot_cfg:
+  kinematics:
+    base_link: "forearm"
+    collision_link_names: [
+    "forearm",
+    "wrist",
+    "palm",
+    "ffproximal",
+    "ffmiddle",
+    "ffdistal",
+    "mfproximal",
+    "mfmiddle",
+    "mfdistal",
+    "rfproximal",
+    "rfmiddle",
+    "rfdistal",
+    "lfmetacarpal",
+    "lfproximal",
+    "lfmiddle",
+    "lfdistal",
+    "thproximal",
+    "thmiddle",
+    "thdistal",
+    ]
+    collision_sphere_buffer: 0.005
+    collision_spheres: spheres/shadowhand_spheres.yml
+    ee_link: "mfdistal"
+    link_names: ["mfdistal","ffdistal","rfdistal","lfdistal","thdistal"]
+    self_collision_buffer: {
+    "forearm": 0.0,
+    "wrist": 0.0,
+    "palm": 0.0,
+    "ffproximal": 0.0,
+    "ffmiddle": 0.0,
+    "ffdistal": 0.0,
+    "mfproximal": 0.0,
+    "mfmiddle": 0.0,
+    "mfdistal": 0.0,
+    "rfproximal": 0.0,
+    "rfmiddle": 0.0,
+    "rfdistal": 0.0,
+    "lfmetacarpal": 0.0,
+    "lfproximal": 0.0,
+    "lfmiddle": 0.0,
+    "lfdistal": 0.0,
+    "thproximal": 0.0,
+    "thmiddle": 0.0,
+    "thdistal": 0.0,
+    }
+    self_collision_ignore: {
+    "forearm": ["wrist"],
+    "wrist": ["forearm","palm"],
+    "palm": ["wrist","ffproximal","mfproximal","rfproximal","lfmetacarpal","thproximal"],
+    "lfmetacarpal": ["palm","lfproximal"],
+
+    "thproximal": ["paml","thmiddle"],
+        
+    "ffproximal": ["palm","ffmiddle"],
+    "mfproximal": ["palm","mfmiddle"],
+    "rfproximal": ["palm","rfmiddle"],
+    "lfproximal": ["lfmetacarpal","lfmiddle"],
+        
+    "thmiddle": ["thproximal","thdistal"],
+    "ffmiddle": ["ffproximal","ffdistal"],
+    "mfmiddle": ["mfproximal","mfdistal"],
+    "rfmiddle": ["rfproximal","rfdistal"],
+    "lfmiddle": ["lfproximal","lfdistal"],
+        
+    "thdistal": ["thmiddle"],
+    "ffdistal": ["ffmiddle"],
+    "mfdistal": ["mfmiddle"],
+    "rfdistal": ["rfmiddle"],
+    "lfdistal": ["lfmiddle"],
+    }
+
+    urdf_path: "robot/shadowhand_description/shadowhand.urdf"
+    asset_root_path: "robot/shadowhand_description"
+    usd_path: "robot/shadowhand_description/shadowhand.usda"
+    usd_robot_root: "/shadowhand"
+    cspace:
+      joint_names: ["WRJ1","FFJ4","FFJ3","FFJ2","FFJ1","MFJ4","MFJ3","MFJ2","MFJ1","RFJ4","RFJ3","RFJ2","RFJ1","LFJ5","LFJ4","LFJ3","LFJ2","LFJ1","THJ5","THJ4","THJ3","THJ2","THJ1"]
+      cspace_distance_weight:
+        #- 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+        - 0.1
+
+      null_space_weight:
+        #- 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        - 1.0
+        
+      retract_config:
+        #- 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+      max_acceleration: 15.0
+      max_jerk: 500.0
