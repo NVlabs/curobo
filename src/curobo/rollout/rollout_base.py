@@ -23,9 +23,8 @@ import torch
 # CuRobo
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
-from curobo.types.robot import CSpaceConfig, State
+from curobo.types.robot import CSpaceConfig, State, JointState
 from curobo.types.tensor import (
-    T_BDOF,
     T_DOF,
     T_BHDOF_float,
     T_BHValue_float,
@@ -456,7 +455,7 @@ class RolloutBase:
         return out_metrics
 
     def get_metrics_cuda_graph(self, state: State):
-        return get_metrics(state)
+        return self.get_metrics(state)
 
     def rollout_fn(self, act):
         pass
