@@ -11,18 +11,20 @@
 robot: 'UR10'
 collision_spheres:
   shoulder_link:
-    - center: [0, 0, 0.0]
-      radius: 0.02
+    - center: [0, 0, 0]
+      radius: 0.05
+    #- center: [0, 0, -0.18]
+    #  radius: 0.09
   upper_arm_link:
     - center: [-0, -0, 0.18]
       radius: 0.09
     - center: [-0.102167, 0,  0.18]
       radius: 0.05
-    - center: [-0.204333, -8.88178e-19, 0.18]
+    - center: [-0.204333, 0, 0.18]
       radius: 0.05
-    - center: [-0.3065, -1.33227e-18, 0.18]
+    - center: [-0.3065, 0, 0.18]
       radius: 0.05
-    - center: [-0.408667, -1.77636e-18, 0.18]
+    - center: [-0.408667, 0, 0.18]
       radius: 0.05
     - center: [-0.510833, 0, 0.18]
       radius: 0.05
@@ -53,10 +55,9 @@ collision_spheres:
     - center: [0, 0, 0]
       radius: 0.05
     - center: [0, 0, 0.06]
-      radius: 0.08
-    
+      radius: 0.07
   tool0:
-    - center: [0, 0, 0.03]
+    - center: [0, 0, 0.12]
       radius: 0.05
   camera_mount:
     - center: [0, 0.11, -0.01]

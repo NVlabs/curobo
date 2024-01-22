@@ -116,7 +116,8 @@ class CudaRobotModelConfig:
 
     @staticmethod
     def from_data_dict(
-        data_dict: Dict[str, Any], tensor_args: TensorDeviceType = TensorDeviceType()
+        data_dict: Dict[str, Any],
+        tensor_args: TensorDeviceType = TensorDeviceType(),
     ):
         return CudaRobotModelConfig.from_config(
             CudaRobotGeneratorConfig(**data_dict, tensor_args=tensor_args)

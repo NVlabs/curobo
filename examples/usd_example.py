@@ -19,6 +19,7 @@ from curobo.geom.types import WorldConfig
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.robot import JointState, RobotConfig
+from curobo.util.logger import setup_curobo_logger
 from curobo.util.usd_helper import UsdHelper
 from curobo.util_file import (
     get_assets_path,
@@ -164,7 +165,81 @@ def read_robot_from_usd(robot_file: str = "franka.yml"):
     robot_cfg = RobotConfig.from_dict(robot_cfg, TensorDeviceType())
 
 
+def save_log_motion_gen(robot_file: str = "franka.yml"):
+    # load motion generation with debug mode:
+    robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"]
+    # robot_cfg["kinematics"]["collision_link_names"] = None
+    world_cfg = WorldConfig.from_dict(
+        load_yaml(join_path(get_world_configs_path(), "collision_table.yml"))
+    ).get_obb_world()
+
+    c_cache = {"obb": 10}
+
+    robot_cfg_instance = RobotConfig.from_dict(robot_cfg, tensor_args=TensorDeviceType())
+
+    enable_debug = True
+    motion_gen_config = MotionGenConfig.load_from_robot_config(
+        robot_cfg_instance,
+        world_cfg,
+        collision_cache=c_cache,
+        store_ik_debug=enable_debug,
+        store_trajopt_debug=enable_debug,
+        # num_ik_seeds=2,
+        # num_trajopt_seeds=1,
+        # ik_opt_iters=20,
+        # ik_particle_opt=False,
+    )
+    mg = MotionGen(motion_gen_config)
+    # mg.warmup(enable_graph=True, warmup_js_trajopt=False)
+    motion_gen = mg
+    # generate a plan:
+    retract_cfg = motion_gen.get_retract_config()
+    state = motion_gen.rollout_fn.compute_kinematics(
+        JointState.from_position(retract_cfg.view(1, -1))
+    )
+    link_chain = motion_gen.kinematics.kinematics_config.link_chain_map[
+        motion_gen.kinematics.kinematics_config.store_link_map.to(dtype=torch.long)
+    ]
+
+    # exit()
+    link_poses = state.link_pose
+    # print(link_poses)
+    # del link_poses["tool0"]
+    # del link_poses["tool1"]
+    # del link_poses["tool2"]
+
+    # del link_poses["tool3"]
+    # print(link_poses)
+
+    retract_pose = Pose(state.ee_pos_seq.squeeze(), quaternion=state.ee_quat_seq.squeeze())
+    start_state = JointState.from_position(retract_cfg.view(1, -1).clone() + 0.5)
+
+    # get link poses if they exist:
+
+    result = motion_gen.plan_single(
+        start_state,
+        retract_pose,
+        link_poses=link_poses,
+        plan_config=MotionGenPlanConfig(max_attempts=1, partial_ik_opt=False),
+    )
+    UsdHelper.write_motion_gen_log(
+        result,
+        robot_cfg,
+        world_cfg,
+        start_state,
+        retract_pose,
+        join_path("log/usd/", "debug"),
+        write_robot_usd_path=join_path("log/usd/", "debug/assets/"),
+        write_ik=True,
+        write_trajopt=True,
+        visualize_robot_spheres=False,
+        grid_space=2,
+        link_poses=link_poses,
+    )
+
+
 if __name__ == "__main__":
     # save_curobo_world_to_usd()
-
-    save_curobo_robot_world_to_usd("franka.yml")
+    setup_curobo_logger("error")
+    save_log_motion_gen("franka.yml")
+    # save_curobo_robot_world_to_usd("franka.yml")

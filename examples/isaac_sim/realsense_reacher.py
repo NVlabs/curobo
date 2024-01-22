@@ -189,7 +189,7 @@ if __name__ == "__main__":
                 "world": {
                     "pose": [0, 0, 0, 1, 0, 0, 0],
                     "integrator_type": "occupancy",
-                    "voxel_size": 0.03,
+                    "voxel_size": 0.02,
                 }
             }
         }
@@ -270,7 +270,7 @@ if __name__ == "__main__":
             continue
         step_index = my_world.current_time_step_index
 
-        if step_index == 0:
+        if step_index <= 2:
             my_world.reset()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)

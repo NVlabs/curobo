@@ -12,7 +12,7 @@
 
 
 # This script will create a dev docker. Run this script by calling `bash build_dev_docker.sh`
-# If you want to build a isaac sim docker, run this script with `bash build_dev_docker.sh isaac_sim_2022.2.1`
+# If you want to build a isaac sim docker, run this script with `bash build_dev_docker.sh isaac`
 
 # Check architecture to build:
 
@@ -51,7 +51,7 @@ elif [ "$input_arg" = "aarch64" ]; then
     dockerfile="aarch64.dockerfile"
     image_tag="aarch64"
 else
-    echo "Unknown Architecture"
+    echo "Unknown Argument. Please pass one of [x86, aarch64, isaac_sim_2022.2.1, isaac_sim_2023.1.0]"
     exit
 fi
 

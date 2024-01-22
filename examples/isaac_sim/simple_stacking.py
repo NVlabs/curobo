@@ -146,7 +146,6 @@ class CuroboController(BaseController):
             store_ik_debug=self._save_log,
             store_trajopt_debug=self._save_log,
             state_finite_difference_mode="CENTRAL",
-            minimize_jerk=True,
             acceleration_scale=0.5,
             fixed_iters_trajopt=True,
         )

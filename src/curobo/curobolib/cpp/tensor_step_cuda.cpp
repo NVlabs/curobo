@@ -79,7 +79,7 @@ std::vector<torch::Tensor> step_position_clique_wrapper(
     const torch::Tensor traj_dt, const int batch_size, const int horizon,
     const int dof) {
   const at::cuda::OptionalCUDAGuard guard(u_position.device());
-
+  assert(false); // not supported
   CHECK_INPUT(u_position);
   CHECK_INPUT(out_position);
   CHECK_INPUT(out_velocity);
@@ -155,7 +155,7 @@ std::vector<torch::Tensor> backward_step_position_clique_wrapper(
     const torch::Tensor grad_jerk, const torch::Tensor traj_dt,
     const int batch_size, const int horizon, const int dof) {
   const at::cuda::OptionalCUDAGuard guard(grad_position.device());
-
+  assert(false); // not supported
   CHECK_INPUT(out_grad_position);
   CHECK_INPUT(grad_position);
   CHECK_INPUT(grad_velocity);

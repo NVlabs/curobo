@@ -32,7 +32,7 @@ robot_cfg:
       - thumb_link_3
     collision_sphere_buffer: 0.005
     collision_spheres: spheres/iiwa_allegro.yml
-    ee_link: index_link_3
+    ee_link: palm_link
     link_names:
       - palm_link
       - index_link_3

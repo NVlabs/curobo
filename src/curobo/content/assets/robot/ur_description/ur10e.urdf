@@ -356,4 +356,11 @@
     <parent link="flange"/>
     <child link="tool0"/>
   </joint>
+  
+  <joint name="camera_mount_joint" type="fixed">
+    <origin rpy="0 0 -3.14" xyz="0 0 0"/>
+    <parent link="flange"/>
+    <child link="camera_mount"/>
+  </joint>
+  <link name="camera_mount"/>
 </robot>

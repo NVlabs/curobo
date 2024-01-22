@@ -488,7 +488,7 @@ class JointState(State):
         return new_js
 
     def trim_trajectory(self, start_idx: int, end_idx: Optional[int] = None):
-        if end_idx is None:
+        if end_idx is None or end_idx == 0:
             end_idx = self.position.shape[-2]
         if len(self.position.shape) < 2:
             raise ValueError("JointState does not have horizon")

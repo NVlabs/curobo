@@ -9,7 +9,6 @@
 ## its affiliates is strictly prohibited.
 ##
 
-#@FROM nvcr.io/nvidia/pytorch:22.12-py3
 FROM nvcr.io/nvidia/pytorch:23.08-py3 AS torch_cuda_base
 
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections

@@ -164,10 +164,14 @@ compute_distance(float *distance_vec, float &distance, float &position_distance,
   distance = 0;
   if (rotation_distance > vec_convergence[0] * vec_convergence[0]) {
     rotation_distance = sqrtf(rotation_distance);
+    //rotation_distance -= vec_convergence[0];
+  
     distance += rotation_weight * rotation_distance;
   }
   if (position_distance > vec_convergence[1] * vec_convergence[1]) {
     position_distance = sqrtf(position_distance);
+    //position_distance -= vec_convergence[1];
+  
     distance += position_weight * position_distance;
   }
 }
@@ -202,9 +206,12 @@ __device__ __forceinline__ void compute_metric_distance(
   distance = 0;
   if (rotation_distance > vec_convergence[0] * vec_convergence[0]) {
     rotation_distance = sqrtf(rotation_distance);
+    //rotation_distance -= vec_convergence[0];
+  
     distance += rotation_weight * log2f(coshf(r_alpha * rotation_distance));
   }
   if (position_distance > vec_convergence[1] * vec_convergence[1]) {
+    //position_distance -= vec_convergence[1];
     position_distance = sqrtf(position_distance);
     distance += position_weight * log2f(coshf(p_alpha * position_distance));
   }
@@ -372,6 +379,14 @@ __global__ void goalset_pose_distance_kernel(
   // write out pose distance:
   out_distance[batch_idx * horizon + h_idx] = best_distance;
   if (write_distance) {
+    if(position_weight == 0.0)
+    {
+      best_position_distance = 0.0;
+    }
+    if (rotation_weight == 0.0)
+    {
+      best_rotation_distance = 0.0;
+    }
     out_position_distance[batch_idx * horizon + h_idx] = best_position_distance;
     out_rotation_distance[batch_idx * horizon + h_idx] = best_rotation_distance;
   }
@@ -522,6 +537,14 @@ __global__ void goalset_pose_distance_metric_kernel(
   // write out pose distance:
   out_distance[batch_idx * horizon + h_idx] = best_distance;
   if (write_distance) {
+    if(position_weight == 0.0)
+    {
+      best_position_distance = 0.0;
+    }
+    if (rotation_weight == 0.0)
+    {
+      best_rotation_distance = 0.0;
+    }
     out_position_distance[batch_idx * horizon + h_idx] = best_position_distance;
     out_rotation_distance[batch_idx * horizon + h_idx] = best_rotation_distance;
   }

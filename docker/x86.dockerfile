@@ -77,6 +77,9 @@ ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/opt/hpcx/ompi/lib"
 ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
 ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 
+# Add cache date to avoid using cached layers older than this
+ARG CACHE_DATE=2023-12-15 
+
 
 RUN pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
@@ -103,7 +106,7 @@ ENV PYOPENGL_PLATFORM=egl
 RUN echo '{"file_format_version": "1.0.0", "ICD": {"library_path": "libEGL_nvidia.so.0"}}' >> /usr/share/glvnd/egl_vendor.d/10_nvidia.json
 
 RUN apt-get update && \
-    apt-get install -y libgoogle-glog-dev libgtest-dev curl libsqlite3-dev && \
+    apt-get install -y libgoogle-glog-dev libgtest-dev curl libsqlite3-dev libbenchmark-dev && \
     cd /usr/src/googletest && cmake . && cmake --build . --target install && \
     rm -rf /var/lib/apt/lists/*
 
@@ -115,6 +118,10 @@ RUN cd /pkgs &&  git clone https://github.com/valtsblukis/nvblox.git && \
 
 RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
     cd nvblox_torch && \
-    sh install.sh
+    sh install.sh $(python -c 'import torch.utils; print(torch.utils.cmake_prefix_path)') && \
+    python3 -m pip install -e .
 
 RUN python -m pip install pyrealsense2 opencv-python transforms3d
+
+# install benchmarks:
+RUN python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"

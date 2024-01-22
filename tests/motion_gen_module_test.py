@@ -32,11 +32,7 @@ def motion_gen():
         robot_file,
         world_file,
         tensor_args,
-        trajopt_tsteps=32,
         use_cuda_graph=False,
-        num_trajopt_seeds=50,
-        fixed_iters_trajopt=True,
-        evaluate_interpolated_trajectory=True,
     )
     motion_gen_instance = MotionGen(motion_gen_config)
     return motion_gen_instance
@@ -55,11 +51,7 @@ def motion_gen_batch_env():
         robot_file,
         world_cfg,
         tensor_args,
-        trajopt_tsteps=32,
         use_cuda_graph=False,
-        num_trajopt_seeds=10,
-        fixed_iters_trajopt=True,
-        evaluate_interpolated_trajectory=True,
     )
     motion_gen_instance = MotionGen(motion_gen_config)
 
@@ -173,12 +165,12 @@ def test_motion_gen_batch(motion_gen):
 
     start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3).repeat_seeds(2)
 
-    goal_pose.position[1, 0] -= 0.2
+    goal_pose.position[1, 0] -= 0.1
 
-    m_config = MotionGenPlanConfig(False, True, num_trajopt_seeds=10)
+    m_config = MotionGenPlanConfig(False, True, num_trajopt_seeds=12)
 
     result = motion_gen.plan_batch(start_state, goal_pose.clone(), m_config)
-    assert torch.count_nonzero(result.success) > 0
+    assert torch.count_nonzero(result.success) == 2
 
     # get final solutions:
     q = result.optimized_plan.trim_trajectory(-1).squeeze(1)
@@ -236,12 +228,12 @@ def test_motion_gen_batch_env(motion_gen_batch_env):
 
     start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3).repeat_seeds(2)
 
-    goal_pose.position[1, 0] -= 0.2
+    goal_pose.position[1, 0] -= 0.1
 
     m_config = MotionGenPlanConfig(False, True, num_trajopt_seeds=10)
 
     result = motion_gen_batch_env.plan_batch_env(start_state, goal_pose, m_config)
-    assert torch.count_nonzero(result.success) > 0
+    assert torch.count_nonzero(result.success) == 2
 
     # get final solutions:
     reached_state = motion_gen_batch_env.compute_kinematics(
@@ -282,3 +274,32 @@ def test_motion_gen_batch_env_goalset(motion_gen_batch_env):
         )
         < 0.005
     )
+
+
+@pytest.mark.parametrize(
+    "motion_gen_str,enable_graph",
+    [
+        ("motion_gen", True),
+        ("motion_gen", False),
+    ],
+)
+def test_motion_gen_single_js(motion_gen_str, enable_graph, request):
+    motion_gen = request.getfixturevalue(motion_gen_str)
+
+    motion_gen.reset()
+
+    retract_cfg = motion_gen.get_retract_config()
+
+    start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3)
+
+    m_config = MotionGenPlanConfig(enable_graph=enable_graph, max_attempts=2)
+    goal_state = start_state.clone()
+    goal_state.position -= 0.3
+
+    result = motion_gen.plan_single_js(start_state, goal_state, m_config)
+
+    assert torch.count_nonzero(result.success) == 1
+
+    reached_state = result.optimized_plan[-1]
+
+    assert torch.norm(goal_state.position - reached_state.position) < 0.005

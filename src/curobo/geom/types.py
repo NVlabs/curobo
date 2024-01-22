@@ -391,9 +391,9 @@ class Mesh(Obstacle):
                 vertex_normals=self.vertex_normals,
                 face_colors=self.face_colors,
             )
-        # if self.scale is not None:
-        #    m.vertices = np.ravel(self.scale) * m.vertices
-
+        if self.scale is not None:
+            m.vertices = np.ravel(self.scale) * m.vertices
+            self.scale = None
         return m
 
     def update_material(self):

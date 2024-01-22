@@ -10,16 +10,9 @@
 ## its affiliates is strictly prohibited.
 ##
 
+input_arg=$1
+USER_ID=$(id -g "$USER")
 
-# This script will create a dev docker. Run this script by calling `bash build_dev_docker.sh`
-# If you want to build a isaac sim docker, run this script with `bash build_dev_docker.sh isaac_sim_2022.2.1`
-
-# Check architecture to build:
-echo "deprecated, use build_docker.sh instead"
-
-image_tag="x86"
-isaac_sim_version=""
-input_arg="$1"
 
 if [ -z "$input_arg" ]; then
     arch=$(uname -m)
@@ -33,42 +26,13 @@ if [ -z "$input_arg" ]; then
     fi
 fi
 
-if [ "$input_arg" == "isaac_sim_2022.2.1" ]; then
-    echo "Building Isaac Sim docker"
-    dockerfile="isaac_sim.dockerfile"
-    image_tag="isaac_sim_2022.2.1"
-    isaac_sim_version="2022.2.1"
-elif [ "$input_arg" == "isaac_sim_2023.1.0" ]; then
-    echo "Building Isaac Sim headless docker"
-    dockerfile="isaac_sim.dockerfile"
-    image_tag="isaac_sim_2023.1.0"
-    isaac_sim_version="2023.1.0"
-elif [ "$input_arg" == "x86" ]; then
-    echo "Building for X86 Architecture"
-    dockerfile="x86.dockerfile"
-    image_tag="x86"
-elif [ "$input_arg" = "aarch64" ]; then
-    echo "Building for ARM Architecture"
-    dockerfile="aarch64.dockerfile"
-    image_tag="aarch64"
-else
-    echo "Unknown Architecture"
-    exit
+user_dockerfile=user.dockerfile
+
+if [[ $input_arg == *isaac_sim* ]] ; then
+    user_dockerfile=user_isaac_sim.dockerfile
 fi
 
-# build docker file:
-# Make sure you enable nvidia runtime by:
-# Edit/create the /etc/docker/daemon.json with content:
-# {
-#    "runtimes": {
-#        "nvidia": {
-#            "path": "/usr/bin/nvidia-container-runtime",
-#            "runtimeArgs": []
-#         } 
-#    },
-#    "default-runtime": "nvidia" # ADD this line (the above lines will already exist in your json file)
-# }
-# 
-echo "${dockerfile}"
+echo $input_arg
+echo $USER_ID
 
-docker build --build-arg ISAAC_SIM_VERSION=${isaac_sim_version} -t curobo_docker:${image_tag} -f ${dockerfile} . 
+docker build --build-arg USERNAME=$USER --build-arg USER_ID=${USER_ID} --build-arg IMAGE_TAG=$input_arg -f $user_dockerfile --tag curobo_docker:user_$input_arg . 

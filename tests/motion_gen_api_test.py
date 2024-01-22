@@ -48,3 +48,15 @@ def test_motion_gen_attach_obstacle(motion_gen):
     start_state = JointState.from_position(retract_cfg.view(1, -1))
     motion_gen.attach_objects_to_robot(start_state, [obstacle])
     assert True
+
+
+def test_motion_gen_attach_obstacle_offset(motion_gen):
+    obstacle = motion_gen.world_model.objects[-1].name
+    retract_cfg = motion_gen.get_retract_config()
+
+    start_state = JointState.from_position(retract_cfg.view(1, -1))
+    offset_pose = Pose.from_list([0, 0, 0.005, 1, 0, 0, 0], motion_gen.tensor_args)
+    motion_gen.attach_objects_to_robot(
+        start_state, [obstacle], world_objects_pose_offset=offset_pose
+    )
+    assert True

@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 import torch.autograd.profiler as profiler
+from nvblox_torch.datasets.sun3d_dataset import Sun3dDataset
 from robometrics.datasets import demo_raw
 from torch.profiler import ProfilerActivity, profile, record_function
 from tqdm import tqdm
@@ -55,7 +56,7 @@ from curobo.types.camera import CameraObservation
 
 def load_curobo(n_cubes: int, enable_log: bool = False):
     robot_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
-    robot_cfg["kinematics"]["collision_sphere_buffer"] = -0.015
+    robot_cfg["kinematics"]["collision_sphere_buffer"] = -0.0
     motion_gen_config = MotionGenConfig.load_from_robot_config(
         robot_cfg,
         "collision_nvblox_online.yml",
@@ -67,7 +68,6 @@ def load_curobo(n_cubes: int, enable_log: bool = False):
         num_ik_seeds=30,
         num_trajopt_seeds=12,
         interpolation_dt=0.02,
-        # grad_trajopt_iters=200,
         store_ik_debug=enable_log,
         store_trajopt_debug=enable_log,
     )
@@ -85,7 +85,7 @@ def benchmark_mb(write_usd=False, save_log=False):
         spheres = load_yaml(join_path(get_robot_configs_path(), spheres))["collision_spheres"]
 
     plan_config = MotionGenPlanConfig(
-        max_attempts=2,
+        max_attempts=1,
         enable_graph_attempt=3,
         enable_finetune_trajopt=True,
         partial_ik_opt=False,
@@ -107,7 +107,7 @@ def benchmark_mb(write_usd=False, save_log=False):
             n_cubes = check_problems(scene_problems)
             mg = load_curobo(n_cubes, save_log)
             m_list = []
-            i = 0
+            i = 1
             for problem in tqdm(scene_problems, leave=False):
                 q_start = problem["start"]
                 pose = (
@@ -124,9 +124,13 @@ def benchmark_mb(write_usd=False, save_log=False):
                 mg.clear_world_cache()
                 obs = []
                 # get camera_observations:
-                m_dataset = MeshDataset(
-                    None, n_frames=200, image_size=640, save_data_dir=None, trimesh_mesh=mesh
-                )
+                save_path = "benchmark/log/nvblox/" + key + "_" + str(i)
+
+                m_dataset = Sun3dDataset(save_path)
+
+                # m_dataset = MeshDataset(
+                #    None, n_frames=200, image_size=640, save_data_dir=None, trimesh_mesh=mesh
+                # )
                 obs = []
                 tensor_args = mg.tensor_args
                 for j in range(len(m_dataset)):
@@ -158,7 +162,7 @@ def benchmark_mb(write_usd=False, save_log=False):
                         plan_config,
                     )
                 print("Exporting the trace..")
-                prof.export_chrome_trace("log/trace/trajopt_global_nvblox.json")
+                prof.export_chrome_trace("benchmark/log/trace/motion_gen_nvblox.json")
                 print(result.success, result.status)
                 exit()
 

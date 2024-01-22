@@ -43,6 +43,7 @@ class OptimizerConfig:
     n_envs: int
     sync_cuda_time: bool
     use_coo_sparse: bool
+    action_horizon: int
 
     def __post_init__(self):
         object.__setattr__(self, "action_highs", self.tensor_args.to_device(self.action_highs))
@@ -68,6 +69,8 @@ class OptimizerConfig:
         child_dict["rollout_fn"] = rollout_fn
         child_dict["tensor_args"] = tensor_args
         child_dict["horizon"] = rollout_fn.horizon
+        child_dict["action_horizon"] = rollout_fn.action_horizon
+
         if "num_particles" not in child_dict:
             child_dict["num_particles"] = 1
         return child_dict

@@ -130,6 +130,7 @@ def get_batch_interpolated_trajectory(
     tensor_args: TensorDeviceType = TensorDeviceType(),
     max_deviation: float = 0.1,
     min_dt: float = 0.02,
+    optimize_dt: bool = True,
 ):
     # compute dt across trajectory:
     b, horizon, dof = raw_traj.position.shape  # horizon
@@ -146,6 +147,7 @@ def get_batch_interpolated_trajectory(
         raw_dt,
         min_dt,
         horizon,
+        optimize_dt,
     )
     # traj_steps contains the tsteps for each trajectory
     assert steps_max > 0
@@ -208,6 +210,7 @@ def get_cpu_linear_interpolation(
                 interpolation_dt=interpolation_dt,
             )
         retimed_traj[k, tstep:, :] = retimed_traj[k, tstep - 1 : tstep, :]
+
     out_traj_state.position[:] = retimed_traj.to(device=raw_traj.position.device)
     return out_traj_state
 
@@ -417,7 +420,7 @@ def linear_smooth(
         y = np.linspace(0, last_step + 3, x.shape[0] + 4)
         x = np.concatenate((x, x[-1:], x[-1:], x[-1:], x[-1:]))
     elif y is None:
-        step = float(last_step) / float(x.shape[0] - 1)
+        step = float(last_step - 1) / float(x.shape[0] - 1)
         y = np.ravel([float(i) * step for i in range(x.shape[0])])
         # y[-1] = np.floor(y[-1])
 
@@ -506,9 +509,12 @@ def calculate_tsteps(
     raw_dt: float,
     min_dt: float,
     horizon: int,
+    optimize_dt: bool = True,
 ):
     # compute scaled dt:
     opt_dt = calculate_dt(vel, acc, jerk, max_vel, max_acc, max_jerk, raw_dt, interpolation_dt)
+    if not optimize_dt:
+        opt_dt[:] = raw_dt
     traj_steps = (torch.ceil((horizon - 1) * ((opt_dt) / interpolation_dt))).to(dtype=torch.int32)
     steps_max = torch.max(traj_steps)
     return traj_steps, steps_max, opt_dt

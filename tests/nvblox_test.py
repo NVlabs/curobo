@@ -9,6 +9,9 @@
 # its affiliates is strictly prohibited.
 #
 
+# Standard Library
+import sys
+
 # Third Party
 import pytest
 import torch
@@ -106,13 +109,14 @@ def test_world_blox_get_mesh():
     assert len(world_mesh.vertices) > 10
 
 
+@pytest.mark.skipif(sys.version_info < (3, 8), reason="pyglet requires python 3.8+")
 def test_nvblox_world_from_primitive_world():
     world_file = "collision_cubby.yml"
     tensor_args = TensorDeviceType()
     data_dict = load_yaml(join_path(get_world_configs_path(), world_file))
     world_cfg = WorldConfig.from_dict(data_dict).get_mesh_world(True)
     mesh = world_cfg.mesh[0].get_trimesh_mesh()
-    world_cfg.mesh[0].save_as_mesh("world.obj")
+    # world_cfg.mesh[0].save_as_mesh("world.obj")
     # Third Party
     from nvblox_torch.datasets.mesh_dataset import MeshDataset
 
@@ -143,7 +147,7 @@ def test_nvblox_world_from_primitive_world():
     for i in range(len(m_dataset)):
         data = m_dataset[i]
         cam_obs = CameraObservation(
-            rgb_image=data["rgba"],
+            rgb_image=data["rgba"].permute(1, 2, 0),
             depth_image=data["depth"],
             intrinsics=data["intrinsics"],
             pose=Pose.from_matrix(data["pose"].to(device=tensor_args.device)),

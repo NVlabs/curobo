@@ -10,25 +10,24 @@
 ## its affiliates is strictly prohibited.
 ##
 
-echo "deprecated, use start_user_docker.sh instead"
 
-input_arg="$1"
+input_arg=$1
 
 
 if [ -z "$input_arg" ]; then
     echo "Argument empty, trying to run based on architecture"
-    arch=$(uname -m)
-    if [ "$arch" == "x86_64" ]; then
+    arch=`uname -m`
+    if [ $arch == "x86_64" ]; then
         input_arg="x86"
-    elif [ "$arch" == "arm64" ]; then
+    elif [ $arch == "arm64" ]; then
         input_arg="aarch64"
-    elif [ "$arch" == "aarch64" ]; then
+    elif [ $arch == "aarch64" ]; then
         input_arg="aarch64"
     fi
 fi
 
 
-if [ "$input_arg" == "x86" ]; then
+if [ $input_arg == "x86" ]; then
 
     docker run --rm -it \
     --privileged \
@@ -44,9 +43,10 @@ if [ "$input_arg" == "x86" ]; then
     --volume /dev:/dev \
     curobo_docker:user_$input_arg
 
-elif [ "$input_arg" == "aarch64" ]; then
+elif [ $input_arg == "aarch64" ]; then
 
     docker run --rm -it \
+    --privileged \
     --runtime nvidia \
     --hostname ros1-docker \
     --add-host ros1-docker:127.0.0.1 \
@@ -59,8 +59,38 @@ elif [ "$input_arg" == "aarch64" ]; then
     --mount type=bind,src=/home/$USER/code,target=/home/$USER/code \
     curobo_docker:user_$input_arg
 
-elif [[ "$input_arg" == *isaac_sim* ]] ; then
-   echo "Isaac Sim User Docker is not supported" 
+elif [[ $input_arg == *isaac_sim* ]] ; then
+   echo "Isaac Sim Dev Docker is not supported" 
+
+   mkdir -p ~/docker/isaac-sim ~/docker/isaac-sim/cache/kit \
+    ~/docker/isaac-sim/cache/ov \
+    ~/docker/isaac-sim/cache/pip \
+    ~/docker/isaac-sim/cache/glcache \
+    ~/docker/isaac-sim/cache/computecache \
+    ~/docker/isaac-sim/logs \
+    ~/docker/isaac-sim/data \
+    ~/docker/isaac-sim/documents
+ 
+
+
+   docker run --name container_$input_arg -it --gpus all -e "ACCEPT_EULA=Y" --rm --network=host \
+        --privileged \
+        -e "PRIVACY_CONSENT=Y" \
+        -v $HOME/.Xauthority:/root/.Xauthority \
+        -e DISPLAY \
+        -v ~/docker/isaac-sim/cache/kit:/isaac-sim/kit/cache:rw \
+        -v ~/docker/isaac-sim/cache/ov:/root/.cache/ov:rw \
+        -v ~/docker/isaac-sim/cache/pip:/root/.cache/pip:rw \
+        -v ~/docker/isaac-sim/cache/glcache:/root/.cache/nvidia/GLCache:rw \
+        -v ~/docker/isaac-sim/cache/computecache:/root/.nv/ComputeCache:rw \
+        -v ~/docker/isaac-sim/logs:/root/.nvidia-omniverse/logs:rw \
+        -v ~/docker/isaac-sim/data:/root/.local/share/ov/data:rw \
+        -v ~/docker/isaac-sim/documents:/home/$USER/Documents:rw \
+        --volume /dev:/dev \
+        --mount type=bind,src=/home/$USER/code,target=/home/$USER/code \
+        curobo_docker:user_$input_arg
+    
+
 else
     echo "Unknown docker"
 fi

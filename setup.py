@@ -29,7 +29,7 @@ print(
 )
 extra_cuda_args = {
     "nvcc": [
-        "--threads=6",
+        "--threads=8",
         "-O3",
         "--ftz=true",
         "--fmad=true",

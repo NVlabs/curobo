@@ -22,7 +22,7 @@ robot_cfg:
     link_names: null 
     collision_link_names: ['shoulder_link','upper_arm_link', 'forearm_link', 'wrist_1_link', 'wrist_2_link' ,'wrist_3_link', 'tool0']
     collision_spheres: 'spheres/ur10e.yml'
-    collision_sphere_buffer: 0.02
+    collision_sphere_buffer: 0.01
     self_collision_ignore: {
       "upper_arm_link": ["forearm_link", "shoulder_link"],
       "forarm_link": ["wrist_1_link"],
@@ -49,4 +49,7 @@ robot_cfg:
       null_space_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
       cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0] #[2.5, 1.75, 1.5, 1.25, 0.7, 0.4]
       max_jerk: 500.0
-      max_acceleration: 15.0
+      max_acceleration: 12.0
+      position_limit_clip: 0.1
+      # add velocity scaling
+      # add joint position limit clipping

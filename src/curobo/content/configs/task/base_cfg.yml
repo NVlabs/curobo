@@ -22,6 +22,11 @@ cost:
     weight: [0.0, 0.0]
     vec_convergence: [0.0, 0.00] # orientation, position
     terminal: False
+  link_pose_cfg:
+    vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    weight: [0.0, 0.0]
+    vec_convergence: [0.0, 0.00] # orientation, position
+    terminal: False
     
  
   bound_cfg:
@@ -44,8 +49,13 @@ constraint:
 convergence:
   pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    weight: [0.1,10.0] #[0.1, 100.0]
+    vec_convergence: [0.0, 0.0] # orientation, position
+    terminal: False
+  link_pose_cfg:
+    vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     weight: [1.0, 1.0]
-    vec_convergence: [0.0, 0.00] # orientation, position
+    vec_convergence: [0.0, 0.0] # orientation, position
     terminal: False
     
   cspace_cfg:

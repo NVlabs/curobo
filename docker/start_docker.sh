@@ -42,6 +42,7 @@ if [ "$input_arg" == "x86" ]; then
 elif [ "$input_arg" == "aarch64" ]; then
 
     docker run --rm -it \
+    --privileged \
     --runtime nvidia \
     --hostname ros1-docker \
     --add-host ros1-docker:127.0.0.1 \

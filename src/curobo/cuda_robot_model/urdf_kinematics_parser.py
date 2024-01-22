@@ -95,7 +95,7 @@ class UrdfKinematicsParser(KinematicsParser):
                         "velocity": joint.limit.velocity,
                     }
                 else:
-                    # log_warn("Converting continuous joint to revolute")
+                    log_warn("Converting continuous joint to revolute")
                     joint_type = "revolute"
                     joint_limits = {
                         "effort": joint.limit.effort,
@@ -105,9 +105,7 @@ class UrdfKinematicsParser(KinematicsParser):
                     }
 
                 joint_axis = joint.axis
-                if (joint_axis < 0).any():
-                    log_warn("Joint axis has negative value (-1). This is not supported.")
-                joint_axis = np.abs(joint_axis)
+
                 body_params["joint_limits"] = [joint_limits["lower"], joint_limits["upper"]]
                 body_params["joint_velocity_limits"] = [
                     -1.0 * joint_limits["velocity"],
@@ -128,6 +126,13 @@ class UrdfKinematicsParser(KinematicsParser):
                 joint_type = JointType.Y_PRISM
             if joint_axis[2] == 1:
                 joint_type = JointType.Z_PRISM
+            if joint_axis[0] == -1:
+                joint_type = JointType.X_PRISM_NEG
+            if joint_axis[1] == -1:
+                joint_type = JointType.Y_PRISM_NEG
+            if joint_axis[2] == -1:
+                joint_type = JointType.Z_PRISM_NEG
+
         elif joint_type == "revolute":
             if joint_axis[0] == 1:
                 joint_type = JointType.X_ROT
@@ -135,6 +140,12 @@ class UrdfKinematicsParser(KinematicsParser):
                 joint_type = JointType.Y_ROT
             if joint_axis[2] == 1:
                 joint_type = JointType.Z_ROT
+            if joint_axis[0] == -1:
+                joint_type = JointType.X_ROT_NEG
+            if joint_axis[1] == -1:
+                joint_type = JointType.Y_ROT_NEG
+            if joint_axis[2] == -1:
+                joint_type = JointType.Z_ROT_NEG
         else:
             log_error("Joint type not supported")
 

@@ -243,10 +243,11 @@
     <parent link="panda_hand"/>
     <child link="panda_rightfinger"/>
     <origin rpy="0 0 0" xyz="0 0 0.0584"/>
-    <axis xyz="0 1 0"/>
+    <axis xyz="0 -1 0"/>
     <dynamics damping="10.0"/>
-    <limit effort="20" lower="-0.04" upper="0.0" velocity="0.2"/>
+    <limit effort="20" lower="0.0" upper="0.04" velocity="0.2"/>
   </joint>
+  
   <link name="ee_link"/>
 
   <joint name="ee_fixed_joint" type="fixed">

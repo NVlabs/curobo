@@ -136,7 +136,7 @@ def main():
         robot_cfg,
         world_cfg,
         tensor_args,
-        trajopt_tsteps=32,
+        trajopt_tsteps=40,
         collision_checker_type=CollisionCheckerType.MESH,
         use_cuda_graph=True,
         num_trajopt_seeds=12,
@@ -145,7 +145,6 @@ def main():
         collision_cache={"obb": n_obstacle_cuboids, "mesh": n_obstacle_mesh},
         collision_activation_distance=0.025,
         acceleration_scale=1.0,
-        maximum_trajectory_dt=0.2,
         fixed_iters_trajopt=True,
     )
     motion_gen = MotionGen(motion_gen_config)
@@ -286,7 +285,7 @@ def main():
         if (
             np.linalg.norm(cube_position - target_pose) > 1e-3
             and np.linalg.norm(past_pose - cube_position) == 0.0
-            and np.linalg.norm(sim_js.velocities) < 0.2
+            and np.max(np.abs(sim_js.velocities)) < 0.2
         ):
             # Set EE teleop goals, use cube for simple non-vr init:
             ee_translation_goal = cube_position

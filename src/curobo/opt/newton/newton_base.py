@@ -72,7 +72,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
     ):
         if config is not None:
             NewtonOptConfig.__init__(self, **vars(config))
-        self.d_opt = self.horizon * self.d_action
+        self.d_opt = self.action_horizon * self.d_action
         self.line_scale = self._create_box_line_search(self.line_search_scale)
         Optimizer.__init__(self)
         self.i = -1
@@ -84,8 +84,8 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
         self.reset()
 
         # reshape action lows and highs:
-        self.action_lows = self.action_lows.repeat(self.horizon)
-        self.action_highs = self.action_highs.repeat(self.horizon)
+        self.action_lows = self.action_lows.repeat(self.action_horizon)
+        self.action_highs = self.action_highs.repeat(self.action_horizon)
         self.action_range = self.action_highs - self.action_lows
         self.action_step_max = self.step_scale * torch.abs(self.action_range)
         self.c_1 = 1e-5
@@ -99,10 +99,13 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
             self.use_cuda_line_search_kernel = False
         if self.use_temporal_smooth:
             self._temporal_mat = build_fd_matrix(
-                self.horizon, order=2, device=self.tensor_args.device, dtype=self.tensor_args.dtype
+                self.action_horizon,
+                order=2,
+                device=self.tensor_args.device,
+                dtype=self.tensor_args.dtype,
             ).unsqueeze(0)
             eye_mat = torch.eye(
-                self.horizon, device=self.tensor_args.device, dtype=self.tensor_args.dtype
+                self.action_horizon, device=self.tensor_args.device, dtype=self.tensor_args.dtype
             ).unsqueeze(0)
             self._temporal_mat += eye_mat
 
@@ -130,9 +133,9 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
             self._shift(shift_steps)
         # reshape q:
         if self.store_debug:
-            self.debug.append(q.view(-1, self.horizon, self.d_action).clone())
+            self.debug.append(q.view(-1, self.action_horizon, self.d_action).clone())
         with profiler.record_function("newton_base/init_opt"):
-            q = q.view(self.n_envs, self.horizon * self.d_action)
+            q = q.view(self.n_envs, self.action_horizon * self.d_action)
             grad_q = q.detach() * 0.0
         # run opt graph
         if not self.cu_opt_init:
@@ -147,7 +150,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
                 if check_convergence(self.best_iteration, self.current_iteration, self.last_best):
                     break
 
-        best_q = best_q.view(self.n_envs, self.horizon, self.d_action)
+        best_q = best_q.view(self.n_envs, self.action_horizon, self.d_action)
         return best_q
 
     def reset(self):
@@ -166,8 +169,11 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
             self.i += 1
             cost_n, q, grad_q = self._opt_step(q.detach(), grad_q.detach())
         if self.store_debug:
-            self.debug.append(self.best_q.view(-1, self.horizon, self.d_action).clone())
+            self.debug.append(self.best_q.view(-1, self.action_horizon, self.d_action).clone())
             self.debug_cost.append(self.best_cost.detach().view(-1, 1).clone())
+            # self.debug.append(q.view(-1, self.action_horizon, self.d_action).clone())
+            # self.debug_cost.append(cost_n.detach().view(-1, 1).clone())
+            # print(grad_q)
 
         return self.best_q.detach(), self.best_cost.detach(), q.detach(), grad_q.detach()
 
@@ -186,9 +192,9 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
 
     def scale_step_direction(self, dx):
         if self.use_temporal_smooth:
-            dx_v = dx.view(-1, self.horizon, self.d_action)
+            dx_v = dx.view(-1, self.action_horizon, self.d_action)
             dx_new = self._temporal_mat @ dx_v  # 1,h,h x b, h, dof -> b, h, dof
-            dx = dx_new.view(-1, self.horizon * self.d_action)
+            dx = dx_new.view(-1, self.action_horizon * self.d_action)
         dx_scaled = scale_action(dx, self.action_step_max)
 
         return dx_scaled
@@ -216,11 +222,11 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
     def _compute_cost_gradient(self, x):
         x_n = x.detach().requires_grad_(True)
         x_in = x_n.view(
-            self.n_envs * self.num_particles, self.rollout_fn.horizon, self.rollout_fn.d_action
+            self.n_envs * self.num_particles, self.action_horizon, self.rollout_fn.d_action
         )
         trajectories = self.rollout_fn(x_in)  # x_n = (batch*line_search_scale) x horizon x d_action
         cost = torch.sum(
-            trajectories.costs.view(self.n_envs, self.num_particles, self.rollout_fn.horizon),
+            trajectories.costs.view(self.n_envs, self.num_particles, self.horizon),
             dim=-1,
             keepdim=True,
         )

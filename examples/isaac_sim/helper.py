@@ -82,7 +82,13 @@ def add_robot_to_scene(
     import_config.default_drive_type = _urdf.UrdfJointTargetType.JOINT_DRIVE_POSITION
     import_config.distance_scale = 1
     import_config.density = 0.0
-    full_path = join_path(get_assets_path(), robot_config["kinematics"]["urdf_path"])
+    asset_path = get_assets_path()
+    if (
+        "external_asset_path" in robot_config["kinematics"]
+        and robot_config["kinematics"]["external_asset_path"] is not None
+    ):
+        asset_path = robot_config["kinematics"]["external_asset_path"]
+    full_path = join_path(asset_path, robot_config["kinematics"]["urdf_path"])
     robot_path = get_path_of_dir(full_path)
     filename = get_filename(full_path)
     imported_robot = urdf_interface.parse_urdf(robot_path, filename, import_config)

@@ -29,6 +29,7 @@ from curobo.types.base import TensorDeviceType
 from curobo.types.robot import RobotConfig
 from curobo.types.tensor import T_BValue_float
 from curobo.util.helpers import list_idx_if_not_none
+from curobo.util.logger import log_info
 from curobo.util.tensor_util import cat_max, cat_sum
 
 # Local Folder
@@ -79,6 +80,7 @@ class ArmReacherCostConfig(ArmCostConfig):
     zero_acc_cfg: Optional[CostConfig] = None
     zero_vel_cfg: Optional[CostConfig] = None
     zero_jerk_cfg: Optional[CostConfig] = None
+    link_pose_cfg: Optional[PoseCostConfig] = None
 
     @staticmethod
     def _get_base_keys():
@@ -91,6 +93,7 @@ class ArmReacherCostConfig(ArmCostConfig):
             "zero_acc_cfg": CostConfig,
             "zero_vel_cfg": CostConfig,
             "zero_jerk_cfg": CostConfig,
+            "link_pose_cfg": PoseCostConfig,
         }
         new_k.update(base_k)
         return new_k
@@ -166,10 +169,17 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             self.dist_cost = DistCost(self.cost_cfg.cspace_cfg)
         if self.cost_cfg.pose_cfg is not None:
             self.goal_cost = PoseCost(self.cost_cfg.pose_cfg)
-            self._link_pose_costs = {}
+            if self.cost_cfg.link_pose_cfg is None:
+                log_info(
+                    "Deprecated: Add link_pose_cfg to your rollout config. Using pose_cfg instead."
+                )
+                self.cost_cfg.link_pose_cfg = self.cost_cfg.pose_cfg
+        self._link_pose_costs = {}
+
+        if self.cost_cfg.link_pose_cfg is not None:
             for i in self.kinematics.link_names:
                 if i != self.kinematics.ee_link:
-                    self._link_pose_costs[i] = PoseCost(self.cost_cfg.pose_cfg)
+                    self._link_pose_costs[i] = PoseCost(self.cost_cfg.link_pose_cfg)
         if self.cost_cfg.straight_line_cfg is not None:
             self.straight_line_cost = StraightLineCost(self.cost_cfg.straight_line_cfg)
         if self.cost_cfg.zero_vel_cfg is not None:
@@ -192,12 +202,20 @@ class ArmReacher(ArmBase, ArmReacherConfig):
         self.z_tensor = torch.tensor(
             0, device=self.tensor_args.device, dtype=self.tensor_args.dtype
         )
+        self._link_pose_convergence = {}
+
         if self.convergence_cfg.pose_cfg is not None:
             self.pose_convergence = PoseCost(self.convergence_cfg.pose_cfg)
-            self._link_pose_convergence = {}
+            if self.convergence_cfg.link_pose_cfg is None:
+                log_warn(
+                    "Deprecated: Add link_pose_cfg to your rollout config. Using pose_cfg instead."
+                )
+                self.convergence_cfg.link_pose_cfg = self.convergence_cfg.pose_cfg
+
+        if self.convergence_cfg.link_pose_cfg is not None:
             for i in self.kinematics.link_names:
                 if i != self.kinematics.ee_link:
-                    self._link_pose_convergence[i] = PoseCost(self.convergence_cfg.pose_cfg)
+                    self._link_pose_convergence[i] = PoseCost(self.convergence_cfg.link_pose_cfg)
         if self.convergence_cfg.cspace_cfg is not None:
             self.cspace_convergence = DistCost(self.convergence_cfg.cspace_cfg)
 
@@ -307,6 +325,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             # print(z_vel.shape)
             cost_list.append(z_vel)
         cost = cat_sum(cost_list)
+        # print(cost[:].T)
         return cost
 
     def convergence_fn(
