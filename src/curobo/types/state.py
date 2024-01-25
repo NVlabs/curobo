@@ -182,7 +182,7 @@ class JointState(State):
         if velocity is None:
             velocity = self.position * 0.0
         if acceleration is None:
-            acceleration = self.positoin * 0.0
+            acceleration = self.position * 0.0
         if jerk is None:
             jerk = self.position * 0.0
         state_tensor = torch.cat((self.position, velocity, acceleration, jerk), dim=-1)

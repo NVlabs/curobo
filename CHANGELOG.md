@@ -9,6 +9,11 @@ without an express license agreement from NVIDIA CORPORATION or
 its affiliates is strictly prohibited.
 -->
 # Changelog
+## Latest Commit
+### BugFixes
+- refactored wp.index() instances to `[]` to avoid errors in using with warp-lang>=0.11.
+- Fix bug in gaussian transformation to ensure values are not -1 or +1.
+- Fixed bug in transforming link visual mesh offset when reading from urdf. 
 
 ## Version 0.6.2
 ### New Features
@@ -29,7 +34,6 @@ generation median at 0.017mm (with). IK now solves most problems with 24 seeds (
 Run `benchmark/ik_benchmark.py` to get the latest results.
 - Added `external_asset_path` to robot configuration to help in loading urdf and meshes from an 
 external directory.
-
 
 ### BugFixes & Misc.
 - Update nvblox wrappers to work with v0.0.5 without segfaults. Significantly improves stability.
@@ -55,7 +59,6 @@ slight reformulations of trajectory optimization. These changes have led to a sl
 planning time, 20ms slower on 4090 and 40ms on ORIN MAXN. We will address this slow down in a later
 release. One way to avoid this regression is to set `finetune_dt_scale=1.05` in 
 `MotionGenConfig.load_from_robot_config()`.
-
 
 ## Version 0.6.1
 
