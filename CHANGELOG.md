@@ -12,9 +12,9 @@ its affiliates is strictly prohibited.
 ## Latest Commit
 ### BugFixes
 - refactored wp.index() instances to `[]` to avoid errors in using with warp-lang>=0.11.
-- Fix bug in gaussian transformation to ensure values are not -1 or +1.
+- Fixed bug in gaussian transformation to ensure values are not -1 or +1.
 - Fixed bug in transforming link visual mesh offset when reading from urdf. 
-
+- Fixed bug in MotionGenPlanConfig.clone() that didn't clone the state of parallel_finetune.
 ## Version 0.6.2
 ### New Features
 - Added support for actuated axis to be negative (i.e., urdf joints with `<axis xyz="0 -1 0"/>` are
