@@ -264,7 +264,7 @@ class CudaRobotModel(CudaRobotModelConfig):
         pose = self.get_link_poses(q, self.kinematics_config.mesh_link_names)
         for li, l in enumerate(self.kinematics_config.mesh_link_names):
             m_list[li].pose = (
-                Pose.from_list(m_list[li].pose).multiply(pose.get_index(0, li)).tolist()
+                pose.get_index(0, li).multiply(Pose.from_list(m_list[li].pose)).tolist()
             )
 
         return m_list

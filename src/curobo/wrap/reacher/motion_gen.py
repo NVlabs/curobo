@@ -804,6 +804,7 @@ class MotionGenPlanConfig:
             success_ratio=self.success_ratio,
             fail_on_invalid_query=self.fail_on_invalid_query,
             enable_finetune_trajopt=self.enable_finetune_trajopt,
+            parallel_finetune=self.parallel_finetune,
         )
 
 

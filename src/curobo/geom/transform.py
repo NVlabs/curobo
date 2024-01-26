@@ -353,10 +353,10 @@ def compute_pose_inverse(
     out_q = wp.transform_get_rotation(t_3)
 
     out_v = wp.vec4()
-    out_v[0] = wp.index(out_q, 3)
-    out_v[1] = wp.index(out_q, 0)
-    out_v[2] = wp.index(out_q, 1)
-    out_v[3] = wp.index(out_q, 2)
+    out_v[0] = out_q[3]
+    out_v[1] = out_q[0]
+    out_v[2] = out_q[1]
+    out_v[3] = out_q[2]
 
     out_position[b_idx] = wp.transform_get_translation(t_3)
     out_quat[b_idx] = out_v
@@ -398,10 +398,10 @@ def compute_matrix_to_quat(
     out_q = wp.quat_from_matrix(in_m)
 
     out_v = wp.vec4()
-    out_v[0] = wp.index(out_q, 3)
-    out_v[1] = wp.index(out_q, 0)
-    out_v[2] = wp.index(out_q, 1)
-    out_v[3] = wp.index(out_q, 2)
+    out_v[0] = out_q[3]
+    out_v[1] = out_q[0]
+    out_v[2] = out_q[1]
+    out_v[3] = out_q[2]
     # write pt:
     out_quat[b_idx] = out_v
 
