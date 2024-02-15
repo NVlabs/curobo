@@ -1,0 +1,14 @@
+mesh:
+  shelves:
+    pose: [0.85, 0, 0.4, 1, 0, 0, 0.0]
+    file_path: "scene/shelves/shelves.obj"
+  bin1:
+    pose: [0, -0.6, 0, 1, 0, 0, 0.0]
+    file_path: "scene/bin/bin.obj"
+  bin2:
+    pose: [0, 0.6, 0, 1, 0, 0, 0.0]
+    file_path: "scene/bin/bin.obj"
+  table:
+    pose: [0.4, 0.0, 0.0, 1, 0, 0, 0.0]
+    file_path: "scene/table/table_wide.obj"
+

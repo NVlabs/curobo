@@ -1,0 +1,9 @@
+mesh:
+  shelves:
+    pose: [-0.23, -0.37, 0.35, 0.5, 0.0, 0.0, 0.866025]
+    file_path: "scene/PipeLong.obj"
+cuboid:
+  table:
+    dims: [0.1, 0.1, 0.8] # x, y, z
+    pose: [0.0, 0.0, -0.45, 1, 0, 0, 0.0] # x, y, z, qw, qx, qy, qz
+
