@@ -190,11 +190,13 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    b_list = [1, 10, 100, 1000, 10000]
+    b_list = [4096]
+    # b_list = [2]
 
     robot_list = get_robot_list()
+    # robot_list = [robot_list[-1]]
 
-    world_file = "collision_test.yml"
+    world_file = "benchmark_manufacturing.yml"
 
     print("running...")
     data = {"robot": [], "Kinematics": [], "Collision Checking": [], "Batch Size": []}
