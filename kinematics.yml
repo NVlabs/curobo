@@ -1,0 +1,8 @@
+Batch Size:
+- 4096
+Collision Checking:
+- 0.010995149612426758
+Kinematics:
+- 5.269050598144531e-05
+robot:
+- franka.yml
