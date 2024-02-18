@@ -378,8 +378,12 @@ class ArmBase(RolloutBase, ArmBaseConfig):
     ) -> RolloutMetrics:
         # setup constraint terms:
 
-        constraint = self.bound_constraint.forward(state.state_seq)
-        constraint_list = [constraint]
+        constraint_list = []
+
+        if (self.bound_constraint.enabled):
+            constraint = self.bound_constraint.forward(state.state_seq)
+            constraint_list.append(constraint)
+
         if (
             self.constraint_cfg.primitive_collision_cfg is not None
             and self.primitive_collision_constraint.enabled
@@ -391,16 +395,19 @@ class ArmBase(RolloutBase, ArmBaseConfig):
                 )
             else:
                 coll_constraint = self.primitive_collision_constraint.forward(
-                    state.robot_spheres, env_query_idx=None
+                    state.robot_spheres, 
+                    env_query_idx=None
                 )
 
             constraint_list.append(coll_constraint)
+            
         if (
             self.constraint_cfg.self_collision_cfg is not None
             and self.robot_self_collision_constraint.enabled
         ):
             self_constraint = self.robot_self_collision_constraint.forward(state.robot_spheres)
             constraint_list.append(self_constraint)
+
         constraint = cat_sum(constraint_list)
         feasible = constraint == 0.0
         if out_metrics is None:
