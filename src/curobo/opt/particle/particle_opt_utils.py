@@ -121,7 +121,7 @@ def get_stomp_cov_jit(
                     else:
                         A[k * horizon + i, k * horizon + index] = fd_array[j + 3]
 
-    R = torch.matmul(A.transpose(-2, -1), A)
+    R = torch.matmul(A.transpose(-2, -1).clone(), A.clone())
     M = torch.inverse(R)
     scaled_M = (1 / horizon) * M / (torch.max(torch.abs(M), dim=1)[0].unsqueeze(0))
     cov = M / torch.max(torch.abs(M))
@@ -132,7 +132,6 @@ def get_stomp_cov_jit(
         scale_tril = torch.linalg.cholesky(cov)
     else:
         scale_tril = cov
-
     """
     k = 0
     act_cov_matrix = cov[k * horizon:k * horizon + horizon, k * horizon:k * horizon + horizon]

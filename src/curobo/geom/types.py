@@ -12,7 +12,7 @@ from __future__ import annotations
 
 # Standard Library
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 # Third Party
 import numpy as np
@@ -22,6 +22,7 @@ import trimesh
 # CuRobo
 from curobo.geom.sphere_fit import SphereFitType, fit_spheres_to_mesh
 from curobo.types.base import TensorDeviceType
+from curobo.types.camera import CameraObservation
 from curobo.types.math import Pose
 from curobo.util.logger import log_error, log_warn
 from curobo.util_file import get_assets_path, join_path
@@ -60,7 +61,7 @@ class Obstacle:
 
     tensor_args: TensorDeviceType = TensorDeviceType()
 
-    def get_trimesh_mesh(self, process: bool = True) -> trimesh.Trimesh:
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
         """Create a trimesh instance from the obstacle representation.
 
         Args:
@@ -74,8 +75,11 @@ class Obstacle:
         """
         raise NotImplementedError
 
-    def save_as_mesh(self, file_path: str):
+    def save_as_mesh(self, file_path: str, transform_with_pose: bool = False):
         mesh_scene = self.get_trimesh_mesh()
+        if transform_with_pose:
+            mesh_scene.apply_transform(self.get_transform_matrix())
+
         mesh_scene.export(file_path)
 
     def get_cuboid(self) -> Cuboid:
@@ -238,7 +242,7 @@ class Cuboid(Obstacle):
         if self.pose is None:
             log_error("Cuboid Obstacle requires Pose")
 
-    def get_trimesh_mesh(self, process: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
         m = trimesh.creation.box(extents=self.dims)
         if self.color is not None:
             color_visual = trimesh.visual.color.ColorVisuals(
@@ -254,7 +258,7 @@ class Capsule(Obstacle):
     base: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     tip: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
 
-    def get_trimesh_mesh(self, process: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
         height = self.tip[2] - self.base[2]
         if (
             height < 0
@@ -280,7 +284,7 @@ class Cylinder(Obstacle):
     radius: float = 0.0
     height: float = 0.0
 
-    def get_trimesh_mesh(self, process: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
         m = trimesh.creation.cylinder(radius=self.radius, height=self.height)
         if self.color is not None:
             color_visual = trimesh.visual.color.ColorVisuals(
@@ -304,7 +308,7 @@ class Sphere(Obstacle):
         if self.pose is not None:
             self.position = self.pose[:3]
 
-    def get_trimesh_mesh(self, process: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
         m = trimesh.creation.icosphere(radius=self.radius)
         if self.color is not None:
             color_visual = trimesh.visual.color.ColorVisuals(
@@ -356,9 +360,9 @@ class Sphere(Obstacle):
 @dataclass
 class Mesh(Obstacle):
     file_path: Optional[str] = None
-    file_string: Optional[
-        str
-    ] = None  # storing full mesh as a string, loading from this is not implemented yet.
+    file_string: Optional[str] = (
+        None  # storing full mesh as a string, loading from this is not implemented yet.
+    )
     urdf_path: Optional[str] = None  # useful for visualization in isaac gym.
     vertices: Optional[List[List[float]]] = None
     faces: Optional[List[int]] = None
@@ -375,13 +379,13 @@ class Mesh(Obstacle):
             self.vertices = np.ravel(self.scale) * self.vertices
             self.scale = None
 
-    def get_trimesh_mesh(self, process: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
         # load mesh from filepath or verts and faces:
         if self.file_path is not None:
             m = trimesh.load(self.file_path, process=process, force="mesh")
             if isinstance(m, trimesh.Scene):
                 m = m.dump(concatenate=True)
-            if isinstance(m.visual, trimesh.visual.texture.TextureVisuals):
+            if process_color and isinstance(m.visual, trimesh.visual.texture.TextureVisuals):
                 m.visual = m.visual.to_color()
         else:
             m = trimesh.Trimesh(
@@ -467,12 +471,97 @@ class BloxMap(Obstacle):
                 name=self.name + "_mesh", file_path=self.mesh_file_path, pose=self.pose
             )
 
-    def get_trimesh_mesh(self, process: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
         if self.mesh is not None:
             return self.mesh.get_trimesh_mesh(process)
         else:
             log_warn("no mesh found for obstacle: " + self.name)
             return None
+
+
+@dataclass
+class PointCloud(Obstacle):
+    points: Union[torch.Tensor, np.ndarray, List[List[float]]] = None
+    points_features: Union[torch.Tensor, np.ndarray, List[List[float]], None] = None
+
+    def __post_init__(self):
+        if self.scale is not None and self.points is not None:
+            self.points = np.ravel(self.scale) * self.points
+            self.scale = None
+
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
+        points = self.points
+        if isinstance(points, torch.Tensor):
+            points = points.view(-1, 3).cpu().numpy()
+        if isinstance(points, list):
+            points = np.ndarray(points)
+
+        mesh = Mesh.from_pointcloud(points, pose=self.pose)
+        return mesh.get_trimesh_mesh()
+
+    def get_mesh_data(self, process: bool = True):
+        verts = faces = None
+        m = self.get_trimesh_mesh(process=process)
+        verts = m.vertices.view(np.ndarray)
+        faces = m.faces
+        return verts, faces
+
+    @staticmethod
+    def from_camera_observation(
+        camera_obs: CameraObservation, name: str = "pc_obstacle", pose: Optional[List[float]] = None
+    ):
+        return PointCloud(name=name, pose=pose, points=camera_obs.get_pointcloud())
+
+    def get_bounding_spheres(
+        self,
+        n_spheres: int = 1,
+        surface_sphere_radius: float = 0.002,
+        fit_type: SphereFitType = SphereFitType.VOXEL_VOLUME_SAMPLE_SURFACE,
+        voxelize_method: str = "ray",
+        pre_transform_pose: Optional[Pose] = None,
+        tensor_args: TensorDeviceType = TensorDeviceType(),
+    ) -> List[Sphere]:
+        """Compute n spheres that fits in the volume of the object.
+
+        Args:
+            n: number of spheres
+        Returns:
+            spheres
+        """
+        # sample points in pointcloud:
+
+        # mesh = self.get_trimesh_mesh()
+        # pts, n_radius = fit_spheres_to_mesh(
+        #     mesh, n_spheres, surface_sphere_radius, fit_type, voxelize_method=voxelize_method
+        # )
+
+        obj_pose = Pose.from_list(self.pose, tensor_args)
+        # transform object:
+
+        # transform points:
+        if pre_transform_pose is not None:
+            obj_pose = pre_transform_pose.multiply(obj_pose)  # convert object pose to another frame
+
+        if pts is None or len(pts) == 0:
+            log_warn("spheres could not be fit!, adding one sphere at origin")
+            pts = np.zeros((1, 3))
+            pts[0, :] = mesh.centroid
+            n_radius = [0.02]
+            obj_pose = Pose.from_list([0, 0, 0, 1, 0, 0, 0], tensor_args)
+
+        points_cuda = tensor_args.to_device(pts)
+        pts = obj_pose.transform_points(points_cuda).cpu().view(-1, 3).numpy()
+
+        new_spheres = [
+            Sphere(
+                name="sph_" + str(i),
+                pose=[pts[i, 0], pts[i, 1], pts[i, 2], 1, 0, 0, 0],
+                radius=n_radius[i],
+            )
+            for i in range(pts.shape[0])
+        ]
+
+        return new_spheres
 
 
 @dataclass
@@ -664,23 +753,25 @@ class WorldConfig(Sequence):
         )
 
     @staticmethod
-    def get_scene_graph(current_world: WorldConfig):
+    def get_scene_graph(current_world: WorldConfig, process_color: bool = True):
         m_world = WorldConfig.create_mesh_world(current_world)
-        mesh_scene = trimesh.scene.scene.Scene(base_frame="world")
+        mesh_scene = trimesh.scene.scene.Scene(base_frame="world_origin")
         mesh_list = m_world
         for m in mesh_list:
             mesh_scene.add_geometry(
-                m.get_trimesh_mesh(),
+                m.get_trimesh_mesh(process_color=process_color),
                 geom_name=m.name,
-                parent_node_name="world",
+                parent_node_name="world_origin",
                 transform=m.get_transform_matrix(),
             )
 
         return mesh_scene
 
     @staticmethod
-    def create_merged_mesh_world(current_world: WorldConfig, process: bool = True):
-        mesh_scene = WorldConfig.get_scene_graph(current_world)
+    def create_merged_mesh_world(
+        current_world: WorldConfig, process: bool = True, process_color: bool = True
+    ):
+        mesh_scene = WorldConfig.get_scene_graph(current_world, process_color=process_color)
         mesh_scene = mesh_scene.dump(concatenate=True)
         new_mesh = Mesh(
             vertices=mesh_scene.vertices.view(np.ndarray),
@@ -702,8 +793,10 @@ class WorldConfig(Sequence):
     def get_collision_check_world(self, mesh_process: bool = False):
         return WorldConfig.create_collision_support_world(self, process=mesh_process)
 
-    def save_world_as_mesh(self, file_path: str, save_as_scene_graph=False):
-        mesh_scene = WorldConfig.get_scene_graph(self)
+    def save_world_as_mesh(
+        self, file_path: str, save_as_scene_graph=False, process_color: bool = True
+    ):
+        mesh_scene = WorldConfig.get_scene_graph(self, process_color=process_color)
         if save_as_scene_graph:
             mesh_scene = mesh_scene.dump(concatenate=True)
 

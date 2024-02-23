@@ -13,7 +13,6 @@ from typing import Dict, List, Optional, Tuple
 
 # Third Party
 import numpy as np
-from pxr import Usd, UsdPhysics
 
 # CuRobo
 from curobo.cuda_robot_model.kinematics_parser import KinematicsParser, LinkParams
@@ -21,6 +20,15 @@ from curobo.cuda_robot_model.types import JointType
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.util.logger import log_error
+
+try:
+    # Third Party
+    from pxr import Usd, UsdPhysics
+except ImportError:
+    raise ImportError(
+        "usd-core failed to import, install with pip install usd-core"
+        + " NOTE: Do not install this if using with ISAAC SIM."
+    )
 
 
 class UsdKinematicsParser(KinematicsParser):

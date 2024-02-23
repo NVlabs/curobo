@@ -15,7 +15,7 @@
 import torch
 
 # CuRobo
-from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel, CudaRobotModelConfig
+from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
 from curobo.types.base import TensorDeviceType
 from curobo.types.robot import RobotConfig
 from curobo.util.logger import setup_curobo_logger

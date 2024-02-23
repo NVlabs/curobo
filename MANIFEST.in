@@ -16,3 +16,4 @@
 # graft <path to files or directories to add to the project>
 graft src/curobo/content
 global-include py.typed
+graft src/curobo/curobolib/*.so

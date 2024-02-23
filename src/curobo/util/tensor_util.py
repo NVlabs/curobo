@@ -31,9 +31,27 @@ def copy_tensor(new_tensor: torch.Tensor, mem_tensor: torch.Tensor):
     return False
 
 
-def copy_if_not_none(x):
+def copy_if_not_none(new_tensor, ref_tensor):
     """Clones x if it's not None.
     TODO: Rename this to clone_if_not_none
+
+
+    Args:
+        x (torch.Tensor): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    if ref_tensor is not None and new_tensor is not None:
+        ref_tensor.copy_(new_tensor)
+    elif ref_tensor is None and new_tensor is not None:
+        ref_tensor = new_tensor
+
+    return ref_tensor
+
+
+def clone_if_not_none(x):
+    """Clones x if it's not None.
 
 
     Args:

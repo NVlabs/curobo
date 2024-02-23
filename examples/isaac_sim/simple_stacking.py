@@ -34,6 +34,13 @@ parser.add_argument(
     default=None,
     help="To run headless, use one of [native, websocket], webrtc might not work.",
 )
+
+parser.add_argument(
+    "--constrain_grasp_approach",
+    action="store_true",
+    help="When True, approaches grasp with fixed orientation and motion only along z axis.",
+    default=False,
+)
 args = parser.parse_args()
 
 # Third Party
@@ -78,6 +85,7 @@ from curobo.wrap.reacher.motion_gen import (
     MotionGenConfig,
     MotionGenPlanConfig,
     MotionGenResult,
+    PoseCostMetric,
 )
 
 
@@ -87,6 +95,7 @@ class CuroboController(BaseController):
         my_world: World,
         my_task: BaseStacking,
         name: str = "curobo_controller",
+        constrain_grasp_approach: bool = False,
     ) -> None:
         BaseController.__init__(self, name=name)
         self._save_log = False
@@ -145,13 +154,16 @@ class CuroboController(BaseController):
             collision_cache={"obb": n_obstacle_cuboids, "mesh": n_obstacle_mesh},
             store_ik_debug=self._save_log,
             store_trajopt_debug=self._save_log,
-            state_finite_difference_mode="CENTRAL",
-            acceleration_scale=0.5,
-            fixed_iters_trajopt=True,
+            velocity_scale=0.75,
         )
         self.motion_gen = MotionGen(motion_gen_config)
         print("warming up...")
-        self.motion_gen.warmup()
+        self.motion_gen.warmup(parallel_finetune=True)
+        pose_metric = None
+        if constrain_grasp_approach:
+            pose_metric = PoseCostMetric.create_grasp_approach_metric(
+                offset_position=0.1, tstep_fraction=0.6
+            )
 
         self.plan_config = MotionGenPlanConfig(
             enable_graph=False,
@@ -159,6 +171,8 @@ class CuroboController(BaseController):
             enable_graph_attempt=None,
             enable_finetune_trajopt=True,
             partial_ik_opt=False,
+            parallel_finetune=True,
+            pose_cost_metric=pose_metric,
         )
         self.usd_help.load_stage(self.my_world.stage)
         self.cmd_plan = None
@@ -185,7 +199,7 @@ class CuroboController(BaseController):
             cu_js,
             [cube_name],
             sphere_fit_type=SphereFitType.VOXEL_VOLUME_SAMPLE_SURFACE,
-            world_objects_pose_offset=Pose.from_list([0, 0, 0.005, 1, 0, 0, 0], self.tensor_args),
+            world_objects_pose_offset=Pose.from_list([0, 0, 0.01, 1, 0, 0, 0], self.tensor_args),
         )
 
     def detach_obj(self) -> None:
@@ -259,7 +273,7 @@ class CuroboController(BaseController):
             # get full dof state
             art_action = ArticulationAction(
                 cmd_state.position.cpu().numpy(),
-                # cmd_state.velocity.cpu().numpy(),
+                cmd_state.velocity.cpu().numpy() * 0.0,
                 joint_indices=self.idx_list,
             )
             if self.cmd_idx >= len(self.cmd_plan.position):
@@ -417,7 +431,9 @@ my_world.add_task(my_task)
 my_world.reset()
 robot_name = my_task.get_params()["robot_name"]["value"]
 my_franka = my_world.scene.get_object(robot_name)
-my_controller = CuroboController(my_world=my_world, my_task=my_task)
+my_controller = CuroboController(
+    my_world=my_world, my_task=my_task, constrain_grasp_approach=args.constrain_grasp_approach
+)
 articulation_controller = my_franka.get_articulation_controller()
 set_camera_view(eye=[2, 0, 1], target=[0.00, 0.00, 0.00], camera_prim_path="/OmniverseKit_Persp")
 wait_steps = 8
@@ -439,17 +455,17 @@ print(articulation_controller.get_gains())
 print(articulation_controller.get_max_efforts())
 robot = my_franka
 print("**********************")
-robot.enable_gravity()
-articulation_controller.set_gains(
-    kps=np.array(
-        [100000000, 6000000.0, 10000000, 600000.0, 25000.0, 15000.0, 50000.0, 6000.0, 6000.0]
+if True:
+    robot.enable_gravity()
+    articulation_controller.set_gains(
+        kps=np.array(
+            [100000000, 6000000.0, 10000000, 600000.0, 25000.0, 15000.0, 50000.0, 6000.0, 6000.0]
+        )
     )
-)
 
-
-articulation_controller.set_max_efforts(
-    values=np.array([100000, 52.199997, 100000, 52.199997, 7.2, 7.2, 7.2, 50.0, 50])
-)
+    articulation_controller.set_max_efforts(
+        values=np.array([100000, 52.199997, 100000, 52.199997, 7.2, 7.2, 7.2, 50.0, 50])
+    )
 
 print("Updated gains:")
 print(articulation_controller.get_gains())

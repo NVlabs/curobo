@@ -55,7 +55,7 @@ class WorldBloxCollision(WorldMeshCollision):
         self._blox_voxel_sizes = [0.02]
         super().__init__(config)
 
-    def load_collision_model(self, world_model: WorldConfig):
+    def load_collision_model(self, world_model: WorldConfig, fix_cache_reference: bool = False):
         # load nvblox mesh
         if len(world_model.blox) > 0:
             # check if there is a mapper instance:
@@ -109,15 +109,17 @@ class WorldBloxCollision(WorldMeshCollision):
             self._blox_names = names
             self.collision_types["blox"] = True
 
-        return super().load_collision_model(world_model)
+        return super().load_collision_model(world_model, fix_cache_reference=fix_cache_reference)
 
     def clear_cache(self):
         self._blox_mapper.clear()
+        self._blox_mapper.update_hashmaps()
         super().clear_cache()
 
     def clear_blox_layer(self, layer_name: str):
         index = self._blox_names.index(layer_name)
         self._blox_mapper.clear(index)
+        self._blox_mapper.update_hashmaps()
 
     def _get_blox_sdf(
         self,
@@ -147,6 +149,7 @@ class WorldBloxCollision(WorldMeshCollision):
         speed_dt,
         sweep_steps,
         enable_speed_metric,
+        return_loss=False,
     ):
         d = self._blox_mapper.query_sphere_trajectory_sdf_cost(
             query_spheres,
@@ -160,6 +163,8 @@ class WorldBloxCollision(WorldMeshCollision):
             self._blox_tensor_list[1],
             sweep_steps,
             enable_speed_metric,
+            return_loss,
+            use_experimental=False,
         )
         return d
 
@@ -279,6 +284,7 @@ class WorldBloxCollision(WorldMeshCollision):
             speed_dt=speed_dt,
             sweep_steps=sweep_steps,
             enable_speed_metric=enable_speed_metric,
+            return_loss=return_loss,
         )
 
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
@@ -332,6 +338,7 @@ class WorldBloxCollision(WorldMeshCollision):
             speed_dt=speed_dt,
             sweep_steps=sweep_steps,
             enable_speed_metric=enable_speed_metric,
+            return_loss=return_loss,
         )
 
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (

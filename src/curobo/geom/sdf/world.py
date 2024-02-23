@@ -364,8 +364,12 @@ class WorldPrimitiveCollision(WorldCollision):
         if self.cache is not None and "obb" in self.cache and self.cache["obb"] not in [None, 0]:
             self._create_obb_cache(self.cache["obb"])
 
-    def load_collision_model(self, world_config: WorldConfig, env_idx=0):
-        self._load_collision_model_in_cache(world_config, env_idx)
+    def load_collision_model(
+        self, world_config: WorldConfig, env_idx=0, fix_cache_reference: bool = False
+    ):
+        self._load_collision_model_in_cache(
+            world_config, env_idx, fix_cache_reference=fix_cache_reference
+        )
 
     def load_batch_collision_model(self, world_config_list: List[WorldConfig]):
         """Load a batch of collision environments from a list of world configs.
@@ -436,7 +440,9 @@ class WorldPrimitiveCollision(WorldCollision):
         )
         self.collision_types["primitive"] = True
 
-    def _load_collision_model_in_cache(self, world_config: WorldConfig, env_idx: int = 0):
+    def _load_collision_model_in_cache(
+        self, world_config: WorldConfig, env_idx: int = 0, fix_cache_reference: bool = False
+    ):
         cube_objs = world_config.cuboid
         max_obb = len(cube_objs)
         self.world_model = world_config
@@ -444,8 +450,11 @@ class WorldPrimitiveCollision(WorldCollision):
             log_info("No OBB objs")
             return
         if self._cube_tensor_list is None or self._cube_tensor_list[0].shape[1] < max_obb:
-            log_info("Creating Obb cache" + str(max_obb))
-            self._create_obb_cache(max_obb)
+            if not fix_cache_reference:
+                log_info("Creating Obb cache" + str(max_obb))
+                self._create_obb_cache(max_obb)
+            else:
+                log_error("number of OBB is larger than collision cache, create larger cache.")
 
         # load as a batch:
         pose_batch = [c.pose for c in cube_objs]
@@ -835,7 +844,9 @@ class WorldPrimitiveCollision(WorldCollision):
         return dist
 
     def clear_cache(self):
-        pass
+        if self._cube_tensor_list is not None:
+            self._cube_tensor_list[2][:] = 1
+            self._env_n_obbs[:] = 0
 
     def get_voxels_in_bounding_box(
         self,

@@ -78,7 +78,7 @@ ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
 ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 
 # Add cache date to avoid using cached layers older than this
-ARG CACHE_DATE=2023-12-15 
+ARG CACHE_DATE=2024-02-20
 
 
 RUN pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"

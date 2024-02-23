@@ -23,7 +23,7 @@ import torch
 # CuRobo
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
-from curobo.types.robot import CSpaceConfig, State, JointState
+from curobo.types.robot import CSpaceConfig, State
 from curobo.types.tensor import (
     T_BDOF,
     T_DOF,
@@ -33,6 +33,7 @@ from curobo.types.tensor import (
     T_BValue_float,
 )
 from curobo.util.helpers import list_idx_if_not_none
+from curobo.util.logger import log_info
 from curobo.util.sample_lib import HaltonGenerator
 from curobo.util.tensor_util import copy_tensor
 
@@ -235,6 +236,7 @@ class Goal(Sequence):
             batch_retract_state_idx=self.batch_retract_state_idx,
             batch_goal_state_idx=self.batch_goal_state_idx,
             links_goal_pose=self.links_goal_pose,
+            n_goalset=self.n_goalset,
         )
 
     def _tensor_repeat_seeds(self, tensor, num_seeds):
@@ -353,7 +355,7 @@ class Goal(Sequence):
 
     def _copy_tensor(self, ref_buffer, buffer):
         if buffer is not None:
-            if ref_buffer is not None:
+            if ref_buffer is not None and buffer.shape == ref_buffer.shape:
                 if not copy_tensor(buffer, ref_buffer):
                     ref_buffer = buffer.clone()
             else:
@@ -553,6 +555,10 @@ class RolloutBase:
         self._rollout_constraint_cuda_graph_init = False
         if self.cu_rollout_constraint_graph is not None:
             self.cu_rollout_constraint_graph.reset()
+        self.reset_shape()
+
+    def reset_shape(self):
+        pass
 
     @abstractmethod
     def get_action_from_state(self, state: State):

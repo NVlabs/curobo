@@ -52,7 +52,8 @@ def smooth_cost(abs_acc, abs_jerk, opt_dt):
     # jerk = torch.max(torch.max(abs_jerk, dim=-1)[0], dim=-1)[0]
     jerk = torch.mean(torch.max(abs_jerk, dim=-1)[0], dim=-1)
     mean_acc = torch.mean(torch.max(abs_acc, dim=-1)[0], dim=-1)  # [0]
-    a = (jerk * 0.001) + opt_dt + (mean_acc * 0.01)
+    a = (jerk * 0.001) + 5.0 * opt_dt + (mean_acc * 0.01)
+
     return a
 
 

@@ -145,6 +145,9 @@ class CudaRobotGeneratorConfig:
     #: cspace config
     cspace: Union[None, CSpaceConfig, Dict[str, List[Any]]] = None
 
+    #: Enable loading meshes from kinematics parser.
+    load_meshes: bool = False
+
     def __post_init__(self):
         # add root path:
         # Check if an external asset path is provided:
@@ -283,7 +286,10 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             )
         else:
             self._kinematics_parser = UrdfKinematicsParser(
-                self.urdf_path, mesh_root=self.asset_root_path, extra_links=self.extra_links
+                self.urdf_path,
+                mesh_root=self.asset_root_path,
+                extra_links=self.extra_links,
+                load_meshes=self.load_meshes,
             )
 
         if self.lock_joints is None:

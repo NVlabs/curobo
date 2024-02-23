@@ -89,12 +89,12 @@ mppi:
   sample_mode       : 'BEST'
   base_action       : 'REPEAT'
   squash_fn         : 'CLAMP'
-  n_envs            : 1
+  n_problems        : 1
   use_cuda_graph    : True
   seed              : 0
   store_debug       : False
   random_mean       : True
-  sample_per_env    : False
+  sample_per_problem: False
   sync_cuda_time    : True
   use_coo_sparse    : True
   sample_params:

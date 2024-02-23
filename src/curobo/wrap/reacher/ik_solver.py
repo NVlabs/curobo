@@ -26,6 +26,7 @@ from curobo.opt.newton.newton_base import NewtonOptBase, NewtonOptConfig
 from curobo.opt.particle.parallel_es import ParallelES, ParallelESConfig
 from curobo.opt.particle.parallel_mppi import ParallelMPPI, ParallelMPPIConfig
 from curobo.rollout.arm_reacher import ArmReacher, ArmReacherConfig
+from curobo.rollout.cost.pose_cost import PoseCostMetric
 from curobo.rollout.rollout_base import Goal, RolloutBase, RolloutMetrics
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
@@ -56,6 +57,7 @@ class IKSolverConfig:
     world_coll_checker: Optional[WorldCollision] = None
     sample_rejection_ratio: int = 50
     tensor_args: TensorDeviceType = TensorDeviceType()
+    use_cuda_graph: bool = True
 
     @staticmethod
     @profiler.record_function("ik_solver/load_from_robot_config")
@@ -72,12 +74,12 @@ class IKSolverConfig:
         base_cfg_file: str = "base_cfg.yml",
         particle_file: str = "particle_ik.yml",
         gradient_file: str = "gradient_ik.yml",
-        use_cuda_graph: Optional[bool] = None,
+        use_cuda_graph: bool = True,
         self_collision_check: bool = True,
         self_collision_opt: bool = True,
         grad_iters: Optional[int] = None,
         use_particle_opt: bool = True,
-        collision_checker_type: Optional[CollisionCheckerType] = CollisionCheckerType.PRIMITIVE,
+        collision_checker_type: Optional[CollisionCheckerType] = CollisionCheckerType.MESH,
         sync_cuda_time: Optional[bool] = None,
         use_gradient_descent: bool = False,
         collision_cache: Optional[Dict[str, int]] = None,
@@ -90,6 +92,7 @@ class IKSolverConfig:
         regularization: bool = True,
         collision_activation_distance: Optional[float] = None,
         high_precision: bool = False,
+        project_pose_to_goal_frame: bool = True,
     ):
         if position_threshold <= 0.001:
             high_precision = True
@@ -116,6 +119,9 @@ class IKSolverConfig:
             base_config_data["convergence"]["cspace_cfg"]["weight"] = 0.0
             config_data["cost"]["bound_cfg"]["null_space_weight"] = 0.0
             grad_config_data["cost"]["bound_cfg"]["null_space_weight"] = 0.0
+
+        if isinstance(robot_cfg, str):
+            robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_cfg))["robot_cfg"]
         if ee_link_name is not None:
             if isinstance(robot_cfg, RobotConfig):
                 raise NotImplementedError("ee link cannot be changed after creating RobotConfig")
@@ -123,8 +129,6 @@ class IKSolverConfig:
                 robot_cfg.kinematics.ee_link = ee_link_name
             else:
                 robot_cfg["kinematics"]["ee_link"] = ee_link_name
-        if isinstance(robot_cfg, str):
-            robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_cfg))["robot_cfg"]
         if isinstance(robot_cfg, dict):
             robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
 
@@ -160,8 +164,8 @@ class IKSolverConfig:
             grad_config_data["cost"]["self_collision_cfg"]["weight"] = 0.0
         if grad_iters is not None:
             grad_config_data["lbfgs"]["n_iters"] = grad_iters
-        config_data["mppi"]["n_envs"] = 1
-        grad_config_data["lbfgs"]["n_envs"] = 1
+        config_data["mppi"]["n_problems"] = 1
+        grad_config_data["lbfgs"]["n_problems"] = 1
         grad_cfg = ArmReacherConfig.from_dict(
             robot_cfg,
             grad_config_data["model"],
@@ -241,6 +245,7 @@ class IKSolverConfig:
             world_coll_checker=world_coll_checker,
             rollout_fn=aux_rollout,
             tensor_args=tensor_args,
+            use_cuda_graph=use_cuda_graph,
         )
         return ik_cfg
 
@@ -259,6 +264,7 @@ class IKResult(Sequence):
     error: T_BValue_float
     solve_time: float
     debug_info: Optional[Any] = None
+    goalset_index: Optional[torch.Tensor] = None
 
     def __getitem__(self, idx):
         success = self.success[idx]
@@ -272,6 +278,7 @@ class IKResult(Sequence):
             position_error=self.position_error[idx],
             rotation_error=self.rotation_error[idx],
             debug_info=self.debug_info,
+            goalset_index=None if self.goalset_index is None else self.goalset_index[idx],
         )
 
     def __len__(self):
@@ -317,7 +324,7 @@ class IKSolver(IKSolverConfig):
             self.solver.rollout_fn.retract_state.unsqueeze(0)
         )
         self.dof = self.solver.safety_rollout.d_action
-        self._col = torch.arange(0, 1, device=self.tensor_args.device, dtype=torch.long)
+        self._col = None  # torch.arange(0, 1, device=self.tensor_args.device, dtype=torch.long)
 
         # self.fixed_seeds = self.solver.safety_rollout.sample_random_actions(100 * 200)
         # create random seeder:
@@ -355,10 +362,14 @@ class IKSolver(IKSolverConfig):
             self._goal_buffer,
             self.tensor_args,
         )
-        # print("Goal:", self._goal_buffer.links_goal_pose)
+
         if update_reference:
-            self.solver.update_nenvs(self._solve_state.get_ik_batch_size())
-            self.reset_cuda_graph()
+            self.reset_shape()
+            if self.use_cuda_graph and self._col is not None:
+                log_error("changing goal type, breaking previous cuda graph.")
+                self.reset_cuda_graph()
+
+            self.solver.update_nproblems(self._solve_state.get_ik_batch_size())
             self._goal_buffer.current_state = self.init_state.repeat_seeds(goal_pose.batch)
             self._col = torch.arange(
                 0,
@@ -676,6 +687,8 @@ class IKSolver(IKSolverConfig):
         if newton_iters is not None:
             self.solver.newton_optimizer.outer_iters = self.og_newton_iters
         ik_result = self.get_result(num_seeds, result, goal_buffer.goal_pose, return_seeds)
+        if ik_result.goalset_index is not None:
+            ik_result.goalset_index[ik_result.goalset_index >= goal_pose.n_goalset] = 0
 
         return ik_result
 
@@ -684,15 +697,18 @@ class IKSolver(IKSolverConfig):
         self, num_seeds: int, result: WrapResult, goal_pose: Pose, return_seeds: int
     ) -> IKResult:
         success = self.get_success(result.metrics, num_seeds=num_seeds)
-        if result.metrics.cost is not None:
-            result.metrics.pose_error += result.metrics.cost
+        # if result.metrics.cost is not None:
+        #    result.metrics.pose_error += result.metrics.cost * 0.0001
+        if result.metrics.null_space_error is not None:
+            result.metrics.pose_error += result.metrics.null_space_error
         if result.metrics.cspace_error is not None:
             result.metrics.pose_error += result.metrics.cspace_error
 
-        q_sol, success, position_error, rotation_error, total_error = get_result(
+        q_sol, success, position_error, rotation_error, total_error, goalset_index = get_result(
             result.metrics.pose_error,
             result.metrics.position_error,
             result.metrics.rotation_error,
+            result.metrics.goalset_index,
             success,
             result.action.position,
             self._col,
@@ -717,6 +733,7 @@ class IKSolver(IKSolverConfig):
             solve_time=result.solve_time,
             error=total_error,
             debug_info={"solver": result.debug},
+            goalset_index=goalset_index,
         )
         return ik_result
 
@@ -959,6 +976,10 @@ class IKSolver(IKSolverConfig):
         self.solver.reset_cuda_graph()
         self.rollout_fn.reset_cuda_graph()
 
+    def reset_shape(self):
+        self.solver.reset_shape()
+        self.rollout_fn.reset_shape()
+
     def attach_object_to_robot(
         self,
         sphere_radius: float,
@@ -976,6 +997,17 @@ class IKSolver(IKSolverConfig):
 
     def get_retract_config(self):
         return self.rollout_fn.dynamics_model.retract_config
+
+    def update_pose_cost_metric(
+        self,
+        metric: PoseCostMetric,
+    ):
+        rollouts = self.get_all_rollout_instances()
+        [
+            rollout.update_pose_cost_metric(metric)
+            for rollout in rollouts
+            if isinstance(rollout, ArmReacher)
+        ]
 
 
 @torch.jit.script
@@ -1001,6 +1033,7 @@ def get_result(
     pose_error,
     position_error,
     rotation_error,
+    goalset_index: Union[torch.Tensor, None],
     success,
     sol_position,
     col,
@@ -1018,4 +1051,6 @@ def get_result(
     position_error = position_error[idx].view(batch_size, return_seeds)
     rotation_error = rotation_error[idx].view(batch_size, return_seeds)
     total_error = position_error + rotation_error
-    return q_sol, success, position_error, rotation_error, total_error
+    if goalset_index is not None:
+        goalset_index = goalset_index[idx].view(batch_size, return_seeds)
+    return q_sol, success, position_error, rotation_error, total_error, goalset_index

@@ -15,12 +15,20 @@ from typing import List, Optional
 
 # Third Party
 import numpy as np
-from robometrics.statistics import (
-    Statistic,
-    TrajectoryGroupMetrics,
-    TrajectoryMetrics,
-    percent_true,
-)
+
+try:
+    # Third Party
+    from robometrics.statistics import (
+        Statistic,
+        TrajectoryGroupMetrics,
+        TrajectoryMetrics,
+        percent_true,
+    )
+except ImportError:
+    raise ImportError(
+        "Benchmarking library not found, pip install "
+        + '"robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"'
+    )
 
 
 @dataclass

@@ -25,7 +25,7 @@ from curobo.types.tensor import T_BDOF, T_DOF
 from curobo.util.logger import log_error, log_info, log_warn
 from curobo.util.tensor_util import (
     check_tensor_shapes,
-    copy_if_not_none,
+    clone_if_not_none,
     copy_tensor,
     fd_tensor,
     tensor_repeat_seeds,
@@ -121,12 +121,14 @@ class JointState(State):
     def repeat_seeds(self, num_seeds: int):
         return JointState(
             position=tensor_repeat_seeds(self.position, num_seeds),
-            velocity=tensor_repeat_seeds(self.velocity, num_seeds)
-            if self.velocity is not None
-            else None,
-            acceleration=tensor_repeat_seeds(self.acceleration, num_seeds)
-            if self.acceleration is not None
-            else None,
+            velocity=(
+                tensor_repeat_seeds(self.velocity, num_seeds) if self.velocity is not None else None
+            ),
+            acceleration=(
+                tensor_repeat_seeds(self.acceleration, num_seeds)
+                if self.acceleration is not None
+                else None
+            ),
             joint_names=self.joint_names,
         )
 
@@ -153,10 +155,10 @@ class JointState(State):
         if self.joint_names is not None:
             j_names = self.joint_names.copy()
         return JointState(
-            position=copy_if_not_none(self.position),
-            velocity=copy_if_not_none(self.velocity),
-            acceleration=copy_if_not_none(self.acceleration),
-            jerk=copy_if_not_none(self.jerk),
+            position=clone_if_not_none(self.position),
+            velocity=clone_if_not_none(self.velocity),
+            acceleration=clone_if_not_none(self.acceleration),
+            jerk=clone_if_not_none(self.jerk),
             joint_names=j_names,
             tensor_args=self.tensor_args,
         )

@@ -34,3 +34,10 @@ def is_cuda_graph_available():
         log_warn("WARNING: Disabling CUDA Graph as pytorch < 1.10")
         return False
     return True
+
+
+def is_torch_compile_available():
+    if version.parse(torch.__version__) < version.parse("2.0"):
+        log_warn("WARNING: Disabling compile as pytorch < 2.0")
+        return False
+    return True

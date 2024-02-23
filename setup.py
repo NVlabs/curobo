@@ -87,4 +87,6 @@ ext_modules = [
 setuptools.setup(
     ext_modules=ext_modules,
     cmdclass={"build_ext": BuildExtension},
+    package_data={"": ["*.so"]},
+    include_package_data=True,
 )

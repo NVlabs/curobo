@@ -95,9 +95,9 @@ class LBFGSOpt(NewtonOptBase, LBFGSOptConfig):
         self.step_q_buffer[:] = 0.0
         return super().reset()
 
-    def update_nenvs(self, n_envs):
-        self.init_hessian(b=n_envs)
-        return super().update_nenvs(n_envs)
+    def update_nproblems(self, n_problems):
+        self.init_hessian(b=n_problems)
+        return super().update_nproblems(n_problems)
 
     def init_hessian(self, b=1):
         self.x_0 = torch.zeros(

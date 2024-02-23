@@ -79,7 +79,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
         self.outer_iters = math.ceil(self.n_iters / self.inner_iters)
 
         # create line search
-        self.update_nenvs(self.n_envs)
+        self.update_nproblems(self.n_problems)
 
         self.reset()
 
@@ -135,7 +135,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
         if self.store_debug:
             self.debug.append(q.view(-1, self.action_horizon, self.d_action).clone())
         with profiler.record_function("newton_base/init_opt"):
-            q = q.view(self.n_envs, self.action_horizon * self.d_action)
+            q = q.view(self.n_problems, self.action_horizon * self.d_action)
             grad_q = q.detach() * 0.0
         # run opt graph
         if not self.cu_opt_init:
@@ -150,7 +150,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
                 if check_convergence(self.best_iteration, self.current_iteration, self.last_best):
                     break
 
-        best_q = best_q.view(self.n_envs, self.action_horizon, self.d_action)
+        best_q = best_q.view(self.n_problems, self.action_horizon, self.d_action)
         return best_q
 
     def reset(self):
@@ -171,9 +171,6 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
         if self.store_debug:
             self.debug.append(self.best_q.view(-1, self.action_horizon, self.d_action).clone())
             self.debug_cost.append(self.best_cost.detach().view(-1, 1).clone())
-            # self.debug.append(q.view(-1, self.action_horizon, self.d_action).clone())
-            # self.debug_cost.append(cost_n.detach().view(-1, 1).clone())
-            # print(grad_q)
 
         return self.best_q.detach(), self.best_cost.detach(), q.detach(), grad_q.detach()
 
@@ -222,11 +219,11 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
     def _compute_cost_gradient(self, x):
         x_n = x.detach().requires_grad_(True)
         x_in = x_n.view(
-            self.n_envs * self.num_particles, self.action_horizon, self.rollout_fn.d_action
+            self.n_problems * self.num_particles, self.action_horizon, self.rollout_fn.d_action
         )
         trajectories = self.rollout_fn(x_in)  # x_n = (batch*line_search_scale) x horizon x d_action
         cost = torch.sum(
-            trajectories.costs.view(self.n_envs, self.num_particles, self.horizon),
+            trajectories.costs.view(self.n_problems, self.num_particles, self.horizon),
             dim=-1,
             keepdim=True,
         )
@@ -235,7 +232,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
         return (
             cost,
             g_x,
-        )  # cost: [n_envs, n_particles, 1], g_x: [n_envs, n_particles, horizon*d_action]
+        )  # cost: [n_problems, n_particles, 1], g_x: [n_problems, n_particles, horizon*d_action]
 
     def _wolfe_line_search(self, x, step_direction):
         # x_set = get_x_set_jit(step_direction, x, self.alpha_list, self.action_lows, self.action_highs)
@@ -455,36 +452,40 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
             mask_q = mask.unsqueeze(-1).expand(-1, self.d_opt)
             self.best_q.copy_(torch.where(mask_q, q, self.best_q))
 
-    def update_nenvs(self, n_envs):
+    def update_nproblems(self, n_problems):
         self.l_vec = torch.ones(
-            (n_envs, self.num_particles, 1),
+            (n_problems, self.num_particles, 1),
             device=self.tensor_args.device,
             dtype=self.tensor_args.dtype,
         )
         self.best_cost = (
-            torch.ones((n_envs, 1), device=self.tensor_args.device, dtype=self.tensor_args.dtype)
+            torch.ones(
+                (n_problems, 1), device=self.tensor_args.device, dtype=self.tensor_args.dtype
+            )
             * 5000000.0
         )
         self.best_q = torch.zeros(
-            (n_envs, self.d_opt), device=self.tensor_args.device, dtype=self.tensor_args.dtype
+            (n_problems, self.d_opt), device=self.tensor_args.device, dtype=self.tensor_args.dtype
         )
         self.best_grad_q = torch.zeros(
-            (n_envs, 1, self.d_opt), device=self.tensor_args.device, dtype=self.tensor_args.dtype
+            (n_problems, 1, self.d_opt),
+            device=self.tensor_args.device,
+            dtype=self.tensor_args.dtype,
         )
 
         # create list:
-        self.alpha_list = self.line_scale.repeat(n_envs, 1, 1)
+        self.alpha_list = self.line_scale.repeat(n_problems, 1, 1)
         self.zero_alpha_list = self.alpha_list[:, :, 0:1].contiguous()
         h = self.alpha_list.shape[1]
         self.c_idx = torch.arange(
-            0, n_envs * h, step=(h), device=self.tensor_args.device, dtype=torch.long
+            0, n_problems * h, step=(h), device=self.tensor_args.device, dtype=torch.long
         )
         self.best_iteration = torch.zeros(
-            (n_envs), device=self.tensor_args.device, dtype=torch.int16
+            (n_problems), device=self.tensor_args.device, dtype=torch.int16
         )
         self.current_iteration = torch.zeros((1), device=self.tensor_args.device, dtype=torch.int16)
         self.cu_opt_init = False
-        super().update_nenvs(n_envs)
+        super().update_nproblems(n_problems)
 
     def _initialize_opt_iters_graph(self, q, grad_q, shift_steps):
         if self.use_cuda_graph:

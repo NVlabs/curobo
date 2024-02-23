@@ -43,7 +43,7 @@ def generate_images():
 
         for key, v in tqdm(problems.items()):
             scene_problems = problems[key]
-            i = 0
+            i = -1
             for problem in tqdm(scene_problems, leave=False):
                 i += 1
 

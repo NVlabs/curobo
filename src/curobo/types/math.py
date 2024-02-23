@@ -19,6 +19,7 @@ import numpy as np
 import torch
 import torch.autograd.profiler as profiler
 from torch.autograd import Function
+from torch.profiler import record_function
 
 # CuRobo
 from curobo.geom.transform import (
@@ -33,7 +34,7 @@ from curobo.geom.transform import (
 from curobo.types.base import TensorDeviceType
 from curobo.util.helpers import list_idx_if_not_none
 from curobo.util.logger import log_error, log_info, log_warn
-from curobo.util.tensor_util import copy_if_not_none, copy_tensor
+from curobo.util.tensor_util import clone_if_not_none, copy_tensor
 
 # Local Folder
 from .tensor import T_BPosition, T_BQuaternion, T_BRotation
@@ -256,10 +257,10 @@ class Pose(Sequence):
 
     def clone(self):
         return Pose(
-            position=copy_if_not_none(self.position),
-            quaternion=copy_if_not_none(self.quaternion),
+            position=clone_if_not_none(self.position),
+            quaternion=clone_if_not_none(self.quaternion),
             normalize_rotation=False,
-            # rotation=copy_if_not_none(self.rotation),
+            # rotation=clone_if_not_none(self.rotation),
         )
 
     def to(self, tensor_args: TensorDeviceType):
@@ -408,6 +409,7 @@ class Pose(Sequence):
             gpt_out,
         )
 
+    @record_function("math/pose/transform_points")
     def batch_transform_points(
         self,
         points: torch.Tensor,
@@ -431,6 +433,12 @@ class Pose(Sequence):
     @property
     def shape(self):
         return self.position.shape
+
+    def compute_offset_pose(self, offset: Pose) -> Pose:
+        return self.multiply(offset)
+
+    def compute_local_pose(self, world_pose: Pose) -> Pose:
+        return self.inverse().multiply(world_pose)
 
 
 def quat_multiply(q1, q2, q_res):

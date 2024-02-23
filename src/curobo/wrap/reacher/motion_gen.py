@@ -32,6 +32,8 @@ from curobo.geom.sphere_fit import SphereFitType
 from curobo.geom.types import Cuboid, Obstacle, WorldConfig
 from curobo.graph.graph_base import GraphConfig, GraphPlanBase, GraphResult
 from curobo.graph.prm import PRMStar
+from curobo.rollout.arm_reacher import ArmReacher
+from curobo.rollout.cost.pose_cost import PoseCostMetric
 from curobo.rollout.dynamics_model.kinematic_model import KinematicModelState
 from curobo.rollout.rollout_base import Goal, RolloutBase, RolloutMetrics
 from curobo.types.base import TensorDeviceType
@@ -59,7 +61,7 @@ from curobo.wrap.reacher.types import ReacherSolveState, ReacherSolveType
 
 @dataclass
 class MotionGenConfig:
-    """Creates a configuration file for running motion generation."""
+    """Configuration dataclass for creating a motion generation instance."""
 
     #: number of IK seeds to run per query problem.
     ik_seeds: int
@@ -122,7 +124,10 @@ class MotionGenConfig:
     interpolation_dt: float = 0.01
 
     #: scale initial dt by this value to finetune trajectory optimization.
-    finetune_dt_scale: float = 0.98
+    finetune_dt_scale: float = 0.9
+
+    #: record compute ops as cuda graphs and replay recorded graphs for upto 10x faster execution.
+    use_cuda_graph: bool = True
 
     @staticmethod
     @profiler.record_function("motion_gen_config/load_from_robot_config")
@@ -146,19 +151,19 @@ class MotionGenConfig:
         graph_file: str = "graph.yml",
         particle_trajopt_file: str = "particle_trajopt.yml",
         gradient_trajopt_file: str = "gradient_trajopt.yml",
-        finetune_trajopt_file: str = "finetune_trajopt.yml",
+        finetune_trajopt_file: Optional[str] = None,
         trajopt_tsteps: int = 32,
         interpolation_steps: int = 5000,
         interpolation_dt: float = 0.02,
         interpolation_type: InterpolateType = InterpolateType.LINEAR_CUDA,
-        use_cuda_graph: Optional[bool] = None,
+        use_cuda_graph: bool = True,
         self_collision_check: bool = True,
         self_collision_opt: bool = True,
         grad_trajopt_iters: Optional[int] = None,
         trajopt_seed_ratio: Dict[str, int] = {"linear": 1.0, "bias": 0.0},
         ik_opt_iters: Optional[int] = None,
         ik_particle_opt: bool = True,
-        collision_checker_type: Optional[CollisionCheckerType] = CollisionCheckerType.PRIMITIVE,
+        collision_checker_type: Optional[CollisionCheckerType] = CollisionCheckerType.MESH,
         sync_cuda_time: Optional[bool] = None,
         trajopt_particle_opt: bool = True,
         traj_evaluator_config: Optional[TrajEvaluatorConfig] = None,
@@ -199,84 +204,86 @@ class MotionGenConfig:
         acceleration_scale: Optional[Union[List[float], float]] = None,
         jerk_scale: Optional[Union[List[float], float]] = None,
         optimize_dt: bool = True,
+        project_pose_to_goal_frame: bool = True,
     ):
-        """Load motion generation configuration from robot and world configurations.
+        """Helper function to create configuration from robot and world configuration.
 
         Args:
-            robot_cfg (Union[Union[str, Dict], RobotConfig]): robot configuration to load.
-            world_model (Optional[Union[Union[str, Dict], WorldConfig]], optional): World configuration to load. Defaults to None.
-            tensor_args (TensorDeviceType, optional): _description_. Defaults to TensorDeviceType().
-            num_ik_seeds (int, optional): _description_. Defaults to 30.
-            num_graph_seeds (int, optional): _description_. Defaults to 1.
-            num_trajopt_seeds (int, optional): _description_. Defaults to 12.
-            num_batch_ik_seeds (int, optional): _description_. Defaults to 30.
-            num_batch_trajopt_seeds (int, optional): _description_. Defaults to 1.
-            num_trajopt_noisy_seeds (int, optional): _description_. Defaults to 1.
-            position_threshold (float, optional): _description_. Defaults to 0.005.
-            rotation_threshold (float, optional): _description_. Defaults to 0.05.
-            cspace_threshold (float, optional): _description_. Defaults to 0.05.
-            world_coll_checker (_type_, optional): _description_. Defaults to None.
-            base_cfg_file (str, optional): _description_. Defaults to "base_cfg.yml".
-            particle_ik_file (str, optional): _description_. Defaults to "particle_ik.yml".
-            gradient_ik_file (str, optional): _description_. Defaults to "gradient_ik.yml".
-            graph_file (str, optional): _description_. Defaults to "graph.yml".
-            particle_trajopt_file (str, optional): _description_. Defaults to "particle_trajopt.yml".
-            gradient_trajopt_file (str, optional): _description_. Defaults to "gradient_trajopt.yml".
-            finetune_trajopt_file (str, optional): _description_. Defaults to "finetune_trajopt.yml".
-            trajopt_tsteps (int, optional): _description_. Defaults to 32.
-            interpolation_steps (int, optional): _description_. Defaults to 5000.
-            interpolation_dt (float, optional): _description_. Defaults to 0.02.
-            interpolation_type (InterpolateType, optional): _description_. Defaults to InterpolateType.LINEAR_CUDA.
-            use_cuda_graph (Optional[bool], optional): _description_. Defaults to None.
-            self_collision_check (bool, optional): _description_. Defaults to True.
-            self_collision_opt (bool, optional): _description_. Defaults to True.
-            grad_trajopt_iters (Optional[int], optional): _description_. Defaults to None.
-            trajopt_seed_ratio (_type_, optional): _description_. Defaults to {"linear": 1.0, "bias": 0.0}.
-            ik_opt_iters (Optional[int], optional): _description_. Defaults to None.
-            ik_particle_opt (bool, optional): _description_. Defaults to True.
-            collision_checker_type (Optional[CollisionCheckerType], optional): _description_. Defaults to CollisionCheckerType.PRIMITIVE.
-            sync_cuda_time (Optional[bool], optional): _description_. Defaults to None.
-            trajopt_particle_opt (bool, optional): _description_. Defaults to True.
-            traj_evaluator_config (Optional[TrajEvaluatorConfig], optional): _description_. Defaults to None.
-            traj_evaluator (Optional[TrajEvaluator], optional): _description_. Defaults to None.
-            minimize_jerk (bool, optional): _description_. Defaults to True.
-            filter_robot_command (bool, optional): _description_. Defaults to True.
-            use_gradient_descent (bool, optional): _description_. Defaults to False.
-            collision_cache (Optional[Dict[str, int]], optional): _description_. Defaults to None.
-            n_collision_envs (Optional[int], optional): _description_. Defaults to None.
-            ee_link_name (Optional[str], optional): _description_. Defaults to None.
-            use_es_ik (Optional[bool], optional): _description_. Defaults to None.
-            use_es_trajopt (Optional[bool], optional): _description_. Defaults to None.
-            es_ik_learning_rate (float, optional): _description_. Defaults to 1.0.
-            es_trajopt_learning_rate (float, optional): _description_. Defaults to 1.0.
-            use_ik_fixed_samples (Optional[bool], optional): _description_. Defaults to None.
-            use_trajopt_fixed_samples (Optional[bool], optional): _description_. Defaults to None.
-            evaluate_interpolated_trajectory (bool, optional): _description_. Defaults to True.
-            partial_ik_iters (int, optional): _description_. Defaults to 2.
-            fixed_iters_trajopt (Optional[bool], optional): _description_. Defaults to None.
-            store_ik_debug (bool, optional): _description_. Defaults to False.
-            store_trajopt_debug (bool, optional): _description_. Defaults to False.
-            graph_trajopt_iters (Optional[int], optional): _description_. Defaults to None.
-            collision_max_outside_distance (Optional[float], optional): _description_. Defaults to None.
-            collision_activation_distance (Optional[float], optional): _description_. Defaults to None.
-            trajopt_dt (Optional[float], optional): _description_. Defaults to None.
-            js_trajopt_dt (Optional[float], optional): _description_. Defaults to None.
-            js_trajopt_tsteps (Optional[int], optional): _description_. Defaults to None.
-            trim_steps (Optional[List[int]], optional): _description_. Defaults to None.
-            store_debug_in_result (bool, optional): _description_. Defaults to False.
-            finetune_trajopt_iters (Optional[int], optional): _description_. Defaults to None.
-            smooth_weight (List[float], optional): _description_. Defaults to None.
-            finetune_smooth_weight (Optional[List[float]], optional): _description_. Defaults to None.
-            state_finite_difference_mode (Optional[str], optional): _description_. Defaults to None.
-            finetune_dt_scale (float, optional): _description_. Defaults to 1.05.
-            maximum_trajectory_time (Optional[float], optional): _description_. Defaults to None.
-            maximum_trajectory_dt (float, optional): _description_. Defaults to 0.1.
-            velocity_scale (Optional[Union[List[float], float]], optional): _description_. Defaults to None.
-            acceleration_scale (Optional[Union[List[float], float]], optional): _description_. Defaults to None.
-            jerk_scale (Optional[Union[List[float], float]], optional): _description_. Defaults to None.
+            robot_cfg: Robot configuration to use for motion generation.
+            world_model: World model to use for motion generation. Use None to disable world model.
+            tensor_args: Tensor device to use for motion generation. Use to change cuda device id.
+            num_ik_seeds: Number of seeds to use in inverse kinematics (IK) optimization.
+            num_graph_seeds: Number of graph paths to use as seed in trajectory optimization.
+            num_trajopt_seeds: Number of seeds to use in trajectory optimization.
+            num_batch_ik_seeds: Number of seeds to use in batch planning modes for IK.
+            num_batch_trajopt_seeds: Number of seeds to use in batch planning modes for trajopt.
+            num_trajopt_noisy_seeds: Number of seeds to use for trajopt.
+            position_threshold: _description_
+            rotation_threshold: _description_
+            cspace_threshold: _description_
+            world_coll_checker: _description_
+            base_cfg_file: _description_
+            particle_ik_file: _description_
+            gradient_ik_file: _description_
+            graph_file: _description_
+            particle_trajopt_file: _description_
+            gradient_trajopt_file: _description_
+            finetune_trajopt_file: _description_
+            trajopt_tsteps: _description_
+            interpolation_steps: _description_
+            interpolation_dt: _description_
+            interpolation_type: _description_
+            use_cuda_graph: _description_
+            self_collision_check: _description_
+            self_collision_opt: _description_
+            grad_trajopt_iters: _description_
+            trajopt_seed_ratio: _description_
+            ik_opt_iters: _description_
+            ik_particle_opt: _description_
+            collision_checker_type: _description_
+            sync_cuda_time: _description_
+            trajopt_particle_opt: _description_
+            traj_evaluator_config: _description_
+            traj_evaluator: _description_
+            minimize_jerk: _description_
+            filter_robot_command: _description_
+            use_gradient_descent: _description_
+            collision_cache: _description_
+            n_collision_envs: _description_
+            ee_link_name: _description_
+            use_es_ik: _description_
+            use_es_trajopt: _description_
+            es_ik_learning_rate: _description_
+            es_trajopt_learning_rate: _description_
+            use_ik_fixed_samples: _description_
+            use_trajopt_fixed_samples: _description_
+            evaluate_interpolated_trajectory: _description_
+            partial_ik_iters: _description_
+            fixed_iters_trajopt: _description_
+            store_ik_debug: _description_
+            store_trajopt_debug: _description_
+            graph_trajopt_iters: _description_
+            collision_max_outside_distance: _description_
+            collision_activation_distance: _description_
+            trajopt_dt: _description_
+            js_trajopt_dt: _description_
+            js_trajopt_tsteps: _description_
+            trim_steps: _description_
+            store_debug_in_result: _description_
+            finetune_trajopt_iters: _description_
+            smooth_weight: _description_
+            finetune_smooth_weight: _description_
+            state_finite_difference_mode: _description_
+            finetune_dt_scale: _description_
+            maximum_trajectory_time: _description_
+            maximum_trajectory_dt: _description_
+            velocity_scale: _description_
+            acceleration_scale: _description_
+            jerk_scale: _description_
+            optimize_dt: _description_
 
         Returns:
-            _type_: _description_
+            _description_
         """
 
         init_warp(tensor_args=tensor_args)
@@ -306,7 +313,7 @@ class MotionGenConfig:
             and min(velocity_scale) < 1.0
             and maximum_trajectory_dt <= 0.1
         ):
-            maximum_trajectory_dt = np.sqrt(1.0 / min(velocity_scale)) * maximum_trajectory_dt
+            maximum_trajectory_dt = (1.0 / min(velocity_scale)) * maximum_trajectory_dt
 
         if traj_evaluator_config is None:
             if maximum_trajectory_dt is not None:
@@ -316,21 +323,54 @@ class MotionGenConfig:
             if acceleration_scale is not None:
                 max_dt = max_dt * (1.0 / np.sqrt(min(acceleration_scale)))
             traj_evaluator_config = TrajEvaluatorConfig(min_dt=interpolation_dt, max_dt=max_dt)
+        if maximum_trajectory_dt is not None:
+            if trajopt_dt is None:
+                trajopt_dt = maximum_trajectory_dt
+            if js_trajopt_dt is None:
+                js_trajopt_dt = maximum_trajectory_dt
         if acceleration_scale is not None and min(acceleration_scale) < 0.5:
             fixed_iters_trajopt = True
         if velocity_scale is not None and min(velocity_scale) < 0.5:
             fixed_iters_trajopt = True
+
+        if (
+            velocity_scale is not None
+            and min(velocity_scale) < 0.1
+            and finetune_trajopt_file is None
+        ):
+            log_error(
+                "velocity scale<0.1 is not supported with default finetune_trajopt.yml "
+                + "provide your own finetune_trajopt_file to override this error"
+            )
+
+        if (
+            velocity_scale is not None
+            and min(velocity_scale) <= 0.25
+            and finetune_trajopt_file is None
+        ):
+            finetune_trajopt_file = "finetune_trajopt_slow.yml"
 
         if isinstance(robot_cfg, str):
             robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_cfg))["robot_cfg"]
         elif isinstance(robot_cfg, Dict) and "robot_cfg" in robot_cfg.keys():
             robot_cfg = robot_cfg["robot_cfg"]
         if isinstance(robot_cfg, RobotConfig):
-            if ee_link_name is not None:
+            if (
+                ee_link_name is not None
+                and robot_cfg.kinematics.kinematics_config.ee_link != ee_link_name
+            ):
                 log_error("ee link cannot be changed after creating RobotConfig")
-            if acceleration_scale is not None:
+            if (
+                acceleration_scale is not None
+                and torch.max(robot_cfg.kinematics.kinematics_config.cspace.acceleration_scale)
+                != acceleration_scale
+            ):
                 log_error("acceleration_scale cannot be changed after creating RobotConfig")
-            if velocity_scale is not None:
+            if (
+                velocity_scale is not None
+                and torch.max(robot_cfg.kinematics.kinematics_config.cspace.velocity_scale)
+                != velocity_scale
+            ):
                 log_error("velocity cannot be changed after creating RobotConfig")
         else:
             if ee_link_name is not None:
@@ -395,6 +435,7 @@ class MotionGenConfig:
             use_fixed_samples=use_ik_fixed_samples,
             store_debug=store_ik_debug,
             collision_activation_distance=collision_activation_distance,
+            project_pose_to_goal_frame=project_pose_to_goal_frame,
         )
 
         ik_solver = IKSolver(ik_solver_cfg)
@@ -445,7 +486,6 @@ class MotionGenConfig:
             store_debug=store_trajopt_debug,
             collision_activation_distance=collision_activation_distance,
             trajopt_dt=trajopt_dt,
-            # trim_steps=trim_steps,
             store_debug_in_result=store_debug_in_result,
             smooth_weight=smooth_weight,
             cspace_threshold=cspace_threshold,
@@ -453,6 +493,7 @@ class MotionGenConfig:
             filter_robot_command=filter_robot_command,
             minimize_jerk=minimize_jerk,
             optimize_dt=optimize_dt,
+            project_pose_to_goal_frame=project_pose_to_goal_frame,
         )
         trajopt_solver = TrajOptSolver(trajopt_cfg)
 
@@ -496,6 +537,9 @@ class MotionGenConfig:
         )
         js_trajopt_solver = TrajOptSolver(js_trajopt_cfg)
 
+        if finetune_trajopt_file is None:
+            finetune_trajopt_file = "finetune_trajopt.yml"
+
         finetune_trajopt_cfg = TrajOptSolverConfig.load_from_robot_config(
             robot_cfg=robot_cfg,
             world_model=world_model,
@@ -531,6 +575,7 @@ class MotionGenConfig:
             use_gradient_descent=use_gradient_descent,
             filter_robot_command=filter_robot_command,
             optimize_dt=optimize_dt,
+            project_pose_to_goal_frame=project_pose_to_goal_frame,
         )
 
         finetune_trajopt_solver = TrajOptSolver(finetune_trajopt_cfg)
@@ -562,6 +607,7 @@ class MotionGenConfig:
             store_debug_in_result=store_debug_in_result,
             interpolation_dt=interpolation_dt,
             finetune_dt_scale=finetune_dt_scale,
+            use_cuda_graph=use_cuda_graph,
         )
 
 
@@ -636,6 +682,9 @@ class MotionGenResult:
     #: stores graph plan.
     graph_plan: Optional[JointState] = None
 
+    #: stores the index of the goal pose reached when planning for a goalset.
+    goalset_index: Optional[torch.Tensor] = None
+
     def clone(self):
         m = MotionGenResult(
             self.success.clone(),
@@ -657,10 +706,11 @@ class MotionGenResult:
             trajopt_attempts=self.trajopt_attempts,
             used_graph=self.used_graph,
             path_buffer_last_tstep=self.path_buffer_last_tstep,
-            interpolated_plan=self.interpolated_plan.clone()
-            if self.interpolated_plan is not None
-            else None,
+            interpolated_plan=(
+                self.interpolated_plan.clone() if self.interpolated_plan is not None else None
+            ),
             interpolation_dt=self.interpolation_dt,
+            goalset_index=self.goalset_index.clone() if self.goalset_index is not None else None,
         )
         return m
 
@@ -709,6 +759,9 @@ class MotionGenResult:
             self.cspace_error, source_result.cspace_error, idx
         )
 
+        self.goalset_index = self._check_none_and_copy_idx(
+            self.goalset_index, source_result.goalset_index, idx
+        )
         # NOTE: graph plan will have different shape based on success.
         # self.graph_plan = self._check_none_and_copy_idx(
         #    self.graph_plan, source_result.graph_plan, idx
@@ -778,9 +831,15 @@ class MotionGenPlanConfig:
     num_trajopt_seeds: Optional[int] = None
     success_ratio: float = 1
     fail_on_invalid_query: bool = True
+
     #: enables retiming trajectory optimization, useful for getting low jerk trajectories.
     enable_finetune_trajopt: bool = True
-    parallel_finetune: bool = False
+    parallel_finetune: bool = True
+
+    #: use start config as regularization
+    use_start_state_as_retract: bool = True
+
+    pose_cost_metric: Optional[PoseCostMetric] = None
 
     def __post_init__(self):
         if not self.enable_opt and not self.enable_graph:
@@ -805,6 +864,10 @@ class MotionGenPlanConfig:
             fail_on_invalid_query=self.fail_on_invalid_query,
             enable_finetune_trajopt=self.enable_finetune_trajopt,
             parallel_finetune=self.parallel_finetune,
+            use_start_state_as_retract=self.use_start_state_as_retract,
+            pose_cost_metric=(
+                None if self.pose_cost_metric is None else self.pose_cost_metric.clone()
+            ),
         )
 
 
@@ -819,6 +882,9 @@ class MotionGen(MotionGenConfig):
         self._batch_graph_search_buffer = None
         self._batch_path_buffer_last_tstep = None
         self._rollout_list = None
+        self._solver_rollout_list = None
+        self._pose_solver_rollout_list = None
+
         self._kin_list = None
         self.update_batch_size(seeds=self.trajopt_seeds)
 
@@ -1022,6 +1088,18 @@ class MotionGen(MotionGenConfig):
         link_poses: List[Pose] = None,
     ):
         start_time = time.time()
+
+        if plan_config.pose_cost_metric is not None:
+            valid_query = self.update_pose_cost_metric(
+                plan_config.pose_cost_metric, start_state, goal_pose
+            )
+            if not valid_query:
+                result = MotionGenResult(
+                    success=torch.as_tensor([False], device=self.tensor_args.device),
+                    valid_query=valid_query,
+                    status="Invalid Hold Partial Pose",
+                )
+                return result
         # if plan_config.enable_opt:
         self.update_batch_size(seeds=solve_state.num_trajopt_seeds, batch=solve_state.batch_size)
         if solve_state.batch_env:
@@ -1097,6 +1175,8 @@ class MotionGen(MotionGenConfig):
         result.trajopt_attempts = time_dict["trajopt_attempts"]
         result.attempts = n + 1
         torch.cuda.synchronize()
+        if plan_config.pose_cost_metric is not None:
+            self.update_pose_cost_metric(PoseCostMetric.reset_metric())
         result.total_time = time.time() - start_time
         return result
 
@@ -1108,6 +1188,21 @@ class MotionGen(MotionGenConfig):
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
     ):
         start_time = time.time()
+
+        if plan_config.pose_cost_metric is not None:
+            valid_query = self.update_pose_cost_metric(
+                plan_config.pose_cost_metric, start_state, goal_pose
+            )
+            if not valid_query:
+                result = MotionGenResult(
+                    success=torch.as_tensor(
+                        [False for _ in solve_state.batch_size],
+                        device=self.motion_gen.tensor_args.device,
+                    ),
+                    valid_query=valid_query,
+                    status="Invalid Hold Partial Pose",
+                )
+                return result
 
         if solve_state.batch_env:
             if solve_state.batch_size > self.world_coll_checker.n_envs:
@@ -1144,9 +1239,6 @@ class MotionGen(MotionGenConfig):
                 solve_state, start_state, goal_pose, plan_config
             )
 
-            # torch.cuda.synchronize()
-            # print("Success: ",torch.count_nonzero(result.success))
-            # print(result.success)
             time_dict["solve_time"] += result.solve_time
             time_dict["ik_time"] += result.ik_time
 
@@ -1161,7 +1253,6 @@ class MotionGen(MotionGenConfig):
             else:
                 # get success idx:
                 idx = torch.nonzero(result.success).reshape(-1)
-                # print(idx, result.optimized_plan.shape, best_result.optimized_plan.shape)
                 if len(idx) > 0:
                     best_result.copy_idx(idx, result)
 
@@ -1208,6 +1299,8 @@ class MotionGen(MotionGenConfig):
         best_result.trajopt_attempts = time_dict["trajopt_attempts"]
         best_result.attempts = n + 1
         torch.cuda.synchronize()
+        if plan_config.pose_cost_metric is not None:
+            self.update_pose_cost_metric(PoseCostMetric.reset_metric())
         best_result.total_time = time.time() - start_time
         return best_result
 
@@ -1236,6 +1329,7 @@ class MotionGen(MotionGenConfig):
         start_state: JointState,
         goal_pose: Pose,
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
+        link_poses: List[Pose] = None,
     ) -> MotionGenResult:
         solve_state = self._get_solve_state(
             ReacherSolveType.GOALSET, plan_config, goal_pose, start_state
@@ -1246,6 +1340,7 @@ class MotionGen(MotionGenConfig):
             start_state,
             goal_pose,
             plan_config,
+            link_poses=link_poses,
         )
         return result
 
@@ -1393,8 +1488,6 @@ class MotionGen(MotionGenConfig):
 
                 result.used_graph = True
                 if plan_config.enable_opt:
-                    # print(result.graph_plan.position.shape, interpolation_steps,
-                    # graph_result.path_buffer_last_tstep)
                     trajopt_seed = (
                         result.graph_plan.position.view(
                             1,  # solve_state.batch_size,
@@ -1451,16 +1544,19 @@ class MotionGen(MotionGenConfig):
                 if plan_config.need_graph_success:
                     return result
 
-        # do trajopt:
+        # do trajopt::
 
         if plan_config.enable_opt:
             with profiler.record_function("motion_gen/setup_trajopt_seeds"):
                 self._trajopt_goal_config[:, :ik_success] = goal_config
-
+                retract_config = None
+                if plan_config.use_start_state_as_retract:
+                    retract_config = start_state.position.clone()
                 goal = Goal(
                     goal_pose=goal_pose,
                     current_state=start_state,
                     links_goal_pose=link_poses,
+                    retract_state=retract_config,
                 )
 
                 if (
@@ -1498,9 +1594,9 @@ class MotionGen(MotionGenConfig):
                                 device=self.tensor_args.device,
                                 dtype=torch.bool,
                             )
-                            trajopt_seed_success_new[
-                                0, : trajopt_seed_success.shape[1]
-                            ] = trajopt_seed_success
+                            trajopt_seed_success_new[0, : trajopt_seed_success.shape[1]] = (
+                                trajopt_seed_success
+                            )
                             trajopt_seed_success = trajopt_seed_success_new
                     # create seeds here:
                     trajopt_seed_traj = self.trajopt_solver.get_seed_set(
@@ -1527,11 +1623,11 @@ class MotionGen(MotionGenConfig):
                     trajopt_seed_traj,
                     num_seeds_override=solve_state.num_trajopt_seeds * self.noisy_trajopt_seeds,
                     newton_iters=trajopt_newton_iters,
-                    return_all_solutions=plan_config.parallel_finetune,
+                    return_all_solutions=plan_config.parallel_finetune
+                    and plan_config.enable_finetune_trajopt,
                 )
             if plan_config.enable_finetune_trajopt:
                 self.trajopt_solver.interpolation_type = og_value
-                # self.trajopt_solver.compute_metrics(not og_evaluate, og_evaluate)
             if self.store_debug_in_result:
                 result.debug_info["trajopt_result"] = traj_result
             # run finetune
@@ -1578,15 +1674,13 @@ class MotionGen(MotionGenConfig):
             result.interpolated_plan = traj_result.interpolated_solution.trim_trajectory(
                 0, traj_result.path_buffer_last_tstep[0]
             )
-            # print(ik_result.position_error[ik_result.success] * 1000.0)
-            # print(traj_result.position_error * 1000.0)
-            # exit()
             result.interpolation_dt = self.trajopt_solver.interpolation_dt
             result.path_buffer_last_tstep = traj_result.path_buffer_last_tstep
             result.position_error = traj_result.position_error
             result.rotation_error = traj_result.rotation_error
             result.optimized_dt = traj_result.optimized_dt
             result.optimized_plan = traj_result.solution
+            result.goalset_index = traj_result.goalset_index
         return result
 
     def _plan_js_from_solve_state(
@@ -1705,9 +1799,9 @@ class MotionGen(MotionGenConfig):
                                 device=self.tensor_args.device,
                                 dtype=torch.bool,
                             )
-                            trajopt_seed_success_new[
-                                0, : trajopt_seed_success.shape[1]
-                            ] = trajopt_seed_success
+                            trajopt_seed_success_new[0, : trajopt_seed_success.shape[1]] = (
+                                trajopt_seed_success
+                            )
                             trajopt_seed_success = trajopt_seed_success_new
                     # create seeds here:
                     trajopt_seed_traj = self.js_trajopt_solver.get_seed_set(
@@ -1784,14 +1878,13 @@ class MotionGen(MotionGenConfig):
             result.interpolated_plan = traj_result.interpolated_solution.trim_trajectory(
                 0, traj_result.path_buffer_last_tstep[0]
             )
-            # print(ik_result.position_error[ik_result.success] * 1000.0)
-            # print(traj_result.position_error * 1000.0)
-            # exit()
+
             result.interpolation_dt = self.trajopt_solver.interpolation_dt
             result.path_buffer_last_tstep = traj_result.path_buffer_last_tstep
             result.cspace_error = traj_result.cspace_error
             result.optimized_dt = traj_result.optimized_dt
             result.optimized_plan = traj_result.solution
+            result.goalset_index = traj_result.goalset_index
 
         return result
 
@@ -1809,7 +1902,6 @@ class MotionGen(MotionGenConfig):
         graph_success = 0
 
         # plan ik:
-
         ik_result = self._solve_ik_from_solve_state(
             goal_pose,
             solve_state,
@@ -1829,6 +1921,7 @@ class MotionGen(MotionGenConfig):
             ik_time=ik_result.solve_time,
             solve_time=ik_result.solve_time,
             debug_info={},
+            # goalset_index=ik_result.goalset_index,
         )
 
         ik_success = torch.count_nonzero(ik_result.success)
@@ -1883,7 +1976,7 @@ class MotionGen(MotionGenConfig):
                         dtype=self.tensor_args.dtype,
                     )
                     trajopt_seed_traj[0, :, :interpolation_steps, :] = trajopt_seed
-
+                    trajopt_seed_traj = trajopt_seed_traj.transpose(0, 1).contiguous()
                     trajopt_seed_success = ik_result.success.clone()
                     trajopt_seed_success[ik_result.success] = graph_result.success
 
@@ -1910,9 +2003,9 @@ class MotionGen(MotionGenConfig):
                     result.interpolated_plan = self._batch_graph_search_buffer
                     g_dim = g_dim.cpu().squeeze().tolist()
                     for x, x_val in enumerate(g_dim):
-                        self._batch_path_buffer_last_tstep[
-                            x_val
-                        ] = graph_result.path_buffer_last_tstep[x]
+                        self._batch_path_buffer_last_tstep[x_val] = (
+                            graph_result.path_buffer_last_tstep[x]
+                        )
                     result.path_buffer_last_tstep = self._batch_path_buffer_last_tstep
                     result.optimized_plan = result.interpolated_plan
                     result.optimized_dt = torch.as_tensor(
@@ -1948,16 +2041,16 @@ class MotionGen(MotionGenConfig):
                 current_state=start_state,
             )
             # generate seeds:
-            if trajopt_seed_traj is None or graph_success < solve_state.num_trajopt_seeds:
+            if trajopt_seed_traj is None or (
+                plan_config.enable_graph and graph_success < solve_state.batch_size
+            ):
                 seed_goal = Goal(
                     goal_pose=goal_pose.repeat_seeds(solve_state.num_trajopt_seeds),
                     current_state=start_state.repeat_seeds(solve_state.num_trajopt_seeds),
                     goal_state=JointState.from_position(goal_config.view(-1, self._dof)),
                 )
                 if trajopt_seed_traj is not None:
-                    trajopt_seed_traj = (
-                        trajopt_seed_traj.transpose(0, 1).contiguous(),
-                    )  # batch, num_seeds, h, dof
+                    trajopt_seed_traj = trajopt_seed_traj.transpose(0, 1).contiguous()
 
                 # create seeds here:
                 trajopt_seed_traj = self.trajopt_solver.get_seed_set(
@@ -1976,6 +2069,7 @@ class MotionGen(MotionGenConfig):
             if plan_config.enable_finetune_trajopt:
                 og_value = self.trajopt_solver.interpolation_type
                 self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
+
             traj_result = self._solve_trajopt_from_solve_state(
                 goal,
                 solve_state,
@@ -2005,6 +2099,7 @@ class MotionGen(MotionGenConfig):
                         self.trajopt_solver.interpolation_dt,
                     )
                     self.finetune_trajopt_solver.update_solver_dt(scaled_dt.item())
+
                     traj_result = self._solve_trajopt_from_solve_state(
                         goal,
                         solve_state,
@@ -2026,6 +2121,7 @@ class MotionGen(MotionGenConfig):
             result.position_error = traj_result.position_error
             result.rotation_error = traj_result.rotation_error
             result.cspace_error = traj_result.cspace_error
+            result.goalset_index = traj_result.goalset_index
             result.path_buffer_last_tstep = traj_result.path_buffer_last_tstep
             result.optimized_plan = traj_result.solution
             result.optimized_dt = traj_result.optimized_dt
@@ -2034,7 +2130,6 @@ class MotionGen(MotionGenConfig):
                 result.success[:] = False
             if self.store_debug_in_result:
                 result.debug_info = {"trajopt_result": traj_result}
-
         return result
 
     def compute_kinematics(self, state: JointState) -> KinematicModelState:
@@ -2054,7 +2149,7 @@ class MotionGen(MotionGenConfig):
         return metrics
 
     def update_world(self, world: WorldConfig):
-        self.world_coll_checker.load_collision_model(world)
+        self.world_coll_checker.load_collision_model(world, fix_cache_reference=self.use_cuda_graph)
         self.graph_planner.reset_graph()
         return True
 
@@ -2081,9 +2176,32 @@ class MotionGen(MotionGenConfig):
         batch: Optional[int] = None,
         warmup_js_trajopt: bool = True,
         batch_env_mode: bool = False,
-        parallel_finetune: bool = False,
+        parallel_finetune: bool = True,
+        n_goalset: int = -1,
+        warmup_joint_index: int = 0,
+        warmup_joint_delta: float = 0.1,
     ):
         log_info("Warmup")
+        if warmup_js_trajopt:
+            start_state = JointState.from_position(
+                self.rollout_fn.dynamics_model.retract_config.view(1, -1).clone(),
+                joint_names=self.rollout_fn.joint_names,
+            )
+            # warm up js_trajopt:
+            goal_state = start_state.clone()
+            goal_state.position[..., warmup_joint_index] += warmup_joint_delta
+            for _ in range(2):
+                self.plan_single_js(start_state, goal_state, MotionGenPlanConfig(max_attempts=1))
+        if enable_graph:
+            start_state = JointState.from_position(
+                self.rollout_fn.dynamics_model.retract_config.view(1, -1).clone(),
+                joint_names=self.rollout_fn.joint_names,
+            )
+            start_state.position[..., warmup_joint_index] += warmup_joint_delta
+            self.graph_planner.warmup(
+                self.rollout_fn.dynamics_model.retract_config.view(1, -1).clone(),
+                start_state.position,
+            )
 
         if batch is None:
             start_state = JointState.from_position(
@@ -2092,25 +2210,21 @@ class MotionGen(MotionGenConfig):
             )
             state = self.rollout_fn.compute_kinematics(start_state)
             link_poses = state.link_pose
-            retract_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
-            start_state.position += 0.1
 
-            for _ in range(2):
-                self.plan_single(
-                    start_state,
-                    retract_pose,
-                    MotionGenPlanConfig(
-                        max_attempts=1,
-                        enable_finetune_trajopt=True,
-                        parallel_finetune=parallel_finetune,
-                    ),
-                    link_poses=link_poses,
-                )
-            if enable_graph:
-                self.graph_planner.warmup(
-                    self.rollout_fn.dynamics_model.retract_config.view(1, -1).clone(),
-                    start_state.position,
-                )
+            if n_goalset == -1:
+                retract_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
+                start_state.position[..., warmup_joint_index] += warmup_joint_delta
+                for _ in range(2):
+                    self.plan_single(
+                        start_state,
+                        retract_pose,
+                        MotionGenPlanConfig(
+                            max_attempts=1,
+                            enable_finetune_trajopt=True,
+                            parallel_finetune=parallel_finetune,
+                        ),
+                        link_poses=link_poses,
+                    )
 
                 self.plan_single(
                     start_state,
@@ -2123,14 +2237,35 @@ class MotionGen(MotionGenConfig):
                     ),
                     link_poses=link_poses,
                 )
-            if warmup_js_trajopt:
-                # warm up js_trajopt:
-                goal_state = start_state.clone()
-                goal_state.position += 0.2
+            else:
+                retract_pose = Pose(
+                    state.ee_pos_seq.repeat(n_goalset, 1).view(1, n_goalset, 3),
+                    quaternion=state.ee_quat_seq.repeat(n_goalset, 1).view(1, n_goalset, 4),
+                )
+                start_state.position[..., warmup_joint_index] += warmup_joint_delta
                 for _ in range(2):
-                    self.plan_single_js(
-                        start_state, goal_state, MotionGenPlanConfig(max_attempts=1)
+                    self.plan_goalset(
+                        start_state,
+                        retract_pose,
+                        MotionGenPlanConfig(
+                            max_attempts=1,
+                            enable_finetune_trajopt=True,
+                            parallel_finetune=parallel_finetune,
+                        ),
+                        link_poses=link_poses,
                     )
+
+                self.plan_goalset(
+                    start_state,
+                    retract_pose,
+                    MotionGenPlanConfig(
+                        max_attempts=1,
+                        enable_finetune_trajopt=True,
+                        enable_graph=enable_graph,
+                        parallel_finetune=parallel_finetune,
+                    ),
+                    link_poses=link_poses,
+                )
 
         else:
             start_state = JointState.from_position(
@@ -2138,26 +2273,64 @@ class MotionGen(MotionGenConfig):
                 joint_names=self.rollout_fn.joint_names,
             ).repeat_seeds(batch)
             state = self.rollout_fn.compute_kinematics(start_state)
-            retract_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
-            start_state.position += 0.1
 
-            for _ in range(3):
-                if batch_env_mode:
-                    self.plan_batch_env(
-                        start_state,
-                        retract_pose,
-                        MotionGenPlanConfig(
-                            max_attempts=1, enable_finetune_trajopt=True, enable_graph=enable_graph
-                        ),
-                    )
-                else:
-                    self.plan_batch(
-                        start_state,
-                        retract_pose,
-                        MotionGenPlanConfig(
-                            max_attempts=1, enable_finetune_trajopt=True, enable_graph=enable_graph
-                        ),
-                    )
+            if n_goalset == -1:
+                retract_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
+                start_state.position[..., warmup_joint_index] += warmup_joint_delta
+
+                for _ in range(2):
+                    if batch_env_mode:
+                        self.plan_batch_env(
+                            start_state,
+                            retract_pose,
+                            MotionGenPlanConfig(
+                                max_attempts=10,
+                                enable_finetune_trajopt=True,
+                                enable_graph=enable_graph,
+                            ),
+                        )
+                    else:
+                        self.plan_batch(
+                            start_state,
+                            retract_pose,
+                            MotionGenPlanConfig(
+                                max_attempts=10,
+                                enable_finetune_trajopt=True,
+                                enable_graph=enable_graph,
+                            ),
+                        )
+            else:
+                retract_pose = Pose(
+                    state.ee_pos_seq.view(batch, 1, 3).repeat(1, n_goalset, 1).contiguous(),
+                    quaternion=state.ee_quat_seq.view(batch, 1, 4)
+                    .repeat(1, n_goalset, 1)
+                    .contiguous(),
+                )
+                start_state.position[..., warmup_joint_index] += warmup_joint_delta
+                for _ in range(2):
+                    if batch_env_mode:
+                        self.plan_batch_env_goalset(
+                            start_state,
+                            retract_pose,
+                            MotionGenPlanConfig(
+                                max_attempts=10,
+                                enable_finetune_trajopt=True,
+                                enable_graph=enable_graph,
+                                enable_graph_attempt=20,
+                            ),
+                        )
+                    else:
+                        self.plan_batch_goalset(
+                            start_state,
+                            retract_pose,
+                            MotionGenPlanConfig(
+                                max_attempts=10,
+                                enable_finetune_trajopt=True,
+                                enable_graph=enable_graph,
+                                enable_graph_attempt=20,
+                            ),
+                        )
+
         log_info("Warmup complete")
         return True
 
@@ -2200,6 +2373,7 @@ class MotionGen(MotionGenConfig):
                 break
 
         result.solve_time = time_dict["trajopt_time"]
+        result.total_time = result.solve_time
         if self.store_debug_in_result:
             result.debug_info = {"trajopt_result": traj_result}
 
@@ -2302,14 +2476,91 @@ class MotionGen(MotionGenConfig):
         opt_js = in_js.get_ordered_joint_state(opt_jnames)
         return opt_js
 
+    def update_pose_cost_metric(
+        self,
+        metric: PoseCostMetric,
+        start_state: Optional[JointState] = None,
+        goal_pose: Optional[Pose] = None,
+    ) -> bool:
+        # check if constraint is valid:
+        if metric.hold_partial_pose and metric.offset_tstep_fraction < 0.0:
+            start_pose = self.compute_kinematics(start_state).ee_pose.clone()
+            if self.project_pose_to_goal_frame:
+                # project start pose to goal frame:
+                projected_pose = goal_pose.compute_local_pose(start_pose)
+                if torch.count_nonzero(metric.hold_vec_weight[:3] > 0.0) > 0:
+                    # angular distance should be zero:
+                    distance = projected_pose.angular_distance(
+                        Pose.from_list([0, 0, 0, 1, 0, 0, 0], tensor_args=self.tensor_args)
+                    )
+                    if torch.max(distance) > 0.05:
+                        log_warn(
+                            "Partial orientation between start and goal is not equal"
+                            + str(distance)
+                        )
+                        return False
+
+                # check linear distance:
+                if (
+                    torch.count_nonzero(
+                        torch.abs(projected_pose.position[..., metric.hold_vec_weight[3:] > 0.0])
+                        > 0.005
+                    )
+                    > 0
+                ):
+                    log_warn("Partial position between start and goal is not equal.")
+                    return False
+            else:
+                # project start pose to goal frame:
+                projected_position = goal_pose.position - start_pose.position
+                # check linear distance:
+                if (
+                    torch.count_nonzero(
+                        torch.abs(projected_position[..., metric.hold_vec_weight[3:] > 0.0]) > 0.005
+                    )
+                    > 0
+                ):
+                    log_warn("Partial position between start and goal is not equal.")
+                    return False
+
+        rollouts = self.get_all_pose_solver_rollout_instances()
+        [
+            rollout.update_pose_cost_metric(metric)
+            for rollout in rollouts
+            if isinstance(rollout, ArmReacher)
+        ]
+        torch.cuda.synchronize()
+        return True
+
     def get_all_rollout_instances(self) -> List[RolloutBase]:
         if self._rollout_list is None:
             self._rollout_list = (
                 self.ik_solver.get_all_rollout_instances()
                 + self.graph_planner.get_all_rollout_instances()
                 + self.trajopt_solver.get_all_rollout_instances()
+                + self.finetune_trajopt_solver.get_all_rollout_instances()
+                + self.js_trajopt_solver.get_all_rollout_instances()
             )
         return self._rollout_list
+
+    def get_all_solver_rollout_instances(self) -> List[RolloutBase]:
+        if self._solver_rollout_list is None:
+            self._solver_rollout_list = (
+                self.ik_solver.solver.get_all_rollout_instances()
+                + self.trajopt_solver.solver.get_all_rollout_instances()
+                + self.finetune_trajopt_solver.solver.get_all_rollout_instances()
+                + self.js_trajopt_solver.solver.get_all_rollout_instances()
+            )
+        return self._solver_rollout_list
+
+    def get_all_pose_solver_rollout_instances(self) -> List[RolloutBase]:
+        if self._pose_solver_rollout_list is None:
+            self._pose_solver_rollout_list = (
+                self.ik_solver.solver.get_all_rollout_instances()
+                + self.trajopt_solver.solver.get_all_rollout_instances()
+                + self.finetune_trajopt_solver.solver.get_all_rollout_instances()
+            )
+        return self._pose_solver_rollout_list
 
     def get_all_kinematics_instances(self) -> List[CudaRobotModel]:
         if self._kin_list is None:
@@ -2375,6 +2626,65 @@ class MotionGen(MotionGenConfig):
             self.world_coll_checker.enable_obstacle(enable=False, name=x)
             if remove_obstacles_from_world_config:
                 self.world_model.remove_obstacle(x)
+        log_info("MG: Computed spheres for attach objects to robot")
+
+        spheres = self.tensor_args.to_device(torch.as_tensor(sph_list))
+
+        if spheres.shape[0] > max_spheres:
+            spheres = spheres[: spheres.shape[0]]
+        sphere_tensor[: spheres.shape[0], :] = spheres.contiguous()
+
+        self.attach_spheres_to_robot(sphere_tensor=sphere_tensor, link_name=link_name)
+
+    def attach_external_objects_to_robot(
+        self,
+        joint_state: JointState,
+        external_objects: List[Obstacle],
+        surface_sphere_radius: float = 0.001,
+        link_name: str = "attached_object",
+        sphere_fit_type: SphereFitType = SphereFitType.VOXEL_VOLUME_SAMPLE_SURFACE,
+        voxelize_method: str = "ray",
+        world_objects_pose_offset: Optional[Pose] = None,
+    ) -> None:
+        """Attach an object from world to robot's link.
+
+        Args:
+            surface_sphere_radius: _description_. Defaults to None.
+            sphere_tensor: _description_. Defaults to None.
+            link_name: _description_. Defaults to "attached_object".
+        """
+        log_info("MG: Attach objects to robot")
+        if len(external_objects) == 0:
+            log_error("no object in external_objects")
+        kin_state = self.compute_kinematics(joint_state)
+        ee_pose = kin_state.ee_pose  # w_T_ee
+        if world_objects_pose_offset is not None:
+            # add offset from ee:
+            ee_pose = world_objects_pose_offset.inverse().multiply(ee_pose)
+            # new ee_pose:
+            # w_T_ee = offset_T_w * w_T_ee
+            # ee_T_w
+        ee_pose = ee_pose.inverse()  # ee_T_w to multiply all objects later
+        max_spheres = self.robot_cfg.kinematics.kinematics_config.get_number_of_spheres(link_name)
+        object_names = [x.name for x in external_objects]
+        n_spheres = int(max_spheres / len(object_names))
+        sphere_tensor = torch.zeros((max_spheres, 4))
+        sphere_tensor[:, 3] = -10.0
+        sph_list = []
+        if n_spheres == 0:
+            log_error("MG: No spheres found")
+        for i, x in enumerate(object_names):
+            obs = external_objects[i]
+            sph = obs.get_bounding_spheres(
+                n_spheres,
+                surface_sphere_radius,
+                pre_transform_pose=ee_pose,
+                tensor_args=self.tensor_args,
+                fit_type=sphere_fit_type,
+                voxelize_method=voxelize_method,
+            )
+            sph_list += [s.position + [s.radius] for s in sph]
+
         log_info("MG: Computed spheres for attach objects to robot")
 
         spheres = self.tensor_args.to_device(torch.as_tensor(sph_list))
@@ -2616,6 +2926,10 @@ class MotionGen(MotionGenConfig):
     def world_collision(self) -> WorldCollision:
         return self.world_coll_checker
 
+    @property
+    def project_pose_to_goal_frame(self) -> bool:
+        return self.trajopt_solver.rollout_fn.goal_cost.project_distance
+
     def update_interpolation_type(
         self,
         interpolation_type: InterpolateType,
@@ -2629,7 +2943,22 @@ class MotionGen(MotionGenConfig):
             self.finetune_trajopt_solver.interpolation_type = interpolation_type
             self.js_trajopt_solver.interpolation_type = interpolation_type
 
-    def update_locked_state(js: JointState):
-        # update the joint values of locked joints:
+    def update_locked_joints(
+        self, lock_joints: Dict[str, float], robot_config_dict: Union[str, Dict[Any]]
+    ):
+        if isinstance(robot_config_dict, str):
+            robot_config_dict = load_yaml(join_path(get_robot_configs_path(), robot_config_dict))[
+                "robot_cfg"
+            ]
+        if "robot_cfg" in robot_config_dict:
+            robot_config_dict = robot_config_dict["robot_cfg"]
+        robot_config_dict["kinematics"]["lock_joints"] = lock_joints
+        robot_cfg = RobotConfig.from_dict(robot_config_dict, self.tensor_args)
 
-        pass
+        # make sure the new robot config and current have the same joint limits:
+        new_joint_limits = robot_cfg.kinematics.get_joint_limits()
+        current_joint_limits = self.robot_cfg.kinematics.get_joint_limits()
+        # if new_joint_limits != current_joint_limits:
+        #    log_error("Joint limits are different, reinstance motion gen")
+
+        self.kinematics.update_kinematics_config(robot_cfg.kinematics.kinematics_config)

@@ -73,8 +73,8 @@ def load_curobo(
         position_threshold=0.005,
         rotation_threshold=0.05,
         num_ik_seeds=30,
-        num_trajopt_seeds=10,
-        interpolation_dt=0.02,
+        num_trajopt_seeds=12,
+        interpolation_dt=0.025,
         # grad_trajopt_iters=200,
         store_ik_debug=enable_log,
         store_trajopt_debug=enable_log,
@@ -91,7 +91,7 @@ def benchmark_mb(args):
         spheres = load_yaml(join_path(get_robot_configs_path(), spheres))["collision_spheres"]
 
     plan_config = MotionGenPlanConfig(
-        max_attempts=2,
+        max_attempts=1,
         enable_graph_attempt=3,
         enable_finetune_trajopt=True,
         partial_ik_opt=False,
@@ -130,11 +130,18 @@ def benchmark_mb(args):
                     world = WorldConfig.from_dict(problem["obstacles"]).get_obb_world()
 
                 mg.update_world(world)
+                start_state = JointState.from_position(mg.tensor_args.to_device([q_start]))
+
+                result = mg.plan_single(
+                    start_state,
+                    Pose.from_list(pose),
+                    plan_config,
+                )
+                print(result.total_time, result.solve_time)
                 # continue
                 # load obstacles
 
                 # run planner
-                start_state = JointState.from_position(mg.tensor_args.to_device([q_start]))
                 with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
                     result = mg.plan_single(
                         start_state,

@@ -23,7 +23,7 @@ from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.state import JointState
 from curobo.types.tensor import T_DOF
-from curobo.util.tensor_util import copy_if_not_none
+from curobo.util.tensor_util import clone_if_not_none, copy_if_not_none
 
 
 class JointType(Enum):
@@ -75,20 +75,28 @@ class JointLimits:
             self.tensor_args,
         )
 
+    def copy_(self, new_jl: JointLimits):
+        self.joint_names = new_jl.joint_names.copy()
+        self.position.copy_(new_jl.position)
+        self.velocity.copy_(new_jl.velocity)
+        self.acceleration.copy_(new_jl.acceleration)
+        self.effort = copy_if_not_none(new_jl.effort, self.effort)
+        return self
+
 
 @dataclass
 class CSpaceConfig:
     joint_names: List[str]
     retract_config: Optional[T_DOF] = None
     cspace_distance_weight: Optional[T_DOF] = None
-    null_space_weight: Optional[T_DOF] = None  # List[float]
+    null_space_weight: Optional[T_DOF] = None
     tensor_args: TensorDeviceType = TensorDeviceType()
     max_acceleration: Union[float, List[float]] = 10.0
     max_jerk: Union[float, List[float]] = 500.0
     velocity_scale: Union[float, List[float]] = 1.0
     acceleration_scale: Union[float, List[float]] = 1.0
     jerk_scale: Union[float, List[float]] = 1.0
-    position_limit_clip: Union[float, List[float]] = 0.01
+    position_limit_clip: Union[float, List[float]] = 0.0
 
     def __post_init__(self):
         if self.retract_config is not None:
@@ -147,12 +155,31 @@ class CSpaceConfig:
         joint_names = [self.joint_names[n] for n in new_index]
         self.joint_names = joint_names
 
+    def copy_(self, new_config: CSpaceConfig):
+        self.joint_names = new_config.joint_names.copy()
+        self.retract_config = copy_if_not_none(new_config.retract_config, self.retract_config)
+        self.null_space_weight = copy_if_not_none(
+            new_config.null_space_weight, self.null_space_weight
+        )
+        self.cspace_distance_weight = copy_if_not_none(
+            new_config.cspace_distance_weight, self.cspace_distance_weight
+        )
+        self.tensor_args = self.tensor_args
+        self.max_jerk = copy_if_not_none(new_config.max_jerk, self.max_jerk)
+        self.max_acceleration = copy_if_not_none(new_config.max_acceleration, self.max_acceleration)
+        self.velocity_scale = copy_if_not_none(new_config.velocity_scale, self.velocity_scale)
+        self.acceleration_scale = copy_if_not_none(
+            new_config.acceleration_scale, self.acceleration_scale
+        )
+        self.jerk_scale = copy_if_not_none(new_config.jerk_scale, self.jerk_scale)
+        return self
+
     def clone(self) -> CSpaceConfig:
         return CSpaceConfig(
             joint_names=self.joint_names.copy(),
-            retract_config=copy_if_not_none(self.retract_config),
-            null_space_weight=copy_if_not_none(self.null_space_weight),
-            cspace_distance_weight=copy_if_not_none(self.cspace_distance_weight),
+            retract_config=clone_if_not_none(self.retract_config),
+            null_space_weight=clone_if_not_none(self.null_space_weight),
+            cspace_distance_weight=clone_if_not_none(self.cspace_distance_weight),
             tensor_args=self.tensor_args,
             max_jerk=self.max_jerk.clone(),
             max_acceleration=self.max_acceleration.clone(),
@@ -215,12 +242,48 @@ class KinematicsTensorConfig:
     cspace: Optional[CSpaceConfig] = None
     base_link: str = "base_link"
     ee_link: str = "ee_link"
+    reference_link_spheres: Optional[torch.Tensor] = None
 
     def __post_init__(self):
         if self.cspace is None and self.joint_limits is not None:
             self.load_cspace_cfg_from_kinematics()
         if self.joint_limits is not None and self.cspace is not None:
             self.joint_limits = self.cspace.scale_joint_limits(self.joint_limits)
+        if self.link_spheres is not None and self.reference_link_spheres is None:
+            self.reference_link_spheres = self.link_spheres.clone()
+
+    def copy_(self, new_config: KinematicsTensorConfig):
+        self.fixed_transforms.copy_(new_config.fixed_transforms)
+        self.link_map.copy_(new_config.link_map)
+        self.joint_map.copy_(new_config.joint_map)
+        self.joint_map_type.copy_(new_config.joint_map_type)
+        self.store_link_map.copy_(new_config.store_link_map)
+        self.link_chain_map.copy_(new_config.link_chain_map)
+        self.joint_limits.copy_(new_config.joint_limits)
+        if new_config.link_spheres is not None and self.link_spheres is not None:
+            self.link_spheres.copy_(new_config.link_spheres)
+        if new_config.link_sphere_idx_map is not None and self.link_sphere_idx_map is not None:
+            self.link_sphere_idx_map.copy_(new_config.link_sphere_idx_map)
+        if new_config.link_name_to_idx_map is not None and self.link_name_to_idx_map is not None:
+            self.link_name_to_idx_map = new_config.link_name_to_idx_map.copy()
+        if (
+            new_config.reference_link_spheres is not None
+            and self.reference_link_spheres is not None
+        ):
+            self.reference_link_spheres.copy_(new_config.reference_link_spheres)
+        self.base_link = new_config.base_link
+        self.ee_idx = new_config.ee_idx
+        self.ee_link = new_config.ee_link
+        self.debug = new_config.debug
+        self.cspace.copy_(new_config.cspace)
+        self.n_dof = new_config.n_dof
+        self.non_fixed_joint_names = new_config.non_fixed_joint_names
+        self.joint_names = new_config.joint_names
+        self.link_names = new_config.link_names
+        self.mesh_link_names = new_config.mesh_link_names
+        self.total_spheres = new_config.total_spheres
+
+        return self
 
     def load_cspace_cfg_from_kinematics(self):
         retract_config = (
@@ -269,6 +332,13 @@ class KinematicsTensorConfig:
     ):
         link_sphere_index = self.get_sphere_index_from_link_name(link_name)
         return self.link_spheres[link_sphere_index, :]
+
+    def get_reference_link_spheres(
+        self,
+        link_name: str,
+    ):
+        link_sphere_index = self.get_sphere_index_from_link_name(link_name)
+        return self.reference_link_spheres[link_sphere_index, :]
 
     def attach_object(
         self,
@@ -331,6 +401,19 @@ class KinematicsTensorConfig:
             link_name: name of link
         """
         return self.get_link_spheres(link_name).shape[0]
+
+    def disable_link_spheres(self, link_name: str):
+        if link_name not in self.link_name_to_idx_map.keys():
+            raise ValueError(link_name + " not found in spheres")
+        curr_spheres = self.get_link_spheres(link_name)
+        curr_spheres[:, 3] = -100.0
+        self.update_link_spheres(link_name, curr_spheres)
+
+    def enable_link_spheres(self, link_name: str):
+        if link_name not in self.link_name_to_idx_map.keys():
+            raise ValueError(link_name + " not found in spheres")
+        curr_spheres = self.get_reference_link_spheres(link_name)
+        self.update_link_spheres(link_name, curr_spheres)
 
 
 @dataclass

@@ -13,7 +13,7 @@ from __future__ import annotations
 # Standard Library
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 # CuRobo
 from curobo.rollout.rollout_base import Goal
@@ -126,16 +126,26 @@ class ReacherSolveState:
         if (
             current_solve_state is None
             or current_goal_buffer is None
-            or current_solve_state != solve_state
             or (current_goal_buffer.retract_state is None and retract_config is not None)
             or (current_goal_buffer.goal_state is None and goal_state is not None)
             or (current_goal_buffer.links_goal_pose is None and link_poses is not None)
         ):
+            update_reference = True
+
+        elif current_solve_state != solve_state:
+            new_goal_pose = get_padded_goalset(
+                solve_state, current_solve_state, current_goal_buffer, goal_pose
+            )
+            if new_goal_pose is not None:
+                goal_pose = new_goal_pose
+            else:
+                update_reference = True
+
+        if update_reference:
             current_solve_state = solve_state
             current_goal_buffer = solve_state.create_goal_buffer(
                 goal_pose, goal_state, retract_config, link_poses, tensor_args
             )
-            update_reference = True
         else:
             current_goal_buffer.goal_pose.copy_(goal_pose)
             if retract_config is not None:
@@ -145,6 +155,7 @@ class ReacherSolveState:
             if link_poses is not None:
                 for k in link_poses.keys():
                     current_goal_buffer.links_goal_pose[k].copy_(link_poses[k])
+
         return current_solve_state, current_goal_buffer, update_reference
 
     def update_goal(
@@ -155,17 +166,26 @@ class ReacherSolveState:
         tensor_args: TensorDeviceType = TensorDeviceType(),
     ):
         solve_state = self
-
         update_reference = False
         if (
             current_solve_state is None
             or current_goal_buffer is None
-            or current_solve_state != solve_state
             or (current_goal_buffer.goal_state is None and goal.goal_state is not None)
             or (current_goal_buffer.goal_state is not None and goal.goal_state is None)
         ):
-            # TODO: Check for change in update idx buffers, currently we assume
-            # that solve_state captures difference in idx buffers
+            update_reference = True
+        elif current_solve_state != solve_state:
+            new_goal_pose = get_padded_goalset(
+                solve_state, current_solve_state, current_goal_buffer, goal.goal_pose
+            )
+            if new_goal_pose is not None:
+                goal = goal.clone()
+                goal.goal_pose = new_goal_pose
+
+            else:
+                update_reference = True
+
+        if update_reference:
             current_solve_state = solve_state
             current_goal_buffer = goal.create_index_buffers(
                 solve_state.batch_size,
@@ -174,7 +194,6 @@ class ReacherSolveState:
                 solve_state.num_seeds,
                 tensor_args,
             )
-            update_reference = True
         else:
             current_goal_buffer.copy_(goal, update_idx_buffers=False)
         return current_solve_state, current_goal_buffer, update_reference
@@ -185,3 +204,92 @@ class MotionGenSolverState:
     solve_type: ReacherSolveType
     ik_solve_state: ReacherSolveState
     trajopt_solve_state: ReacherSolveState
+
+
+def get_padded_goalset(
+    solve_state: ReacherSolveState,
+    current_solve_state: ReacherSolveState,
+    current_goal_buffer: Goal,
+    new_goal_pose: Pose,
+) -> Union[Pose, None]:
+    if (
+        current_solve_state.solve_type == ReacherSolveType.GOALSET
+        and solve_state.solve_type == ReacherSolveType.SINGLE
+    ):
+        # convert single goal to goal set
+        # solve_state.solve_type = ReacherSolveType.GOALSET
+        # solve_state.n_goalset = current_solve_state.n_goalset
+
+        goal_pose = current_goal_buffer.goal_pose.clone()
+        goal_pose.position[:] = new_goal_pose.position
+        goal_pose.quaternion[:] = new_goal_pose.quaternion
+        return goal_pose
+
+    elif (
+        current_solve_state.solve_type == ReacherSolveType.BATCH_GOALSET
+        and solve_state.solve_type == ReacherSolveType.BATCH
+        and new_goal_pose.n_goalset <= current_solve_state.n_goalset
+        and new_goal_pose.batch == current_solve_state.batch_size
+    ):
+        goal_pose = current_goal_buffer.goal_pose.clone()
+        if len(new_goal_pose.position.shape) == 2:
+            new_goal_pose = new_goal_pose.unsqueeze(1)
+        goal_pose.position[..., :, :] = new_goal_pose.position
+        goal_pose.quaternion[..., :, :] = new_goal_pose.quaternion
+        return goal_pose
+    elif (
+        current_solve_state.solve_type == ReacherSolveType.BATCH_ENV_GOALSET
+        and solve_state.solve_type == ReacherSolveType.BATCH_ENV
+        and new_goal_pose.n_goalset <= current_solve_state.n_goalset
+        and new_goal_pose.batch == current_solve_state.batch_size
+    ):
+        goal_pose = current_goal_buffer.goal_pose.clone()
+        if len(new_goal_pose.position.shape) == 2:
+            new_goal_pose = new_goal_pose.unsqueeze(1)
+        goal_pose.position[..., :, :] = new_goal_pose.position
+        goal_pose.quaternion[..., :, :] = new_goal_pose.quaternion
+        return goal_pose
+
+    elif (
+        current_solve_state.solve_type == ReacherSolveType.GOALSET
+        and solve_state.solve_type == ReacherSolveType.GOALSET
+        and new_goal_pose.n_goalset <= current_solve_state.n_goalset
+    ):
+        goal_pose = current_goal_buffer.goal_pose.clone()
+        goal_pose.position[..., : new_goal_pose.n_goalset, :] = new_goal_pose.position
+        goal_pose.quaternion[..., : new_goal_pose.n_goalset, :] = new_goal_pose.quaternion
+        goal_pose.position[..., new_goal_pose.n_goalset :, :] = new_goal_pose.position[..., :1, :]
+        goal_pose.quaternion[..., new_goal_pose.n_goalset :, :] = new_goal_pose.quaternion[
+            ..., :1, :
+        ]
+
+        return goal_pose
+    elif (
+        current_solve_state.solve_type == ReacherSolveType.BATCH_GOALSET
+        and solve_state.solve_type == ReacherSolveType.BATCH_GOALSET
+        and new_goal_pose.n_goalset <= current_solve_state.n_goalset
+        and new_goal_pose.batch == current_solve_state.batch_size
+    ):
+        goal_pose = current_goal_buffer.goal_pose.clone()
+        goal_pose.position[..., : new_goal_pose.n_goalset, :] = new_goal_pose.position
+        goal_pose.quaternion[..., : new_goal_pose.n_goalset, :] = new_goal_pose.quaternion
+        goal_pose.position[..., new_goal_pose.n_goalset :, :] = new_goal_pose.position[..., :1, :]
+        goal_pose.quaternion[..., new_goal_pose.n_goalset :, :] = new_goal_pose.quaternion[
+            ..., :1, :
+        ]
+        return goal_pose
+    elif (
+        current_solve_state.solve_type == ReacherSolveType.BATCH_ENV_GOALSET
+        and solve_state.solve_type == ReacherSolveType.BATCH_ENV_GOALSET
+        and new_goal_pose.n_goalset <= current_solve_state.n_goalset
+        and new_goal_pose.batch == current_solve_state.batch_size
+    ):
+        goal_pose = current_goal_buffer.goal_pose.clone()
+        goal_pose.position[..., : new_goal_pose.n_goalset, :] = new_goal_pose.position
+        goal_pose.quaternion[..., : new_goal_pose.n_goalset, :] = new_goal_pose.quaternion
+        goal_pose.position[..., new_goal_pose.n_goalset :, :] = new_goal_pose.position[..., :1, :]
+        goal_pose.quaternion[..., new_goal_pose.n_goalset :, :] = new_goal_pose.quaternion[
+            ..., :1, :
+        ]
+        return goal_pose
+    return None

@@ -16,7 +16,6 @@ from typing import Dict, List, Optional, Union
 # Third Party
 import numpy as np
 import torch
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 from tqdm import tqdm
 
 # CuRobo
@@ -46,6 +45,15 @@ from curobo.util_file import (
     load_yaml,
 )
 from curobo.wrap.reacher.motion_gen import MotionGenResult
+
+try:
+    # Third Party
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+except ImportError:
+    raise ImportError(
+        "usd-core failed to import, install with pip install usd-core"
+        + " NOTE: Do not install this if using with ISAAC SIM."
+    )
 
 
 def set_prim_translate(prim, translation):

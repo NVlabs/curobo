@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #
 # Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
@@ -95,7 +94,7 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
         self.trajectories = None
         self.cu_opt_init = False
         self.info = ParticleOptInfo()
-        self.update_num_particles_per_env(self.num_particles)
+        self.update_num_particles_per_problem(self.num_particles)
 
     @abstractmethod
     def _get_action_seq(self, mode=SampleMode):
@@ -172,7 +171,7 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
         Parameters
         ----------
         state : dict or np.ndarray
-            Initial state to set the simulation env to
+            Initial state to set the simulation problem to
         """
 
         act_seq = self.sample_actions(init_act)
@@ -259,10 +258,10 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
             # generate random simulated trajectories
             trajectory = self.generate_rollouts()
             trajectory.actions = trajectory.actions.view(
-                self.n_envs, self.particles_per_env, self.action_horizon, self.d_action
+                self.n_problems, self.particles_per_problem, self.action_horizon, self.d_action
             )
             trajectory.costs = trajectory.costs.view(
-                self.n_envs, self.particles_per_env, self.horizon
+                self.n_problems, self.particles_per_problem, self.horizon
             )
             with profiler.record_function("mpc/mppi/update_distribution"):
                 self._update_distribution(trajectory)
@@ -275,26 +274,26 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
         curr_action_seq = self._get_action_seq(mode=self.sample_mode)
         return curr_action_seq
 
-    def update_nenvs(self, n_envs):
-        assert n_envs > 0
-        self.total_num_particles = n_envs * self.num_particles
+    def update_nproblems(self, n_problems):
+        assert n_problems > 0
+        self.total_num_particles = n_problems * self.num_particles
         self.cu_opt_init = False
-        super().update_nenvs(n_envs)
+        super().update_nproblems(n_problems)
 
-    def update_num_particles_per_env(self, num_particles_per_env):
-        self.null_per_env = round(int(self.null_act_frac * num_particles_per_env * 0.5))
+    def update_num_particles_per_problem(self, num_particles_per_problem):
+        self.null_per_problem = round(int(self.null_act_frac * num_particles_per_problem * 0.5))
 
-        self.neg_per_env = (
-            round(int(self.null_act_frac * num_particles_per_env)) - self.null_per_env
+        self.neg_per_problem = (
+            round(int(self.null_act_frac * num_particles_per_problem)) - self.null_per_problem
         )
 
-        self.sampled_particles_per_env = (
-            num_particles_per_env - self.null_per_env - self.neg_per_env
+        self.sampled_particles_per_problem = (
+            num_particles_per_problem - self.null_per_problem - self.neg_per_problem
         )
-        self.particles_per_env = num_particles_per_env
-        if self.null_per_env > 0:
+        self.particles_per_problem = num_particles_per_problem
+        if self.null_per_problem > 0:
             self.null_act_seqs = torch.zeros(
-                self.null_per_env,
+                self.null_per_problem,
                 self.action_horizon,
                 self.d_action,
                 device=self.tensor_args.device,

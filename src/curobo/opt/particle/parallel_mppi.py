@@ -65,7 +65,7 @@ class ParallelMPPIConfig(ParticleOptConfig):
     alpha: float
     gamma: float
     kappa: float
-    sample_per_env: bool
+    sample_per_problem: bool
 
     def __post_init__(self):
         self.init_cov = self.tensor_args.to_device(self.init_cov).unsqueeze(0)
@@ -264,7 +264,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         actions = trajectories.actions
 
         total_costs = self._compute_total_cost(costs)
-        # Let's reshape to n_envs now:
+        # Let's reshape to n_problems now:
 
         # first find the means before doing exponential utility:
         w = self._exp_util(total_costs)
@@ -272,7 +272,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         # Update best action
         if self.sample_mode == SampleMode.BEST:
             best_idx = torch.argmax(w, dim=-1)
-            self.best_traj.copy_(actions[self.env_col, best_idx])
+            self.best_traj.copy_(actions[self.problem_col, best_idx])
 
         if self.store_rollouts and self.visual_traj is not None:
             vis_seq = getattr(trajectories.state, self.visual_traj)
@@ -281,7 +281,9 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
             self.top_idx = top_idx
             top_trajs = torch.index_select(vis_seq, 0, top_idx[0])
             for i in range(1, top_idx.shape[0]):
-                trajs = torch.index_select(vis_seq, 0, top_idx[i] + (self.particles_per_env * i))
+                trajs = torch.index_select(
+                    vis_seq, 0, top_idx[i] + (self.particles_per_problem * i)
+                )
                 top_trajs = torch.cat((top_trajs, trajs), dim=0)
             if self.top_trajs is None or top_trajs.shape != self.top_trajs:
                 self.top_trajs = top_trajs
@@ -317,13 +319,15 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         act_seq = self.mean_action.unsqueeze(-3) + scaled_delta
         cat_list = [act_seq]
 
-        if self.neg_per_env > 0:
+        if self.neg_per_problem > 0:
             neg_action = -1.0 * self.mean_action
-            neg_act_seqs = neg_action.unsqueeze(-3).expand(-1, self.neg_per_env, -1, -1)
+            neg_act_seqs = neg_action.unsqueeze(-3).expand(-1, self.neg_per_problem, -1, -1)
             cat_list.append(neg_act_seqs)
-        if self.null_per_env > 0:
+        if self.null_per_problem > 0:
             cat_list.append(
-                self.null_act_seqs[: self.null_per_env].unsqueeze(0).expand(self.n_envs, -1, -1, -1)
+                self.null_act_seqs[: self.null_per_problem]
+                .unsqueeze(0)
+                .expand(self.n_problems, -1, -1, -1)
             )
 
         act_seq = torch.cat(
@@ -343,8 +347,8 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
     def update_init_mean(self, init_mean):
         # update mean:
         # init_mean = init_mean.clone()
-        if init_mean.shape[0] != self.n_envs:
-            init_mean = init_mean.expand(self.n_envs, -1, -1)
+        if init_mean.shape[0] != self.n_problems:
+            init_mean = init_mean.expand(self.n_problems, -1, -1)
         if not copy_tensor(init_mean, self.mean_action):
             self.mean_action = init_mean.clone()
         if not copy_tensor(init_mean, self.best_traj):
@@ -353,27 +357,27 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
     def reset_mean(self):
         with profiler.record_function("mppi/reset_mean"):
             if self.random_mean:
-                mean = self.mean_lib.get_samples([self.n_envs])
+                mean = self.mean_lib.get_samples([self.n_problems])
                 self.update_init_mean(mean)
             else:
                 self.update_init_mean(self.init_mean)
 
     def reset_covariance(self):
         with profiler.record_function("mppi/reset_cov"):
-            # init_cov can either be a single value, or n_envs x 1 or n_envs x d_action
+            # init_cov can either be a single value, or n_problems x 1 or n_problems x d_action
 
             if self.cov_type == CovType.SIGMA_I:
-                # init_cov can either be a single value, or n_envs x 1
+                # init_cov can either be a single value, or n_problems x 1
                 self.cov_action = self.init_cov
-                if self.init_cov.shape[0] != self.n_envs:
-                    self.cov_action = self.init_cov.unsqueeze(0).expand(self.n_envs, -1)
+                if self.init_cov.shape[0] != self.n_problems:
+                    self.cov_action = self.init_cov.unsqueeze(0).expand(self.n_problems, -1)
                 self.inv_cov_action = 1.0 / self.cov_action
                 a = torch.sqrt(self.cov_action)
                 if not copy_tensor(a, self.scale_tril):
                     self.scale_tril = a
 
             elif self.cov_type == CovType.DIAG_A:
-                # init_cov can either be a single value, or n_envs x 1 or n_envs x 7
+                # init_cov can either be a single value, or n_problems x 1 or n_problems x 7
                 init_cov = self.init_cov.clone()
 
                 # if(init_cov.shape[-1] != self.d_action):
@@ -382,8 +386,8 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
                 if len(init_cov.shape) == 2 and init_cov.shape[-1] != self.d_action:
                     init_cov = init_cov.expand(-1, self.d_action)
                 init_cov = init_cov.unsqueeze(1)
-                if init_cov.shape[0] != self.n_envs:
-                    init_cov = init_cov.expand(self.n_envs, -1, -1)
+                if init_cov.shape[0] != self.n_problems:
+                    init_cov = init_cov.expand(self.n_problems, -1, -1)
                 if not copy_tensor(init_cov.clone(), self.cov_action):
                     self.cov_action = init_cov.clone()
                 self.inv_cov_action = 1.0 / self.cov_action
@@ -523,16 +527,18 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
                 n_iters = 1
             else:
                 n_iters = self.n_iters
-            if self.sample_per_env:
+            if self.sample_per_problem:
                 s_set = (
                     self.sample_lib.get_samples(
-                        sample_shape=[self.sampled_particles_per_env * self.n_envs * n_iters],
+                        sample_shape=[
+                            self.sampled_particles_per_problem * self.n_problems * n_iters
+                        ],
                         base_seed=self.seed,
                     )
                     .view(
                         n_iters,
-                        self.n_envs,
-                        self.sampled_particles_per_env,
+                        self.n_problems,
+                        self.sampled_particles_per_problem,
                         self.action_horizon,
                         self.d_action,
                     )
@@ -540,13 +546,17 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
                 )
             else:
                 s_set = self.sample_lib.get_samples(
-                    sample_shape=[n_iters * (self.sampled_particles_per_env)],
+                    sample_shape=[n_iters * (self.sampled_particles_per_problem)],
                     base_seed=self.seed,
                 )
                 s_set = s_set.view(
-                    n_iters, 1, self.sampled_particles_per_env, self.action_horizon, self.d_action
+                    n_iters,
+                    1,
+                    self.sampled_particles_per_problem,
+                    self.action_horizon,
+                    self.d_action,
                 )
-                s_set = s_set.repeat(1, self.n_envs, 1, 1, 1).clone()
+                s_set = s_set.repeat(1, self.n_problems, 1, 1, 1).clone()
             s_set[:, :, -1, :, :] = 0.0
             if not copy_tensor(s_set, self._sample_set):
                 log_info("ParallelMPPI: Updating sample set")
@@ -575,7 +585,7 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         Parameters
         ----------
         state : dict or np.ndarray
-            Initial state to set the simulation env to
+            Initial state to set the simulation problem to
         """
 
         return super().generate_rollouts(init_act)

@@ -13,7 +13,7 @@ robot_cfg:
   kinematics:
     use_usd_kinematics: False
     isaac_usd_path: "/Isaac/Robots/Franka/franka.usd"
-    usd_path: "robot/non_shipping/franka/franka_panda_meters.usda"
+    usd_path: "robot/franka/franka_panda.usda"
     usd_robot_root: "/panda"
     usd_flip_joints: ["panda_joint1","panda_joint2","panda_joint3","panda_joint4", "panda_joint5",
       "panda_joint6","panda_joint7","panda_finger_joint1", "panda_finger_joint2"]
@@ -32,7 +32,7 @@ robot_cfg:
     usd_flip_joint_limits: ["panda_finger_joint2"]
     urdf_path: "robot/franka_description/franka_panda.urdf"
     asset_root_path: "robot/franka_description"
-    base_link: "base_link"
+    base_link: "panda_link0"
     ee_link: "panda_hand"
     collision_link_names:
       [
@@ -50,7 +50,7 @@ robot_cfg:
         "attached_object",
       ]
     collision_spheres: "spheres/franka_mesh.yml"
-    collision_sphere_buffer: 0.0025 
+    collision_sphere_buffer: 0.004 # 0.0025
     extra_collision_spheres: {"attached_object": 4}
     use_global_cumul: True
     self_collision_ignore:

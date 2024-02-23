@@ -8,6 +8,9 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+""" Base module for Optimization. """
+from __future__ import annotations
+
 # Standard Library
 import time
 from abc import abstractmethod
@@ -28,31 +31,75 @@ from curobo.util.torch_utils import is_cuda_graph_available
 
 @dataclass
 class OptimizerConfig:
+    """Configuration for an :meth:`Optimizer`."""
+
+    #: Number of optimization variables per timestep.
     d_action: int
+
+    #: Lower bound for optimization variables.
     action_lows: List[float]
+
+    #: Higher bound for optimization variables
     action_highs: List[float]
-    horizon: int
-    n_iters: int
-    rollout_fn: RolloutBase
-    tensor_args: TensorDeviceType
-    use_cuda_graph: bool
-    store_debug: bool
-    debug_info: Any
-    cold_start_n_iters: int
-    num_particles: Union[int, None]
-    n_envs: int
-    sync_cuda_time: bool
-    use_coo_sparse: bool
+
+    #:
     action_horizon: int
+
+    #: Number of timesteps in optimization state, total variables = d_action * horizon
+    horizon: int
+
+    #: Number of iterations to run optimization
+    n_iters: int
+
+    #: Number of iterations to run optimization during the first instance. Setting to None will
+    #: use n_iters. This parameter is useful in MPC like settings where we need to run many
+    #: iterations during initialization (cold start) and then run only few iterations (warm start).
+    cold_start_n_iters: Union[int, None]
+
+    #: Rollout function to use for computing cost, given optimization variables.
+    rollout_fn: RolloutBase
+
+    #: Tensor device to use for optimization.
+    tensor_args: TensorDeviceType
+
+    #: Capture optimization iteration in a cuda graph and replay graph instead of eager execution.
+    #: Enabling this can make optimization 10x faster. But changing control flow, tensor
+    #: shapes, or problem type is not allowed.
+    use_cuda_graph: bool
+
+    #: Record debugging data such as optimization variables, and cost at every iteration. Enabling
+    #: this will disable cuda graph.
+    store_debug: bool
+
+    #: Use this to record additional attributes from rollouts.
+    debug_info: Any
+
+    #: Number of parallel problems to optimize.
+    n_problems: int
+
+    #: Number of particles to use per problem. Common optimization solvers use many particles to
+    #: optimize a single problem. E.g., MPPI rolls out many parallel samples and computes a weighted
+    #: mean. In cuRobo, Quasi-Newton solvers use particles to run many line search magnitudes.
+    #: Total optimization batch size = n_problems * num_particles.
+    num_particles: Union[int, None]
+
+    #: Synchronize device before computing solver time.
+    sync_cuda_time: bool
+
+    #: Matmul with a Sparse tensor is used to create particles for each problem index to save memory
+    #: and compute. Some versions of pytorch do not support coo sparse, specifically during
+    #: torch profile runs. Set this to False to use a standard tensor.
+    use_coo_sparse: bool
 
     def __post_init__(self):
         object.__setattr__(self, "action_highs", self.tensor_args.to_device(self.action_highs))
         object.__setattr__(self, "action_lows", self.tensor_args.to_device(self.action_lows))
-        # check cuda graph version:
         if self.use_cuda_graph:
             self.use_cuda_graph = is_cuda_graph_available()
         if self.num_particles is None:
             self.num_particles = 1
+        if self.cold_start_n_iters is None:
+            self.cold_start_n_iters = self.n_iters
 
     @staticmethod
     def create_data_dict(
@@ -61,6 +108,17 @@ class OptimizerConfig:
         tensor_args: TensorDeviceType = TensorDeviceType(),
         child_dict: Optional[Dict] = None,
     ):
+        """Helper function to create dictionary from optimizer parameters and rollout class.
+
+        Args:
+            data_dict: optimizer parameters dictionary.
+            rollout_fn: rollout function.
+            tensor_args: tensor cuda device.
+            child_dict: new dictionary where parameters will be stored.
+
+        Returns:
+            Dictionary with parameters to create a :meth:`OptimizerConfig`
+        """
         if child_dict is None:
             child_dict = deepcopy(data_dict)
         child_dict["d_action"] = rollout_fn.d_action
@@ -78,17 +136,33 @@ class OptimizerConfig:
 
 class Optimizer(OptimizerConfig):
     def __init__(self, config: Optional[OptimizerConfig] = None) -> None:
+        """Base optimization solver class
+
+        Args:
+            config: Initialized with parameters from a dataclass.
+        """
         if config is not None:
             super().__init__(**vars(config))
         self.opt_dt = 0.0
         self.COLD_START = True
-        self.update_nenvs(self.n_envs)
+        self.update_nproblems(self.n_problems)
         self._batch_goal = None
         self._rollout_list = None
         self.debug = []
         self.debug_cost = []
 
     def optimize(self, opt_tensor: torch.Tensor, shift_steps=0, n_iters=None) -> torch.Tensor:
+        """Find a solution through optimization given the initial values for variables.
+
+        Args:
+            opt_tensor: Initial value of optimization variables.
+                        Shape: [n_problems, action_horizon, d_action]
+            shift_steps: Shift variables along action_horizon. Useful in mpc warm-start setting.
+            n_iters: Override number of iterations to run optimization.
+
+        Returns:
+            Optimized values returned as a tensor of shape [n_problems, action_horizon, d_action].
+        """
         if self.COLD_START:
             n_iters = self.cold_start_n_iters
             self.COLD_START = False
@@ -99,17 +173,12 @@ class Optimizer(OptimizerConfig):
         self.opt_dt = time.time() - st_time
         return out
 
-    @abstractmethod
-    def _optimize(self, opt_tensor: torch.Tensor, shift_steps=0, n_iters=None) -> torch.Tensor:
-        pass
-
-    def _shift(self, shift_steps=0):
-        """
-        Shift the variables in the solver to hotstart the next timestep
-        """
-        return
-
     def update_params(self, goal: Goal):
+        """Update parameters in the :meth:`curobo.rollout.rollout_base.RolloutBase` instance.
+
+        Args:
+            goal: parameters to update rollout instance.
+        """
         with profiler.record_function("OptBase/batch_goal"):
             if self._batch_goal is not None:
                 self._batch_goal.copy_(goal, update_idx_buffers=True)  # why True?
@@ -118,80 +187,37 @@ class Optimizer(OptimizerConfig):
         self.rollout_fn.update_params(self._batch_goal)
 
     def reset(self):
-        """
-        Reset the controller
-        """
+        """Reset optimizer."""
         self.rollout_fn.reset()
         self.debug = []
         self.debug_cost = []
-        # self.COLD_START = True
 
-    def update_nenvs(self, n_envs):
-        assert n_envs > 0
-        self._update_env_kernel(n_envs, self.num_particles)
-        self.n_envs = n_envs
+    def update_nproblems(self, n_problems: int):
+        """Update the number of problems that need to be optimized.
 
-    def _update_env_kernel(self, n_envs, num_particles):
-        log_info(
-            "Updating env kernel [n_envs: "
-            + str(n_envs)
-            + " , num_particles: "
-            + str(num_particles)
-            + " ]"
-        )
+        Args:
+            n_problems: number of problems.
+        """
+        assert n_problems > 0
+        self._update_problem_kernel(n_problems, self.num_particles)
+        self.n_problems = n_problems
 
-        self.env_col = torch.arange(
-            0, n_envs, step=1, dtype=torch.long, device=self.tensor_args.device
-        )
-        self.n_select_ = torch.tensor(
-            [x * n_envs + x for x in range(n_envs)],
-            device=self.tensor_args.device,
-            dtype=torch.long,
-        )
-
-        # create sparse tensor:
-        sparse_indices = []
-        for i in range(n_envs):
-            sparse_indices.extend([[i * num_particles + x, i] for x in range(num_particles)])
-
-        sparse_values = torch.ones(len(sparse_indices))
-        sparse_indices = torch.tensor(sparse_indices)
-        if self.use_coo_sparse:
-            self.env_kernel_ = torch.sparse_coo_tensor(
-                sparse_indices.t(),
-                sparse_values,
-                device=self.tensor_args.device,
-                dtype=self.tensor_args.dtype,
-            )
-        else:
-            self.env_kernel_ = torch.sparse_coo_tensor(
-                sparse_indices.t(),
-                sparse_values,
-                device="cpu",
-                dtype=self.tensor_args.dtype,
-            )
-            self.env_kernel_ = self.env_kernel_.to_dense().to(device=self.tensor_args.device)
-        self._env_seeds = self.num_particles
-
-    def get_nenv_tensor(self, x):
-        """This function takes an input tensor of shape (n_env,....) and converts it into
-        (n_particles,...)
+    def get_nproblem_tensor(self, x):
+        """This function takes an input tensor of shape (n_problem,....) and converts it into
+        (n_particles,...).
         """
 
-        # if x.shape[0] != self.n_envs:
-        #    x_env = x.unsqueeze(0).repeat(self.n_envs, 1)
-        # else:
-        #    x_env = x
-
         # create a tensor
-        nx_env = self.env_kernel_ @ x
+        nx_problem = self.problem_kernel_ @ x
 
-        return nx_env
+        return nx_problem
 
     def reset_seed(self):
+        """Reset seeds."""
         return True
 
     def reset_cuda_graph(self):
+        """Reset CUDA Graphs. This does not work, workaround is to create a new instance."""
         if self.use_cuda_graph:
             self.cu_opt_init = False
         else:
@@ -199,7 +225,87 @@ class Optimizer(OptimizerConfig):
         self._batch_goal = None
         self.rollout_fn.reset_cuda_graph()
 
+    def reset_shape(self):
+        """Reset any flags in rollout class. Useful to reinitialize tensors for a new shape."""
+        self.rollout_fn.reset_shape()
+        self._batch_goal = None
+
     def get_all_rollout_instances(self) -> List[RolloutBase]:
+        """Get all instances of Rollout class in the optimizer."""
         if self._rollout_list is None:
             self._rollout_list = [self.rollout_fn]
         return self._rollout_list
+
+    @abstractmethod
+    def _optimize(self, opt_tensor: torch.Tensor, shift_steps=0, n_iters=None) -> torch.Tensor:
+        """Implement this function in a derived class containing the solver.
+
+        Args:
+            opt_tensor: Initial value of optimization variables.
+                        Shape: [n_problems, action_horizon, d_action]
+            shift_steps: Shift variables along action_horizon. Useful in mpc warm-start setting.
+            n_iters: Override number of iterations to run optimization.
+
+        Returns:
+            Optimized variables in tensor shape [action_horizon, d_action].
+        """
+        return opt_tensor
+
+    @abstractmethod
+    def _shift(self, shift_steps=0):
+        """Shift the variables in the solver to hotstart the next timestep.
+
+        Args:
+            shift_steps: Number of timesteps to shift.
+        """
+        return
+
+    def _update_problem_kernel(self, n_problems: int, num_particles: int):
+        """Update matrix used to map problem index to number of particles.
+
+        Args:
+            n_problems: Number of optimization problems.
+            num_particles: Number of particles per problem.
+        """
+        log_info(
+            "Updating problem kernel [n_problems: "
+            + str(n_problems)
+            + " , num_particles: "
+            + str(num_particles)
+            + " ]"
+        )
+
+        self.problem_col = torch.arange(
+            0, n_problems, step=1, dtype=torch.long, device=self.tensor_args.device
+        )
+        self.n_select_ = torch.tensor(
+            [x * n_problems + x for x in range(n_problems)],
+            device=self.tensor_args.device,
+            dtype=torch.long,
+        )
+
+        # create sparse tensor:
+        sparse_indices = []
+        for i in range(n_problems):
+            sparse_indices.extend([[i * num_particles + x, i] for x in range(num_particles)])
+
+        sparse_values = torch.ones(len(sparse_indices))
+        sparse_indices = torch.tensor(sparse_indices)
+        if self.use_coo_sparse:
+            self.problem_kernel_ = torch.sparse_coo_tensor(
+                sparse_indices.t(),
+                sparse_values,
+                device=self.tensor_args.device,
+                dtype=self.tensor_args.dtype,
+            )
+        else:
+            self.problem_kernel_ = torch.sparse_coo_tensor(
+                sparse_indices.t(),
+                sparse_values,
+                device="cpu",
+                dtype=self.tensor_args.dtype,
+            )
+            self.problem_kernel_ = self.problem_kernel_.to_dense().to(
+                device=self.tensor_args.device
+            )
+        self._problem_seeds = self.num_particles

@@ -229,6 +229,61 @@ def pose_inverse(
 
 
 @wp.kernel
+def compute_pose_inverse(
+    position: wp.array(dtype=wp.vec3),
+    quat: wp.array(dtype=wp.vec4),
+    out_position: wp.array(dtype=wp.vec3),
+    out_quat: wp.array(dtype=wp.vec4),
+):  # b pose_1 and b pose_2, compute pose_1 * pose_2
+    b_idx = wp.tid()
+    # read data:
+
+    in_position = position[b_idx]
+    in_quat = quat[b_idx]
+
+    # read point
+    # create a transform from a vector/quaternion:
+    t_1 = wp.transform(in_position, wp.quaternion(in_quat[1], in_quat[2], in_quat[3], in_quat[0]))
+    t_3 = wp.transform_inverse(t_1)
+
+    # write pt:
+    out_q = wp.transform_get_rotation(t_3)
+
+    out_v = wp.vec4()
+    out_v[0] = out_q[3]  # out_q[3]
+    out_v[1] = out_q[0]  # [0]
+    out_v[2] = out_q[1]  # wp.extract(out_q, 1)
+    out_v[3] = out_q[2]  # wp.extract(out_q, 2)
+
+    out_position[b_idx] = wp.transform_get_translation(t_3)
+    out_quat[b_idx] = out_v
+
+
+@wp.kernel
+def compute_matrix_to_quat(
+    in_mat: wp.array(dtype=wp.mat33),
+    out_quat: wp.array(dtype=wp.vec4),
+):
+    # b pose_1 and b pose_2, compute pose_1 * pose_2
+    b_idx = wp.tid()
+    # read data:
+
+    in_m = in_mat[b_idx]
+
+    # read point
+    # create a transform from a vector/quaternion:
+    out_q = wp.quat_from_matrix(in_m)
+
+    out_v = wp.vec4()
+    out_v[0] = out_q[3]  # wp.extract(out_q, 3)
+    out_v[1] = out_q[0]  # wp.extract(out_q, 0)
+    out_v[2] = out_q[1]  # wp.extract(out_q, 1)
+    out_v[3] = out_q[2]  # wp.extract(out_q, 2)
+    # write pt:
+    out_quat[b_idx] = out_v
+
+
+@wp.kernel
 def compute_transform_point(
     position: wp.array(dtype=wp.vec3),
     quat: wp.array(dtype=wp.vec4),
@@ -332,37 +387,6 @@ def compute_batch_pose_multipy(
 
 
 @wp.kernel
-def compute_pose_inverse(
-    position: wp.array(dtype=wp.vec3),
-    quat: wp.array(dtype=wp.vec4),
-    out_position: wp.array(dtype=wp.vec3),
-    out_quat: wp.array(dtype=wp.vec4),
-):  # b pose_1 and b pose_2, compute pose_1 * pose_2
-    b_idx = wp.tid()
-    # read data:
-
-    in_position = position[b_idx]
-    in_quat = quat[b_idx]
-
-    # read point
-    # create a transform from a vector/quaternion:
-    t_1 = wp.transform(in_position, wp.quaternion(in_quat[1], in_quat[2], in_quat[3], in_quat[0]))
-    t_3 = wp.transform_inverse(t_1)
-
-    # write pt:
-    out_q = wp.transform_get_rotation(t_3)
-
-    out_v = wp.vec4()
-    out_v[0] = out_q[3]
-    out_v[1] = out_q[0]
-    out_v[2] = out_q[1]
-    out_v[3] = out_q[2]
-
-    out_position[b_idx] = wp.transform_get_translation(t_3)
-    out_quat[b_idx] = out_v
-
-
-@wp.kernel
 def compute_quat_to_matrix(
     quat: wp.array(dtype=wp.vec4),
     out_mat: wp.array(dtype=wp.mat33),
@@ -380,30 +404,6 @@ def compute_quat_to_matrix(
 
     # write pt:
     out_mat[b_idx] = m_1
-
-
-@wp.kernel
-def compute_matrix_to_quat(
-    in_mat: wp.array(dtype=wp.mat33),
-    out_quat: wp.array(dtype=wp.vec4),
-):
-    # b pose_1 and b pose_2, compute pose_1 * pose_2
-    b_idx = wp.tid()
-    # read data:
-
-    in_m = in_mat[b_idx]
-
-    # read point
-    # create a transform from a vector/quaternion:
-    out_q = wp.quat_from_matrix(in_m)
-
-    out_v = wp.vec4()
-    out_v[0] = out_q[3]
-    out_v[1] = out_q[0]
-    out_v[2] = out_q[1]
-    out_v[3] = out_q[2]
-    # write pt:
-    out_quat[b_idx] = out_v
 
 
 @wp.kernel
@@ -962,6 +962,7 @@ class PoseInverse(torch.autograd.Function):
             adj_quaternion,
         )
         ctx.b = b
+
         wp.launch(
             kernel=compute_pose_inverse,
             dim=b,
@@ -1071,6 +1072,7 @@ class QuatToMatrix(torch.autograd.Function):
             adj_quaternion,
         )
         ctx.b = b
+
         wp.launch(
             kernel=compute_quat_to_matrix,
             dim=b,
@@ -1153,6 +1155,7 @@ class MatrixToQuaternion(torch.autograd.Function):
             adj_mat,
         )
         ctx.b = b
+
         wp.launch(
             kernel=compute_matrix_to_quat,
             dim=b,

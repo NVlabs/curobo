@@ -31,6 +31,7 @@ cost:
     vec_convergence: [0.00, 0.000] # orientation, position
     terminal: False
     use_metric: True
+    run_weight: 1.0
   link_pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     weight: [30, 50, 10, 10] #[20.0, 100.0]
@@ -56,7 +57,7 @@ mppi:
   init_cov          : 1.0 #0.15 #.5 #.5
   gamma             : 1.0
   n_iters           : 4
-  cold_start_n_iters: 4
+  cold_start_n_iters: null
   step_size_mean    : 0.9
   step_size_cov     : 0.1
   beta              : 0.01
@@ -69,12 +70,12 @@ mppi:
   sample_mode       : 'BEST'
   base_action       : 'REPEAT'
   squash_fn         : 'CLAMP'
-  n_envs            : 1
+  n_problems            : 1
   use_cuda_graph    : True
   seed              : 0
   store_debug       : False
   random_mean       : False
-  sample_per_env    : True
+  sample_per_problem: True
   sync_cuda_time    : False
   use_coo_sparse    : True
   sample_params:

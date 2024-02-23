@@ -9,7 +9,22 @@
 # its affiliates is strictly prohibited.
 #
 
-"""CuRobo package."""
+"""
+cuRobo package is split into several modules:
+
+- :mod:`curobo.opt` contains optimization solvers.
+- :mod:`curobo.cuda_robot_model` contains robot kinematics.
+- :mod:`curobo.curobolib` contains the cuda kernels and python bindings for them.
+- :mod:`curobo.geom` contains geometry processing, collision checking and frame transforms.
+- :mod:`curobo.graph` contains geometric planning with graph search methods.
+- :mod:`curobo.rollout` contains methods that map actions to costs. This class wraps instances of
+  :mod:`curobo.cuda_robot_model` and :mod:`geom` to compute costs given trajectory of actions.
+- :mod:`curobo.util` contains utility methods.
+- :mod:`curobo.wrap` adds the user-level api for task programming. Includes implementation of 
+  collision-free reacher and batched robot world collision checking.
+- :mod:`curobo.types` contains custom dataclasses for common data types in robotics, including 
+  :meth:`types.state.JointState`, :meth:`types.camera.CameraObservation`, :meth:`types.math.Pose`.
+"""
 
 
 # NOTE (roflaherty): This is inspired by how matplotlib does creates its version value.

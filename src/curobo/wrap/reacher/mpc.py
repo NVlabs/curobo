@@ -80,7 +80,7 @@ class MpcSolverConfig:
 
         task_file = "particle_mpc.yml"
         config_data = load_yaml(join_path(get_task_configs_path(), task_file))
-        config_data["mppi"]["n_envs"] = 1
+        config_data["mppi"]["n_problems"] = 1
         if step_dt is not None:
             config_data["model"]["dt_traj_params"]["base_dt"] = step_dt
         if particle_opt_iters is not None:
@@ -238,7 +238,7 @@ class MpcSolver(MpcSolverConfig):
             self.tensor_args,
         )
         if update_reference:
-            self.solver.update_nenvs(self._solve_state.get_batch_size())
+            self.solver.update_nproblems(self._solve_state.get_batch_size())
             self.reset()
             self.reset_cuda_graph()
             self._col = torch.arange(

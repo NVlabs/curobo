@@ -32,6 +32,7 @@ cost:
     vec_convergence: [0.0, 0.00] 
     terminal: False
     use_metric: True
+    run_weight: 1.0
   link_pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     weight: [1000, 20000, 30, 50]
@@ -58,7 +59,7 @@ cost:
 lbfgs:
   n_iters: 100 #60
   inner_iters: 25
-  cold_start_n_iters: 100
+  cold_start_n_iters: null
   min_iters: 20
   line_search_scale:  [0.01, 0.3, 0.7,  1.0]
   fixed_iters: True
@@ -69,7 +70,7 @@ lbfgs:
   history: 6
   horizon: 1
   use_cuda_graph: True
-  n_envs: 1
+  n_problems: 1
   store_debug: False
   use_cuda_kernel: True
   stable_mode: True

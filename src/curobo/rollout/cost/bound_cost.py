@@ -257,13 +257,13 @@ class BoundCost(CostBase, BoundCostConfig):
         return cost
 
     def update_dt(self, dt: Union[float, torch.Tensor]):
-        # return super().update_dt(dt)
         if self.cost_type == BoundCostType.BOUNDS_SMOOTH:
             v_scale = dt / self._dt
             a_scale = v_scale**2
             j_scale = v_scale**3
             self.smooth_weight[1] *= a_scale
             self.smooth_weight[2] *= j_scale
+
         return super().update_dt(dt)
 
 

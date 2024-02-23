@@ -169,3 +169,35 @@ def test_locked_joints_kinematics():
     assert torch.linalg.norm(out.ee_position - out_locked.ee_position) < 1e-5
     assert torch.linalg.norm(out.ee_quaternion - out_locked.ee_quaternion) < 1e-5
     assert torch.linalg.norm(out.link_spheres_tensor - out_locked.link_spheres_tensor) < 1e-5
+
+
+def test_franka_toggle_link_collision(cfg):
+    tensor_args = TensorDeviceType()
+
+    robot_model = CudaRobotModel(cfg)
+    q_test = torch.as_tensor([0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **vars(tensor_args)).view(1, -1)
+    sph_idx = robot_model.kinematics_config.get_sphere_index_from_link_name("panda_link5")
+    state = robot_model.get_state(q_test.clone())
+
+    attached_spheres = state.link_spheres_tensor[:, sph_idx, :]
+    # check if all values are equal to position and quaternion
+    link_radius = attached_spheres[..., 3].clone()
+
+    assert torch.count_nonzero(link_radius <= 0.0) == 0
+
+    robot_model.kinematics_config.disable_link_spheres("panda_link5")
+
+    state = robot_model.get_state(q_test.clone())
+
+    attached_spheres = state.link_spheres_tensor[:, sph_idx, :]
+
+    sph_radius = attached_spheres[..., 3].clone()
+    assert torch.count_nonzero(sph_radius < 0.0)
+
+    robot_model.kinematics_config.enable_link_spheres("panda_link5")
+
+    state = robot_model.get_state(q_test.clone())
+
+    radius = link_radius - state.link_spheres_tensor[:, sph_idx, 3]
+
+    assert torch.count_nonzero(radius == 0.0)

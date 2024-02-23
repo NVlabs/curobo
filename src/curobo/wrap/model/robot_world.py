@@ -34,6 +34,7 @@ from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.robot import RobotConfig
 from curobo.types.state import JointState
+from curobo.util.logger import log_error
 from curobo.util.sample_lib import HaltonGenerator
 from curobo.util.warp import init_warp
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
@@ -60,8 +61,8 @@ class RobotWorldConfig:
         world_model: Union[None, str, Dict, WorldConfig, List[WorldConfig], List[str]] = None,
         tensor_args: TensorDeviceType = TensorDeviceType(),
         n_envs: int = 1,
-        n_meshes: int = 10,
-        n_cuboids: int = 10,
+        n_meshes: int = 50,
+        n_cuboids: int = 50,
         collision_activation_distance: float = 0.2,
         self_collision_activation_distance: float = 0.0,
         max_collision_distance: float = 1.0,
@@ -74,6 +75,8 @@ class RobotWorldConfig:
         if isinstance(robot_config, str):
             robot_config = load_yaml(join_path(get_robot_configs_path(), robot_config))["robot_cfg"]
         if isinstance(robot_config, Dict):
+            if "robot_cfg" in robot_config:
+                robot_config = robot_config["robot_cfg"]
             robot_config = RobotConfig.from_dict(robot_config, tensor_args)
         kinematics = CudaRobotModel(robot_config.kinematics)
 
@@ -178,8 +181,11 @@ class RobotWorld(RobotWorldConfig):
     def __init__(self, config: RobotWorldConfig) -> None:
         RobotWorldConfig.__init__(self, **vars(config))
         self._batch_pose_idx = None
+        self._camera_projection_rays = None
 
     def get_kinematics(self, q: torch.Tensor) -> CudaRobotModelState:
+        if len(q.shape) == 1:
+            log_error("q should be of shape [b, dof]")
         state = self.kinematics.get_state(q)
         return state
 
@@ -344,6 +350,37 @@ class RobotWorld(RobotWorldConfig):
         distance = self.pose_cost.forward_pose(x_des, x_current, self._batch_pose_idx)
         return distance
 
+    def get_point_robot_distance(self, points: torch.Tensor, q: torch.Tensor):
+        """Compute distance from the robot at q joint configuration to points (e.g., pointcloud)
+
+        Args:
+            points: [b,n,3]
+            q: [1, dof]
+
+        Returns:
+            distance: [b,1] Positive is in collision with robot
+        NOTE: This currently does not support batched robot but can be done easily.
+        """
+        if len(q.shape) == 1:
+            log_error("q should be of shape [b, dof]")
+        kin_state = self.get_kinematics(q)
+        b, n = None, None
+        if len(points.shape) == 3:
+            b, n, _ = points.shape
+            points = points.view(b * n, 3)
+
+        pt_distance = point_robot_distance(kin_state.link_spheres_tensor, points)
+
+        if b is not None:
+            pt_distance = pt_distance.view(b, n)
+
+        return pt_distance
+
+    def get_active_js(self, full_js: JointState):
+        active_jnames = self.kinematics.joint_names
+        out_js = full_js.get_ordered_joint_state(active_jnames)
+        return out_js
+
 
 @torch.jit.script
 def sum_mask(d1, d2, d3):
@@ -357,3 +394,15 @@ def mask(d1, d2, d3):
     d_total = d1 + d2 + d3
     d_mask = d_total == 0.0
     return d_mask
+
+
+@torch.jit.script
+def point_robot_distance(link_spheres_tensor, points):
+    robot_spheres = link_spheres_tensor.view(1, -1, 4).contiguous()
+    robot_radius = robot_spheres[:, :, 3]
+    points = points.unsqueeze(1)
+    sph_distance = (
+        torch.linalg.norm(points - robot_spheres[:, :, :3], dim=-1) - robot_radius
+    )  # b, n_spheres
+    pt_distance = torch.max(-1 * sph_distance, dim=-1)[0]
+    return pt_distance

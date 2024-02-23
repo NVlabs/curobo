@@ -111,7 +111,7 @@ class HaltonSampleLib(BaseSampleLib):
         super().__init__(sample_config)
         # create halton generator:
         self.halton_generator = HaltonGenerator(
-            self.ndims, seed=self.seed, tensor_args=self.tensor_args
+            self.d_action, seed=self.seed, tensor_args=self.tensor_args
         )
 
     def get_samples(self, sample_shape, base_seed=None, filter_smooth=False, **kwargs):
@@ -122,8 +122,10 @@ class HaltonSampleLib(BaseSampleLib):
             seed = self.seed if base_seed is None else base_seed
             self.sample_shape = sample_shape
             self.seed = seed
-            self.samples = self.halton_generator.get_gaussian_samples(sample_shape[0])
-            self.samples = self.samples.view(self.samples.shape[0], self.horizon, self.d_action)
+            self.samples = self.halton_generator.get_gaussian_samples(
+                sample_shape[0] * self.horizon
+            )
+            self.samples = self.samples.view(sample_shape[0], self.horizon, self.d_action)
 
             if filter_smooth:
                 self.samples = self.filter_smooth(self.samples)
@@ -301,7 +303,7 @@ class StompSampleLib(BaseSampleLib):
 
         self.filter_coeffs = None
         self.halton_generator = HaltonGenerator(
-            self.ndims, seed=self.seed, tensor_args=self.tensor_args
+            self.d_action, seed=self.seed, tensor_args=self.tensor_args
         )
 
     def get_samples(self, sample_shape, base_seed=None, **kwargs):
@@ -314,7 +316,10 @@ class StompSampleLib(BaseSampleLib):
 
             # self.seed = seed
             # torch.manual_seed(self.seed)
-            halton_samples = self.halton_generator.get_gaussian_samples(sample_shape[0])
+            halton_samples = self.halton_generator.get_gaussian_samples(
+                sample_shape[0] * self.horizon
+            ).view(sample_shape[0], self.horizon * self.d_action)
+
             halton_samples = (
                 self.stomp_scale_tril.unsqueeze(0) @ halton_samples.unsqueeze(-1)
             ).squeeze(-1)
@@ -415,7 +420,7 @@ class HaltonGenerator:
         up_bounds=[1],
         low_bounds=[0],
         seed=123,
-        store_buffer: Optional[int] = 1000,
+        store_buffer: Optional[int] = 2000,
     ):
         self._seed = seed
         self.tensor_args = tensor_args
@@ -499,7 +504,7 @@ class HaltonGenerator:
     @profiler.record_function("halton_generator/gaussian_samples")
     def get_gaussian_samples(self, num_samples, variance=1.0):
         std_dev = np.sqrt(variance)
-        uniform_samples = self.get_samples(num_samples)
+        uniform_samples = self.get_samples(num_samples, False)
         gaussian_halton_samples = gaussian_transform(
             uniform_samples, self.proj_mat, self.i_mat, std_dev
         )
@@ -508,7 +513,7 @@ class HaltonGenerator:
 
 @torch.jit.script
 def gaussian_transform(
-    uniform_samples: torch.Tensor, proj_mat: torch.Tensor, i_mat: torch.Tensor, variance: float
+    uniform_samples: torch.Tensor, proj_mat: torch.Tensor, i_mat: torch.Tensor, std_dev: float
 ):
     """Compute a guassian transform of uniform samples.
 
@@ -525,7 +530,7 @@ def gaussian_transform(
     # these values.
     changed_samples = 1.99 * uniform_samples - 0.99
     gaussian_halton_samples = proj_mat * torch.erfinv(changed_samples)
-    i_mat = i_mat * variance
+    i_mat = i_mat * std_dev
     gaussian_halton_samples = torch.matmul(gaussian_halton_samples, i_mat)
     return gaussian_halton_samples
 

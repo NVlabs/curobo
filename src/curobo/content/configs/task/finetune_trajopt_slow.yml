@@ -31,16 +31,16 @@ model:
 cost:
   pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0] # orientation, position for all timesteps
-    run_vec_weight: [0.00,0.00,0.00,0.0,0.0,0.0] # running weight orientation, position
-    weight: [2000,500000.0,30,50] 
+    run_vec_weight: [1.00,1.00,1.00,1.0,1.0,1.0] # running weight orientation, position
+    weight: [2000,500000.0,30,50] #[150.0, 2000.0, 30, 40]
     vec_convergence: [0.0,0.0] # orientation, position, orientation metric activation, position metric activation
     terminal: True
-    run_weight: 1.0 
+    run_weight: 0.0 #0.05
     use_metric: True
 
   link_pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0] # orientation, position for all timesteps
-    run_vec_weight: [0.00,0.00,0.00,0.0,0.0,0.0] # running weight orientation, position
+    run_vec_weight: [1.00,1.00,1.00,1.0,1.0,1.0] # running weight orientation, position
     weight: [2000,500000.0,30,50] #[150.0, 2000.0, 30, 40]
     vec_convergence: [0.0,0.0] # orientation, position, orientation metric activation, position metric activation
     terminal: True
@@ -55,7 +55,9 @@ cost:
 
   bound_cfg:
     weight: [5000.0, 50000.0, 50000.0, 50000.0] # needs to be 3 values
-    smooth_weight: [0.0,5000.0, 50.0, 0.0]  # [vel, acc, jerk,] 
+    
+    smooth_weight: [0.0,50000.0, 500.0, 0.0]  # [vel, acc, jerk,] 
+    
     run_weight_velocity: 0.0
     run_weight_acceleration: 1.0
     run_weight_jerk: 1.0
@@ -81,7 +83,7 @@ cost:
 lbfgs:
   n_iters: 400 # 400 
   inner_iters: 25 
-  cold_start_n_iters: null 
+  cold_start_n_iters: 200 
   min_iters: 25
   line_search_scale: [0.01, 0.3, 0.7,1.0]   #   #
   fixed_iters: True

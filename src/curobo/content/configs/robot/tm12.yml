@@ -12,7 +12,7 @@
 robot_cfg:
   kinematics:
     use_usd_kinematics: False
-    usd_path: "robot/non_shipping/techman/tm12.usd"
+    usd_path: "robot/techman/tm12.usd"
     usd_robot_root: "/tm12"
     usd_flip_joints:
       {

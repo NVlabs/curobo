@@ -183,6 +183,7 @@ class UrdfKinematicsParser(KinematicsParser):
         else:
             # convert to list:
             mesh_pose = Pose.from_matrix(mesh_pose).to_list()
+
         return CuroboMesh(
             name=link_name,
             pose=mesh_pose,

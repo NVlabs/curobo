@@ -72,7 +72,11 @@ class WorldMeshCollision(WorldPrimitiveCollision):
         return super()._init_cache()
 
     def load_collision_model(
-        self, world_model: WorldConfig, env_idx: int = 0, load_obb_obs: bool = True
+        self,
+        world_model: WorldConfig,
+        env_idx: int = 0,
+        load_obb_obs: bool = True,
+        fix_cache_reference: bool = False,
     ):
         max_nmesh = len(world_model.mesh)
         if max_nmesh > 0:
@@ -91,14 +95,16 @@ class WorldMeshCollision(WorldPrimitiveCollision):
 
             self.collision_types["mesh"] = True
         if load_obb_obs:
-            super().load_collision_model(world_model, env_idx)
+            super().load_collision_model(
+                world_model, env_idx, fix_cache_reference=fix_cache_reference
+            )
         else:
             self.world_model = world_model
 
     def load_batch_collision_model(self, world_config_list: List[WorldConfig]):
         max_nmesh = max([len(x.mesh) for x in world_config_list])
         if self._mesh_tensor_list is None or self._mesh_tensor_list[0].shape[1] < max_nmesh:
-            log_info("Creating new Mesh cache: " + str(max_nmesh))
+            log_warn("Creating new Mesh cache: " + str(max_nmesh))
             self._create_mesh_cache(max_nmesh)
 
         for env_idx, world_model in enumerate(world_config_list):

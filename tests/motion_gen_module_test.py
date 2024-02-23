@@ -23,7 +23,7 @@ from curobo.util_file import get_robot_configs_path, get_world_configs_path, joi
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="module")
 def motion_gen():
     tensor_args = TensorDeviceType()
     world_file = "collision_table.yml"
@@ -38,7 +38,7 @@ def motion_gen():
     return motion_gen_instance
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="module")
 def motion_gen_batch_env():
     tensor_args = TensorDeviceType()
     world_files = ["collision_table.yml", "collision_test.yml"]
@@ -101,6 +101,7 @@ def test_motion_gen_goalset(motion_gen):
         state.ee_pos_seq.repeat(2, 1).view(1, -1, 3),
         quaternion=state.ee_quat_seq.repeat(2, 1).view(1, -1, 4),
     )
+    goal_pose.position[0, 0, 0] -= 0.1
 
     start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3)
 
@@ -121,6 +122,13 @@ def test_motion_gen_goalset(motion_gen):
         < 0.005
     )
 
+    assert result.goalset_index is not None
+
+    assert (
+        torch.norm(goal_pose.position[:, result.goalset_index, :] - reached_state.ee_pos_seq)
+        < 0.005
+    )
+
 
 def test_motion_gen_batch_goalset(motion_gen):
     motion_gen.reset()
@@ -130,28 +138,35 @@ def test_motion_gen_batch_goalset(motion_gen):
     state = motion_gen.compute_kinematics(JointState.from_position(retract_cfg.view(1, -1)))
 
     goal_pose = Pose(
-        state.ee_pos_seq.repeat(4, 1).view(2, -1, 3),
-        quaternion=state.ee_quat_seq.repeat(4, 1).view(2, -1, 4),
+        state.ee_pos_seq.repeat(6, 1).view(3, -1, 3).clone(),
+        quaternion=state.ee_quat_seq.repeat(6, 1).view(3, -1, 4).clone(),
     )
+    goal_pose.position[0, 1, 1] = 0.2
+    goal_pose.position[1, 0, 1] = 0.2
+    goal_pose.position[2, 1, 1] = 0.2
 
-    start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3).repeat_seeds(2)
+    start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.2).repeat_seeds(3)
 
-    m_config = MotionGenPlanConfig(False, True, num_trajopt_seeds=10)
+    m_config = MotionGenPlanConfig(False, True, num_trajopt_seeds=10, max_attempts=1)
 
     result = motion_gen.plan_batch_goalset(start_state, goal_pose, m_config)
 
     # get final solutions:
-    assert torch.count_nonzero(result.success) > 0
+    assert torch.count_nonzero(result.success) == result.success.shape[0]
 
     reached_state = motion_gen.compute_kinematics(result.optimized_plan.trim_trajectory(-1))
 
-    assert (
-        torch.min(
-            torch.norm(goal_pose.position[:, 0, :] - reached_state.ee_pos_seq),
-            torch.norm(goal_pose.position[:, 1, :] - reached_state.ee_pos_seq),
-        )
-        < 0.005
+    #
+    goal_position = torch.cat(
+        [
+            goal_pose.position[x, result.goalset_index[x], :].unsqueeze(0)
+            for x in range(len(result.goalset_index))
+        ]
     )
+
+    assert result.goalset_index is not None
+
+    assert torch.max(torch.norm(goal_position - reached_state.ee_pos_seq, dim=-1)) < 0.005
 
 
 def test_motion_gen_batch(motion_gen):
@@ -188,7 +203,6 @@ def test_motion_gen_batch(motion_gen):
     ],
 )
 def test_motion_gen_batch_graph(motion_gen_str: str, interpolation: InterpolateType, request):
-    # return
     motion_gen = request.getfixturevalue(motion_gen_str)
 
     motion_gen.graph_planner.interpolation_type = interpolation
@@ -274,6 +288,17 @@ def test_motion_gen_batch_env_goalset(motion_gen_batch_env):
         )
         < 0.005
     )
+
+    goal_position = torch.cat(
+        [
+            goal_pose.position[x, result.goalset_index[x], :].unsqueeze(0)
+            for x in range(len(result.goalset_index))
+        ]
+    )
+
+    assert result.goalset_index is not None
+
+    assert torch.max(torch.norm(goal_position - reached_state.ee_pos_seq, dim=-1)) < 0.005
 
 
 @pytest.mark.parametrize(
