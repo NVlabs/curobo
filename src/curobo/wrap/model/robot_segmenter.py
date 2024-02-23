@@ -17,10 +17,8 @@ import torch
 from torch.profiler import record_function
 
 # CuRobo
-from curobo.geom.cv import (
-    get_projection_rays,
-    project_depth_using_rays,
-)
+from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
+from curobo.geom.cv import get_projection_rays, project_depth_using_rays
 from curobo.geom.types import PointCloud
 from curobo.types.base import TensorDeviceType
 from curobo.types.camera import CameraObservation
@@ -188,6 +186,18 @@ class RobotSegmenter:
         mask, filtered_image = mask_image(camera_obs.depth_image, dist, self.distance_threshold)
 
         return mask, filtered_image
+
+    @property
+    def kinematics(self) -> CudaRobotModel:
+        return self._robot_world.kinematics
+
+    @property
+    def robot_world(self) -> RobotWorld:
+        return self._robot_world
+
+    @property
+    def base_link(self) -> str:
+        return self.kinematics.base_link
 
 
 @torch.jit.script
