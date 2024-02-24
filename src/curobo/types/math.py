@@ -365,7 +365,9 @@ class Pose(Sequence):
 
     @profiler.record_function("pose/multiply")
     def multiply(self, other_pose: Pose):
-        if self.shape == other_pose.shape or (self.shape[0] == 1 and other_pose.shape[0] > 1):
+        if self.shape == other_pose.shape or (
+            (self.shape[0] == 1 and other_pose.shape[0] > 1) and len(other_pose.shape) == 2
+        ):
             p3, q3 = pose_multiply(
                 self.position, self.quaternion, other_pose.position, other_pose.quaternion
             )

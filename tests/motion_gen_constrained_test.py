@@ -30,23 +30,29 @@ def motion_gen(request):
     tensor_args = TensorDeviceType()
     world_file = "collision_table.yml"
     robot_file = "franka.yml"
+
     motion_gen_config = MotionGenConfig.load_from_robot_config(
         robot_file,
         world_file,
         tensor_args,
         use_cuda_graph=True,
-        project_pose_to_goal_frame=request.param,
+        project_pose_to_goal_frame=request.param[0],
     )
     motion_gen_instance = MotionGen(motion_gen_config)
-    motion_gen_instance.warmup(enable_graph=False, warmup_js_trajopt=False)
+
+    motion_gen_instance.warmup(
+        enable_graph=False, warmup_js_trajopt=False, n_goalset=request.param[1]
+    )
     return motion_gen_instance
 
 
 @pytest.mark.parametrize(
     "motion_gen",
     [
-        (True),
-        (False),
+        ([True, -1]),
+        ([False, -1]),
+        ([True, 10]),
+        ([False, 10]),
     ],
     indirect=True,
 )
@@ -77,8 +83,10 @@ def test_approach_grasp_pose(motion_gen):
 @pytest.mark.parametrize(
     "motion_gen",
     [
-        (True),
-        (False),
+        ([True, -1]),
+        ([False, -1]),
+        ([True, 10]),
+        ([False, 10]),
     ],
     indirect=True,
 )
@@ -112,8 +120,10 @@ def test_reach_only_position(motion_gen):
 @pytest.mark.parametrize(
     "motion_gen",
     [
-        (True),
-        (False),
+        ([True, -1]),
+        ([False, -1]),
+        ([True, 10]),
+        ([False, 10]),
     ],
     indirect=True,
 )
@@ -147,8 +157,10 @@ def test_reach_only_orientation(motion_gen):
 @pytest.mark.parametrize(
     "motion_gen",
     [
-        (True),
-        (False),
+        ([True, -1]),
+        ([False, -1]),
+        ([True, 10]),
+        ([False, 10]),
     ],
     indirect=True,
 )
@@ -186,8 +198,10 @@ def test_hold_orientation(motion_gen):
 @pytest.mark.parametrize(
     "motion_gen",
     [
-        (True),
-        (False),
+        ([True, -1]),
+        ([False, -1]),
+        ([True, 10]),
+        ([False, 10]),
     ],
     indirect=True,
 )
@@ -224,8 +238,10 @@ def test_hold_position(motion_gen):
 @pytest.mark.parametrize(
     "motion_gen",
     [
-        (False),
-        (True),
+        ([True, -1]),
+        ([False, -1]),
+        ([True, 10]),
+        ([False, 10]),
     ],
     indirect=True,
 )
@@ -276,8 +292,10 @@ def test_hold_partial_pose(motion_gen):
 @pytest.mark.parametrize(
     "motion_gen",
     [
-        (False),
-        (True),
+        ([True, -1]),
+        ([False, -1]),
+        ([True, 10]),
+        ([False, 10]),
     ],
     indirect=True,
 )
