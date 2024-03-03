@@ -192,13 +192,14 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    b_list = [4096]
+    b_list = [256,512,1024,2048,4096]
     # b_list = [2]
 
     robot_list = get_robot_list()
     robot_list = [robot_list[0]]
 
-    world_file = "collision_base.yml"
+    # world_file = "benchmark_shelf.yml"
+    world_file = "benchmark_shelf.yml"
 
     print("running...")
     data = {"robot": [], "Kinematics": [], "Collision Checking": [], "Batch Size": []}

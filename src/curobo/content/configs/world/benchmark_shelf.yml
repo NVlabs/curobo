@@ -26,24 +26,24 @@ mesh:
   Cow:
     pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     file_path: "scene/Cow.obj"
-  City:
-    pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
-    file_path: "scene/City.obj"
-  Bridge:
-    pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
-    file_path: "scene/Bridge.obj"
+  # City:
+  #   pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+  #   file_path: "scene/City.obj"
+  # Bridge:
+  #   pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+  #   file_path: "scene/Bridge.obj"
   Fish:
     pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     file_path: "scene/Fish.obj"
   Sheep:
     pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     file_path: "scene/Sheep.obj"
-  Rose:
-    pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
-    file_path: "scene/Rose.obj"
+  # Rose:
+  #   pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+  #   file_path: "scene/Rose.obj"
   Board:
     pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     file_path: "scene/Snakeboard.obj"
-  Yeah:
-    pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
-    file_path: "scene/Yeah.obj"
+  # Yeah:
+  #   pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+  #   file_path: "scene/Yeah.obj"
