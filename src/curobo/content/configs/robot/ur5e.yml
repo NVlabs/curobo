@@ -92,7 +92,7 @@ robot_cfg:
           "radius": 0.043
       tool0:
         - "center": [0.001, 0.001, 0.05]
-          "radius": 0.05
+          "radius": -0.01 #0.05
 
 
     collision_sphere_buffer: 0.005
@@ -109,6 +109,7 @@ robot_cfg:
       'wrist_1_link': 0, 
       'wrist_2_link': 0,
       'wrist_3_link' : 0,
+      'tool0': 0.025,
       } 
       
     use_global_cumul: True

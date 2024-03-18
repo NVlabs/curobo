@@ -21,6 +21,7 @@ import warp as wp
 from curobo.cuda_robot_model.types import JointLimits
 from curobo.types.robot import JointState
 from curobo.types.tensor import T_DOF
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp import init_warp
 
 # Local Folder
@@ -267,7 +268,7 @@ class BoundCost(CostBase, BoundCostConfig):
         return super().update_dt(dt)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def forward_bound_cost(p, lower_bounds, upper_bounds, weight):
     # c = weight * torch.sum(torch.nn.functional.relu(torch.max(lower_bounds - p, p - upper_bounds)), dim=-1)
 
@@ -281,7 +282,7 @@ def forward_bound_cost(p, lower_bounds, upper_bounds, weight):
     return c
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def forward_all_bound_cost(
     p,
     v,

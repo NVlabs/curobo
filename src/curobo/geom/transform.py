@@ -18,6 +18,7 @@ import warp as wp
 # CuRobo
 from curobo.curobolib.kinematics import rotation_matrix_to_quaternion
 from curobo.util.logger import log_error
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp import init_warp
 
 
@@ -27,11 +28,11 @@ def transform_points(
     if out_points is None:
         out_points = torch.zeros((points.shape[0], 3), device=points.device, dtype=points.dtype)
     if out_gp is None:
-        out_gp = torch.zeros((position.shape[0], 3), device=position.device)
+        out_gp = torch.zeros((position.shape[0], 3), device=position.device, dtype=points.dtype)
     if out_gq is None:
-        out_gq = torch.zeros((quaternion.shape[0], 4), device=quaternion.device)
+        out_gq = torch.zeros((quaternion.shape[0], 4), device=quaternion.device, dtype=points.dtype)
     if out_gpt is None:
-        out_gpt = torch.zeros((points.shape[0], 3), device=position.device)
+        out_gpt = torch.zeros((points.shape[0], 3), device=position.device, dtype=points.dtype)
     out_points = TransformPoint.apply(
         position, quaternion, points, out_points, out_gp, out_gq, out_gpt
     )
@@ -46,18 +47,20 @@ def batch_transform_points(
             (points.shape[0], points.shape[1], 3), device=points.device, dtype=points.dtype
         )
     if out_gp is None:
-        out_gp = torch.zeros((position.shape[0], 3), device=position.device)
+        out_gp = torch.zeros((position.shape[0], 3), device=position.device, dtype=points.dtype)
     if out_gq is None:
-        out_gq = torch.zeros((quaternion.shape[0], 4), device=quaternion.device)
+        out_gq = torch.zeros((quaternion.shape[0], 4), device=quaternion.device, dtype=points.dtype)
     if out_gpt is None:
-        out_gpt = torch.zeros((points.shape[0], points.shape[1], 3), device=position.device)
+        out_gpt = torch.zeros(
+            (points.shape[0], points.shape[1], 3), device=position.device, dtype=points.dtype
+        )
     out_points = BatchTransformPoint.apply(
         position, quaternion, points, out_points, out_gp, out_gq, out_gpt
     )
     return out_points
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def get_inv_transform(w_rot_c, w_trans_c):
     # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor]
     c_rot_w = w_rot_c.transpose(-1, -2)
@@ -65,7 +68,7 @@ def get_inv_transform(w_rot_c, w_trans_c):
     return c_rot_w, c_trans_w
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def transform_point_inverse(point, rot, trans):
     # type: (Tensor, Tensor, Tensor) -> Tensor
 

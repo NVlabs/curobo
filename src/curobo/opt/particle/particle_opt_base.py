@@ -263,7 +263,7 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
             trajectory.costs = trajectory.costs.view(
                 self.n_problems, self.particles_per_problem, self.horizon
             )
-            with profiler.record_function("mpc/mppi/update_distribution"):
+            with profiler.record_function("mppi/update_distribution"):
                 self._update_distribution(trajectory)
             if not self.use_cuda_graph and self.store_debug:
                 self.debug.append(self._get_action_seq(mode=self.sample_mode).clone())

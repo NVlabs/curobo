@@ -9,54 +9,24 @@
 # its affiliates is strictly prohibited.
 #
 
+""" This module contains aliases for structured Tensors, improving readability."""
+
+# Third Party
+import torch
+
 # CuRobo
 from curobo.util.logger import log_warn
 
-try:
-    # Third Party
-    from torchtyping import TensorType
-except ImportError:
-    log_warn("torchtyping could not be imported, falling back to basic types")
-    TensorType = None
-    # Third Party
-    import torch
-b_dof = ["batch", "dof"]
-b_value = ["batch", "value"]
-bh_value = ["batch", "horizon", "value"]
-bh_dof = ["batch", "horizon", "dof"]
-h_dof = ["horizon", "dof"]
+T_DOF = torch.Tensor  #: Tensor of shape [degrees of freedom]
+T_BDOF = torch.Tensor  #: Tensor of shape [batch, degrees of freedom]
+T_BHDOF_float = torch.Tensor  #: Tensor of shape [batch, horizon, degrees of freedom]
+T_HDOF_float = torch.Tensor  #: Tensor of shape [horizon, degrees of freedom]
 
-if TensorType is not None:
-    T_DOF = TensorType[tuple(["dof"] + [float])]
-    T_BDOF = TensorType[tuple(b_dof + [float])]
-    T_BValue_float = TensorType[tuple(b_value + [float])]
-    T_BHValue_float = TensorType[tuple(bh_value + [float])]
-    T_BValue_bool = TensorType[tuple(b_value + [bool])]
-    T_BValue_int = TensorType[tuple(b_value + [int])]
+T_BValue_float = torch.Tensor  #: Float Tensor of shape [batch, 1].
+T_BHValue_float = torch.Tensor  #: Float Tensor of shape [batch, horizon, 1].
+T_BValue_bool = torch.Tensor  #: Bool Tensor of shape [batch, horizon, 1].
+T_BValue_int = torch.Tensor  #: Int Tensor of shape [batch, horizon, 1].
 
-    T_BPosition = TensorType["batch", "xyz":3, float]
-    T_BQuaternion = TensorType["batch", "wxyz":4, float]
-    T_BRotation = TensorType["batch", 3, 3, float]
-    T_Position = TensorType["xyz":3, float]
-    T_Quaternion = TensorType["wxyz":4, float]
-    T_Rotation = TensorType[3, 3, float]
-
-    T_BHDOF_float = TensorType[tuple(bh_dof + [float])]
-    T_HDOF_float = TensorType[tuple(h_dof + [float])]
-else:
-    T_DOF = torch.Tensor
-    T_BDOF = torch.Tensor
-    T_BValue_float = torch.Tensor
-    T_BHValue_float = torch.Tensor
-    T_BValue_bool = torch.Tensor
-    T_BValue_int = torch.Tensor
-
-    T_BPosition = torch.Tensor
-    T_BQuaternion = torch.Tensor
-    T_BRotation = torch.Tensor
-    T_Position = torch.Tensor
-    T_Quaternion = torch.Tensor
-    T_Rotation = torch.Tensor
-
-    T_BHDOF_float = torch.Tensor
-    T_HDOF_float = torch.Tensor
+T_BPosition = torch.Tensor  #: Tensor of shape [batch, 3].
+T_BQuaternion = torch.Tensor  #: Tensor of shape [batch, 4].
+T_BRotation = torch.Tensor  #: Tensor of shape [batch, 3,3].

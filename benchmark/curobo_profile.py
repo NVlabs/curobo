@@ -75,12 +75,13 @@ def load_curobo(
         num_ik_seeds=30,
         num_trajopt_seeds=12,
         interpolation_dt=0.025,
+        finetune_trajopt_iters=200,
         # grad_trajopt_iters=200,
         store_ik_debug=enable_log,
         store_trajopt_debug=enable_log,
     )
     mg = MotionGen(motion_gen_config)
-    mg.warmup(enable_graph=False)
+    mg.warmup(enable_graph=False, warmup_js_trajopt=False)
     return mg
 
 
@@ -140,14 +141,17 @@ def benchmark_mb(args):
                 print(result.total_time, result.solve_time)
                 # continue
                 # load obstacles
-
+                # exit()
                 # run planner
                 with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+                    # torch.cuda.profiler.start()
                     result = mg.plan_single(
                         start_state,
                         Pose.from_list(pose),
                         plan_config,
                     )
+                    # torch.cuda.profiler.stop()
+
                 print("Exporting the trace..")
                 prof.export_chrome_trace(join_path(args.save_path, args.file_name) + ".json")
                 print(result.success, result.status)
@@ -191,5 +195,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    setup_curobo_logger("error")
+    setup_curobo_logger("warn")
     benchmark_mb(args)

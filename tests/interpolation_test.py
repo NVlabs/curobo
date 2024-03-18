@@ -19,10 +19,11 @@ from curobo.util.trajectory import InterpolateType, get_batch_interpolated_traje
 
 
 def test_linear_interpolation():
-    b, h, dof = 1, 24, 1
-    raw_dt = 0.4
-    int_dt = 0.01
     tensor_args = TensorDeviceType()
+
+    b, h, dof = 1, 24, 1
+    raw_dt = tensor_args.to_device(0.4)
+    int_dt = 0.01
     # initialize raw trajectory:
     in_traj = JointState.zeros((b, h, dof), tensor_args)
     in_traj.position = torch.zeros((b, h, dof), device=tensor_args.device)
@@ -62,6 +63,3 @@ def test_linear_interpolation():
         ).item()
         < 0.05
     )
-
-
-# test_linear_interpolation()

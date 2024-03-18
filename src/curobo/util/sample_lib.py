@@ -25,6 +25,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 # CuRobo
 from curobo.types.base import TensorDeviceType
 from curobo.util.logger import log_error, log_warn
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 # Local Folder
 from ..opt.particle.particle_opt_utils import get_stomp_cov
@@ -511,7 +512,7 @@ class HaltonGenerator:
         return gaussian_halton_samples
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def gaussian_transform(
     uniform_samples: torch.Tensor, proj_mat: torch.Tensor, i_mat: torch.Tensor, std_dev: float
 ):

@@ -23,6 +23,7 @@ from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.state import JointState
 from curobo.types.tensor import T_DOF
+from curobo.util.logger import log_error
 from curobo.util.tensor_util import clone_if_not_none, copy_if_not_none
 
 
@@ -138,6 +139,13 @@ class CSpaceConfig:
             self.acceleration_scale = self.tensor_args.to_device(self.acceleration_scale)
         if isinstance(self.jerk_scale, List):
             self.jerk_scale = self.tensor_args.to_device(self.jerk_scale)
+        # check shapes:
+        if self.retract_config is not None:
+            dof = self.retract_config.shape
+            if self.cspace_distance_weight is not None and self.cspace_distance_weight.shape != dof:
+                log_error("cspace_distance_weight shape does not match retract_config")
+            if self.null_space_weight is not None and self.null_space_weight.shape != dof:
+                log_error("null_space_weight shape does not match retract_config")
 
     def inplace_reindex(self, joint_names: List[str]):
         new_index = [self.joint_names.index(j) for j in joint_names]
@@ -207,8 +215,8 @@ class CSpaceConfig:
     ):
         retract_config = ((joint_position_upper + joint_position_lower) / 2).flatten()
         n_dof = retract_config.shape[-1]
-        null_space_weight = torch.ones(n_dof, **vars(tensor_args))
-        cspace_distance_weight = torch.ones(n_dof, **vars(tensor_args))
+        null_space_weight = torch.ones(n_dof, **(tensor_args.as_torch_dict()))
+        cspace_distance_weight = torch.ones(n_dof, **(tensor_args.as_torch_dict()))
         return CSpaceConfig(
             joint_names,
             retract_config,
@@ -289,8 +297,8 @@ class KinematicsTensorConfig:
         retract_config = (
             (self.joint_limits.position[1] + self.joint_limits.position[0]) / 2
         ).flatten()
-        null_space_weight = torch.ones(self.n_dof, **vars(self.tensor_args))
-        cspace_distance_weight = torch.ones(self.n_dof, **vars(self.tensor_args))
+        null_space_weight = torch.ones(self.n_dof, **(self.tensor_args.as_torch_dict()))
+        cspace_distance_weight = torch.ones(self.n_dof, **(self.tensor_args.as_torch_dict()))
         joint_names = self.joint_names
         self.cspace = CSpaceConfig(
             joint_names,

@@ -39,7 +39,7 @@ def demo_basic_robot():
 
     # compute forward kinematics:
 
-    q = torch.rand((10, kin_model.get_dof()), **vars(tensor_args))
+    q = torch.rand((10, kin_model.get_dof()), **(tensor_args.as_torch_dict()))
     out = kin_model.get_state(q)
     # here is the kinematics state:
     # print(out)
@@ -55,7 +55,7 @@ def demo_full_config_robot():
     kin_model = CudaRobotModel(robot_cfg.kinematics)
 
     # compute forward kinematics:
-    q = torch.rand((10, kin_model.get_dof()), **vars(tensor_args))
+    q = torch.rand((10, kin_model.get_dof()), **(tensor_args.as_torch_dict()))
     out = kin_model.get_state(q)
     # here is the kinematics state:
     # print(out)

@@ -185,11 +185,11 @@ namespace Curobo
             if (coll_matrix[i * nspheres + j] == 1)
             {
               float4 sph1 = __rs_shared[i];
-
-              if ((sph1.w <= 0.0) || (sph2.w <= 0.0))
-              {
-                continue;
-              }
+              //
+              //if ((sph1.w <= 0.0) || (sph2.w <= 0.0))
+              //{
+              //  continue;
+              //}
               float r_diff = sph1.w + sph2.w;
               float d      = sqrt((sph1.x - sph2.x) * (sph1.x - sph2.x) +
                                   (sph1.y - sph2.y) * (sph1.y - sph2.y) +
@@ -380,10 +380,10 @@ namespace Curobo
           float4 sph1 = __rs_shared[NBPB * i + l];
           float4 sph2 = __rs_shared[NBPB * j + l];
 
-          if ((sph1.w <= 0.0) || (sph2.w <= 0.0))
-          {
-            continue;
-          }
+          //if ((sph1.w <= 0.0) || (sph2.w <= 0.0))
+          //{
+          //  continue;
+          //}
           float r_diff =
             sph1.w + sph2.w; // sum of two radii, radii include respective offsets
           float d = sqrt((sph1.x - sph2.x) * (sph1.x - sph2.x) +

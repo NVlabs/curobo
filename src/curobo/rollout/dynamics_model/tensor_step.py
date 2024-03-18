@@ -19,6 +19,7 @@ import torch
 # CuRobo
 from curobo.types.base import TensorDeviceType
 from curobo.types.robot import JointState
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 # Local Folder
 from .integration_utils import (
@@ -544,7 +545,7 @@ class TensorStepPositionCliqueKernel(TensorStepBase):
         return new_signal
 
 
-@torch.jit.script
+@get_torch_jit_decorator(force_jit=True)
 def filter_signal_jit(signal, kernel):
     b, h, dof = signal.shape
 

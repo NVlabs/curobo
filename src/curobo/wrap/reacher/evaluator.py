@@ -20,6 +20,7 @@ import torch.autograd.profiler as profiler
 # CuRobo
 from curobo.types.robot import JointState
 from curobo.types.tensor import T_DOF
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.trajectory import calculate_dt
 
 
@@ -32,7 +33,7 @@ class TrajEvaluatorConfig:
     max_dt: float = 0.1
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def compute_path_length(vel, traj_dt, cspace_distance_weight):
     pl = torch.sum(
         torch.sum(torch.abs(vel) * traj_dt.unsqueeze(-1) * cspace_distance_weight, dim=-1), dim=-1
@@ -40,24 +41,25 @@ def compute_path_length(vel, traj_dt, cspace_distance_weight):
     return pl
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def compute_path_length_cost(vel, cspace_distance_weight):
     pl = torch.sum(torch.sum(torch.abs(vel) * cspace_distance_weight, dim=-1), dim=-1)
     return pl
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def smooth_cost(abs_acc, abs_jerk, opt_dt):
     # acc = torch.max(torch.max(abs_acc, dim=-1)[0], dim=-1)[0]
     # jerk = torch.max(torch.max(abs_jerk, dim=-1)[0], dim=-1)[0]
     jerk = torch.mean(torch.max(abs_jerk, dim=-1)[0], dim=-1)
     mean_acc = torch.mean(torch.max(abs_acc, dim=-1)[0], dim=-1)  # [0]
-    a = (jerk * 0.001) + 5.0 * opt_dt + (mean_acc * 0.01)
+    a = (jerk * 0.001) + 10.0 * opt_dt + (mean_acc * 0.01)
+    # a = (jerk * 0.001) + 50.0 * opt_dt + (mean_acc * 0.01)
 
     return a
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def compute_smoothness(
     vel: torch.Tensor,
     acc: torch.Tensor,
@@ -104,7 +106,7 @@ def compute_smoothness(
     return (acc_label, smooth_cost(abs_acc, abs_jerk, dt_score))
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def compute_smoothness_opt_dt(
     vel, acc, jerk, max_vel: torch.Tensor, max_acc: float, max_jerk: float, opt_dt: torch.Tensor
 ):

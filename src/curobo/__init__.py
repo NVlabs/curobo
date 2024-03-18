@@ -56,8 +56,10 @@ def _get_version():
             # `importlib_metadata` is the back ported library for older versions of python.
             # Third Party
             from importlib_metadata import version
-
-        return version("nvidia_curobo")
+        try:
+            return version("nvidia_curobo")
+        except:
+            return "v0.7.0-no-tag"
 
 
 # Set `__version__` attribute

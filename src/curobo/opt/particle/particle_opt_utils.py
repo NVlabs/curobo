@@ -18,6 +18,7 @@ import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo.types.base import TensorDeviceType
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 class SquashType(Enum):
@@ -74,7 +75,7 @@ def get_stomp_cov(
     return cov, scale_tril
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def get_stomp_cov_jit(
     horizon: int,
     d_action: int,
@@ -245,7 +246,7 @@ def gaussian_kl(mean0, cov0, mean1, cov1, cov_type="full"):
     return term1 + mahalanobis_dist + term3
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def cost_to_go(cost_seq, gamma_seq, only_first=False):
     # type: (Tensor, Tensor, bool) -> Tensor
 

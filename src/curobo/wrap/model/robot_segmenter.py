@@ -19,13 +19,16 @@ from torch.profiler import record_function
 # CuRobo
 from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
 from curobo.geom.cv import get_projection_rays, project_depth_using_rays
-from curobo.geom.types import PointCloud
 from curobo.types.base import TensorDeviceType
 from curobo.types.camera import CameraObservation
-from curobo.types.math import Pose
 from curobo.types.robot import RobotConfig
 from curobo.types.state import JointState
 from curobo.util.logger import log_error
+from curobo.util.torch_utils import (
+    get_torch_compile_options,
+    get_torch_jit_decorator,
+    is_torch_compile_available,
+)
 from curobo.util_file import get_robot_configs_path, join_path, load_yaml
 from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
 
@@ -36,6 +39,7 @@ class RobotSegmenter:
         robot_world: RobotWorld,
         distance_threshold: float = 0.05,
         use_cuda_graph: bool = True,
+        ops_dtype: torch.dtype = torch.float32,
     ):
         self._robot_world = robot_world
         self._projection_rays = None
@@ -48,11 +52,12 @@ class RobotSegmenter:
         self._use_cuda_graph = use_cuda_graph
         self.tensor_args = robot_world.tensor_args
         self.distance_threshold = distance_threshold
+        self._ops_dtype = ops_dtype
 
     @staticmethod
     def from_robot_file(
         robot_file: Union[str, Dict],
-        collision_sphere_buffer: Optional[float],
+        collision_sphere_buffer: Optional[float] = None,
         distance_threshold: float = 0.05,
         use_cuda_graph: bool = True,
         tensor_args: TensorDeviceType = TensorDeviceType(),
@@ -78,7 +83,7 @@ class RobotSegmenter:
     def get_pointcloud_from_depth(self, camera_obs: CameraObservation):
         if self._projection_rays is None:
             self.update_camera_projection(camera_obs)
-        depth_image = camera_obs.depth_image
+        depth_image = camera_obs.depth_image.to(dtype=self._ops_dtype)
         if len(depth_image.shape) == 2:
             depth_image = depth_image.unsqueeze(0)
         points = project_depth_using_rays(depth_image, self._projection_rays)
@@ -91,7 +96,7 @@ class RobotSegmenter:
             intrinsics = intrinsics.unsqueeze(0)
         project_rays = get_projection_rays(
             camera_obs.depth_image.shape[-2], camera_obs.depth_image.shape[-1], intrinsics
-        )
+        ).to(dtype=self._ops_dtype)
 
         if self._projection_rays is None:
             self._projection_rays = project_rays
@@ -157,8 +162,12 @@ class RobotSegmenter:
     def _mask_op(self, camera_obs, q):
         if len(q.shape) == 1:
             q = q.unsqueeze(0)
+
+        robot_spheres = self._robot_world.get_kinematics(q).link_spheres_tensor
+
         points = self.get_pointcloud_from_depth(camera_obs)
         camera_to_robot = camera_obs.pose
+        points = points.to(dtype=torch.float32)
 
         if self._out_points_buffer is None:
             self._out_points_buffer = points.clone()
@@ -181,9 +190,9 @@ class RobotSegmenter:
 
         out_points = points_in_robot_frame
 
-        dist = self._robot_world.get_point_robot_distance(out_points, q)
-
-        mask, filtered_image = mask_image(camera_obs.depth_image, dist, self.distance_threshold)
+        mask, filtered_image = mask_spheres_image(
+            camera_obs.depth_image, robot_spheres, out_points, self.distance_threshold
+        )
 
         return mask, filtered_image
 
@@ -200,10 +209,43 @@ class RobotSegmenter:
         return self.kinematics.base_link
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def mask_image(
     image: torch.Tensor, distance: torch.Tensor, distance_threshold: float
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    distance = distance.view(
+        image.shape[0],
+        image.shape[1],
+        image.shape[2],
+    )
+    mask = torch.logical_and((image > 0.0), (distance > -distance_threshold))
+    filtered_image = torch.where(mask, 0, image)
+    return mask, filtered_image
+
+
+@get_torch_jit_decorator()
+def mask_spheres_image(
+    image: torch.Tensor,
+    link_spheres_tensor: torch.Tensor,
+    points: torch.Tensor,
+    distance_threshold: float,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    if link_spheres_tensor.shape[0] != 1:
+        assert link_spheres_tensor.shape[0] == points.shape[0]
+    if len(points.shape) == 2:
+        points = points.unsqueeze(0)
+
+    robot_spheres = link_spheres_tensor.view(link_spheres_tensor.shape[0], -1, 4).contiguous()
+    robot_spheres = robot_spheres.unsqueeze(-3)
+
+    robot_radius = robot_spheres[..., 3]
+    points = points.unsqueeze(-2)
+    sph_distance = -1 * (
+        torch.linalg.norm(points - robot_spheres[..., :3], dim=-1) - robot_radius
+    )  # b, n_spheres
+    distance = torch.max(sph_distance, dim=-1)[0]
+
     distance = distance.view(
         image.shape[0],
         image.shape[1],

@@ -36,6 +36,7 @@ from curobo.util.helpers import list_idx_if_not_none
 from curobo.util.logger import log_info
 from curobo.util.sample_lib import HaltonGenerator
 from curobo.util.tensor_util import copy_tensor
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 @dataclass
@@ -298,9 +299,9 @@ class Goal(Sequence):
         if self.goal_pose is not None:
             self.goal_pose = self.goal_pose.to(tensor_args)
         if self.goal_state is not None:
-            self.goal_state = self.goal_state.to(**vars(tensor_args))
+            self.goal_state = self.goal_state.to(**(tensor_args.as_torch_dict()))
         if self.current_state is not None:
-            self.current_state = self.current_state.to(**vars(tensor_args))
+            self.current_state = self.current_state.to(**(tensor_args.as_torch_dict()))
         return self
 
     def copy_(self, goal: Goal, update_idx_buffers: bool = True):
@@ -350,6 +351,7 @@ class Goal(Sequence):
             if ref_buffer is not None:
                 ref_buffer = ref_buffer.copy_(buffer)
             else:
+                log_info("breaking reference")
                 ref_buffer = buffer.clone()
         return ref_buffer
 
@@ -414,6 +416,7 @@ class Goal(Sequence):
 @dataclass
 class RolloutConfig:
     tensor_args: TensorDeviceType
+    sum_horizon: bool = False
 
 
 class RolloutBase:
@@ -578,7 +581,7 @@ class RolloutBase:
         return q_js
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def tensor_repeat_seeds(tensor, num_seeds: int):
     a = (
         tensor.view(tensor.shape[0], 1, tensor.shape[-1])

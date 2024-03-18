@@ -61,11 +61,15 @@ def test_franka_kinematics(cfg):
     tensor_args = TensorDeviceType()
 
     robot_model = CudaRobotModel(cfg)
-    q_test = torch.as_tensor([0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **vars(tensor_args)).view(1, -1)
-    ee_position = torch.as_tensor([6.0860e-02, -4.7547e-12, 7.6373e-01], **vars(tensor_args)).view(
-        1, -1
-    )
-    ee_quat = torch.as_tensor([0.0382, 0.9193, 0.3808, 0.0922], **vars(tensor_args)).view(1, -1)
+    q_test = torch.as_tensor(
+        [0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **(tensor_args.as_torch_dict())
+    ).view(1, -1)
+    ee_position = torch.as_tensor(
+        [6.0860e-02, -4.7547e-12, 7.6373e-01], **(tensor_args.as_torch_dict())
+    ).view(1, -1)
+    ee_quat = torch.as_tensor(
+        [0.0382, 0.9193, 0.3808, 0.0922], **(tensor_args.as_torch_dict())
+    ).view(1, -1)
     b_list = [1, 10, 100, 5000][:1]
     for b in b_list:
         state = robot_model.get_state(q_test.repeat(b, 1).clone())
@@ -80,7 +84,9 @@ def test_franka_attached_object_kinematics(cfg):
     tensor_args = TensorDeviceType()
 
     robot_model = CudaRobotModel(cfg)
-    q_test = torch.as_tensor([0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **vars(tensor_args)).view(1, -1)
+    q_test = torch.as_tensor(
+        [0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **(tensor_args.as_torch_dict())
+    ).view(1, -1)
     sph_idx = robot_model.kinematics_config.get_sphere_index_from_link_name("attached_object")
     state = robot_model.get_state(q_test.clone())
 
@@ -91,7 +97,7 @@ def test_franka_attached_object_kinematics(cfg):
     assert torch.norm(attached_spheres[:, :, 1]) < 0.0001
 
     # attach an object:
-    new_object = torch.zeros((2, 4), **vars(tensor_args))
+    new_object = torch.zeros((2, 4), **(tensor_args.as_torch_dict()))
     new_object[:, 3] = 0.01
     new_object[:, 1] = 0.1
     robot_model.kinematics_config.update_link_spheres("attached_object", new_object)
@@ -106,7 +112,9 @@ def test_franka_attach_object_kinematics(cfg):
     tensor_args = TensorDeviceType()
 
     robot_model = CudaRobotModel(cfg)
-    q_test = torch.as_tensor([0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **vars(tensor_args)).view(1, -1)
+    q_test = torch.as_tensor(
+        [0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **(tensor_args.as_torch_dict())
+    ).view(1, -1)
     sph_idx = robot_model.kinematics_config.get_sphere_index_from_link_name("attached_object")
     state = robot_model.get_state(q_test.clone())
 
@@ -117,7 +125,7 @@ def test_franka_attach_object_kinematics(cfg):
     assert torch.norm(attached_spheres[:, :, 1]) < 0.0001
 
     # attach an object:
-    new_object = torch.zeros((4, 4), **vars(tensor_args))
+    new_object = torch.zeros((4, 4), **(tensor_args.as_torch_dict()))
     new_object[:2, 3] = 0.01
     new_object[:2, 1] = 0.1
     # print(attached_spheres[:, sph_idx,:].shape)
@@ -175,7 +183,9 @@ def test_franka_toggle_link_collision(cfg):
     tensor_args = TensorDeviceType()
 
     robot_model = CudaRobotModel(cfg)
-    q_test = torch.as_tensor([0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **vars(tensor_args)).view(1, -1)
+    q_test = torch.as_tensor(
+        [0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **(tensor_args.as_torch_dict())
+    ).view(1, -1)
     sph_idx = robot_model.kinematics_config.get_sphere_index_from_link_name("panda_link5")
     state = robot_model.get_state(q_test.clone())
 

@@ -175,7 +175,11 @@ class UrdfKinematicsParser(KinematicsParser):
         return txt
 
     def get_link_mesh(self, link_name):
-        m = self._robot.link_map[link_name].visuals[0].geometry.mesh
+        link_data = self._robot.link_map[link_name]
+
+        if len(link_data.visuals) == 0:
+            log_error(link_name + " not found in urdf, remove from mesh_link_names")
+        m = link_data.visuals[0].geometry.mesh
         mesh_pose = self._robot.link_map[link_name].visuals[0].origin
         # read visual material:
         if mesh_pose is None:

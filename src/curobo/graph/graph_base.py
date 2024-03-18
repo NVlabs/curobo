@@ -33,6 +33,7 @@ from curobo.types.base import TensorDeviceType
 from curobo.types.robot import JointState, RobotConfig, State
 from curobo.util.logger import log_info, log_warn
 from curobo.util.sample_lib import HaltonGenerator
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.trajectory import InterpolateType, get_interpolated_trajectory
 from curobo.util_file import (
     get_robot_configs_path,
@@ -1029,7 +1030,7 @@ class GraphPlanBase(GraphConfig):
         pass
 
 
-@torch.jit.script
+@get_torch_jit_decorator(dynamic=True)
 def get_unique_nodes(dist_node: torch.Tensor, nodes: torch.Tensor, node_distance: float):
     node_flag = dist_node <= node_distance
     dist_node[node_flag] = 0.0
@@ -1042,7 +1043,7 @@ def get_unique_nodes(dist_node: torch.Tensor, nodes: torch.Tensor, node_distance
     return unique_nodes, n_inv
 
 
-@torch.jit.script
+@get_torch_jit_decorator(force_jit=True, dynamic=True)
 def add_new_nodes_jit(
     nodes, new_nodes, flag, cat_buffer, path, idx, i: int, dof: int
 ) -> Tuple[torch.Tensor, torch.Tensor, int]:
@@ -1066,7 +1067,7 @@ def add_new_nodes_jit(
     return path, node_set, new_nodes.shape[0]
 
 
-@torch.jit.script
+@get_torch_jit_decorator(force_jit=True, dynamic=True)
 def add_all_nodes_jit(
     nodes, cat_buffer, path, i: int, dof: int
 ) -> Tuple[torch.Tensor, torch.Tensor, int]:
@@ -1084,20 +1085,20 @@ def add_all_nodes_jit(
     return path, node_set, nodes.shape[0]
 
 
-@torch.jit.script
+@get_torch_jit_decorator(force_jit=True, dynamic=True)
 def compute_distance_norm_jit(pt, batch_pts, distance_weight):
     vec = (batch_pts - pt) * distance_weight
     dist = torch.norm(vec, dim=-1)
     return dist
 
 
-@torch.jit.script
+@get_torch_jit_decorator(dynamic=True)
 def compute_distance_jit(pt, batch_pts, distance_weight):
     vec = (batch_pts - pt) * distance_weight
     return vec
 
 
-@torch.jit.script
+@get_torch_jit_decorator(dynamic=True)
 def compute_rotation_frame_jit(
     x_start: torch.Tensor, x_goal: torch.Tensor, rot_frame_col: torch.Tensor
 ) -> torch.Tensor:
@@ -1114,7 +1115,7 @@ def compute_rotation_frame_jit(
     return C
 
 
-@torch.jit.script
+@get_torch_jit_decorator(force_jit=True, dynamic=True)
 def biased_vertex_projection_jit(
     x_start,
     x_goal,
@@ -1144,7 +1145,7 @@ def biased_vertex_projection_jit(
     return x_samples
 
 
-@torch.jit.script
+@get_torch_jit_decorator(force_jit=True, dynamic=True)
 def cat_xc_jit(x, n: int):
     c = x[:, 0:1] * 0.0
     xc_search = torch.cat((x, c), dim=1)[:n, :]

@@ -137,7 +137,7 @@ RUN pip3 install warp-lang
 
 # install curobo:
 
-RUN mkdir /pkgs && git clone https://github.com/NVlabs/curobo.git
+RUN mkdir /pkgs && cd /pkgs && git clone https://github.com/NVlabs/curobo.git
 
 ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
 
@@ -166,7 +166,7 @@ RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
     python3 -m pip install -e .
 
   
-RUN python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
+RUN python3 -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
 # upgrade typing extensions:
 RUN python3 -m pip install typing-extensions --upgrade

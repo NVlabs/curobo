@@ -10,7 +10,7 @@
 #
 # Standard Library
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 # Third Party
 import torch
@@ -29,8 +29,9 @@ from curobo.types.base import TensorDeviceType
 from curobo.types.robot import RobotConfig
 from curobo.types.tensor import T_BValue_float, T_BValue_int
 from curobo.util.helpers import list_idx_if_not_none
-from curobo.util.logger import log_error, log_info
-from curobo.util.tensor_util import cat_max, cat_sum
+from curobo.util.logger import log_error, log_info, log_warn
+from curobo.util.tensor_util import cat_max
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 # Local Folder
 from .arm_base import ArmBase, ArmBaseConfig, ArmCostConfig
@@ -145,7 +146,7 @@ class ArmReacherConfig(ArmBaseConfig):
         )
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def _compute_g_dist_jit(rot_err_norm, goal_dist):
     # goal_cost = goal_cost.view(cost.shape)
     # rot_err_norm = rot_err_norm.view(cost.shape)
@@ -319,7 +320,12 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                 g_dist,
             )
             cost_list.append(z_vel)
-        cost = cat_sum(cost_list)
+        with profiler.record_function("cat_sum"):
+            if self.sum_horizon:
+                cost = cat_sum_horizon_reacher(cost_list)
+            else:
+                cost = cat_sum_reacher(cost_list)
+
         return cost
 
     def convergence_fn(
@@ -466,3 +472,15 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                 )
                 for x in pose_costs
             ]
+
+
+@get_torch_jit_decorator()
+def cat_sum_reacher(tensor_list: List[torch.Tensor]):
+    cat_tensor = torch.sum(torch.stack(tensor_list, dim=0), dim=0)
+    return cat_tensor
+
+
+@get_torch_jit_decorator()
+def cat_sum_horizon_reacher(tensor_list: List[torch.Tensor]):
+    cat_tensor = torch.sum(torch.stack(tensor_list, dim=0), dim=(0, -1))
+    return cat_tensor

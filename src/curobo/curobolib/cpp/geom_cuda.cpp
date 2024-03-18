@@ -57,7 +57,8 @@ std::vector<torch::Tensor>swept_sphere_obb_clpt(
   const bool          enable_speed_metric,
   const bool          transform_back,
   const bool          compute_distance,
-  const bool          use_batch_env);
+  const bool          use_batch_env,
+  const bool          sum_collisions);
 
 std::vector<torch::Tensor>
 sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 4
@@ -66,6 +67,7 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 4
                 torch::Tensor       sparsity_idx,
                 const torch::Tensor weight,
                 const torch::Tensor activation_distance,
+                  const torch::Tensor max_distance,
                 const torch::Tensor obb_accel,     // n_boxes, 4, 4
                 const torch::Tensor obb_bounds,    // n_boxes, 3
                 const torch::Tensor obb_pose,      // n_boxes, 4, 4
@@ -78,8 +80,52 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 4
                 const int           n_spheres,
                 const bool          transform_back,
                 const bool          compute_distance,
-                const bool          use_batch_env);
+                const bool          use_batch_env,
+                const bool          sum_collisions,
+                const bool          compute_esdf);
+std::vector<torch::Tensor>
+sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
+                torch::Tensor distance,
+                torch::Tensor closest_point,         // batch size, 3
+                torch::Tensor sparsity_idx, const torch::Tensor weight,
+                const torch::Tensor activation_distance,
+                const torch::Tensor max_distance,
+                const torch::Tensor grid_features,       // n_boxes, 4, 4
+                const torch::Tensor grid_params,      // n_boxes, 3
+                const torch::Tensor grid_pose,        // n_boxes, 4, 4
+                const torch::Tensor grid_enable,      // n_boxes, 4, 4
+                const torch::Tensor n_env_grid,
+                const torch::Tensor env_query_idx,   // n_boxes, 4, 4
+                const int max_nobs, const int batch_size, const int horizon,
+                const int n_spheres, const bool transform_back,
+                const bool compute_distance, const bool use_batch_env,
+                const bool sum_collisions,
+                const bool compute_esdf);
 
+std::vector<torch::Tensor>
+swept_sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
+                torch::Tensor distance,
+                torch::Tensor closest_point,         // batch size, 3
+                torch::Tensor sparsity_idx, const torch::Tensor weight,
+                const torch::Tensor activation_distance,
+                const torch::Tensor max_distance,
+                const torch::Tensor speed_dt, 
+                const torch::Tensor grid_features,       // n_boxes, 4, 4
+                const torch::Tensor grid_params,      // n_boxes, 3
+                const torch::Tensor grid_pose,        // n_boxes, 4, 4
+                const torch::Tensor grid_enable,      // n_boxes, 4, 4
+                const torch::Tensor n_env_grid,
+                const torch::Tensor env_query_idx,   // n_boxes, 4, 4
+                const int max_nobs, 
+                const int batch_size, 
+                const int horizon,
+                const int n_spheres, 
+                const int sweep_steps,
+                const bool enable_speed_metric,
+                const bool transform_back,
+                const bool compute_distance, 
+                const bool use_batch_env,
+                const bool sum_collisions);
 std::vector<torch::Tensor>pose_distance(
   torch::Tensor       out_distance,
   torch::Tensor       out_position_distance,
@@ -159,11 +205,11 @@ std::vector<torch::Tensor>self_collision_distance_wrapper(
 
 std::vector<torch::Tensor>sphere_obb_clpt_wrapper(
   const torch::Tensor sphere_position, // batch_size, 4
-
   torch::Tensor distance,
   torch::Tensor closest_point,         // batch size, 3
   torch::Tensor sparsity_idx, const torch::Tensor weight,
   const torch::Tensor activation_distance,
+  const torch::Tensor max_distance, 
   const torch::Tensor obb_accel,       // n_boxes, 4, 4
   const torch::Tensor obb_bounds,      // n_boxes, 3
   const torch::Tensor obb_pose,        // n_boxes, 4, 4
@@ -171,8 +217,10 @@ std::vector<torch::Tensor>sphere_obb_clpt_wrapper(
   const torch::Tensor n_env_obb,       // n_boxes, 4, 4
   const torch::Tensor env_query_idx,   // n_boxes, 4, 4
   const int max_nobs, const int batch_size, const int horizon,
-  const int n_spheres, const bool transform_back, const bool compute_distance,
-  const bool use_batch_env)
+  const int n_spheres, 
+  const bool transform_back, const bool compute_distance,
+  const bool use_batch_env, const bool sum_collisions = true, 
+  const bool compute_esdf = false)
 {
   const at::cuda::OptionalCUDAGuard guard(sphere_position.device());
 
@@ -185,9 +233,9 @@ std::vector<torch::Tensor>sphere_obb_clpt_wrapper(
   CHECK_INPUT(obb_accel);
   return sphere_obb_clpt(
     sphere_position, distance, closest_point, sparsity_idx, weight,
-    activation_distance, obb_accel, obb_bounds, obb_pose, obb_enable,
+    activation_distance, max_distance, obb_accel, obb_bounds, obb_pose, obb_enable,
     n_env_obb, env_query_idx, max_nobs, batch_size, horizon, n_spheres,
-    transform_back, compute_distance, use_batch_env);
+    transform_back, compute_distance, use_batch_env, sum_collisions, compute_esdf);
 }
 
 std::vector<torch::Tensor>swept_sphere_obb_clpt_wrapper(
@@ -205,7 +253,7 @@ std::vector<torch::Tensor>swept_sphere_obb_clpt_wrapper(
   const int max_nobs, const int batch_size, const int horizon,
   const int n_spheres, const int sweep_steps, const bool enable_speed_metric,
   const bool transform_back, const bool compute_distance,
-  const bool use_batch_env)
+  const bool use_batch_env, const bool sum_collisions = true)
 {
   const at::cuda::OptionalCUDAGuard guard(sphere_position.device());
 
@@ -218,7 +266,37 @@ std::vector<torch::Tensor>swept_sphere_obb_clpt_wrapper(
     distance, closest_point, sparsity_idx, weight, activation_distance,
     speed_dt, obb_accel, obb_bounds, obb_pose, obb_enable, n_env_obb,
     env_query_idx, max_nobs, batch_size, horizon, n_spheres, sweep_steps,
-    enable_speed_metric, transform_back, compute_distance, use_batch_env);
+    enable_speed_metric, transform_back, compute_distance, use_batch_env, sum_collisions);
+}
+
+std::vector<torch::Tensor>
+sphere_voxel_clpt_wrapper(const torch::Tensor sphere_position, // batch_size, 3
+                torch::Tensor distance,
+                torch::Tensor closest_point,         // batch size, 3
+                torch::Tensor sparsity_idx, const torch::Tensor weight,
+                const torch::Tensor activation_distance,
+                const torch::Tensor max_distance,
+                const torch::Tensor grid_features,       // n_boxes, 4, 4
+                const torch::Tensor grid_params,      // n_boxes, 3
+                const torch::Tensor grid_pose,        // n_boxes, 4, 4
+                const torch::Tensor grid_enable,      // n_boxes, 4, 4
+                const torch::Tensor n_env_grid,
+                const torch::Tensor env_query_idx,   // n_boxes, 4, 4
+                const int max_ngrid, const int batch_size, const int horizon,
+                const int n_spheres, const bool transform_back,
+                const bool compute_distance, const bool use_batch_env,
+                const bool sum_collisions,
+                const bool compute_esdf)
+{
+    const at::cuda::OptionalCUDAGuard guard(sphere_position.device());
+
+  CHECK_INPUT(distance);
+  CHECK_INPUT(closest_point);
+  CHECK_INPUT(sphere_position);
+  return sphere_voxel_clpt(sphere_position, distance, closest_point, sparsity_idx, weight,
+  activation_distance, max_distance, grid_features, grid_params,
+  grid_pose, grid_enable, n_env_grid, env_query_idx, max_ngrid, batch_size, horizon, n_spheres,
+  transform_back, compute_distance, use_batch_env, sum_collisions, compute_esdf);
 }
 
 std::vector<torch::Tensor>pose_distance_wrapper(
@@ -297,6 +375,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         "Closest Point OBB(curobolib)");
   m.def("swept_closest_point",     &swept_sphere_obb_clpt_wrapper,
         "Swept Closest Point OBB(curobolib)");
+  m.def("closest_point_voxel",           &sphere_voxel_clpt_wrapper,
+        "Closest Point Voxel(curobolib)");
+  m.def("swept_closest_point_voxel",           &swept_sphere_voxel_clpt,
+        "Swpet Closest Point Voxel(curobolib)");
+  
+  
 
   m.def("self_collision_distance", &self_collision_distance_wrapper,
         "Self Collision Distance (curobolib)");

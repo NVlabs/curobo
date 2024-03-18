@@ -30,6 +30,25 @@ robot_cfg:
       - ring_link_3
       - thumb_link_2
       - thumb_link_3
+    mesh_link_names:
+      - iiwa7_link_1
+      - iiwa7_link_2
+      - iiwa7_link_3
+      - iiwa7_link_4
+      - iiwa7_link_5
+      - iiwa7_link_6
+      - palm_link
+      - index_link_1
+      - index_link_2
+      - index_link_3
+      - middle_link_1
+      - middle_link_2
+      - middle_link_3
+      - ring_link_1
+      - ring_link_2
+      - ring_link_3
+      - thumb_link_2
+      - thumb_link_3
     collision_sphere_buffer: 0.005
     collision_spheres: spheres/iiwa_allegro.yml
     ee_link: palm_link

@@ -342,10 +342,8 @@ namespace Curobo
       float out_pos = 0.0, out_vel = 0.0, out_acc = 0.0, out_jerk = 0.0;
       float st_pos = 0.0, st_vel = 0.0, st_acc = 0.0;
 
-      const int   b_addrs        = b_idx * horizon * dof;
       const int   b_addrs_action = b_idx * (horizon - 4) * dof;
       float       in_pos[5]; // create a 5 value scalar
-      const float acc_scale = 1.0;
 
   #pragma unroll 5
 

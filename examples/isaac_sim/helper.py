@@ -100,7 +100,6 @@ def add_robot_to_scene(
         import_config,
         dest_path,
     )
-
     # prim_path = omni.usd.get_stage_next_free_path(
     # my_world.scene.stage, str(my_world.scene.stage.GetDefaultPrim().GetPath()) + robot_path, False)
     # print(prim_path)
@@ -112,13 +111,13 @@ def add_robot_to_scene(
         position=position,
     )
     if ISAAC_SIM_23:
-        robot_p.set_solver_velocity_iteration_count(4)
+        robot_p.set_solver_velocity_iteration_count(0)
         robot_p.set_solver_position_iteration_count(44)
 
         my_world._physics_context.set_solver_type("PGS")
 
     robot = my_world.scene.add(robot_p)
-
+    robot_path = robot.prim_path
     return robot, robot_path
 
 

@@ -30,6 +30,11 @@ def create_collision_checker(config: WorldCollisionConfig):
         from curobo.geom.sdf.world_mesh import WorldMeshCollision
 
         return WorldMeshCollision(config)
+    elif config.checker_type == CollisionCheckerType.VOXEL:
+        # CuRobo
+        from curobo.geom.sdf.world_voxel import WorldVoxelCollision
+
+        return WorldVoxelCollision(config)
     else:
-        log_error("Not implemented", exc_info=True)
+        log_error("Unknown Collision Checker type: " + config.checker_type, exc_info=True)
         raise NotImplementedError

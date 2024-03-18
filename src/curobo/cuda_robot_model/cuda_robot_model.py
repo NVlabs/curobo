@@ -180,7 +180,7 @@ class CudaRobotModel(CudaRobotModelConfig):
             self._batch_robot_spheres = torch.zeros(
                 (self._batch_size, self.kinematics_config.total_spheres, 4),
                 device=self.tensor_args.device,
-                dtype=self.tensor_args.dtype,
+                dtype=self.tensor_args.collision_geometry_dtype,
             )
             self._grad_out_q = torch.zeros(
                 (self._batch_size, self.get_dof()),

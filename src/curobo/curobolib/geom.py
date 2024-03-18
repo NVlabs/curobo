@@ -13,6 +13,7 @@ import torch
 
 # CuRobo
 from curobo.util.logger import log_warn
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 try:
     # CuRobo
@@ -235,7 +236,7 @@ def get_pose_distance_backward(
     return r[0], r[1]
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def backward_PoseError_jit(grad_g_dist, grad_out_distance, weight, g_vec):
     grad_vec = grad_g_dist + (grad_out_distance * weight)
     grad = 1.0 * (grad_vec).unsqueeze(-1) * g_vec
@@ -243,7 +244,7 @@ def backward_PoseError_jit(grad_g_dist, grad_out_distance, weight, g_vec):
 
 
 # full method:
-@torch.jit.script
+@get_torch_jit_decorator()
 def backward_full_PoseError_jit(
     grad_out_distance, grad_g_dist, grad_r_err, p_w, q_w, g_vec_p, g_vec_q
 ):
@@ -570,6 +571,7 @@ class SdfSphereOBB(torch.autograd.Function):
         sparsity_idx,
         weight,
         activation_distance,
+        max_distance,
         box_accel,
         box_dims,
         box_pose,
@@ -584,6 +586,8 @@ class SdfSphereOBB(torch.autograd.Function):
         compute_distance,
         use_batch_env,
         return_loss: bool = False,
+        sum_collisions: bool = True,
+        compute_esdf: bool = False,
     ):
         r = geom_cu.closest_point(
             query_sphere,
@@ -592,6 +596,7 @@ class SdfSphereOBB(torch.autograd.Function):
             sparsity_idx,
             weight,
             activation_distance,
+            max_distance,
             box_accel,
             box_dims,
             box_pose,
@@ -605,8 +610,11 @@ class SdfSphereOBB(torch.autograd.Function):
             transform_back,
             compute_distance,
             use_batch_env,
+            sum_collisions,
+            compute_esdf,
         )
         # r[1][r[1]!=r[1]] = 0.0
+        ctx.compute_esdf = compute_esdf
         ctx.return_loss = return_loss
         ctx.save_for_backward(r[1])
         return r[0]
@@ -615,12 +623,17 @@ class SdfSphereOBB(torch.autograd.Function):
     def backward(ctx, grad_output):
         grad_pt = None
         if ctx.needs_input_grad[0]:
+            # if ctx.compute_esdf:
+            #    raise NotImplementedError("Gradients not implemented for compute_esdf=True")
             (r,) = ctx.saved_tensors
             if ctx.return_loss:
                 r = r * grad_output.unsqueeze(-1)
             grad_pt = r
         return (
             grad_pt,
+            None,
+            None,
+            None,
             None,
             None,
             None,
@@ -670,6 +683,7 @@ class SdfSweptSphereOBB(torch.autograd.Function):
         compute_distance,
         use_batch_env,
         return_loss: bool = False,
+        sum_collisions: bool = True,
     ):
         r = geom_cu.swept_closest_point(
             query_sphere,
@@ -694,6 +708,7 @@ class SdfSweptSphereOBB(torch.autograd.Function):
             transform_back,
             compute_distance,
             use_batch_env,
+            sum_collisions,
         )
         ctx.return_loss = return_loss
         ctx.save_for_backward(
@@ -711,6 +726,202 @@ class SdfSweptSphereOBB(torch.autograd.Function):
             grad_pt = r
         return (
             grad_pt,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class SdfSphereVoxel(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        query_sphere,
+        out_buffer,
+        grad_out_buffer,
+        sparsity_idx,
+        weight,
+        activation_distance,
+        max_distance,
+        grid_features,
+        grid_params,
+        grid_pose,
+        grid_enable,
+        n_env_grid,
+        env_query_idx,
+        max_nobs,
+        batch_size,
+        horizon,
+        n_spheres,
+        transform_back,
+        compute_distance,
+        use_batch_env,
+        return_loss: bool = False,
+        sum_collisions: bool = True,
+        compute_esdf: bool = False,
+    ):
+
+        r = geom_cu.closest_point_voxel(
+            query_sphere,
+            out_buffer,
+            grad_out_buffer,
+            sparsity_idx,
+            weight,
+            activation_distance,
+            max_distance,
+            grid_features,
+            grid_params,
+            grid_pose,
+            grid_enable,
+            n_env_grid,
+            env_query_idx,
+            max_nobs,
+            batch_size,
+            horizon,
+            n_spheres,
+            transform_back,
+            compute_distance,
+            use_batch_env,
+            sum_collisions,
+            compute_esdf,
+        )
+        ctx.compute_esdf = compute_esdf
+        ctx.return_loss = return_loss
+        ctx.save_for_backward(r[1])
+        return r[0]
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_pt = None
+        if ctx.needs_input_grad[0]:
+            # if ctx.compute_esdf:
+            #    raise NotImplementedError("Gradients not implemented for compute_esdf=True")
+            (r,) = ctx.saved_tensors
+            if ctx.return_loss:
+                r = r * grad_output.unsqueeze(-1)
+            grad_pt = r
+        return (
+            grad_pt,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+
+class SdfSweptSphereVoxel(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        query_sphere,
+        out_buffer,
+        grad_out_buffer,
+        sparsity_idx,
+        weight,
+        activation_distance,
+        max_distance,
+        speed_dt,
+        grid_features,
+        grid_params,
+        grid_pose,
+        grid_enable,
+        n_env_grid,
+        env_query_idx,
+        max_nobs,
+        batch_size,
+        horizon,
+        n_spheres,
+        sweep_steps,
+        enable_speed_metric,
+        transform_back,
+        compute_distance,
+        use_batch_env,
+        return_loss: bool = False,
+        sum_collisions: bool = True,
+    ):
+        r = geom_cu.swept_closest_point_voxel(
+            query_sphere,
+            out_buffer,
+            grad_out_buffer,
+            sparsity_idx,
+            weight,
+            activation_distance,
+            max_distance,
+            speed_dt,
+            grid_features,
+            grid_params,
+            grid_pose,
+            grid_enable,
+            n_env_grid,
+            env_query_idx,
+            max_nobs,
+            batch_size,
+            horizon,
+            n_spheres,
+            sweep_steps,
+            enable_speed_metric,
+            transform_back,
+            compute_distance,
+            use_batch_env,
+            sum_collisions,
+        )
+
+        ctx.return_loss = return_loss
+        ctx.save_for_backward(
+            r[1],
+        )
+        return r[0]
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_pt = None
+        if ctx.needs_input_grad[0]:
+            (r,) = ctx.saved_tensors
+            if ctx.return_loss:
+                r = r * grad_output.unsqueeze(-1)
+            grad_pt = r
+        return (
+            grad_pt,
+            None,
+            None,
             None,
             None,
             None,

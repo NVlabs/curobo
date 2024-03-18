@@ -33,6 +33,7 @@ from curobo.types.robot import State
 from curobo.util.logger import log_info
 from curobo.util.sample_lib import HaltonSampleLib, SampleConfig, SampleLib
 from curobo.util.tensor_util import copy_tensor
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 class BaseActionType(Enum):
@@ -187,10 +188,42 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         # w = torch.softmax((-1.0 / self.beta) * total_costs, dim=-1)
         return w
 
+    def _exp_util_from_costs(self, costs):
+        w = jit_calculate_exp_util_from_costs(costs, self.gamma_seq, self.beta)
+        return w
+
     def _compute_mean(self, w, actions):
         # get the new means from here
         new_mean = torch.sum(w * actions, dim=-3)
+        new_mean = jit_blend_mean(self.mean_action, new_mean, self.step_size_mean)
         return new_mean
+
+    def _compute_mean_covariance(self, costs, actions):
+        if self.cov_type == CovType.FULL_A:
+            log_error("Not implemented")
+        if self.cov_type == CovType.DIAG_A:
+            new_mean, new_cov, new_scale_tril = jit_mean_cov_diag_a(
+                costs,
+                actions,
+                self.gamma_seq,
+                self.mean_action,
+                self.cov_action,
+                self.step_size_mean,
+                self.step_size_cov,
+                self.kappa,
+                self.beta,
+            )
+            self.scale_tril.copy_(new_scale_tril)
+            # self._update_cov_scale(new_cov)
+
+        else:
+            w = self._exp_util_from_costs(costs)
+            w = w.unsqueeze(-1).unsqueeze(-1)
+            new_mean = self._compute_mean(w, actions)
+            new_cov = self._compute_covariance(w, actions)
+            self._update_cov_scale(new_cov)
+
+        return new_mean, new_cov
 
     def _compute_covariance(self, w, actions):
         if not self.update_cov:
@@ -200,27 +233,13 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         if self.cov_type == CovType.SIGMA_I:
             delta_actions = actions - self.mean_action.unsqueeze(-3)
 
-            # weighted_delta = w * (delta ** 2).T
-            # cov_update = torch.ean(torch.sum(weighted_delta.T, dim=0))
-            # print(cov_update.shape, self.cov_action)
             weighted_delta = w * (delta_actions**2)
             cov_update = torch.mean(
                 torch.sum(torch.sum(weighted_delta, dim=-2), dim=-1), dim=-1, keepdim=True
             )
-            # raise NotImplementedError("Need to implement covariance update of form sigma*I")
 
         elif self.cov_type == CovType.DIAG_A:
-            # Diagonal covariance of size AxA
-            # n, b, h, d = delta_actions.shape
-            # delta_actions = delta_actions.view(n,b,h*d)
 
-            # weighted_delta = w * (delta_actions**2)
-            # weighted_delta =
-            # sum across horizon and mean across particles:
-            # cov_update = torch.diag(torch.mean(torch.sum(weighted_delta.T  , dim=0), dim=0))
-            # cov_update = torch.mean(torch.sum(weighted_delta, dim=-2), dim=-2).unsqueeze(
-            #    -2
-            # )  # .expand(-1,-1,-1)
             cov_update = jit_diag_a_cov_update(w, actions, self.mean_action)
 
         elif self.cov_type == CovType.FULL_A:
@@ -241,19 +260,22 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
 
         else:
             raise ValueError("Unidentified covariance type in update_distribution")
+        cov_update = jit_blend_cov(self.cov_action, cov_update, self.step_size_cov, self.kappa)
         return cov_update
 
-    def _update_cov_scale(self):
+    def _update_cov_scale(self, new_cov=None):
+        if new_cov is None:
+            new_cov = self.cov_action
         if not self.update_cov:
             return
         if self.cov_type == CovType.SIGMA_I:
-            self.scale_tril = torch.sqrt(self.cov_action)
+            self.scale_tril = torch.sqrt(new_cov)
 
         elif self.cov_type == CovType.DIAG_A:
-            self.scale_tril.copy_(torch.sqrt(self.cov_action))
+            self.scale_tril.copy_(torch.sqrt(new_cov))
 
         elif self.cov_type == CovType.FULL_A:
-            self.scale_tril = matrix_cholesky(self.cov_action)
+            self.scale_tril = matrix_cholesky(new_cov)
 
         elif self.cov_type == CovType.FULL_HA:
             raise NotImplementedError
@@ -263,44 +285,44 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         costs = trajectories.costs
         actions = trajectories.actions
 
-        total_costs = self._compute_total_cost(costs)
         # Let's reshape to n_problems now:
 
         # first find the means before doing exponential utility:
-        w = self._exp_util(total_costs)
 
-        # Update best action
-        if self.sample_mode == SampleMode.BEST:
-            best_idx = torch.argmax(w, dim=-1)
-            self.best_traj.copy_(actions[self.problem_col, best_idx])
+        with profiler.record_function("mppi/get_best"):
 
-        if self.store_rollouts and self.visual_traj is not None:
-            vis_seq = getattr(trajectories.state, self.visual_traj)
-            top_values, top_idx = torch.topk(total_costs, 20, dim=1)
-            self.top_values = top_values
-            self.top_idx = top_idx
-            top_trajs = torch.index_select(vis_seq, 0, top_idx[0])
-            for i in range(1, top_idx.shape[0]):
-                trajs = torch.index_select(
-                    vis_seq, 0, top_idx[i] + (self.particles_per_problem * i)
-                )
-                top_trajs = torch.cat((top_trajs, trajs), dim=0)
-            if self.top_trajs is None or top_trajs.shape != self.top_trajs:
-                self.top_trajs = top_trajs
-            else:
-                self.top_trajs.copy_(top_trajs)
+            # Update best action
+            if self.sample_mode == SampleMode.BEST:
+                w = self._exp_util_from_costs(costs)
+                best_idx = torch.argmax(w, dim=-1)
+                self.best_traj.copy_(actions[self.problem_col, best_idx])
+        with profiler.record_function("mppi/store_rollouts"):
 
-        w = w.unsqueeze(-1).unsqueeze(-1)
+            if self.store_rollouts and self.visual_traj is not None:
+                total_costs = self._compute_total_cost(costs)
+                vis_seq = getattr(trajectories.state, self.visual_traj)
+                top_values, top_idx = torch.topk(total_costs, 20, dim=1)
+                self.top_values = top_values
+                self.top_idx = top_idx
+                top_trajs = torch.index_select(vis_seq, 0, top_idx[0])
+                for i in range(1, top_idx.shape[0]):
+                    trajs = torch.index_select(
+                        vis_seq, 0, top_idx[i] + (self.particles_per_problem * i)
+                    )
+                    top_trajs = torch.cat((top_trajs, trajs), dim=0)
+                if self.top_trajs is None or top_trajs.shape != self.top_trajs:
+                    self.top_trajs = top_trajs
+                else:
+                    self.top_trajs.copy_(top_trajs)
 
-        new_mean = self._compute_mean(w, actions)
-        # print(new_mean)
-        if self.update_cov:
-            cov_update = self._compute_covariance(w, actions)
-            new_cov = jit_blend_cov(self.cov_action, cov_update, self.step_size_cov, self.kappa)
+        if not self.update_cov:
+            w = self._exp_util_from_costs(costs)
+            w = w.unsqueeze(-1).unsqueeze(-1)
+            new_mean = self._compute_mean(w, actions)
+        else:
+            new_mean, new_cov = self._compute_mean_covariance(costs, actions)
             self.cov_action.copy_(new_cov)
 
-            self._update_cov_scale()
-        new_mean = jit_blend_mean(self.mean_action, new_mean, self.step_size_mean)
         self.mean_action.copy_(new_mean)
 
     @torch.no_grad()
@@ -591,20 +613,28 @@ class ParallelMPPI(ParticleOptBase, ParallelMPPIConfig):
         return super().generate_rollouts(init_act)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def jit_calculate_exp_util(beta: float, total_costs):
     w = torch.softmax((-1.0 / beta) * total_costs, dim=-1)
     return w
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
+def jit_calculate_exp_util_from_costs(costs, gamma_seq, beta: float):
+    cost_seq = gamma_seq * costs
+    cost_seq = torch.sum(cost_seq, dim=-1, keepdim=False) / gamma_seq[..., 0]
+    w = torch.softmax((-1.0 / beta) * cost_seq, dim=-1)
+    return w
+
+
+@get_torch_jit_decorator()
 def jit_compute_total_cost(gamma_seq, costs):
     cost_seq = gamma_seq * costs
     cost_seq = torch.sum(cost_seq, dim=-1, keepdim=False) / gamma_seq[..., 0]
     return cost_seq
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def jit_diag_a_cov_update(w, actions, mean_action):
     delta_actions = actions - mean_action.unsqueeze(-3)
 
@@ -616,13 +646,35 @@ def jit_diag_a_cov_update(w, actions, mean_action):
     return cov_update
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def jit_blend_cov(cov_action, cov_update, step_size_cov: float, kappa: float):
     new_cov = (1.0 - step_size_cov) * cov_action + step_size_cov * cov_update + kappa
     return new_cov
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def jit_blend_mean(mean_action, new_mean, step_size_mean: float):
     mean_update = (1.0 - step_size_mean) * mean_action + step_size_mean * new_mean
     return mean_update
+
+
+@get_torch_jit_decorator()
+def jit_mean_cov_diag_a(
+    costs,
+    actions,
+    gamma_seq,
+    mean_action,
+    cov_action,
+    step_size_mean: float,
+    step_size_cov: float,
+    kappa: float,
+    beta: float,
+):
+    w = jit_calculate_exp_util_from_costs(costs, gamma_seq, beta)
+    w = w.unsqueeze(-1).unsqueeze(-1)
+    new_mean = torch.sum(w * actions, dim=-3)
+    new_mean = jit_blend_mean(mean_action, new_mean, step_size_mean)
+    cov_update = jit_diag_a_cov_update(w, actions, mean_action)
+    new_cov = jit_blend_cov(cov_action, cov_update, step_size_cov, kappa)
+    new_tril = torch.sqrt(new_cov)
+    return new_mean, new_cov, new_tril

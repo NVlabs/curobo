@@ -176,6 +176,8 @@ class WorldBloxCollision(WorldMeshCollision):
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_collisions: bool = True,
+        compute_esdf: bool = False,
     ):
         if "blox" not in self.collision_types or not self.collision_types["blox"]:
             return super().get_sphere_distance(
@@ -185,6 +187,8 @@ class WorldBloxCollision(WorldMeshCollision):
                 activation_distance,
                 env_query_idx,
                 return_loss,
+                sum_collisions=sum_collisions,
+                compute_esdf=compute_esdf,
             )
 
         d = self._get_blox_sdf(
@@ -205,8 +209,13 @@ class WorldBloxCollision(WorldMeshCollision):
             activation_distance,
             env_query_idx,
             return_loss,
+            sum_collisions=sum_collisions,
+            compute_esdf=compute_esdf,
         )
-        d = d + d_base
+        if compute_esdf:
+            d = torch.maximum(d, d_base)
+        else:
+            d = d + d_base
 
         return d
 
@@ -262,6 +271,7 @@ class WorldBloxCollision(WorldMeshCollision):
         enable_speed_metric=False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_collisions: bool = True,
     ):
         if "blox" not in self.collision_types or not self.collision_types["blox"]:
             return super().get_swept_sphere_distance(
@@ -274,6 +284,7 @@ class WorldBloxCollision(WorldMeshCollision):
                 enable_speed_metric,
                 env_query_idx,
                 return_loss=return_loss,
+                sum_collisions=sum_collisions,
             )
 
         d = self._get_blox_swept_sdf(
@@ -301,6 +312,7 @@ class WorldBloxCollision(WorldMeshCollision):
             enable_speed_metric,
             env_query_idx,
             return_loss=return_loss,
+            sum_collisions=sum_collisions,
         )
         d = d + d_base
 

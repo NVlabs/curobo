@@ -9,7 +9,6 @@
  * its affiliates is strictly prohibited.
  */
 
-#pragma once
 #include <cuda.h>
 #include <torch/extension.h>
 #include <vector>

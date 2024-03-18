@@ -91,7 +91,8 @@ def test_world_modify():
     world_ccheck.update_obstacle_pose(name="cylinder_1", w_obj_pose=w_pose)
 
     x_sph = torch.as_tensor(
-        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.1], [0.01, 0.01, 0.0, 0.1]], **vars(tensor_args)
+        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.1], [0.01, 0.01, 0.0, 0.1]],
+        **(tensor_args.as_torch_dict())
     ).view(1, 1, -1, 4)
     # create buffers:
     query_buffer = CollisionQueryBuffer.initialize_from_shape(

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 # Standard Library
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Union
 
@@ -565,6 +566,68 @@ class PointCloud(Obstacle):
 
 
 @dataclass
+class VoxelGrid(Obstacle):
+    dims: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    voxel_size: float = 0.02  # meters
+    feature_tensor: Optional[torch.Tensor] = None
+    xyzr_tensor: Optional[torch.Tensor] = None
+    feature_dtype: torch.dtype = torch.float32
+
+    def __post_init__(self):
+        if self.feature_tensor is not None:
+            self.feature_dtype = self.feature_tensor.dtype
+
+    def create_xyzr_tensor(
+        self, transform_to_origin: bool = False, tensor_args: TensorDeviceType = TensorDeviceType()
+    ):
+        bounds = self.dims
+        low = [-bounds[0] / 2, -bounds[1] / 2, -bounds[2] / 2]
+        high = [bounds[0] / 2, bounds[1] / 2, bounds[2] / 2]
+        trange = [h - l for l, h in zip(low, high)]
+        x = torch.linspace(
+            low[0], high[0], int(math.floor(trange[0] / self.voxel_size)), device=tensor_args.device
+        )
+        y = torch.linspace(
+            low[1], high[1], int(math.floor(trange[1] / self.voxel_size)), device=tensor_args.device
+        )
+        z = torch.linspace(
+            low[2], high[2], int(math.floor(trange[2] / self.voxel_size)), device=tensor_args.device
+        )
+        w, l, h = x.shape[0], y.shape[0], z.shape[0]
+        xyz = (
+            torch.stack(torch.meshgrid(x, y, z, indexing="ij")).permute((1, 2, 3, 0)).reshape(-1, 3)
+        )
+
+        if transform_to_origin:
+            pose = Pose.from_list(self.pose, tensor_args=tensor_args)
+            xyz = pose.transform_points(xyz.contiguous())
+        r = torch.zeros_like(xyz[:, 0:1]) + (self.voxel_size * 0.5)
+        xyzr = torch.cat([xyz, r], dim=1)
+        return xyzr
+
+    def get_occupied_voxels(self, feature_threshold: Optional[float] = None):
+        if feature_threshold is None:
+            feature_threshold = -1.0 * self.voxel_size
+        if self.xyzr_tensor is None or self.feature_tensor is None:
+            log_error("Feature tensor or xyzr tensor is empty")
+        xyzr = self.xyzr_tensor.clone()
+        xyzr[:, 3] = self.feature_tensor
+        occupied = xyzr[self.feature_tensor > feature_threshold]
+        return occupied
+
+    def clone(self):
+        return VoxelGrid(
+            name=self.name,
+            pose=self.pose.copy(),
+            dims=self.dims.copy(),
+            feature_tensor=self.feature_tensor.clone() if self.feature_tensor is not None else None,
+            xyzr_tensor=self.xyzr_tensor.clone() if self.xyzr_tensor is not None else None,
+            feature_dtype=self.feature_dtype,
+            voxel_size=self.voxel_size,
+        )
+
+
+@dataclass
 class WorldConfig(Sequence):
     """Representation of World for use in CuRobo."""
 
@@ -586,25 +649,13 @@ class WorldConfig(Sequence):
     #: BloxMap obstacle.
     blox: Optional[List[BloxMap]] = None
 
+    voxel: Optional[List[VoxelGrid]] = None
+
     #: List of all obstacles in world.
     objects: Optional[List[Obstacle]] = None
 
     def __post_init__(self):
         # create objects list:
-        if self.objects is None:
-            self.objects = []
-            if self.sphere is not None:
-                self.objects += self.sphere
-            if self.cuboid is not None:
-                self.objects += self.cuboid
-            if self.capsule is not None:
-                self.objects += self.capsule
-            if self.mesh is not None:
-                self.objects += self.mesh
-            if self.blox is not None:
-                self.objects += self.blox
-            if self.cylinder is not None:
-                self.objects += self.cylinder
         if self.sphere is None:
             self.sphere = []
         if self.cuboid is None:
@@ -617,6 +668,18 @@ class WorldConfig(Sequence):
             self.cylinder = []
         if self.blox is None:
             self.blox = []
+        if self.voxel is None:
+            self.voxel = []
+        if self.objects is None:
+            self.objects = (
+                self.sphere
+                + self.cuboid
+                + self.capsule
+                + self.mesh
+                + self.cylinder
+                + self.blox
+                + self.voxel
+            )
 
     def __len__(self):
         return len(self.objects)
@@ -632,6 +695,7 @@ class WorldConfig(Sequence):
             capsule=self.capsule.copy() if self.capsule is not None else None,
             cylinder=self.cylinder.copy() if self.cylinder is not None else None,
             blox=self.blox.copy() if self.blox is not None else None,
+            voxel=self.voxel.copy() if self.voxel is not None else None,
         )
 
     @staticmethod
@@ -642,6 +706,7 @@ class WorldConfig(Sequence):
         mesh = None
         blox = None
         cylinder = None
+        voxel = None
         # load yaml:
         if "cuboid" in data_dict.keys():
             cuboid = [Cuboid(name=x, **data_dict["cuboid"][x]) for x in data_dict["cuboid"]]
@@ -655,6 +720,8 @@ class WorldConfig(Sequence):
             cylinder = [Cylinder(name=x, **data_dict["cylinder"][x]) for x in data_dict["cylinder"]]
         if "blox" in data_dict.keys():
             blox = [BloxMap(name=x, **data_dict["blox"][x]) for x in data_dict["blox"]]
+        if "voxel" in data_dict.keys():
+            voxel = [VoxelGrid(name=x, **data_dict["voxel"][x]) for x in data_dict["voxel"]]
 
         return WorldConfig(
             cuboid=cuboid,
@@ -663,6 +730,7 @@ class WorldConfig(Sequence):
             cylinder=cylinder,
             mesh=mesh,
             blox=blox,
+            voxel=voxel,
         )
 
     # load world config as obbs: convert all types to obbs
@@ -688,6 +756,10 @@ class WorldConfig(Sequence):
 
         if current_world.mesh is not None and len(current_world.mesh) > 0:
             mesh_obb = [x.get_cuboid() for x in current_world.mesh]
+
+        if current_world.voxel is not None and len(current_world.voxel) > 0:
+            log_error("VoxelGrid cannot be converted to obb world")
+
         return WorldConfig(
             cuboid=cuboid_obb + sphere_obb + capsule_obb + cylinder_obb + mesh_obb + blox_obb
         )
@@ -714,6 +786,8 @@ class WorldConfig(Sequence):
             for i in range(len(current_world.blox)):
                 if current_world.blox[i].mesh is not None:
                     blox_obb.append(current_world.blox[i].get_mesh(process=process))
+        if current_world.voxel is not None and len(current_world.voxel) > 0:
+            log_error("VoxelGrid cannot be converted to mesh world")
 
         return WorldConfig(
             mesh=current_world.mesh
@@ -750,6 +824,7 @@ class WorldConfig(Sequence):
         return WorldConfig(
             mesh=current_world.mesh + sphere_obb + capsule_obb + cylinder_obb + blox_obb,
             cuboid=cuboid_obb,
+            voxel=current_world.voxel,
         )
 
     @staticmethod
@@ -822,6 +897,8 @@ class WorldConfig(Sequence):
             self.cylinder.append(obstacle)
         elif isinstance(obstacle, Capsule):
             self.capsule.append(obstacle)
+        elif isinstance(obstacle, VoxelGrid):
+            self.voxel.append(obstacle)
         else:
             ValueError("Obstacle type not supported")
         self.objects.append(obstacle)

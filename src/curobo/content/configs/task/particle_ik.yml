@@ -34,7 +34,7 @@ cost:
     run_weight: 1.0
   link_pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    weight: [30, 50, 10, 10] #[20.0, 100.0]
+    weight: [0, 50, 10, 10] #[20.0, 100.0]
     vec_convergence: [0.00, 0.000] # orientation, position
     terminal: False
     use_metric: True
@@ -67,7 +67,7 @@ mppi:
   cov_type          : "DIAG_A" # 
   kappa             : 0.01
   null_act_frac     : 0.0
-  sample_mode       : 'BEST'
+  sample_mode       : 'MEAN'
   base_action       : 'REPEAT'
   squash_fn         : 'CLAMP'
   n_problems            : 1

@@ -11,7 +11,7 @@
 
 """curobo package setuptools."""
 
-# NOTE (roflaherty): This file is still needed to allow the package to be
+# NOTE: This file is still needed to allow the package to be
 # installed in editable mode.
 #
 # References:
@@ -21,12 +21,6 @@
 import setuptools
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
-print("*********************************")
-print("CuRobo: Compiling CUDA kernels...")
-print(
-    "This will take 20+ minutes, to speedup compilation set TORCH_CUDA_ARCH_LIST={X}+PTX to "
-    + " compile only for a specific architecture. e.g., export TORCH_CUDA_ARCH_LIST=7.0+PTX"
-)
 extra_cuda_args = {
     "nvcc": [
         "--threads=8",
@@ -56,16 +50,6 @@ ext_modules = [
         extra_compile_args=extra_cuda_args,
     ),
     CUDAExtension(
-        "curobo.curobolib.geom_cu",
-        [
-            "src/curobo/curobolib/cpp/geom_cuda.cpp",
-            "src/curobo/curobolib/cpp/sphere_obb_kernel.cu",
-            "src/curobo/curobolib/cpp/pose_distance_kernel.cu",
-            "src/curobo/curobolib/cpp/self_collision_kernel.cu",
-        ],
-        extra_compile_args=extra_cuda_args,
-    ),
-    CUDAExtension(
         "curobo.curobolib.line_search_cu",
         [
             "src/curobo/curobolib/cpp/line_search_cuda.cpp",
@@ -79,6 +63,16 @@ ext_modules = [
         [
             "src/curobo/curobolib/cpp/tensor_step_cuda.cpp",
             "src/curobo/curobolib/cpp/tensor_step_kernel.cu",
+        ],
+        extra_compile_args=extra_cuda_args,
+    ),
+    CUDAExtension(
+        "curobo.curobolib.geom_cu",
+        [
+            "src/curobo/curobolib/cpp/geom_cuda.cpp",
+            "src/curobo/curobolib/cpp/sphere_obb_kernel.cu",
+            "src/curobo/curobolib/cpp/pose_distance_kernel.cu",
+            "src/curobo/curobolib/cpp/self_collision_kernel.cu",
         ],
         extra_compile_args=extra_cuda_args,
     ),

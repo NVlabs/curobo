@@ -18,6 +18,7 @@ import torch
 import warp as wp
 
 # CuRobo
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp import init_warp
 
 # Local Folder
@@ -41,32 +42,32 @@ class DistCostConfig(CostConfig):
         return super().__post_init__()
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def L2_DistCost_jit(vec_weight, disp_vec):
     return torch.norm(vec_weight * disp_vec, p=2, dim=-1, keepdim=False)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def fwd_SQL2_DistCost_jit(vec_weight, disp_vec):
     return torch.sum(torch.square(vec_weight * disp_vec), dim=-1, keepdim=False)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def fwd_L1_DistCost_jit(vec_weight, disp_vec):
     return torch.sum(torch.abs(vec_weight * disp_vec), dim=-1, keepdim=False)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def L2_DistCost_target_jit(vec_weight, g_vec, c_vec, weight):
     return torch.norm(weight * vec_weight * (g_vec - c_vec), p=2, dim=-1, keepdim=False)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def fwd_SQL2_DistCost_target_jit(vec_weight, g_vec, c_vec, weight):
     return torch.sum(torch.square(weight * vec_weight * (g_vec - c_vec)), dim=-1, keepdim=False)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def fwd_L1_DistCost_target_jit(vec_weight, g_vec, c_vec, weight):
     return torch.sum(torch.abs(weight * vec_weight * (g_vec - c_vec)), dim=-1, keepdim=False)
 

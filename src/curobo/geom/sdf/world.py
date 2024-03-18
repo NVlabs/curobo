@@ -19,7 +19,7 @@ import torch
 
 # CuRobo
 from curobo.curobolib.geom import SdfSphereOBB, SdfSweptSphereOBB
-from curobo.geom.types import Cuboid, Mesh, Obstacle, WorldConfig, batch_tensor_cube
+from curobo.geom.types import Cuboid, Mesh, Obstacle, VoxelGrid, WorldConfig, batch_tensor_cube
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.util.logger import log_error, log_info, log_warn
@@ -39,10 +39,14 @@ class CollisionBuffer:
     def initialize_from_shape(cls, shape: torch.Size, tensor_args: TensorDeviceType):
         batch, horizon, n_spheres, _ = shape
         distance_buffer = torch.zeros(
-            (batch, horizon, n_spheres), device=tensor_args.device, dtype=tensor_args.dtype
+            (batch, horizon, n_spheres),
+            device=tensor_args.device,
+            dtype=tensor_args.collision_distance_dtype,
         )
         grad_distance_buffer = torch.zeros(
-            (batch, horizon, n_spheres, 4), device=tensor_args.device, dtype=tensor_args.dtype
+            (batch, horizon, n_spheres, 4),
+            device=tensor_args.device,
+            dtype=tensor_args.collision_gradient_dtype,
         )
         sparsity_idx = torch.zeros(
             (batch, horizon, n_spheres),
@@ -54,10 +58,14 @@ class CollisionBuffer:
     def _update_from_shape(self, shape: torch.Size, tensor_args: TensorDeviceType):
         batch, horizon, n_spheres, _ = shape
         self.distance_buffer = torch.zeros(
-            (batch, horizon, n_spheres), device=tensor_args.device, dtype=tensor_args.dtype
+            (batch, horizon, n_spheres),
+            device=tensor_args.device,
+            dtype=tensor_args.collision_distance_dtype,
         )
         self.grad_distance_buffer = torch.zeros(
-            (batch, horizon, n_spheres, 4), device=tensor_args.device, dtype=tensor_args.dtype
+            (batch, horizon, n_spheres, 4),
+            device=tensor_args.device,
+            dtype=tensor_args.collision_gradient_dtype,
         )
         self.sparsity_index_buffer = torch.zeros(
             (batch, horizon, n_spheres),
@@ -100,6 +108,7 @@ class CollisionQueryBuffer:
     primitive_collision_buffer: Optional[CollisionBuffer] = None
     mesh_collision_buffer: Optional[CollisionBuffer] = None
     blox_collision_buffer: Optional[CollisionBuffer] = None
+    voxel_collision_buffer: Optional[CollisionBuffer] = None
     shape: Optional[torch.Size] = None
 
     def __post_init__(self):
@@ -110,6 +119,8 @@ class CollisionQueryBuffer:
                 self.shape = self.mesh_collision_buffer.shape
             elif self.blox_collision_buffer is not None:
                 self.shape = self.blox_collision_buffer.shape
+            elif self.voxel_collision_buffer is not None:
+                self.shape = self.voxel_collision_buffer.shape
 
     def __mul__(self, scalar: float):
         if self.primitive_collision_buffer is not None:
@@ -118,17 +129,27 @@ class CollisionQueryBuffer:
             self.mesh_collision_buffer = self.mesh_collision_buffer * scalar
         if self.blox_collision_buffer is not None:
             self.blox_collision_buffer = self.blox_collision_buffer * scalar
+        if self.voxel_collision_buffer is not None:
+            self.voxel_collision_buffer = self.voxel_collision_buffer * scalar
         return self
 
     def clone(self):
-        prim_buffer = mesh_buffer = blox_buffer = None
+        prim_buffer = mesh_buffer = blox_buffer = voxel_buffer = None
         if self.primitive_collision_buffer is not None:
             prim_buffer = self.primitive_collision_buffer.clone()
         if self.mesh_collision_buffer is not None:
             mesh_buffer = self.mesh_collision_buffer.clone()
         if self.blox_collision_buffer is not None:
             blox_buffer = self.blox_collision_buffer.clone()
-        return CollisionQueryBuffer(prim_buffer, mesh_buffer, blox_buffer, self.shape)
+        if self.voxel_collision_buffer is not None:
+            voxel_buffer = self.voxel_collision_buffer.clone()
+        return CollisionQueryBuffer(
+            prim_buffer,
+            mesh_buffer,
+            blox_buffer,
+            voxel_collision_buffer=voxel_buffer,
+            shape=self.shape,
+        )
 
     @classmethod
     def initialize_from_shape(
@@ -137,14 +158,18 @@ class CollisionQueryBuffer:
         tensor_args: TensorDeviceType,
         collision_types: Dict[str, bool],
     ):
-        primitive_buffer = mesh_buffer = blox_buffer = None
+        primitive_buffer = mesh_buffer = blox_buffer = voxel_buffer = None
         if "primitive" in collision_types and collision_types["primitive"]:
             primitive_buffer = CollisionBuffer.initialize_from_shape(shape, tensor_args)
         if "mesh" in collision_types and collision_types["mesh"]:
             mesh_buffer = CollisionBuffer.initialize_from_shape(shape, tensor_args)
         if "blox" in collision_types and collision_types["blox"]:
             blox_buffer = CollisionBuffer.initialize_from_shape(shape, tensor_args)
-        return CollisionQueryBuffer(primitive_buffer, mesh_buffer, blox_buffer)
+        if "voxel" in collision_types and collision_types["voxel"]:
+            voxel_buffer = CollisionBuffer.initialize_from_shape(shape, tensor_args)
+        return CollisionQueryBuffer(
+            primitive_buffer, mesh_buffer, blox_buffer, voxel_collision_buffer=voxel_buffer
+        )
 
     def create_from_shape(
         self,
@@ -160,8 +185,9 @@ class CollisionQueryBuffer:
             self.mesh_collision_buffer = CollisionBuffer.initialize_from_shape(shape, tensor_args)
         if "blox" in collision_types and collision_types["blox"]:
             self.blox_collision_buffer = CollisionBuffer.initialize_from_shape(shape, tensor_args)
+        if "voxel" in collision_types and collision_types["voxel"]:
+            self.voxel_collision_buffer = CollisionBuffer.initialize_from_shape(shape, tensor_args)
         self.shape = shape
-        # return self
 
     def update_buffer_shape(
         self,
@@ -169,12 +195,10 @@ class CollisionQueryBuffer:
         tensor_args: TensorDeviceType,
         collision_types: Optional[Dict[str, bool]],
     ):
-        # print(shape, self.shape)
         # update buffers:
         assert len(shape) == 4  # shape is: batch, horizon, n_spheres, 4
         if self.shape is None:  # buffers not initialized:
             self.create_from_shape(shape, tensor_args, collision_types)
-            # print("Creating new memory", self.shape)
         else:
             # update buffers if shape doesn't match:
             # TODO: allow for dynamic change of collision_types
@@ -185,6 +209,8 @@ class CollisionQueryBuffer:
                 self.mesh_collision_buffer.update_buffer_shape(shape, tensor_args)
             if self.blox_collision_buffer is not None:
                 self.blox_collision_buffer.update_buffer_shape(shape, tensor_args)
+            if self.voxel_collision_buffer is not None:
+                self.voxel_collision_buffer.update_buffer_shape(shape, tensor_args)
             self.shape = shape
 
     def get_gradient_buffer(
@@ -208,6 +234,12 @@ class CollisionQueryBuffer:
                 current_buffer = blox_buffer.clone()
             else:
                 current_buffer += blox_buffer
+        if self.voxel_collision_buffer is not None:
+            voxel_buffer = self.voxel_collision_buffer.grad_distance_buffer
+            if current_buffer is None:
+                current_buffer = voxel_buffer.clone()
+            else:
+                current_buffer += voxel_buffer
 
         return current_buffer
 
@@ -221,6 +253,7 @@ class CollisionCheckerType(Enum):
     PRIMITIVE = "PRIMITIVE"
     BLOX = "BLOX"
     MESH = "MESH"
+    VOXEL = "VOXEL"
 
 
 @dataclass
@@ -230,11 +263,13 @@ class WorldCollisionConfig:
     cache: Optional[Dict[Obstacle, int]] = None
     n_envs: int = 1
     checker_type: CollisionCheckerType = CollisionCheckerType.PRIMITIVE
-    max_distance: float = 0.01
+    max_distance: Union[torch.Tensor, float] = 0.01
 
     def __post_init__(self):
         if self.world_model is not None and isinstance(self.world_model, list):
             self.n_envs = len(self.world_model)
+        if isinstance(self.max_distance, float):
+            self.max_distance = self.tensor_args.to_device([self.max_distance])
 
     @staticmethod
     def load_from_dict(
@@ -261,6 +296,8 @@ class WorldCollision(WorldCollisionConfig):
         if config is not None:
             WorldCollisionConfig.__init__(self, **vars(config))
         self.collision_types = {}  # Use this dictionary to store collision types
+        self._cache_voxelization = None
+        self._cache_voxelization_collision_buffer = None
 
     def load_collision_model(self, world_model: WorldConfig):
         raise NotImplementedError
@@ -273,6 +310,8 @@ class WorldCollision(WorldCollisionConfig):
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_collisions: bool = True,
+        compute_esdf: bool = False,
     ):
         """
         Computes the signed distance via analytic function
@@ -310,6 +349,7 @@ class WorldCollision(WorldCollisionConfig):
         enable_speed_metric=False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_collisions: bool = True,
     ):
         raise NotImplementedError
 
@@ -338,6 +378,118 @@ class WorldCollision(WorldCollisionConfig):
     ):
         raise NotImplementedError
 
+    def get_voxels_in_bounding_box(
+        self,
+        cuboid: Cuboid = Cuboid(name="test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[1, 1, 1]),
+        voxel_size: float = 0.02,
+    ) -> Union[List[Cuboid], torch.Tensor]:
+        new_grid = self.get_occupancy_in_bounding_box(cuboid, voxel_size)
+        occupied = new_grid.get_occupied_voxels(0.0)
+        return occupied
+
+    def clear_voxelization_cache(self):
+        self._cache_voxelization = None
+
+    def update_cache_voxelization(self, new_grid: VoxelGrid):
+        if (
+            self._cache_voxelization is None
+            or self._cache_voxelization.voxel_size != new_grid.voxel_size
+            or self._cache_voxelization.dims != new_grid.dims
+        ):
+            self._cache_voxelization = new_grid
+            self._cache_voxelization.xyzr_tensor = self._cache_voxelization.create_xyzr_tensor(
+                transform_to_origin=True, tensor_args=self.tensor_args
+            )
+            self._cache_voxelization_collision_buffer = CollisionQueryBuffer()
+            xyzr = self._cache_voxelization.xyzr_tensor.view(-1, 1, 1, 4)
+
+            self._cache_voxelization_collision_buffer.update_buffer_shape(
+                xyzr.shape,
+                self.tensor_args,
+                self.collision_types,
+            )
+
+    def get_occupancy_in_bounding_box(
+        self,
+        cuboid: Cuboid = Cuboid(name="test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[1, 1, 1]),
+        voxel_size: float = 0.02,
+    ) -> VoxelGrid:
+        new_grid = VoxelGrid(
+            name=cuboid.name, dims=cuboid.dims, pose=cuboid.pose, voxel_size=voxel_size
+        )
+
+        self.update_cache_voxelization(new_grid)
+
+        xyzr = self._cache_voxelization.xyzr_tensor
+
+        xyzr = xyzr.view(-1, 1, 1, 4)
+
+        weight = self.tensor_args.to_device([1.0])
+        act_distance = self.tensor_args.to_device([0.0])
+
+        d_sph = self.get_sphere_collision(
+            xyzr,
+            self._cache_voxelization_collision_buffer,
+            weight,
+            act_distance,
+        )
+        d_sph = d_sph.reshape(-1)
+        new_grid.xyzr_tensor = self._cache_voxelization.xyzr_tensor
+        new_grid.feature_tensor = d_sph
+        return new_grid
+
+    def get_esdf_in_bounding_box(
+        self,
+        cuboid: Cuboid = Cuboid(name="test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[1, 1, 1]),
+        voxel_size: float = 0.02,
+        dtype=torch.float32,
+    ) -> VoxelGrid:
+        new_grid = VoxelGrid(
+            name=cuboid.name,
+            dims=cuboid.dims,
+            pose=cuboid.pose,
+            voxel_size=voxel_size,
+            feature_dtype=dtype,
+        )
+
+        self.update_cache_voxelization(new_grid)
+
+        xyzr = self._cache_voxelization.xyzr_tensor
+        voxel_shape = xyzr.shape
+        xyzr = xyzr.view(-1, 1, 1, 4)
+
+        weight = self.tensor_args.to_device([1.0])
+
+        d_sph = self.get_sphere_distance(
+            xyzr,
+            self._cache_voxelization_collision_buffer,
+            weight,
+            self.max_distance,
+            sum_collisions=False,
+            compute_esdf=True,
+        )
+
+        d_sph = d_sph.reshape(-1)
+        voxel_grid = self._cache_voxelization
+        voxel_grid.feature_tensor = d_sph
+
+        return voxel_grid
+
+    def get_mesh_in_bounding_box(
+        self,
+        cuboid: Cuboid = Cuboid(name="test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[1, 1, 1]),
+        voxel_size: float = 0.02,
+    ) -> Mesh:
+        voxels = self.get_voxels_in_bounding_box(cuboid, voxel_size)
+        # voxels = voxels.cpu().numpy()
+        # cuboids = [Cuboid(name="c_"+str(x), pose=[voxels[x,0],voxels[x,1],voxels[x,2], 1,0,0,0], dims=[voxel_size, voxel_size, voxel_size]) for x in range(voxels.shape[0])]
+        # mesh = WorldConfig(cuboid=cuboids).get_mesh_world(True).mesh[0]
+        mesh = Mesh.from_pointcloud(
+            voxels[:, :3].detach().cpu().numpy(),
+            pitch=voxel_size * 1.1,
+        )
+        return mesh
+
 
 class WorldPrimitiveCollision(WorldCollision):
     """World Oriented Bounding Box representation object
@@ -354,6 +506,7 @@ class WorldPrimitiveCollision(WorldCollision):
         self._env_n_obbs = None
         self._env_obbs_names = None
         self._init_cache()
+
         if self.world_model is not None:
             if isinstance(self.world_model, list):
                 self.load_batch_collision_model(self.world_model)
@@ -656,6 +809,8 @@ class WorldPrimitiveCollision(WorldCollision):
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss=False,
+        sum_collisions: bool = True,
+        compute_esdf: bool = False,
     ):
         if "primitive" not in self.collision_types or not self.collision_types["primitive"]:
             raise ValueError("Primitive Collision has no obstacles")
@@ -673,6 +828,7 @@ class WorldPrimitiveCollision(WorldCollision):
             collision_query_buffer.primitive_collision_buffer.sparsity_index_buffer,
             weight,
             activation_distance,
+            self.max_distance,
             self._cube_tensor_list[0],
             self._cube_tensor_list[0],
             self._cube_tensor_list[1],
@@ -687,6 +843,8 @@ class WorldPrimitiveCollision(WorldCollision):
             True,
             use_batch_env,
             return_loss,
+            sum_collisions,
+            compute_esdf,
         )
 
         return dist
@@ -699,6 +857,7 @@ class WorldPrimitiveCollision(WorldCollision):
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss=False,
+        **kwargs,
     ):
         if "primitive" not in self.collision_types or not self.collision_types["primitive"]:
             raise ValueError("Primitive Collision has no obstacles")
@@ -717,6 +876,7 @@ class WorldPrimitiveCollision(WorldCollision):
             collision_query_buffer.primitive_collision_buffer.sparsity_index_buffer,
             weight,
             activation_distance,
+            self.max_distance,
             self._cube_tensor_list[0],
             self._cube_tensor_list[0],
             self._cube_tensor_list[1],
@@ -728,7 +888,7 @@ class WorldPrimitiveCollision(WorldCollision):
             h,
             n,
             query_sphere.requires_grad,
-            False,
+            True,
             use_batch_env,
             return_loss,
         )
@@ -745,6 +905,7 @@ class WorldPrimitiveCollision(WorldCollision):
         enable_speed_metric=False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss=False,
+        sum_collisions: bool = True,
     ):
         """
         Computes the signed distance via analytic function
@@ -784,6 +945,7 @@ class WorldPrimitiveCollision(WorldCollision):
             True,
             use_batch_env,
             return_loss,
+            sum_collisions,
         )
 
         return dist
@@ -836,7 +998,7 @@ class WorldPrimitiveCollision(WorldCollision):
             sweep_steps,
             enable_speed_metric,
             query_sphere.requires_grad,
-            False,
+            True,
             use_batch_env,
             return_loss,
         )
@@ -845,70 +1007,5 @@ class WorldPrimitiveCollision(WorldCollision):
 
     def clear_cache(self):
         if self._cube_tensor_list is not None:
-            self._cube_tensor_list[2][:] = 1
+            self._cube_tensor_list[2][:] = 0
             self._env_n_obbs[:] = 0
-
-    def get_voxels_in_bounding_box(
-        self,
-        cuboid: Cuboid,
-        voxel_size: float = 0.02,
-    ) -> Union[List[Cuboid], torch.Tensor]:
-        bounds = cuboid.dims
-        low = [-bounds[0], -bounds[1], -bounds[2]]
-        high = [bounds[0], bounds[1], bounds[2]]
-        trange = [h - l for l, h in zip(low, high)]
-
-        x = torch.linspace(
-            -bounds[0], bounds[0], int(trange[0] // voxel_size) + 1, device=self.tensor_args.device
-        )
-        y = torch.linspace(
-            -bounds[1], bounds[1], int(trange[1] // voxel_size) + 1, device=self.tensor_args.device
-        )
-        z = torch.linspace(
-            -bounds[2], bounds[2], int(trange[2] // voxel_size) + 1, device=self.tensor_args.device
-        )
-        w, l, h = x.shape[0], y.shape[0], z.shape[0]
-        xyz = (
-            torch.stack(torch.meshgrid(x, y, z, indexing="ij")).permute((1, 2, 3, 0)).reshape(-1, 3)
-        )
-
-        pose = Pose.from_list(cuboid.pose, tensor_args=self.tensor_args)
-        xyz = pose.transform_points(xyz.contiguous())
-        r = torch.zeros_like(xyz[:, 0:1]) + voxel_size
-        xyzr = torch.cat([xyz, r], dim=1)
-        xyzr = xyzr.reshape(-1, 1, 1, 4)
-        collision_buffer = CollisionQueryBuffer()
-        collision_buffer.update_buffer_shape(
-            xyzr.shape,
-            self.tensor_args,
-            self.collision_types,
-        )
-        weight = self.tensor_args.to_device([1.0])
-        act_distance = self.tensor_args.to_device([0.0])
-
-        d_sph = self.get_sphere_collision(
-            xyzr,
-            collision_buffer,
-            weight,
-            act_distance,
-        )
-        d_sph = d_sph.reshape(-1)
-        xyzr = xyzr.reshape(-1, 4)
-        # get occupied voxels:
-        occupied = xyzr[d_sph > 0.0]
-        return occupied
-
-    def get_mesh_in_bounding_box(
-        self,
-        cuboid: Cuboid,
-        voxel_size: float = 0.02,
-    ) -> Mesh:
-        voxels = self.get_voxels_in_bounding_box(cuboid, voxel_size)
-        # voxels = voxels.cpu().numpy()
-        # cuboids = [Cuboid(name="c_"+str(x), pose=[voxels[x,0],voxels[x,1],voxels[x,2], 1,0,0,0], dims=[voxel_size, voxel_size, voxel_size]) for x in range(voxels.shape[0])]
-        # mesh = WorldConfig(cuboid=cuboids).get_mesh_world(True).mesh[0]
-        mesh = Mesh.from_pointcloud(
-            voxels[:, :3].detach().cpu().numpy(),
-            pitch=voxel_size * 1.1,
-        )
-        return mesh

@@ -34,6 +34,7 @@ from curobo.types.robot import JointState, RobotConfig
 from curobo.types.tensor import T_BDOF, T_BValue_bool, T_BValue_float
 from curobo.util.logger import log_error, log_warn
 from curobo.util.sample_lib import HaltonGenerator
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util_file import (
     get_robot_configs_path,
     get_task_configs_path,
@@ -1010,7 +1011,7 @@ class IKSolver(IKSolverConfig):
         ]
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def get_success(
     feasible,
     position_error,
@@ -1028,7 +1029,7 @@ def get_success(
     return success
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def get_result(
     pose_error,
     position_error,

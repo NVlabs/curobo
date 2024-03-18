@@ -197,7 +197,7 @@ class MotionGenConfig:
         smooth_weight: List[float] = None,
         finetune_smooth_weight: Optional[List[float]] = None,
         state_finite_difference_mode: Optional[str] = None,
-        finetune_dt_scale: float = 0.98,
+        finetune_dt_scale: float = 0.95,
         maximum_trajectory_time: Optional[float] = None,
         maximum_trajectory_dt: float = 0.1,
         velocity_scale: Optional[Union[List[float], float]] = None,
@@ -2086,6 +2086,7 @@ class MotionGen(MotionGenConfig):
                 # self.trajopt_solver.compute_metrics(not og_evaluate, og_evaluate)
             if self.store_debug_in_result:
                 result.debug_info["trajopt_result"] = traj_result
+
             # run finetune
             if plan_config.enable_finetune_trajopt and torch.count_nonzero(traj_result.success) > 0:
                 with profiler.record_function("motion_gen/finetune_trajopt"):
@@ -2113,6 +2114,9 @@ class MotionGen(MotionGenConfig):
                 traj_result.solve_time = og_solve_time
                 if self.store_debug_in_result:
                     result.debug_info["finetune_trajopt_result"] = traj_result
+            elif plan_config.enable_finetune_trajopt:
+                traj_result.success = traj_result.success[:, 0]
+
             result.success = traj_result.success
 
             result.interpolated_plan = traj_result.interpolated_solution
@@ -2190,7 +2194,7 @@ class MotionGen(MotionGenConfig):
             # warm up js_trajopt:
             goal_state = start_state.clone()
             goal_state.position[..., warmup_joint_index] += warmup_joint_delta
-            for _ in range(2):
+            for _ in range(3):
                 self.plan_single_js(start_state, goal_state, MotionGenPlanConfig(max_attempts=1))
         if enable_graph:
             start_state = JointState.from_position(
@@ -2214,7 +2218,7 @@ class MotionGen(MotionGenConfig):
             if n_goalset == -1:
                 retract_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
                 start_state.position[..., warmup_joint_index] += warmup_joint_delta
-                for _ in range(2):
+                for _ in range(3):
                     self.plan_single(
                         start_state,
                         retract_pose,
@@ -2243,7 +2247,7 @@ class MotionGen(MotionGenConfig):
                     quaternion=state.ee_quat_seq.repeat(n_goalset, 1).view(1, n_goalset, 4),
                 )
                 start_state.position[..., warmup_joint_index] += warmup_joint_delta
-                for _ in range(2):
+                for _ in range(3):
                     self.plan_goalset(
                         start_state,
                         retract_pose,
@@ -2278,7 +2282,7 @@ class MotionGen(MotionGenConfig):
                 retract_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
                 start_state.position[..., warmup_joint_index] += warmup_joint_delta
 
-                for _ in range(2):
+                for _ in range(3):
                     if batch_env_mode:
                         self.plan_batch_env(
                             start_state,
@@ -2307,7 +2311,7 @@ class MotionGen(MotionGenConfig):
                     .contiguous(),
                 )
                 start_state.position[..., warmup_joint_index] += warmup_joint_delta
-                for _ in range(2):
+                for _ in range(3):
                     if batch_env_mode:
                         self.plan_batch_env_goalset(
                             start_state,

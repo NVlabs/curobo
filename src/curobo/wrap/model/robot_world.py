@@ -36,6 +36,11 @@ from curobo.types.robot import RobotConfig
 from curobo.types.state import JointState
 from curobo.util.logger import log_error
 from curobo.util.sample_lib import HaltonGenerator
+from curobo.util.torch_utils import (
+    get_torch_compile_options,
+    get_torch_jit_decorator,
+    is_torch_compile_available,
+)
 from curobo.util.warp import init_warp
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
 
@@ -191,6 +196,9 @@ class RobotWorld(RobotWorldConfig):
 
     def update_world(self, world_config: WorldConfig):
         self.world_model.load_collision_model(world_config)
+
+    def clear_world_cache(self):
+        self.world_model.clear_cache()
 
     def get_collision_distance(
         self, x_sph: torch.Tensor, env_query_idx: Optional[torch.Tensor] = None
@@ -364,16 +372,7 @@ class RobotWorld(RobotWorldConfig):
         if len(q.shape) == 1:
             log_error("q should be of shape [b, dof]")
         kin_state = self.get_kinematics(q)
-        b, n = None, None
-        if len(points.shape) == 3:
-            b, n, _ = points.shape
-            points = points.view(b * n, 3)
-
         pt_distance = point_robot_distance(kin_state.link_spheres_tensor, points)
-
-        if b is not None:
-            pt_distance = pt_distance.view(b, n)
-
         return pt_distance
 
     def get_active_js(self, full_js: JointState):
@@ -382,27 +381,50 @@ class RobotWorld(RobotWorldConfig):
         return out_js
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def sum_mask(d1, d2, d3):
     d_total = d1 + d2 + d3
     d_mask = d_total == 0.0
     return d_mask.view(-1)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def mask(d1, d2, d3):
     d_total = d1 + d2 + d3
     d_mask = d_total == 0.0
     return d_mask
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def point_robot_distance(link_spheres_tensor, points):
-    robot_spheres = link_spheres_tensor.view(1, -1, 4).contiguous()
-    robot_radius = robot_spheres[:, :, 3]
-    points = points.unsqueeze(1)
-    sph_distance = (
-        torch.linalg.norm(points - robot_spheres[:, :, :3], dim=-1) - robot_radius
+    """Compute distance between robot and points
+
+    Args:
+        link_spheres_tensor: [batch_robot, n_robot_spheres, 4]
+        points: [batch_points, n_points, 3]
+
+    Returns:
+        distance: [batch_points, n_points]
+    """
+    if link_spheres_tensor.shape[0] != 1:
+        assert link_spheres_tensor.shape[0] == points.shape[0]
+    squeeze_shape = False
+    n = 1
+    if len(points.shape) == 2:
+        squeeze_shape = True
+        n, _ = points.shape
+        points = points.unsqueeze(0)
+
+    robot_spheres = link_spheres_tensor.view(link_spheres_tensor.shape[0], -1, 4).contiguous()
+    robot_spheres = robot_spheres.unsqueeze(-3)
+
+    robot_radius = robot_spheres[..., 3]
+    points = points.unsqueeze(-2)
+    sph_distance = -1 * (
+        torch.linalg.norm(points - robot_spheres[..., :3], dim=-1) - robot_radius
     )  # b, n_spheres
-    pt_distance = torch.max(-1 * sph_distance, dim=-1)[0]
+    pt_distance = torch.max(sph_distance, dim=-1)[0]
+
+    if squeeze_shape:
+        pt_distance = pt_distance.view(n)
     return pt_distance

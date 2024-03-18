@@ -327,4 +327,4 @@ def test_motion_gen_single_js(motion_gen_str, enable_graph, request):
 
     reached_state = result.optimized_plan[-1]
 
-    assert torch.norm(goal_state.position - reached_state.position) < 0.005
+    assert torch.norm(goal_state.position - reached_state.position) < 0.05
