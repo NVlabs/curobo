@@ -58,6 +58,8 @@ of signed distances (SDF) to compute collision avoidance metrics. Documentation 
 ``benchmark/curobo_voxel_benchmark.py`` for an example.
 - Add API for ESDF computation from world representations, see 
 ``WorldCollision.get_esdf_in_bounding_box()``.
+- Add partial support for isaac sim 2023.1.1. Most examples run for UR robots. `Franka Panda` is 
+unstable.
 
 ### BugFixes & Misc.
 - refactored wp.index() instances to `[]` to avoid errors in future releases of warp.
@@ -95,10 +97,12 @@ trajectory optimization fails.
 - Added unit tests for collision checking functions.
 - Fix bug in linear interpolation which was not reading the new ``optimized_dt`` to interpolate
 velocity, acceleration, and jerk.
+- Remove torch.jit.script wrapper for lbfgs as it causes TorchScript error if history is different
+between trajopt and finetune_trajopt.
 
 
 ### Known Bugs (WIP)
-- Examples don't run in Isaac Sim 2023.1.1 due to behavior change in urdf importer.
+- `Franka Panda` robot loading from urdf in isaac sim 2023.1.1 is unstable. 
 
 ## Version 0.6.2
 ### New Features

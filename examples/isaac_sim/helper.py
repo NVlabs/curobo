@@ -19,6 +19,7 @@ from omni.isaac.core import World
 from omni.isaac.core.materials import OmniPBR
 from omni.isaac.core.objects import cuboid
 from omni.isaac.core.robots import Robot
+from pxr import UsdPhysics
 
 # CuRobo
 from curobo.util.logger import log_warn
@@ -100,24 +101,28 @@ def add_robot_to_scene(
         import_config,
         dest_path,
     )
-    # prim_path = omni.usd.get_stage_next_free_path(
-    # my_world.scene.stage, str(my_world.scene.stage.GetDefaultPrim().GetPath()) + robot_path, False)
-    # print(prim_path)
-    # robot_prim = my_world.scene.stage.OverridePrim(prim_path)
-    # robot_prim.GetReferences().AddReference(dest_path)
+
+    base_link_name = robot_config["kinematics"]["base_link"]
+
     robot_p = Robot(
-        prim_path=robot_path,
+        prim_path=robot_path + "/" + base_link_name,
         name=robot_name,
         position=position,
     )
-    if ISAAC_SIM_23:
+    if False and ISAAC_SIM_23:  # this doesn't work in isaac sim 2023.1.1
         robot_p.set_solver_velocity_iteration_count(0)
         robot_p.set_solver_position_iteration_count(44)
 
         my_world._physics_context.set_solver_type("PGS")
 
+    if ISAAC_SIM_23:  # fix to load robot correctly in isaac sim 2023.1.1
+        robot_prim = robot_p.prim
+        stage = robot_prim.GetStage()
+        linkp = stage.GetPrimAtPath(robot_path + "/" + base_link_name)
+        mass = UsdPhysics.MassAPI(linkp)
+        mass.GetMassAttr().Set(0)
     robot = my_world.scene.add(robot_p)
-    robot_path = robot.prim_path
+    # robot_path = robot.prim_path
     return robot, robot_path
 
 

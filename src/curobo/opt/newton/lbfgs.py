@@ -25,13 +25,13 @@ from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 # kernel for l-bfgs:
-@get_torch_jit_decorator()
+@get_torch_jit_decorator(only_valid_for_compile=True)
 def jit_lbfgs_compute_step_direction(
-    alpha_buffer,
-    rho_buffer,
-    y_buffer,
-    s_buffer,
-    grad_q,
+    alpha_buffer: torch.Tensor,
+    rho_buffer: torch.Tensor,
+    y_buffer: torch.Tensor,
+    s_buffer: torch.Tensor,
+    grad_q: torch.Tensor,
     m: int,
     epsilon: float,
     stable_mode: bool = True,

@@ -437,7 +437,7 @@ class SelfCollisionKinematicsConfig:
     checks_per_thread: int = 32
 
 
-@dataclass(frozen=True)
+@dataclass
 class CudaRobotModelState:
     """Dataclass that stores kinematics information."""
 

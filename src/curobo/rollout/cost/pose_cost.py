@@ -224,15 +224,12 @@ class PoseCost(CostBase, PoseCostConfig):
             run_weight = self.run_weight
 
         active_steps = math.floor(self._horizon * run_tstep_fraction)
+        self.initialize_run_weight_vec(self._horizon)
         self._run_weight_vec[:, :active_steps] = 0
         self._run_weight_vec[:, active_steps:-1] = run_weight
 
     def update_batch_size(self, batch_size, horizon):
         if batch_size != self._batch_size or horizon != self._horizon:
-            # print(self.weight)
-            # print(batch_size, horizon, self._batch_size, self._horizon)
-
-            # batch_size = b*h
             self.out_distance = torch.zeros(
                 (batch_size, horizon), device=self.tensor_args.device, dtype=self.tensor_args.dtype
             )
@@ -265,15 +262,20 @@ class PoseCost(CostBase, PoseCostConfig):
                 device=self.tensor_args.device,
                 dtype=self.tensor_args.dtype,
             )
-            if self._run_weight_vec is None or self._run_weight_vec.shape[1] != horizon:
-                self._run_weight_vec = torch.ones(
-                    (1, horizon), device=self.tensor_args.device, dtype=self.tensor_args.dtype
-                )
+            self.initialize_run_weight_vec(horizon)
             if self.terminal and self.run_weight is not None and horizon > 1:
                 self._run_weight_vec[:, :-1] = self.run_weight
 
             self._batch_size = batch_size
             self._horizon = horizon
+
+    def initialize_run_weight_vec(self, horizon: Optional[int] = None):
+        if horizon is None:
+            horizon = self._horizon
+        if self._run_weight_vec is None or self._run_weight_vec.shape[1] != horizon:
+            self._run_weight_vec = torch.ones(
+                (1, horizon), device=self.tensor_args.device, dtype=self.tensor_args.dtype
+            )
 
     @property
     def goalset_index_buffer(self):
