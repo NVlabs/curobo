@@ -59,6 +59,7 @@ class IKSolverConfig:
     sample_rejection_ratio: int = 50
     tensor_args: TensorDeviceType = TensorDeviceType()
     use_cuda_graph: bool = True
+    random_seed: int = 1531
 
     @staticmethod
     @profiler.record_function("ik_solver/load_from_robot_config")
@@ -94,6 +95,7 @@ class IKSolverConfig:
         collision_activation_distance: Optional[float] = None,
         high_precision: bool = False,
         project_pose_to_goal_frame: bool = True,
+        random_seed: int = 1531
     ):
         if position_threshold <= 0.001:
             high_precision = True
@@ -247,6 +249,7 @@ class IKSolverConfig:
             rollout_fn=aux_rollout,
             tensor_args=tensor_args,
             use_cuda_graph=use_cuda_graph,
+            random_seed=random_seed
         )
         return ik_cfg
 
@@ -334,7 +337,7 @@ class IKSolver(IKSolverConfig):
             self.tensor_args,
             up_bounds=self.solver.safety_rollout.action_bound_highs,
             low_bounds=self.solver.safety_rollout.action_bound_lows,
-            seed=1531,
+            seed=self.random_seed,
             # store_buffer=1000,
         )
 
@@ -948,7 +951,7 @@ class IKSolver(IKSolverConfig):
         """
         Only works for environment=0
         """
-        samples = self.rollout_fn.sample_random_actions(n * self.sample_rejection_ratio)
+        samples = self.q_sample_gen.get_samples(n * self.sample_rejection_ratio, bounded=True)
         metrics = self.rollout_fn.rollout_constraint(
             samples.unsqueeze(1), use_batch_env=use_batch_env
         )
