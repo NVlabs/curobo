@@ -33,6 +33,7 @@ from curobo.curobolib.kinematics import get_cuda_kinematics
 from curobo.geom.types import Mesh, Sphere
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
+from curobo.types.state import JointState
 from curobo.util.logger import log_error
 from curobo.util_file import get_robot_path, join_path, load_yaml
 
@@ -322,7 +323,6 @@ class CudaRobotModel(CudaRobotModelConfig):
 
     def _cuda_forward(self, q):
         link_pos, link_quat, robot_spheres = get_cuda_kinematics(
-            # self._link_mat_seq,  # data will be stored here
             self._link_pos_seq,
             self._link_quat_seq,
             self._batch_robot_spheres,
@@ -336,11 +336,10 @@ class CudaRobotModel(CudaRobotModelConfig):
             self.kinematics_config.store_link_map,
             self.kinematics_config.link_sphere_idx_map,  # sphere idx map
             self.kinematics_config.link_chain_map,
+            self.kinematics_config.joint_offset_map,
             self._grad_out_q,
             self.use_global_cumul,
         )
-        # if(robot_spheres.shape[0]<10):
-        #    print(robot_spheres)
         return link_pos, link_quat, robot_spheres
 
     @property
@@ -380,6 +379,31 @@ class CudaRobotModel(CudaRobotModelConfig):
     @property
     def lock_jointstate(self):
         return self.kinematics_config.lock_jointstate
+
+    def get_full_js(self, js: JointState):
+        all_joint_names = self.all_articulated_joint_names
+        lock_joint_state = self.lock_jointstate
+
+        new_js = js.get_augmented_joint_state(all_joint_names, lock_joint_state)
+        return new_js
+
+    def get_mimic_js(self, js: JointState):
+        if self.kinematics_config.mimic_joints is None:
+            return None
+        extra_joints = {"position": [], "joint_names": []}
+        # for every joint in mimic_joints, get active joint name
+        for j in self.kinematics_config.mimic_joints:
+            active_q = js.position[..., js.joint_names.index(j)]
+            for k in self.kinematics_config.mimic_joints[j]:
+                extra_joints["joint_names"].append(k["joint_name"])
+                extra_joints["position"].append(
+                    k["joint_offset"][0] * active_q + k["joint_offset"][1]
+                )
+        extra_js = JointState.from_position(
+            position=torch.stack(extra_joints["position"]), joint_names=extra_joints["joint_names"]
+        )
+        new_js = js.get_augmented_joint_state(js.joint_names + extra_js.joint_names, extra_js)
+        return new_js
 
     @property
     def ee_link(self):

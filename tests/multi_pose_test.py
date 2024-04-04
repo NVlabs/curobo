@@ -10,6 +10,7 @@
 #
 
 # Third Party
+import pytest
 import torch
 
 # CuRobo
@@ -21,7 +22,11 @@ from curobo.util_file import get_robot_configs_path, get_world_configs_path, joi
 from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
 
 
-def test_multi_pose_franka():
+@pytest.mark.parametrize(
+    "b_size",
+    [1, 10, 100],
+)
+def test_multi_pose_franka(b_size: int):
     tensor_args = TensorDeviceType()
     world_file = "collision_cubby.yml"
 
@@ -44,13 +49,14 @@ def test_multi_pose_franka():
         tensor_args=tensor_args,
     )
     ik_solver = IKSolver(ik_config)
-    b_size = 1
 
     q_sample = ik_solver.sample_configs(b_size)
     kin_state = ik_solver.fk(q_sample)
     link_poses = kin_state.link_pose
     goal = Pose(kin_state.ee_position, kin_state.ee_quaternion)
-    result = ik_solver.solve_single(goal, link_poses=link_poses)
+    result = ik_solver.solve_batch(goal, link_poses=link_poses)
 
     success = result.success
-    assert torch.count_nonzero(success).item() >= 1.0  # we check if atleast 90% are successful
+    assert (
+        torch.count_nonzero(success).item() / b_size >= 0.9
+    )  # we check if atleast 90% are successful

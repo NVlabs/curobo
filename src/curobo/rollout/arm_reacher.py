@@ -274,7 +274,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                         current_fn = self._link_pose_costs[k]
                         if current_fn.enabled:
                             # get link pose
-                            current_pose = link_poses[k]
+                            current_pose = link_poses[k].contiguous()
                             current_pos = current_pose.position
                             current_quat = current_pose.quaternion
 

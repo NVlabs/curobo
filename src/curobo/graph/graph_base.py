@@ -144,6 +144,7 @@ class GraphConfig:
         graph_file: str = "graph.yml",
         self_collision_check: bool = True,
         use_cuda_graph: bool = True,
+        seed: Optional[int] = None,
     ):
         graph_data = load_yaml(join_path(get_task_configs_path(), graph_file))
         base_config_data = load_yaml(join_path(get_task_configs_path(), base_cfg_file))
@@ -182,6 +183,8 @@ class GraphConfig:
             arm_base_cg_rollout = ArmBase(cfg_cg)
         else:
             arm_base_cg_rollout = arm_base
+        if seed is not None:
+            graph_data["graph"]["seed"] = seed
         graph_cfg = GraphConfig.from_dict(
             graph_data["graph"],
             tensor_args,
@@ -911,7 +914,7 @@ class GraphPlanBase(GraphConfig):
         i = self.i
         if x_set is not None:
             if x_set.shape[0] == 0:
-                log_warn("no valid configuration found")
+                log_info("no valid configuration found")
                 return
 
             if connect_mode == "radius":

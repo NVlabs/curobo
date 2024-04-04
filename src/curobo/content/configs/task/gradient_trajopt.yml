@@ -32,7 +32,8 @@ cost:
   pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0] # orientation, position for all timesteps
     run_vec_weight: [0.00,0.00,0.00,0.0,0.0,0.0] # running weight orientation, position
-    weight: [2000,50000.0,30,60] #[150.0, 2000.0, 30, 40]
+    weight: [2000,50000.0,30,50] #[150.0, 2000.0, 30, 40]
+    
     vec_convergence: [0.0,0.0] # orientation, position, orientation metric activation, position metric activation
     terminal: True
     run_weight: 1.0
@@ -62,7 +63,7 @@ cost:
     null_space_weight: [0.0]
 
   primitive_collision_cfg:
-    weight: 100000.0
+    weight: 100000
     use_sweep: True
     sweep_steps: 4
     classify: False

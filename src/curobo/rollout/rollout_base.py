@@ -417,6 +417,7 @@ class Goal(Sequence):
 class RolloutConfig:
     tensor_args: TensorDeviceType
     sum_horizon: bool = False
+    sampler_seed: int = 1312
 
 
 class RolloutBase:
@@ -436,7 +437,7 @@ class RolloutBase:
             self.tensor_args,
             up_bounds=self.action_bound_highs,
             low_bounds=self.action_bound_lows,
-            seed=1312,
+            seed=self.sampler_seed,
         )
 
     @abstractmethod

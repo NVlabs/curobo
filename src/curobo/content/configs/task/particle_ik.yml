@@ -34,7 +34,7 @@ cost:
     run_weight: 1.0
   link_pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    weight: [0, 50, 10, 10] #[20.0, 100.0]
+    weight: [30, 50, 10, 10] #[20.0, 100.0]
     vec_convergence: [0.00, 0.000] # orientation, position
     terminal: False
     use_metric: True

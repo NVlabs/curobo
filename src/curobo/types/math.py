@@ -261,7 +261,6 @@ class Pose(Sequence):
             position=clone_if_not_none(self.position),
             quaternion=clone_if_not_none(self.quaternion),
             normalize_rotation=False,
-            # rotation=clone_if_not_none(self.rotation),
         )
 
     def to(
@@ -451,6 +450,13 @@ class Pose(Sequence):
 
     def compute_local_pose(self, world_pose: Pose) -> Pose:
         return self.inverse().multiply(world_pose)
+
+    def contiguous(self) -> Pose:
+        return Pose(
+            position=self.position.contiguous() if self.position is not None else None,
+            quaternion=self.quaternion.contiguous() if self.quaternion is not None else None,
+            normalize_rotation=False,
+        )
 
 
 def quat_multiply(q1, q2, q_res):

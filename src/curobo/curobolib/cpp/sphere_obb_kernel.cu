@@ -15,23 +15,13 @@
 #include <torch/extension.h>
 
 #include "helper_math.h"
-#include <cuda_fp16.h>
-#include <cuda_bf16.h>
+
 #include <vector>
 #include <torch/torch.h>
 #include <c10/cuda/CUDAGuard.h>
+#include "check_cuda.h"
+#include "cuda_precisions.h"
 
-// NOTE: AT_ASSERT has become AT_CHECK on master after 0.4.
-#define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), # x " must be a CUDA tensor")
-#define CHECK_CONTIGUOUS(x) \
-  AT_ASSERTM(x.is_contiguous(), # x " must be contiguous")
-#define CHECK_INPUT(x) \
-  CHECK_CUDA(x);       \
-  CHECK_CONTIGUOUS(x)
-
-#if defined(CUDA_VERSION) && CUDA_VERSION >= 11080 && TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR >= 2
-#include <cuda_fp8.h>
-#endif
 #define M 4
 #define VOXEL_DEBUG true
 #define VOXEL_UNOBSERVED_DISTANCE -1000.0
@@ -63,8 +53,7 @@ namespace Curobo
     }
 
 
-    #if defined(CUDA_VERSION) && CUDA_VERSION >= 11080 && TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR >= 2
-
+    #if CHECK_FP8
     __device__ __forceinline__ float
     get_array_value(const at::Float8_e4m3fn *grid_features, const int voxel_idx)
     {
@@ -704,16 +693,21 @@ float4 &sum_pt)
     int3 &xyz_grid,
     float &interpolated_distance,
     int &voxel_idx)
-    {
+    { 
 
       
       // convert location to index: can use floor to cast to int.
       // to account for negative values, add 0.5 * bounds.
       const float3 loc_grid = make_float3(loc_grid_params.x, loc_grid_params.y, loc_grid_params.z);
       const  float3 sphere = make_float3(loc_sphere.x, loc_sphere.y, loc_sphere.z);
-      // xyz_loc = make_int3(floorf((sphere  + 0.5 * loc_grid) / loc_grid_params.w));
-      xyz_loc = make_int3(floorf((sphere) / loc_grid_params.w) + (0.5 * loc_grid/loc_grid_params.w));
-      xyz_grid = make_int3(floorf(loc_grid / loc_grid_params.w));
+      //xyz_loc = make_int3(floorf((sphere  + 0.5 * loc_grid) / loc_grid_params.w));
+      const float inv_voxel_size = 1.0/loc_grid_params.w;
+      //xyz_loc = make_int3(sphere * inv_voxel_size)  + make_int3(0.5 * loc_grid * inv_voxel_size);
+      
+      xyz_loc = make_int3((sphere  + 0.5 * loc_grid) * inv_voxel_size);
+
+      //xyz_loc = make_int3(sphere / loc_grid_params.w) + make_int3(floorf(0.5 * loc_grid/loc_grid_params.w));
+      xyz_grid = make_int3((loc_grid * inv_voxel_size)) + 1;
       
       // find next nearest voxel to current point and then do weighted interpolation:
       voxel_idx = xyz_loc.x * xyz_grid.y * xyz_grid.z  + xyz_loc.y * xyz_grid.z + xyz_loc.z;
@@ -732,8 +726,8 @@ float4 &sum_pt)
       
       
       float3 delta =  sphere - voxel_origin;
-      int3 next_loc = make_int3(floorf((make_float3(xyz_loc) + normalize(delta))));
-      float ratio = length(delta)/loc_grid_params.w;
+      int3 next_loc = make_int3(((make_float3(xyz_loc) + normalize(delta))));
+      float ratio = length(delta) * inv_voxel_size;
 
       int next_voxel_idx = next_loc.x * xyz_grid.y * xyz_grid.z  + next_loc.y * xyz_grid.z + next_loc.z;
 
@@ -2752,7 +2746,7 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 3
   else
   {
       
-    #if defined(CUDA_VERSION) && CUDA_VERSION >= 11080 && TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR >= 2
+    #if CHECK_FP8
     const auto fp8_type = torch::kFloat8_e4m3fn;
   #else
     const auto fp8_type = torch::kHalf;
@@ -3217,7 +3211,7 @@ sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
 
   int blocksPerGrid = (bnh_spheres + threadsPerBlock - 1) / threadsPerBlock;
 
-  #if defined(CUDA_VERSION) && CUDA_VERSION >= 11080 && TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR >= 2
+  #if CHECK_FP8
     const auto fp8_type = torch::kFloat8_e4m3fn;
   #else
     const auto fp8_type = torch::kHalf;
@@ -3352,7 +3346,7 @@ swept_sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
 
   int blocksPerGrid = (bnh_spheres + threadsPerBlock - 1) / threadsPerBlock;
 
-  #if defined(CUDA_VERSION) && CUDA_VERSION >= 11080 && TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR >= 2
+  #if CHECK_FP8
     const auto fp8_type = torch::kFloat8_e4m3fn;
   #else
     const auto fp8_type = torch::kHalf;

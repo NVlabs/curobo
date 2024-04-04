@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 #
 # Standard Library
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 # Third Party
 import numpy as np
@@ -33,12 +33,13 @@ class UrdfKinematicsParser(KinematicsParser):
         load_meshes: bool = False,
         mesh_root: str = "",
         extra_links: Optional[Dict[str, LinkParams]] = None,
+        build_scene_graph: bool = False,
     ) -> None:
         # load robot from urdf:
         self._robot = yourdfpy.URDF.load(
             urdf_path,
             load_meshes=load_meshes,
-            build_scene_graph=False,
+            build_scene_graph=build_scene_graph,
             mesh_dir=mesh_root,
             filename_handler=yourdfpy.filename_handler_null,
         )
@@ -46,18 +47,36 @@ class UrdfKinematicsParser(KinematicsParser):
 
     def build_link_parent(self):
         self._parent_map = {}
-        for j in self._robot.joint_map:
-            self._parent_map[self._robot.joint_map[j].child] = self._robot.joint_map[j].parent
-
-    def _find_parent_joint_of_link(self, link_name):
-        for j_idx, j in enumerate(self._robot.joint_map):
-            if self._robot.joint_map[j].child == link_name:
-                return j_idx, j
-        log_error("Link is not attached to any joint")
+        for jid, j in enumerate(self._robot.joint_map):
+            self._parent_map[self._robot.joint_map[j].child] = {
+                "parent": self._robot.joint_map[j].parent,
+                "jid": jid,
+                "joint_name": j,
+            }
 
     def _get_joint_name(self, idx):
         joint = self._robot.joint_names[idx]
         return joint
+
+    def _get_joint_limits(self, joint):
+        joint_type = joint.type
+        if joint_type != "continuous":
+            joint_limits = {
+                "effort": joint.limit.effort,
+                "lower": joint.limit.lower,
+                "upper": joint.limit.upper,
+                "velocity": joint.limit.velocity,
+            }
+        else:
+            log_warn("Converting continuous joint to revolute with limits[-10,10]")
+            joint_type = "revolute"
+            joint_limits = {
+                "effort": joint.limit.effort,
+                "lower": -10,
+                "upper": 10,
+                "velocity": joint.limit.velocity,
+            }
+        return joint_limits, joint_type
 
     def get_link_parameters(self, link_name: str, base=False) -> LinkParams:
         link_params = self._get_from_extra_links(link_name)
@@ -65,44 +84,77 @@ class UrdfKinematicsParser(KinematicsParser):
             return link_params
         body_params = {}
         body_params["link_name"] = link_name
-
+        mimic_joint_name = None
         if base:
             body_params["parent_link_name"] = None
             joint_transform = np.eye(4)
             joint_name = "base_joint"
+            active_joint_name = joint_name
             joint_type = "fixed"
             joint_limits = None
             joint_axis = None
             body_params["joint_id"] = 0
-        else:
-            body_params["parent_link_name"] = self._parent_map[link_name]
+            body_params["joint_type"] = JointType.FIXED
 
-            jid, joint_name = self._find_parent_joint_of_link(link_name)
+        else:
+            parent_data = self._parent_map[link_name]
+            body_params["parent_link_name"] = parent_data["parent"]
+
+            jid, joint_name = parent_data["jid"], parent_data["joint_name"]
             body_params["joint_id"] = jid
             joint = self._robot.joint_map[joint_name]
+            active_joint_name = joint_name
             joint_transform = joint.origin
             if joint_transform is None:
                 joint_transform = np.eye(4)
             joint_type = joint.type
             joint_limits = None
             joint_axis = None
+            body_params["joint_type"] = JointType.FIXED
+
             if joint_type != "fixed":
-                if joint_type != "continuous":
-                    joint_limits = {
-                        "effort": joint.limit.effort,
-                        "lower": joint.limit.lower,
-                        "upper": joint.limit.upper,
-                        "velocity": joint.limit.velocity,
-                    }
-                else:
-                    log_warn("Converting continuous joint to revolute")
-                    joint_type = "revolute"
-                    joint_limits = {
-                        "effort": joint.limit.effort,
-                        "lower": -3.14 * 2,
-                        "upper": 3.14 * 2,
-                        "velocity": joint.limit.velocity,
-                    }
+                joint_offset = [1.0, 0.0]
+                joint_limits, joint_type = self._get_joint_limits(joint)
+
+                if joint.mimic is not None:
+                    joint_offset = [joint.mimic.multiplier, joint.mimic.offset]
+                    # read joint limits of active joint:
+                    mimic_joint_name = joint_name
+                    active_joint_name = joint.mimic.joint
+                    active_joint = self._robot.joint_map[active_joint_name]
+                    active_joint_limits, active_joint_type = self._get_joint_limits(active_joint)
+                    # check to make sure mimic joint limits are not larger than active joint:
+                    if (
+                        active_joint_limits["lower"] * joint_offset[0] + joint_offset[1]
+                        < joint_limits["lower"]
+                    ):
+                        log_error(
+                            "mimic joint can go out of it's lower limit as active joint has larger range "
+                            + "FIX: make mimic joint's lower limit even lower "
+                            + active_joint_name
+                            + " "
+                            + mimic_joint_name
+                        )
+                    if (
+                        active_joint_limits["upper"] * joint_offset[0] + joint_offset[1]
+                        > joint_limits["upper"]
+                    ):
+                        log_error(
+                            "mimic joint can go out of it's upper limit as active joint has larger range "
+                            + "FIX: make mimic joint's upper limit higher"
+                            + active_joint_name
+                            + " "
+                            + mimic_joint_name
+                        )
+                    if active_joint_limits["velocity"] * joint_offset[0] > joint_limits["velocity"]:
+                        log_error(
+                            "mimic joint can move at higher velocity than active joint,"
+                            + "increase velocity limit for mimic joint"
+                            + active_joint_name
+                            + " "
+                            + mimic_joint_name
+                        )
+                    joint_limits = active_joint_limits
 
                 joint_axis = joint.axis
 
@@ -111,45 +163,33 @@ class UrdfKinematicsParser(KinematicsParser):
                     -1.0 * joint_limits["velocity"],
                     joint_limits["velocity"],
                 ]
+                if joint_type == "prismatic":
+                    if abs(joint_axis[0]) == 1:
+                        joint_type = JointType.X_PRISM
+                    if abs(joint_axis[1]) == 1:
+                        joint_type = JointType.Y_PRISM
+                    if abs(joint_axis[2]) == 1:
+                        joint_type = JointType.Z_PRISM
+                elif joint_type == "revolute":
+                    if abs(joint_axis[0]) == 1:
+                        joint_type = JointType.X_ROT
+                    if abs(joint_axis[1]) == 1:
+                        joint_type = JointType.Y_ROT
+                    if abs(joint_axis[2]) == 1:
+                        joint_type = JointType.Z_ROT
+                else:
+                    log_error("Joint type not supported")
+                if joint_axis[0] == -1 or joint_axis[1] == -1 or joint_axis[2] == -1:
+                    joint_offset[0] = -1.0 * joint_offset[0]
+                body_params["joint_type"] = joint_type
+                body_params["joint_offset"] = joint_offset
 
         body_params["fixed_transform"] = joint_transform
-        body_params["joint_name"] = joint_name
+        body_params["joint_name"] = active_joint_name
 
         body_params["joint_axis"] = joint_axis
+        body_params["mimic_joint_name"] = mimic_joint_name
 
-        if joint_type == "fixed":
-            joint_type = JointType.FIXED
-        elif joint_type == "prismatic":
-            if joint_axis[0] == 1:
-                joint_type = JointType.X_PRISM
-            if joint_axis[1] == 1:
-                joint_type = JointType.Y_PRISM
-            if joint_axis[2] == 1:
-                joint_type = JointType.Z_PRISM
-            if joint_axis[0] == -1:
-                joint_type = JointType.X_PRISM_NEG
-            if joint_axis[1] == -1:
-                joint_type = JointType.Y_PRISM_NEG
-            if joint_axis[2] == -1:
-                joint_type = JointType.Z_PRISM_NEG
-
-        elif joint_type == "revolute":
-            if joint_axis[0] == 1:
-                joint_type = JointType.X_ROT
-            if joint_axis[1] == 1:
-                joint_type = JointType.Y_ROT
-            if joint_axis[2] == 1:
-                joint_type = JointType.Z_ROT
-            if joint_axis[0] == -1:
-                joint_type = JointType.X_ROT_NEG
-            if joint_axis[1] == -1:
-                joint_type = JointType.Y_ROT_NEG
-            if joint_axis[2] == -1:
-                joint_type = JointType.Z_ROT_NEG
-        else:
-            log_error("Joint type not supported")
-
-        body_params["joint_type"] = joint_type
         link_params = LinkParams(**body_params)
 
         return link_params
@@ -194,3 +234,16 @@ class UrdfKinematicsParser(KinematicsParser):
             scale=m.scale,
             file_path=m.filename,
         )
+
+    @property
+    def root_link(self):
+        return self._robot.base_link
+
+    def get_controlled_joint_names(self) -> List[str]:
+        j_list = []
+        for k in self._parent_map.keys():
+            joint_name = self._parent_map[k]["joint_name"]
+            joint = self._robot.joint_map[joint_name]
+            if joint.type != "fixed" and joint.mimic is None:
+                j_list.append(joint_name)
+        return j_list

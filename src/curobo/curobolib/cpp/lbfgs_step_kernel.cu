@@ -807,6 +807,7 @@ lbfgs_cuda_fuse(torch::Tensor step_vec, torch::Tensor rho_buffer,
 {
   using namespace Curobo::Optimization;
 
+
   // call first kernel:
   //const bool use_experimental = true;
   const bool use_fixed_m = true;

@@ -512,6 +512,26 @@ class JointState(State):
     def shape(self):
         return self.position.shape
 
+    def index_dof(self, idx: int):
+        # get index of joint names:
+        velocity = acceleration = jerk = None
+        new_index = idx
+        position = torch.index_select(self.position, -1, new_index)
+        if self.velocity is not None:
+            velocity = torch.index_select(self.velocity, -1, new_index)
+        if self.acceleration is not None:
+            acceleration = torch.index_select(self.acceleration, -1, new_index)
+        if self.jerk is not None:
+            jerk = torch.index_select(self.jerk, -1, new_index)
+        joint_names = [self.joint_names[x] for x in new_index]
+        return JointState(
+            position=position,
+            joint_names=joint_names,
+            velocity=velocity,
+            acceleration=acceleration,
+            jerk=jerk,
+        )
+
 
 @get_torch_jit_decorator()
 def jit_js_scale(

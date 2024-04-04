@@ -13,7 +13,7 @@
 
 #include <c10/cuda/CUDAGuard.h>
 #include <vector>
-
+#include "check_cuda.h"
 // CUDA forward declarations
 
 std::vector<torch::Tensor>self_collision_distance(
@@ -168,13 +168,6 @@ backward_pose_distance(torch::Tensor       out_grad_p,
 
 // C++ interface
 
-// NOTE: AT_ASSERT has become AT_CHECK on master after 0.4.
-#define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), # x " must be a CUDA tensor")
-#define CHECK_CONTIGUOUS(x) \
-  AT_ASSERTM(x.is_contiguous(), # x " must be contiguous")
-#define CHECK_INPUT(x) \
-  CHECK_CUDA(x);       \
-  CHECK_CONTIGUOUS(x)
 
 std::vector<torch::Tensor>self_collision_distance_wrapper(
   torch::Tensor out_distance, torch::Tensor out_vec,

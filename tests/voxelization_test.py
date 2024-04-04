@@ -107,12 +107,12 @@ def test_voxels_from_world(world_collision):
     assert voxels.shape[0] > 4
 
 
-@pytest.mark.skip(reason="Not ready yet.")
+# @pytest.mark.skip(reason="Not ready yet.")
 @pytest.mark.parametrize(
     "world_collision",
     [
         (True, True),
-        (False, True),
+        # (False, True),
     ],
     indirect=True,
 )
@@ -156,9 +156,8 @@ def test_esdf_prim_mesh(world_collision, world_collision_primitive):
     voxel_size = 0.1
     esdf = world_collision.get_esdf_in_bounding_box(voxel_size=voxel_size).clone()
     esdf_prim = world_collision_primitive.get_esdf_in_bounding_box(voxel_size=voxel_size).clone()
-    print(esdf.voxel_size, esdf_prim.voxel_size)
-    voxels = esdf.get_occupied_voxels()
-    voxels_prim = esdf_prim.get_occupied_voxels()
+    voxels = esdf.get_occupied_voxels(voxel_size)
+    voxels_prim = esdf_prim.get_occupied_voxels(voxel_size)
     assert voxels.shape == voxels_prim.shape
 
 

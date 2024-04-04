@@ -1,0 +1,108 @@
+<?xml version="1.0" ?>
+
+<robot name="simple_closed_chain_robot">
+
+<link name="base_link">
+    <visual>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry>
+            <box size="0.1 0.1 0.1"/>
+        </geometry>
+        <material name="">
+            <color rgba="0.9 0.9 0.9 1"/>
+        </material>
+    </visual>
+    <collision>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry>
+            <box size="0.01 0.01 0.01"/>
+        </geometry>
+    </collision>
+</link>
+
+
+  <joint name="chain_1_active_joint_1" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.0"/>
+    <parent link="base_link"/>
+    <child link="chain_1_link_1"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="1000" lower="-6.0" upper="6.0" velocity="2.0"/>
+  </joint>
+
+
+<link name="chain_1_link_1">
+    <visual>
+        <origin rpy="0 0 0" xyz="0 0 0.35"/>
+        <geometry>
+            <box size="0.1 0.1 0.5"/>
+        </geometry>
+        <material name="">
+            <color rgba="0.0 0.0 0.9 1"/>
+        </material>
+    </visual>
+    <collision>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry>
+            <box size="0.01 0.01 0.01"/>
+        </geometry>
+    </collision>
+</link>
+
+
+  <joint name="chain_1_mimic_joint_2" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.6"/>
+    <parent link="chain_1_link_1"/>
+    <child link="chain_1_link_2"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="1000" lower="-10.0" upper="10.0" velocity="5.0"/>
+    <mimic joint="chain_1_active_joint_1" multiplier="-1.5" offset="0.5"/>
+  </joint>
+
+<link name="chain_1_link_2">
+    <visual>
+        <origin rpy="0 0 0" xyz="0 0 0.35"/>
+        <geometry>
+            <box size="0.1 0.1 0.5"/>
+        </geometry>
+        <material name="">
+            <color rgba="0.9 0.9 0.9 1"/>
+        </material>
+    </visual>
+    <collision>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry>
+            <box size="0.01 0.01 0.01"/>
+        </geometry>
+    </collision>
+</link>
+
+<link name="ee_link">
+    <visual>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry>
+            <box size="0.2 0.2 0.1"/>
+        </geometry>
+        <material name="">
+            <color rgba="0.0 0.9 0.0 1"/>
+        </material>
+    </visual>
+    <collision>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry>
+            <box size="0.01 0.01 0.01"/>
+        </geometry>
+    </collision>
+</link>
+
+
+
+  <joint name="active_joint_2" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.0"/>
+    <parent link="chain_1_link_2"/>
+    <child link="ee_link"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="1000" lower="-6.0" upper="6.0" velocity="2.0"/>
+  </joint>
+
+
+</robot>

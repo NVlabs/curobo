@@ -18,7 +18,7 @@ import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo.geom.sdf.world import CollisionQueryBuffer, WorldCollisionConfig
-from curobo.geom.sdf.world_mesh import WorldMeshCollision
+from curobo.geom.sdf.world_voxel import WorldVoxelCollision
 from curobo.geom.types import Cuboid, Mesh, Sphere, SphereFitType, WorldConfig
 from curobo.types.camera import CameraObservation
 from curobo.types.math import Pose
@@ -33,7 +33,7 @@ except ImportError:
     from abc import ABC as Mapper
 
 
-class WorldBloxCollision(WorldMeshCollision):
+class WorldBloxCollision(WorldVoxelCollision):
     """World Collision Representaiton using Nvidia's nvblox library.
 
     This class depends on pytorch wrapper for nvblox.
@@ -127,6 +127,7 @@ class WorldBloxCollision(WorldMeshCollision):
         collision_query_buffer: CollisionQueryBuffer,
         weight,
         activation_distance,
+        compute_esdf: bool = False,
     ):
         d = self._blox_mapper.query_sphere_sdf_cost(
             query_spheres,
@@ -196,6 +197,7 @@ class WorldBloxCollision(WorldMeshCollision):
             collision_query_buffer,
             weight=weight,
             activation_distance=activation_distance,
+            compute_esdf=compute_esdf,
         )
 
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
@@ -227,6 +229,7 @@ class WorldBloxCollision(WorldMeshCollision):
         activation_distance: torch.Tensor,
         env_query_idx=None,
         return_loss: bool = False,
+        **kwargs,
     ):
         if "blox" not in self.collision_types or not self.collision_types["blox"]:
             return super().get_sphere_collision(

@@ -59,6 +59,7 @@ class IKSolverConfig:
     sample_rejection_ratio: int = 50
     tensor_args: TensorDeviceType = TensorDeviceType()
     use_cuda_graph: bool = True
+    seed: int = 1531
 
     @staticmethod
     @profiler.record_function("ik_solver/load_from_robot_config")
@@ -94,6 +95,7 @@ class IKSolverConfig:
         collision_activation_distance: Optional[float] = None,
         high_precision: bool = False,
         project_pose_to_goal_frame: bool = True,
+        seed: int = 1531,
     ):
         if position_threshold <= 0.001:
             high_precision = True
@@ -104,6 +106,11 @@ class IKSolverConfig:
         base_config_data = load_yaml(join_path(get_task_configs_path(), base_cfg_file))
         config_data = load_yaml(join_path(get_task_configs_path(), particle_file))
         grad_config_data = load_yaml(join_path(get_task_configs_path(), gradient_file))
+        base_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
+        base_config_data["convergence"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
+        config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
+        grad_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
+
 
         if collision_cache is not None:
             base_config_data["world_collision_checker_cfg"]["cache"] = collision_cache
@@ -247,6 +254,7 @@ class IKSolverConfig:
             rollout_fn=aux_rollout,
             tensor_args=tensor_args,
             use_cuda_graph=use_cuda_graph,
+            seed=seed,
         )
         return ik_cfg
 
@@ -318,24 +326,21 @@ class IKResult(Sequence):
 class IKSolver(IKSolverConfig):
     def __init__(self, config: IKSolverConfig) -> None:
         super().__init__(**vars(config))
-        # self._solve_
         self.batch_size = -1
         self._num_seeds = self.num_seeds
         self.init_state = JointState.from_position(
             self.solver.rollout_fn.retract_state.unsqueeze(0)
         )
         self.dof = self.solver.safety_rollout.d_action
-        self._col = None  # torch.arange(0, 1, device=self.tensor_args.device, dtype=torch.long)
+        self._col = None
 
-        # self.fixed_seeds = self.solver.safety_rollout.sample_random_actions(100 * 200)
         # create random seeder:
         self.q_sample_gen = HaltonGenerator(
             self.dof,
             self.tensor_args,
             up_bounds=self.solver.safety_rollout.action_bound_highs,
             low_bounds=self.solver.safety_rollout.action_bound_lows,
-            seed=1531,
-            # store_buffer=1000,
+            seed=self.seed,
         )
 
         # load ik nn:
@@ -913,21 +918,13 @@ class IKSolver(IKSolverConfig):
         seed_list = []
         if use_nn_seed and self.ik_nn_seeder is not None:
             num_random_seeds = num_seeds - 1
-            in_data = torch.cat(
-                (pose.position, pose.quaternion), dim=-1
-            )  # .to(dtype=torch.float32)
-            nn_seed = self.ik_nn_seeder(in_data).view(
-                batch, 1, self.dof
-            )  # .to(dtype=self.tensor_args.dtype)
+            in_data = torch.cat((pose.position, pose.quaternion), dim=-1)
+            nn_seed = self.ik_nn_seeder(in_data).view(batch, 1, self.dof)
             seed_list.append(nn_seed)
-            # print("using nn seed")
         if num_random_seeds > 0:
-            random_seed = self.q_sample_gen.get_gaussian_samples(num_random_seeds * batch).view(
-                batch, num_random_seeds, self.dof
-            )
-
-            # random_seed = self.fixed_seeds[:num_random_seeds*batch].view(batch, num_random_seeds,
-            # self.solver.safety_rollout.d_action)
+            random_seed = self.q_sample_gen.get_samples(
+                num_random_seeds * batch, bounded=True
+            ).view(batch, num_random_seeds, self.dof)
 
             seed_list.append(random_seed)
         coord_position_seed = torch.cat(seed_list, dim=1)
@@ -944,11 +941,16 @@ class IKSolver(IKSolverConfig):
         metrics = self.rollout_fn.rollout_constraint(q.position.unsqueeze(1))
         return metrics
 
-    def sample_configs(self, n: int, use_batch_env=False) -> torch.Tensor:
+    def sample_configs(
+        self, n: int, use_batch_env=False, sample_from_ik_seeder: bool = False
+    ) -> torch.Tensor:
         """
         Only works for environment=0
         """
-        samples = self.rollout_fn.sample_random_actions(n * self.sample_rejection_ratio)
+        if sample_from_ik_seeder:
+            samples = self.q_sample_gen.get_samples(n * self.sample_rejection_ratio, bounded=True)
+        else:
+            samples = self.rollout_fn.sample_random_actions(n * self.sample_rejection_ratio)
         metrics = self.rollout_fn.rollout_constraint(
             samples.unsqueeze(1), use_batch_env=use_batch_env
         )

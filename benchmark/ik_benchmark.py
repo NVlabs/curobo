@@ -67,7 +67,7 @@ def run_full_config_collision_free_ik(
         robot_cfg,
         world_cfg,
         position_threshold=position_threshold,
-        num_seeds=20,
+        num_seeds=30,
         self_collision_check=collision_free,
         self_collision_opt=collision_free,
         tensor_args=tensor_args,

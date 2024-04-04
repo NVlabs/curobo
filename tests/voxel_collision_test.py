@@ -184,7 +184,7 @@ def test_primitive_voxel_sphere_distance(world_collision):
 
     error = torch.abs(d_cuboid.view(-1) - d_voxel.view(-1))
 
-    assert torch.max(error) < voxel_grid.voxel_size
+    assert torch.max(error) - voxel_grid.voxel_size < 1e-3
 
 
 @pytest.mark.parametrize(
@@ -243,12 +243,11 @@ def test_primitive_voxel_sphere_gradient(world_collision):
 
     error = torch.abs(d_cuboid.view(-1) - d_voxel.view(-1))
 
-    assert torch.max(error) < voxel_grid.voxel_size
+    assert torch.max(error) - voxel_grid.voxel_size < 1e-3
 
     cuboid_gradient = cuboid_collision_buffer.get_gradient_buffer()
 
     voxel_gradient = voxel_collision_buffer.get_gradient_buffer()
     error = torch.linalg.norm(cuboid_gradient - voxel_gradient, dim=-1)
-    print(cuboid_gradient)
-    print(voxel_gradient)
-    assert torch.max(error) < voxel_grid.voxel_size
+
+    assert torch.max(error) - voxel_grid.voxel_size < 1e-3

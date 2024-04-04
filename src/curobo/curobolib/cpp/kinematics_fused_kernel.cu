@@ -10,12 +10,13 @@
  */
 
 #include <c10/cuda/CUDAStream.h>
+
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <torch/extension.h>
 
 #include "helper_math.h"
-#include <cuda_fp16.h>
+#include "check_cuda.h"
 #include <vector>
 
 #define M 4
@@ -28,13 +29,6 @@
 #define Y_ROT 4
 #define Z_ROT 5
 
-#define X_PRISM_NEG 6
-#define Y_PRISM_NEG 7
-#define Z_PRISM_NEG 8
-#define X_ROT_NEG 9
-#define Y_ROT_NEG 10
-#define Z_ROT_NEG 11
-
 #define MAX_BATCH_PER_BLOCK 32    // tunable parameter for improving occupancy
 #define MAX_BW_BATCH_PER_BLOCK 16 // tunable parameter for improving occupancy
 
@@ -46,6 +40,8 @@ namespace Curobo
 {
   namespace Kinematics
   {
+
+
     template<typename psum_t>
     __device__ __forceinline__ void scale_cross_sum(float3 a, float3 b,
                                                     float3 scale, psum_t& sum_out)
@@ -293,36 +289,11 @@ namespace Curobo
       }
     }
 
-    __device__ __forceinline__ void update_joint_type_direction(int& j_type, int8_t& axis_sign)
-    {
-      // Assume that input j_type >= 0 . Check fixed joint outside of this function.
-
-      // Don't do anything if j_type < 6. j_type range is [0, 11]
-      // divergence here.
-      axis_sign = 1;
-
-      if (j_type >= 6)
-      {
-        j_type   -= 6;
-        axis_sign = -1;
-      }
-    }
-
-    __device__ __forceinline__ void update_joint_type_direction(int& j_type)
-    {
-      // Assume that input j_type >= 0 . Check fixed joint outside of this function.
-
-      // Don't do anything if j_type < 6. j_type range is [0, 11]
-      // divergence here.
-      if (j_type >= 6)
-      {
-        j_type -= 6;
-      }
-    }
 
     __device__ __forceinline__ void update_axis_direction(
       float& angle,
-      int  & j_type)
+      int  & j_type,
+      const float2 &j_offset)
     {
       // Assume that input j_type >= 0 . Check fixed joint outside of this function.
       // sign should be +ve <= 5 and -ve >5
@@ -330,9 +301,7 @@ namespace Curobo
       // cuda code treats -1.0 * 0.0 as negative. Hence we subtract 6. If in future, -1.0 * 0.0 =
       // +ve,
       // then this code should be j_type - 5.
-      angle = -1 * copysignf(1.0, j_type - 6) * angle;
-
-      update_joint_type_direction(j_type);
+      angle = j_offset.x * angle + j_offset.y;
     }
 
     // In the following versions of rot_fn, some non-nan values may become nan as we
@@ -462,7 +431,7 @@ namespace Curobo
     template<typename psum_t>
     __device__ __forceinline__ void
     rot_backward_translation(const float3& vec, float *cumul_mat, float *l_pos,
-                             const float3& loc_grad, psum_t& grad_q, const int8_t axis_sign = 1)
+                             const float3& loc_grad, psum_t& grad_q, const float axis_sign = 1)
     {
       float3 e_pos, j_pos;
 
@@ -481,7 +450,7 @@ namespace Curobo
     rot_backward_rotation(const float3 vec,
                           const float3 grad_vec,
                           psum_t     & grad_q,
-                          const int8_t axis_sign = 1)
+                          const float axis_sign = 1)
     {
       grad_q += axis_sign * dot(vec, grad_vec);
     }
@@ -489,7 +458,7 @@ namespace Curobo
     template<typename psum_t>
     __device__ __forceinline__ void
     prism_backward_translation(const float3 vec, const float3 grad_vec,
-                               psum_t& grad_q, const int8_t axis_sign = 1)
+                               psum_t& grad_q, const float axis_sign = 1)
     {
       grad_q += axis_sign * dot(vec, grad_vec);
     }
@@ -497,7 +466,7 @@ namespace Curobo
     template<typename psum_t>
     __device__ __forceinline__ void
     z_rot_backward(float *link_cumul_mat, float *l_pos, float3& loc_grad_position,
-                   float3& loc_grad_orientation, psum_t& grad_q, const int8_t axis_sign = 1)
+                   float3& loc_grad_orientation, psum_t& grad_q, const float axis_sign = 1)
     {
       float3 vec =
         make_float3(link_cumul_mat[2], link_cumul_mat[6], link_cumul_mat[10]);
@@ -512,7 +481,7 @@ namespace Curobo
     template<typename psum_t>
     __device__ __forceinline__ void
     x_rot_backward(float *link_cumul_mat, float *l_pos, float3& loc_grad_position,
-                   float3& loc_grad_orientation, psum_t& grad_q,  const int8_t axis_sign = 1)
+                   float3& loc_grad_orientation, psum_t& grad_q,  const float axis_sign = 1)
     {
       float3 vec =
         make_float3(link_cumul_mat[0], link_cumul_mat[4], link_cumul_mat[8]);
@@ -527,7 +496,7 @@ namespace Curobo
     template<typename psum_t>
     __device__ __forceinline__ void
     y_rot_backward(float *link_cumul_mat, float *l_pos, float3& loc_grad_position,
-                   float3& loc_grad_orientation, psum_t& grad_q,  const int8_t axis_sign = 1)
+                   float3& loc_grad_orientation, psum_t& grad_q,  const float axis_sign = 1)
     {
       float3 vec =
         make_float3(link_cumul_mat[1], link_cumul_mat[5], link_cumul_mat[9]);
@@ -542,7 +511,7 @@ namespace Curobo
     template<typename psum_t>
     __device__ __forceinline__ void
     xyz_prism_backward_translation(float *cumul_mat, float3& loc_grad,
-                                   psum_t& grad_q, int xyz,  const int8_t axis_sign = 1)
+                                   psum_t& grad_q, int xyz,  const float axis_sign = 1)
     {
       prism_backward_translation(
         make_float3(cumul_mat[0 + xyz], cumul_mat[4 + xyz], cumul_mat[8 + xyz]),
@@ -553,7 +522,7 @@ namespace Curobo
     __device__ __forceinline__ void x_prism_backward_translation(float       *cumul_mat,
                                                                  float3     & loc_grad,
                                                                  psum_t     & grad_q,
-                                                                 const int8_t axis_sign = 1)
+                                                                 const float axis_sign = 1)
     {
       // get rotation vector:
       prism_backward_translation(
@@ -564,7 +533,7 @@ namespace Curobo
     __device__ __forceinline__ void y_prism_backward_translation(float       *cumul_mat,
                                                                  float3     & loc_grad,
                                                                  psum_t     & grad_q,
-                                                                 const int8_t axis_sign = 1)
+                                                                 const float axis_sign = 1)
     {
       // get rotation vector:
       prism_backward_translation(
@@ -575,16 +544,15 @@ namespace Curobo
     __device__ __forceinline__ void z_prism_backward_translation(float       *cumul_mat,
                                                                  float3     & loc_grad,
                                                                  psum_t     & grad_q,
-                                                                 const int8_t axis_sign = 1)
+                                                                 const float axis_sign = 1)
     {
       // get rotation vector:
       prism_backward_translation(
         make_float3(cumul_mat[2], cumul_mat[6], cumul_mat[10]), loc_grad, grad_q, axis_sign);
     }
-
     __device__ __forceinline__ void
     xyz_rot_backward_translation(float *cumul_mat, float *l_pos, float3& loc_grad,
-                                 float& grad_q, int xyz,  const int8_t axis_sign = 1)
+                                 float& grad_q, int xyz,  const float axis_sign = 1)
     {
       // get rotation vector:
       rot_backward_translation(
@@ -592,10 +560,11 @@ namespace Curobo
         &cumul_mat[0], &l_pos[0], loc_grad, grad_q, axis_sign);
     }
 
+
     template<typename psum_t>
     __device__ __forceinline__ void
     x_rot_backward_translation(float *cumul_mat, float *l_pos, float3& loc_grad,
-                               psum_t& grad_q,  const int8_t axis_sign = 1)
+                               psum_t& grad_q,  const float axis_sign = 1)
     {
       // get rotation vector:
       rot_backward_translation(
@@ -606,7 +575,7 @@ namespace Curobo
     template<typename psum_t>
     __device__ __forceinline__ void
     y_rot_backward_translation(float *cumul_mat, float *l_pos, float3& loc_grad,
-                               psum_t& grad_q,  const int8_t axis_sign = 1)
+                               psum_t& grad_q,  const float axis_sign = 1)
     {
       // get rotation vector:
       rot_backward_translation(
@@ -617,7 +586,7 @@ namespace Curobo
     template<typename psum_t>
     __device__ __forceinline__ void
     z_rot_backward_translation(float *cumul_mat, float *l_pos, float3& loc_grad,
-                               psum_t& grad_q,  const int8_t axis_sign = 1)
+                               psum_t& grad_q,  const float axis_sign = 1)
     {
       // get rotation vector:
       rot_backward_translation(
@@ -629,18 +598,19 @@ namespace Curobo
     // This one should be about 10% faster.
     template<typename scalar_t, bool use_global_cumul>
     __global__ void
-    kin_fused_warp_kernel2(scalar_t *link_pos,             // batchSize xz store_n_links x M x M
-                           scalar_t *link_quat,            // batchSize x store_n_links x M x M
+    kin_fused_warp_kernel2(float *link_pos,             // batchSize xz store_n_links x M x M
+                           float *link_quat,            // batchSize x store_n_links x M x M
                            scalar_t *b_robot_spheres,      // batchSize x nspheres x M
-                           scalar_t *global_cumul_mat,
-                           const scalar_t *q,              // batchSize x njoints
-                           const scalar_t *fixedTransform, // nlinks x M x M
-                           const scalar_t *robot_spheres,  // nspheres x M
+                           float *global_cumul_mat, // batchSize x nlinks x M x M
+                           const float *q,              // batchSize x njoints
+                           const float *fixedTransform, // nlinks x M x M
+                           const float *robot_spheres,  // nspheres x M
                            const int8_t *jointMapType,     // nlinks
                            const int16_t *jointMap,        // nlinks
                            const int16_t *linkMap,         // nlinks
                            const int16_t *storeLinkMap,    // store_n_links
                            const int16_t *linkSphereMap,   // nspheres
+                           const float *jointOffset, // nlinks
                            const int batchSize, const int nspheres,
                            const int nlinks, const int njoints,
                            const int store_n_links)
@@ -688,7 +658,8 @@ namespace Curobo
         else
         {
           float angle = q[batch * njoints + jointMap[l]];
-          update_axis_direction(angle, j_type);
+          float2 angle_offset = *(float2 *)&jointOffset[l*2];
+          update_axis_direction(angle, j_type, angle_offset);
 
           if (j_type <= Z_PRISM)
           {
@@ -794,20 +765,21 @@ namespace Curobo
     template<typename scalar_t, typename psum_t, bool use_global_cumul,
              bool enable_sparsity_opt, int16_t MAX_JOINTS, bool PARALLEL_WRITE>
     __global__ void kin_fused_backward_kernel3(
-      scalar_t *grad_out_link_q,       // batchSize * njoints
-      const scalar_t *grad_nlinks_pos, // batchSize * store_n_links * 16
-      const scalar_t *grad_nlinks_quat,
+      float *grad_out_link_q,       // batchSize * njoints
+      const float *grad_nlinks_pos, // batchSize * store_n_links * 16
+      const float *grad_nlinks_quat,
       const scalar_t *grad_spheres,    // batchSize * nspheres * 4
-      const scalar_t *global_cumul_mat,
-      const scalar_t *q,               // batchSize * njoints
-      const scalar_t *fixedTransform,  // nlinks * 16
-      const scalar_t *robotSpheres,    // batchSize * nspheres * 4
+      const float *global_cumul_mat,
+      const float *q,               // batchSize * njoints
+      const float *fixedTransform,  // nlinks * 16
+      const float *robotSpheres,    // batchSize * nspheres * 4
       const int8_t *jointMapType,      // nlinks
       const int16_t *jointMap,         // nlinks
       const int16_t *linkMap,          // nlinks
       const int16_t *storeLinkMap,     // store_n_links
       const int16_t *linkSphereMap,    // nspheres
       const int16_t *linkChainMap,     // nlinks*nlinks
+      const float *jointOffset,        // nlinks*2
       const int batchSize, const int nspheres, const int nlinks,
       const int njoints, const int store_n_links)
     {
@@ -819,8 +791,7 @@ namespace Curobo
 
       if (batch >= batchSize)
         return;
-
-      // Each thread computes one element of the cumul_mat.
+        // Each thread computes one element of the cumul_mat.
       // first 4 threads compute a row of the output;
       const int elem_idx    = threadIdx.x % 16;
       const int col_idx     = elem_idx % 4;
@@ -832,6 +803,7 @@ namespace Curobo
         for (int l = 0; l < nlinks; l++)
         {
           int outAddrStart = matAddrBase + l * M * M; // + (t % M) * M;
+
           cumul_mat[outAddrStart + elem_idx] =
             global_cumul_mat[batch * nlinks * M * M + l * M * M + elem_idx];
         }
@@ -857,8 +829,8 @@ namespace Curobo
           else
           {
             float angle = q[batch * njoints + jointMap[l]];
-
-            update_axis_direction(angle, j_type);
+            float2 angle_offset = *(float2 *)&jointOffset[l*2];
+            update_axis_direction(angle, j_type, angle_offset);
 
             if (j_type <= Z_PRISM)
             {
@@ -949,15 +921,11 @@ namespace Curobo
           {
             continue;
           }
-          int8_t axis_sign = 1;
+          float axis_sign = jointOffset[j*2];
 
           int j_type = jointMapType[j];
 
-          if (j_type != FIXED)
-          {
-            update_joint_type_direction(j_type, axis_sign);
-          }
-
+          
           if (j_type == Z_ROT)
           {
             float result = 0.0;
@@ -1046,12 +1014,13 @@ namespace Curobo
         // for (int16_t k = joints_per_thread; k >= 0; k--)
         for (int16_t k = 0; k < joints_per_thread; k++)
         {
-          // int16_t j = elem_idx * joints_per_thread + k;
-          int16_t j = elem_idx + k * 16;
+          int16_t j = elem_idx * joints_per_thread + k;
+          //int16_t j = elem_idx + k * 16;
+          // int16_t j = elem_idx + k * 16; // (threadidx.x % 16) + k * 16 (0 to 16)
 
           // int16_t j = k * M + elem_idx;
-          if ((j > max_lmap) || (j < 0))
-            continue;
+          if ((j > max_lmap))
+            break;
 
           // This can be spread across threads as they are not sequential?
           if (linkChainMap[l_map * nlinks + j] == 0.0)
@@ -1061,12 +1030,8 @@ namespace Curobo
           int16_t j_idx  = jointMap[j];
           int     j_type = jointMapType[j];
 
-          int8_t axis_sign = 1;
+          float axis_sign = jointOffset[j*2];
 
-          if (j_type != FIXED)
-          {
-            update_joint_type_direction(j_type, axis_sign);
-          }
 
           // get rotation vector:
           if (j_type == Z_ROT)
@@ -1090,8 +1055,9 @@ namespace Curobo
                            g_position, g_orientation, psum_grad[j_idx], axis_sign);
           }
         }
-      }
 
+      }
+      __syncthreads();
       if (PARALLEL_WRITE)
       {
         // accumulate the partial sums across the 16 threads
@@ -1114,8 +1080,8 @@ namespace Curobo
 
         for (int16_t j = 0; j < joints_per_thread; j++)
         {
-          // const int16_t j_idx = elem_idx * joints_per_thread + j;
-          const int16_t j_idx = elem_idx + j * 16;
+          const int16_t j_idx = elem_idx * joints_per_thread + j;
+          //const int16_t j_idx = elem_idx + j * 16;
 
           if (j_idx >= njoints)
           {
@@ -1151,7 +1117,7 @@ namespace Curobo
         {
           {
             grad_out_link_q[batch * njoints + j] =
-              psum_grad[j]; // write the sum to memory
+              (float) psum_grad[j]; // write the sum to memory
           }
         }
       }
@@ -1195,11 +1161,27 @@ std::vector<torch::Tensor>kin_fused_forward(
   const torch::Tensor robot_spheres, const torch::Tensor link_map,
   const torch::Tensor joint_map, const torch::Tensor joint_map_type,
   const torch::Tensor store_link_map, const torch::Tensor link_sphere_map,
-  const int batch_size, const int n_spheres,
+  const torch::Tensor joint_offset_map, 
+  const int batch_size, 
+  const int n_joints,const int n_spheres,
   const bool use_global_cumul = false)
 {
   using namespace Curobo::Kinematics;
-  const int n_joints      = joint_vec.size(0) / batch_size;
+  CHECK_INPUT_GUARD(joint_vec);
+  CHECK_INPUT(link_pos);
+  CHECK_INPUT(link_quat);
+  CHECK_INPUT(global_cumul_mat);
+  CHECK_INPUT(batch_robot_spheres);
+  CHECK_INPUT(fixed_transform);
+  CHECK_INPUT(robot_spheres);
+  CHECK_INPUT(link_map);
+  CHECK_INPUT(joint_map);
+  CHECK_INPUT(joint_map_type);
+  CHECK_INPUT(store_link_map);
+  CHECK_INPUT(link_sphere_map);
+  //CHECK_INPUT(link_chain_map);
+  CHECK_INPUT(joint_offset_map);
+  
   const int n_links       = link_map.size(0);
   const int store_n_links = link_pos.size(1);
   assert(joint_map.dtype() == torch::kInt16);
@@ -1238,38 +1220,42 @@ std::vector<torch::Tensor>kin_fused_forward(
   if (use_global_cumul)
   {
     AT_DISPATCH_FLOATING_TYPES(
-      link_pos.scalar_type(), "kin_fused_forward", ([&] {
+      batch_robot_spheres.scalar_type(), "kin_fused_forward", ([&] {
       kin_fused_warp_kernel2<scalar_t, true>
         << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
-        link_pos.data_ptr<scalar_t>(), link_quat.data_ptr<scalar_t>(),
+        link_pos.data_ptr<float>(), link_quat.data_ptr<float>(),
         batch_robot_spheres.data_ptr<scalar_t>(),
-        global_cumul_mat.data_ptr<scalar_t>(),
-        joint_vec.data_ptr<scalar_t>(),
-        fixed_transform.data_ptr<scalar_t>(),
-        robot_spheres.data_ptr<scalar_t>(),
+        global_cumul_mat.data_ptr<float>(),
+        joint_vec.data_ptr<float>(),
+        fixed_transform.data_ptr<float>(),
+        robot_spheres.data_ptr<float>(),
         joint_map_type.data_ptr<int8_t>(),
         joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
         store_link_map.data_ptr<int16_t>(),
-        link_sphere_map.data_ptr<int16_t>(), batch_size, n_spheres,
+        link_sphere_map.data_ptr<int16_t>(), 
+        joint_offset_map.data_ptr<float>(),
+        batch_size, n_spheres,
         n_links, n_joints, store_n_links);
     }));
   }
   else
   {
     AT_DISPATCH_FLOATING_TYPES(
-      link_pos.scalar_type(), "kin_fused_forward", ([&] {
+      batch_robot_spheres.scalar_type(), "kin_fused_forward", ([&] {
       kin_fused_warp_kernel2<scalar_t, false>
         << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
-        link_pos.data_ptr<scalar_t>(), link_quat.data_ptr<scalar_t>(),
+        link_pos.data_ptr<float>(), link_quat.data_ptr<float>(),
         batch_robot_spheres.data_ptr<scalar_t>(),
-        global_cumul_mat.data_ptr<scalar_t>(),
-        joint_vec.data_ptr<scalar_t>(),
-        fixed_transform.data_ptr<scalar_t>(),
-        robot_spheres.data_ptr<scalar_t>(),
+        global_cumul_mat.data_ptr<float>(),
+        joint_vec.data_ptr<float>(),
+        fixed_transform.data_ptr<float>(),
+        robot_spheres.data_ptr<float>(),
         joint_map_type.data_ptr<int8_t>(),
         joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
         store_link_map.data_ptr<int16_t>(),
-        link_sphere_map.data_ptr<int16_t>(), batch_size, n_spheres,
+        link_sphere_map.data_ptr<int16_t>(), 
+        joint_offset_map.data_ptr<float>(),
+        batch_size, n_spheres,
         n_links, n_joints, store_n_links);
     }));
   }
@@ -1292,15 +1278,29 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
   const torch::Tensor link_map, const torch::Tensor joint_map,
   const torch::Tensor joint_map_type, const torch::Tensor store_link_map,
   const torch::Tensor link_sphere_map, const torch::Tensor link_chain_map,
-  const int batch_size, const int n_spheres, const bool sparsity_opt = true,
+  const torch::Tensor joint_offset_map,
+  const int batch_size,  const int n_joints, const int n_spheres, const bool sparsity_opt = true,
   const bool use_global_cumul = false)
 {
   using namespace Curobo::Kinematics;
-
-  const int n_joints      = joint_vec.size(0) / batch_size;
+  CHECK_INPUT_GUARD(joint_vec);
+  CHECK_INPUT(grad_out);
+  CHECK_INPUT(grad_nlinks_pos);  
+  CHECK_INPUT(grad_nlinks_quat);
+  CHECK_INPUT(global_cumul_mat);
+  CHECK_INPUT(fixed_transform);
+  CHECK_INPUT(robot_spheres);
+  CHECK_INPUT(link_map);
+  CHECK_INPUT(joint_map);
+  CHECK_INPUT(joint_map_type);
+  CHECK_INPUT(store_link_map);
+  CHECK_INPUT(link_sphere_map);
+  CHECK_INPUT(link_chain_map);
+  CHECK_INPUT(joint_offset_map);
+  
   const int n_links       = link_map.size(0);
   const int store_n_links = store_link_map.size(0);
-
+  
   // assert(n_links < 128);
   assert(n_joints < 128); // for larger num. of joints, change kernel3's
                           // MAX_JOINTS template value.
@@ -1341,72 +1341,77 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   assert(sparsity_opt);
-
   if (use_global_cumul)
   {
     if (n_joints < 16)
     {
       AT_DISPATCH_FLOATING_TYPES(
-        grad_nlinks_pos.scalar_type(), "kin_fused_backward_16t", ([&] {
-        kin_fused_backward_kernel3<scalar_t, float, true, true, 16, true>
+        grad_spheres.scalar_type(), "kin_fused_backward_16t", ([&] {
+        kin_fused_backward_kernel3<scalar_t, double, true, true, 16, true>
           << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
-          grad_out.data_ptr<scalar_t>(),
-          grad_nlinks_pos.data_ptr<scalar_t>(),
-          grad_nlinks_quat.data_ptr<scalar_t>(),
+          grad_out.data_ptr<float>(),
+          grad_nlinks_pos.data_ptr<float>(),
+          grad_nlinks_quat.data_ptr<float>(),
           grad_spheres.data_ptr<scalar_t>(),
-          global_cumul_mat.data_ptr<scalar_t>(),
-          joint_vec.data_ptr<scalar_t>(),
-          fixed_transform.data_ptr<scalar_t>(),
-          robot_spheres.data_ptr<scalar_t>(),
+          global_cumul_mat.data_ptr<float>(),
+          joint_vec.data_ptr<float>(),
+          fixed_transform.data_ptr<float>(),
+          robot_spheres.data_ptr<float>(),
           joint_map_type.data_ptr<int8_t>(),
           joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
           store_link_map.data_ptr<int16_t>(),
           link_sphere_map.data_ptr<int16_t>(),
-          link_chain_map.data_ptr<int16_t>(), batch_size, n_spheres,
+          link_chain_map.data_ptr<int16_t>(), 
+          joint_offset_map.data_ptr<float>(),
+          batch_size, n_spheres,
           n_links, n_joints, store_n_links);
       }));
     }
     else if (n_joints < 64)
     {
       AT_DISPATCH_FLOATING_TYPES(
-        grad_nlinks_pos.scalar_type(), "kin_fused_backward_16t", ([&] {
-        kin_fused_backward_kernel3<scalar_t, float, true, true, 64, true>
+        grad_spheres.scalar_type(), "kin_fused_backward_16t", ([&] {
+        kin_fused_backward_kernel3<scalar_t, double, true, true, 64, true>
           << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
-          grad_out.data_ptr<scalar_t>(),
-          grad_nlinks_pos.data_ptr<scalar_t>(),
-          grad_nlinks_quat.data_ptr<scalar_t>(),
+          grad_out.data_ptr<float>(),
+          grad_nlinks_pos.data_ptr<float>(),
+          grad_nlinks_quat.data_ptr<float>(),
           grad_spheres.data_ptr<scalar_t>(),
-          global_cumul_mat.data_ptr<scalar_t>(),
-          joint_vec.data_ptr<scalar_t>(),
-          fixed_transform.data_ptr<scalar_t>(),
-          robot_spheres.data_ptr<scalar_t>(),
+          global_cumul_mat.data_ptr<float>(),
+          joint_vec.data_ptr<float>(),
+          fixed_transform.data_ptr<float>(),
+          robot_spheres.data_ptr<float>(),
           joint_map_type.data_ptr<int8_t>(),
           joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
           store_link_map.data_ptr<int16_t>(),
           link_sphere_map.data_ptr<int16_t>(),
-          link_chain_map.data_ptr<int16_t>(), batch_size, n_spheres,
+          link_chain_map.data_ptr<int16_t>(), 
+          joint_offset_map.data_ptr<float>(),
+          batch_size, n_spheres,
           n_links, n_joints, store_n_links);
       }));
     }
     else
     {
       AT_DISPATCH_FLOATING_TYPES(
-        grad_nlinks_pos.scalar_type(), "kin_fused_backward_16t", ([&] {
-        kin_fused_backward_kernel3<scalar_t, float, true, true, 128, true>
+        grad_spheres.scalar_type(), "kin_fused_backward_16t", ([&] {
+        kin_fused_backward_kernel3<scalar_t, double, true, true, 128, true>
           << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
-          grad_out.data_ptr<scalar_t>(),
-          grad_nlinks_pos.data_ptr<scalar_t>(),
-          grad_nlinks_quat.data_ptr<scalar_t>(),
+          grad_out.data_ptr<float>(),
+          grad_nlinks_pos.data_ptr<float>(),
+          grad_nlinks_quat.data_ptr<float>(),
           grad_spheres.data_ptr<scalar_t>(),
-          global_cumul_mat.data_ptr<scalar_t>(),
-          joint_vec.data_ptr<scalar_t>(),
-          fixed_transform.data_ptr<scalar_t>(),
-          robot_spheres.data_ptr<scalar_t>(),
+          global_cumul_mat.data_ptr<float>(),
+          joint_vec.data_ptr<float>(),
+          fixed_transform.data_ptr<float>(),
+          robot_spheres.data_ptr<float>(),
           joint_map_type.data_ptr<int8_t>(),
           joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
           store_link_map.data_ptr<int16_t>(),
           link_sphere_map.data_ptr<int16_t>(),
-          link_chain_map.data_ptr<int16_t>(), batch_size, n_spheres,
+          link_chain_map.data_ptr<int16_t>(), 
+          joint_offset_map.data_ptr<float>(),
+          batch_size, n_spheres,
           n_links, n_joints, store_n_links);
       }));
     }
@@ -1417,22 +1422,25 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
   {
     //
     AT_DISPATCH_FLOATING_TYPES(
-      grad_nlinks_pos.scalar_type(), "kin_fused_backward_16t", ([&] {
-      kin_fused_backward_kernel3<scalar_t, float, false, true, 128, true>
+      grad_spheres.scalar_type(), "kin_fused_backward_16t", ([&] {
+      kin_fused_backward_kernel3<scalar_t, double, false, true, 128, true>
         << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
-        grad_out.data_ptr<scalar_t>(),
-        grad_nlinks_pos.data_ptr<scalar_t>(),
-        grad_nlinks_quat.data_ptr<scalar_t>(),
+        grad_out.data_ptr<float>(),
+        grad_nlinks_pos.data_ptr<float>(),
+        grad_nlinks_quat.data_ptr<float>(),
         grad_spheres.data_ptr<scalar_t>(),
-        global_cumul_mat.data_ptr<scalar_t>(),
-        joint_vec.data_ptr<scalar_t>(),
-        fixed_transform.data_ptr<scalar_t>(),
-        robot_spheres.data_ptr<scalar_t>(),
+        global_cumul_mat.data_ptr<float>(),
+        joint_vec.data_ptr<float>(),
+        fixed_transform.data_ptr<float>(),
+        robot_spheres.data_ptr<float>(),
         joint_map_type.data_ptr<int8_t>(),
-        joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
+        joint_map.data_ptr<int16_t>(), 
+        link_map.data_ptr<int16_t>(),
         store_link_map.data_ptr<int16_t>(),
         link_sphere_map.data_ptr<int16_t>(),
-        link_chain_map.data_ptr<int16_t>(), batch_size, n_spheres,
+        link_chain_map.data_ptr<int16_t>(), 
+        joint_offset_map.data_ptr<float>(),
+        batch_size, n_spheres,
         n_links, n_joints, store_n_links);
     }));
   }
@@ -1447,7 +1455,8 @@ matrix_to_quaternion(torch::Tensor       out_quat,
                      )
 {
   using namespace Curobo::Kinematics;
-
+  CHECK_INPUT(out_quat);
+  CHECK_INPUT_GUARD(in_rot);
   // we compute the warp threads based on number of boxes:
 
   // TODO: verify this math

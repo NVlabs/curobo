@@ -228,28 +228,87 @@ class CSpaceConfig:
 
 @dataclass
 class KinematicsTensorConfig:
+    """Stores robot's kinematics parameters as Tensors to use in Kinematics computations.
+
+    Use :meth:`curobo.cuda_robot_model.cuda_robot_generator.CudaRobotGenerator` to generate this
+    configuration from a urdf or usd.
+
+    """
+
+    #: Static Homogenous Transform from parent link to child link for all links [n_links,4,4].
     fixed_transforms: torch.Tensor
+
+    #: index of fixed_transform given link index [n_links].
     link_map: torch.Tensor
+
+    #: joint index given link index [n_links].
     joint_map: torch.Tensor
+
+    #: type of joint given link index [n_links].
     joint_map_type: torch.Tensor
+
+    joint_offset_map: torch.Tensor
+
+    #: index of link to write out pose [n_store_links].
     store_link_map: torch.Tensor
+
+    #: Mapping between each link to every other link, this is used to check
+    #: if a link is part of a serial chain formed by another link [n_links, n_links].
     link_chain_map: torch.Tensor
+
+    #: Name of links whose pose will be stored [n_store_links].
     link_names: List[str]
+
+    #: Joint limits
     joint_limits: JointLimits
+
+    #: Name of joints which are not fixed.
     non_fixed_joint_names: List[str]
+
+    #: Number of joints that are active. Each joint is only actuated along 1 dimension.
     n_dof: int
+
+    #: Name of links which have a mesh. Currently only used for debugging and rendering.
     mesh_link_names: Optional[List[str]] = None
+
+    #: Name of all actuated joints.
     joint_names: Optional[List[str]] = None
+
+    #:
     lock_jointstate: Optional[JointState] = None
+
+    #:
+    mimic_joints: Optional[dict] = None
+
+    #:
     link_spheres: Optional[torch.Tensor] = None
+
+    #:
     link_sphere_idx_map: Optional[torch.Tensor] = None
+
+    #:
     link_name_to_idx_map: Optional[Dict[str, int]] = None
+
+    #: total number of spheres that represent the robot's geometry.
     total_spheres: int = 0
+
+    #: Additional debug parameters.
     debug: Optional[Any] = None
+
+    #: index of end-effector in stored link poses.
     ee_idx: int = 0
+
+    #: Cspace configuration
     cspace: Optional[CSpaceConfig] = None
+
+    #: Name of base link. This is the root link from which all kinematic parameters were computed.
     base_link: str = "base_link"
+
+    #: Name of end-effector link for which the Cartesian pose will be computed.
     ee_link: str = "ee_link"
+
+    #: A copy of link spheres that is used as reference, in case the link_spheres get modified at
+    #: runtime.
     reference_link_spheres: Optional[torch.Tensor] = None
 
     def __post_init__(self):
@@ -260,7 +319,7 @@ class KinematicsTensorConfig:
         if self.link_spheres is not None and self.reference_link_spheres is None:
             self.reference_link_spheres = self.link_spheres.clone()
 
-    def copy_(self, new_config: KinematicsTensorConfig):
+    def copy_(self, new_config: KinematicsTensorConfig) -> KinematicsTensorConfig:
         self.fixed_transforms.copy_(new_config.fixed_transforms)
         self.link_map.copy_(new_config.link_map)
         self.joint_map.copy_(new_config.joint_map)
@@ -268,6 +327,7 @@ class KinematicsTensorConfig:
         self.store_link_map.copy_(new_config.store_link_map)
         self.link_chain_map.copy_(new_config.link_chain_map)
         self.joint_limits.copy_(new_config.joint_limits)
+        self.joint_offset_map.copy_(new_config.joint_offset_map)
         if new_config.link_spheres is not None and self.link_spheres is not None:
             self.link_spheres.copy_(new_config.link_spheres)
         if new_config.link_sphere_idx_map is not None and self.link_sphere_idx_map is not None:
@@ -321,7 +381,8 @@ class KinematicsTensorConfig:
     ):
         """Update sphere parameters
 
-        #NOTE: This currently does not update self collision distances.
+        NOTE: This currently does not update self collision distances.
+
         Args:
             link_name: _description_
             sphere_position_radius: _description_

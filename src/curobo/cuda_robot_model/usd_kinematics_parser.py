@@ -71,7 +71,7 @@ class UsdKinematicsParser(KinematicsParser):
         for l in all_joints:
             parent, child = get_links_for_joint(l)
             if child is not None and parent is not None:
-                self._parent_map[child.GetName()] = parent.GetName()
+                self._parent_map[child.GetName()] = {"parent": parent.GetName()}
                 self._parent_joint_map[child.GetName()] = l  # store joint prim
 
     def get_link_parameters(self, link_name: str, base: bool = False) -> LinkParams:
@@ -100,7 +100,7 @@ class UsdKinematicsParser(KinematicsParser):
             joint_type = JointType.FIXED
 
         else:
-            parent_link_name = self._parent_map[link_name]
+            parent_link_name = self._parent_map[link_name]["parent"]
             joint_prim = self._parent_joint_map[link_name]  # joint prim connects link
             joint_transform = self._get_joint_transform(joint_prim)
             joint_axis = None

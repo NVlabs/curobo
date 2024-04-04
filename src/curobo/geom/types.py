@@ -577,22 +577,24 @@ class VoxelGrid(Obstacle):
         if self.feature_tensor is not None:
             self.feature_dtype = self.feature_tensor.dtype
 
-    def create_xyzr_tensor(
-        self, transform_to_origin: bool = False, tensor_args: TensorDeviceType = TensorDeviceType()
-    ):
+    def get_grid_shape(self):
         bounds = self.dims
         low = [-bounds[0] / 2, -bounds[1] / 2, -bounds[2] / 2]
         high = [bounds[0] / 2, bounds[1] / 2, bounds[2] / 2]
-        trange = [h - l for l, h in zip(low, high)]
-        x = torch.linspace(
-            low[0], high[0], int(math.floor(trange[0] / self.voxel_size)), device=tensor_args.device
-        )
-        y = torch.linspace(
-            low[1], high[1], int(math.floor(trange[1] / self.voxel_size)), device=tensor_args.device
-        )
-        z = torch.linspace(
-            low[2], high[2], int(math.floor(trange[2] / self.voxel_size)), device=tensor_args.device
-        )
+        grid_shape = [
+            1 + int(high[i] / self.voxel_size) - (int(low[i] / self.voxel_size))
+            for i in range(len(low))
+        ]
+        return grid_shape, low, high
+
+    def create_xyzr_tensor(
+        self, transform_to_origin: bool = False, tensor_args: TensorDeviceType = TensorDeviceType()
+    ):
+        trange, low, high = self.get_grid_shape()
+
+        x = torch.linspace(low[0], high[0], trange[0], device=tensor_args.device)
+        y = torch.linspace(low[1], high[1], trange[1], device=tensor_args.device)
+        z = torch.linspace(low[2], high[2], trange[2], device=tensor_args.device)
         w, l, h = x.shape[0], y.shape[0], z.shape[0]
         xyz = (
             torch.stack(torch.meshgrid(x, y, z, indexing="ij")).permute((1, 2, 3, 0)).reshape(-1, 3)
@@ -603,11 +605,12 @@ class VoxelGrid(Obstacle):
             xyz = pose.transform_points(xyz.contiguous())
         r = torch.zeros_like(xyz[:, 0:1]) + (self.voxel_size * 0.5)
         xyzr = torch.cat([xyz, r], dim=1)
+
         return xyzr
 
     def get_occupied_voxels(self, feature_threshold: Optional[float] = None):
         if feature_threshold is None:
-            feature_threshold = -1.0 * self.voxel_size
+            feature_threshold = -0.5 * self.voxel_size
         if self.xyzr_tensor is None or self.feature_tensor is None:
             log_error("Feature tensor or xyzr tensor is empty")
         xyzr = self.xyzr_tensor.clone()

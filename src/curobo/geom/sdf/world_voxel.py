@@ -48,11 +48,10 @@ class WorldVoxelCollision(WorldMeshCollision):
         dims = voxel_cache["dims"]
         voxel_size = voxel_cache["voxel_size"]
         feature_dtype = voxel_cache["feature_dtype"]
-        n_voxels = int(
-            math.floor(dims[0] / voxel_size)
-            * math.floor(dims[1] / voxel_size)
-            * math.floor(dims[2] / voxel_size)
-        )
+        grid_shape = VoxelGrid(
+            "test", pose=[0, 0, 0, 1, 0, 0, 0], dims=dims, voxel_size=voxel_size
+        ).get_grid_shape()[0]
+        n_voxels = grid_shape[0] * grid_shape[1] * grid_shape[2]
 
         voxel_params = torch.zeros(
             (self.n_envs, n_layers, 4),
@@ -77,6 +76,12 @@ class WorldVoxelCollision(WorldMeshCollision):
             dtype=feature_dtype,
         )
 
+        if feature_dtype in [torch.float32, torch.float16, torch.bfloat16]:
+            voxel_features[:] = -1.0 * self.max_esdf_distance
+        else:
+            voxel_features = (voxel_features.to(dtype=torch.float16) - self.max_esdf_distance).to(
+                dtype=feature_dtype
+            )
         self._voxel_tensor_list = [voxel_params, voxel_pose, voxel_enable, voxel_features]
         self.collision_types["voxel"] = True
         self._env_voxel_names = [[None for _ in range(n_layers)] for _ in range(self.n_envs)]
@@ -84,14 +89,14 @@ class WorldVoxelCollision(WorldMeshCollision):
     def load_collision_model(
         self, world_model: WorldConfig, env_idx=0, fix_cache_reference: bool = False
     ):
-        self._load_collision_model_in_cache(
+        self._load_voxel_collision_model_in_cache(
             world_model, env_idx, fix_cache_reference=fix_cache_reference
         )
         return super().load_collision_model(
             world_model, env_idx=env_idx, fix_cache_reference=fix_cache_reference
         )
 
-    def _load_collision_model_in_cache(
+    def _load_voxel_collision_model_in_cache(
         self, world_config: WorldConfig, env_idx: int = 0, fix_cache_reference: bool = False
     ):
         """TODO:
@@ -396,9 +401,10 @@ class WorldVoxelCollision(WorldMeshCollision):
 
         b, h, n, _ = query_sphere.shape  # This can be read from collision query buffer
         use_batch_env = True
+        env_query_idx_voxel = env_query_idx
         if env_query_idx is None:
             use_batch_env = False
-            env_query_idx = self._env_n_voxels
+            env_query_idx_voxel = self._env_n_voxels
         dist = SdfSphereVoxel.apply(
             query_sphere,
             collision_query_buffer.voxel_collision_buffer.distance_buffer,
@@ -406,13 +412,13 @@ class WorldVoxelCollision(WorldMeshCollision):
             collision_query_buffer.voxel_collision_buffer.sparsity_index_buffer,
             weight,
             activation_distance,
-            self.max_distance,
+            self.max_esdf_distance,
             self._voxel_tensor_list[3],
             self._voxel_tensor_list[0],
             self._voxel_tensor_list[1],
             self._voxel_tensor_list[2],
             self._env_n_voxels,
-            env_query_idx,
+            env_query_idx_voxel,
             self._voxel_tensor_list[0].shape[1],
             b,
             h,
@@ -424,12 +430,8 @@ class WorldVoxelCollision(WorldMeshCollision):
             sum_collisions,
             compute_esdf,
         )
-
-        if (
-            "primitive" not in self.collision_types
-            or not self.collision_types["primitive"]
-            or "mesh" not in self.collision_types
-            or not self.collision_types["mesh"]
+        if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
+            "mesh" not in self.collision_types or not self.collision_types["mesh"]
         ):
             return dist
         d_prim = super().get_sphere_distance(
@@ -443,9 +445,10 @@ class WorldVoxelCollision(WorldMeshCollision):
             compute_esdf=compute_esdf,
         )
         if compute_esdf:
+
             d_val = torch.maximum(dist.view(d_prim.shape), d_prim)
         else:
-            d_val = d_val.view(d_prim.shape) + d_prim
+            d_val = dist.view(d_prim.shape) + d_prim
 
         return d_val
 
@@ -473,9 +476,10 @@ class WorldVoxelCollision(WorldMeshCollision):
             raise ValueError("cannot return loss for classification, use get_sphere_distance")
         b, h, n, _ = query_sphere.shape
         use_batch_env = True
+        env_query_idx_voxel = env_query_idx
         if env_query_idx is None:
             use_batch_env = False
-            env_query_idx = self._env_n_voxels
+            env_query_idx_voxel = self._env_n_voxels
         dist = SdfSphereVoxel.apply(
             query_sphere,
             collision_query_buffer.voxel_collision_buffer.distance_buffer,
@@ -483,13 +487,13 @@ class WorldVoxelCollision(WorldMeshCollision):
             collision_query_buffer.voxel_collision_buffer.sparsity_index_buffer,
             weight,
             activation_distance,
-            self.max_distance,
+            self.max_esdf_distance,
             self._voxel_tensor_list[3],
             self._voxel_tensor_list[0],
             self._voxel_tensor_list[1],
             self._voxel_tensor_list[2],
             self._env_n_voxels,
-            env_query_idx,
+            env_query_idx_voxel,
             self._voxel_tensor_list[0].shape[1],
             b,
             h,
@@ -501,11 +505,8 @@ class WorldVoxelCollision(WorldMeshCollision):
             True,
             False,
         )
-        if (
-            "primitive" not in self.collision_types
-            or not self.collision_types["primitive"]
-            or "mesh" not in self.collision_types
-            or not self.collision_types["mesh"]
+        if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
+            "mesh" not in self.collision_types or not self.collision_types["mesh"]
         ):
             return dist
         d_prim = super().get_sphere_collision(
@@ -552,9 +553,10 @@ class WorldVoxelCollision(WorldMeshCollision):
             )
         b, h, n, _ = query_sphere.shape
         use_batch_env = True
+        env_query_idx_voxel = env_query_idx
         if env_query_idx is None:
             use_batch_env = False
-            env_query_idx = self._env_n_voxels
+            env_query_idx_voxel = self._env_n_voxels
 
         dist = SdfSweptSphereVoxel.apply(
             query_sphere,
@@ -563,14 +565,14 @@ class WorldVoxelCollision(WorldMeshCollision):
             collision_query_buffer.voxel_collision_buffer.sparsity_index_buffer,
             weight,
             activation_distance,
-            self.max_distance,
+            self.max_esdf_distance,
             speed_dt,
             self._voxel_tensor_list[3],
             self._voxel_tensor_list[0],
             self._voxel_tensor_list[1],
             self._voxel_tensor_list[2],
             self._env_n_voxels,
-            env_query_idx,
+            env_query_idx_voxel,
             self._voxel_tensor_list[0].shape[1],
             b,
             h,
@@ -583,12 +585,8 @@ class WorldVoxelCollision(WorldMeshCollision):
             return_loss,
             sum_collisions,
         )
-
-        if (
-            "primitive" not in self.collision_types
-            or not self.collision_types["primitive"]
-            or "mesh" not in self.collision_types
-            or not self.collision_types["mesh"]
+        if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
+            "mesh" not in self.collision_types or not self.collision_types["mesh"]
         ):
             return dist
         d_prim = super().get_swept_sphere_distance(
@@ -641,9 +639,10 @@ class WorldVoxelCollision(WorldMeshCollision):
         b, h, n, _ = query_sphere.shape
 
         use_batch_env = True
+        env_query_idx_voxel = env_query_idx
         if env_query_idx is None:
             use_batch_env = False
-            env_query_idx = self._env_n_voxels
+            env_query_idx_voxel = self._env_n_voxels
         dist = SdfSweptSphereVoxel.apply(
             query_sphere,
             collision_query_buffer.voxel_collision_buffer.distance_buffer,
@@ -651,14 +650,14 @@ class WorldVoxelCollision(WorldMeshCollision):
             collision_query_buffer.voxel_collision_buffer.sparsity_index_buffer,
             weight,
             activation_distance,
-            self.max_distance,
+            self.max_esdf_distance,
             speed_dt,
             self._voxel_tensor_list[3],
             self._voxel_tensor_list[0],
             self._voxel_tensor_list[1],
             self._voxel_tensor_list[2],
             self._env_n_voxels,
-            env_query_idx,
+            env_query_idx_voxel,
             self._voxel_tensor_list[0].shape[1],
             b,
             h,
@@ -671,11 +670,8 @@ class WorldVoxelCollision(WorldMeshCollision):
             return_loss,
             True,
         )
-        if (
-            "primitive" not in self.collision_types
-            or not self.collision_types["primitive"]
-            or "mesh" not in self.collision_types
-            or not self.collision_types["mesh"]
+        if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
+            "mesh" not in self.collision_types or not self.collision_types["mesh"]
         ):
             return dist
         d_prim = super().get_swept_sphere_collision(
@@ -695,5 +691,15 @@ class WorldVoxelCollision(WorldMeshCollision):
     def clear_cache(self):
         if self._voxel_tensor_list is not None:
             self._voxel_tensor_list[2][:] = 0
-            self._voxel_tensor_list[-1][:] = -1.0 * self.max_distance
+            if self._voxel_tensor_list[3].dtype in [torch.float32, torch.float16, torch.bfloat16]:
+                self._voxel_tensor_list[3][:] = -1.0 * self.max_esdf_distance
+            else:
+                self._voxel_tensor_list[3][:] = (
+                    self._voxel_tensor_list[3].to(dtype=torch.float16) * 0.0
+                    - self.max_esdf_distance
+                ).to(dtype=self._voxel_tensor_list[3].dtype)
             self._env_n_voxels[:] = 0
+            print(self._voxel_tensor_list)
+
+    def get_voxel_grid_shape(self, env_idx: int = 0, obs_idx: int = 0):
+        return self._voxel_tensor_list[3][env_idx, obs_idx].shape

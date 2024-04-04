@@ -263,13 +263,16 @@ class WorldCollisionConfig:
     cache: Optional[Dict[Obstacle, int]] = None
     n_envs: int = 1
     checker_type: CollisionCheckerType = CollisionCheckerType.PRIMITIVE
-    max_distance: Union[torch.Tensor, float] = 0.01
+    max_distance: Union[torch.Tensor, float] = 0.1
+    max_esdf_distance: Union[torch.Tensor, float] = 1000.0
 
     def __post_init__(self):
         if self.world_model is not None and isinstance(self.world_model, list):
             self.n_envs = len(self.world_model)
         if isinstance(self.max_distance, float):
             self.max_distance = self.tensor_args.to_device([self.max_distance])
+        if isinstance(self.max_esdf_distance, float):
+            self.max_esdf_distance = self.tensor_args.to_device([self.max_esdf_distance])
 
     @staticmethod
     def load_from_dict(

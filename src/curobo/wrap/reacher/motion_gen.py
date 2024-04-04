@@ -205,6 +205,8 @@ class MotionGenConfig:
         jerk_scale: Optional[Union[List[float], float]] = None,
         optimize_dt: bool = True,
         project_pose_to_goal_frame: bool = True,
+        ik_seed: int = 1531,
+        graph_seed: int = 1531,
     ):
         """Helper function to create configuration from robot and world configuration.
 
@@ -436,6 +438,7 @@ class MotionGenConfig:
             store_debug=store_ik_debug,
             collision_activation_distance=collision_activation_distance,
             project_pose_to_goal_frame=project_pose_to_goal_frame,
+            seed=ik_seed,
         )
 
         ik_solver = IKSolver(ik_solver_cfg)
@@ -448,6 +451,7 @@ class MotionGenConfig:
             base_config_data,
             graph_file,
             use_cuda_graph=use_cuda_graph,
+            seed=graph_seed,
         )
         graph_cfg.interpolation_dt = interpolation_dt
         graph_cfg.interpolation_steps = interpolation_steps

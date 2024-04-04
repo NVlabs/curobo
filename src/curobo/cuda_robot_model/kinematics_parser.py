@@ -11,7 +11,7 @@
 
 # Standard Library
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 # Third Party
 import numpy as np
@@ -21,7 +21,6 @@ from curobo.cuda_robot_model.types import JointType
 from curobo.geom.types import Mesh
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
-from curobo.util.logger import log_error
 
 
 @dataclass
@@ -35,6 +34,8 @@ class LinkParams:
     joint_axis: Optional[np.ndarray] = None
     joint_id: Optional[int] = None
     joint_velocity_limits: List[float] = field(default_factory=lambda: [-2.0, 2.0])
+    joint_offset: List[float] = field(default_factory=lambda: [1.0, 0.0])
+    mimic_joint_name: Optional[str] = None
 
     @staticmethod
     def from_dict(dict_data):
@@ -56,7 +57,7 @@ class KinematicsParser:
         # add extra links to parent:
         if self.extra_links is not None and len(list(self.extra_links.keys())) > 0:
             for i in self.extra_links:
-                self._parent_map[i] = self.extra_links[i].parent_link_name
+                self._parent_map[i] = {"parent": self.extra_links[i].parent_link_name}
 
     def build_link_parent(self):
         """Build a map of parent links to each link in the kinematic tree.
@@ -78,7 +79,7 @@ class KinematicsParser:
         chain_links = [ee_link]
         link = ee_link
         while link != base_link:
-            link = self._parent_map[link]
+            link = self._parent_map[link]["parent"]
             # add link to chain:
             chain_links.append(link)
         chain_links.reverse()

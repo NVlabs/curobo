@@ -154,7 +154,7 @@ def load_curobo(
 
     # del robot_cfg["kinematics"]
     if ik_seeds is None:
-        ik_seeds = 24
+        ik_seeds = 32
 
     if graph_mode:
         trajopt_seeds = 4
@@ -231,7 +231,7 @@ def benchmark_mb(
     # load dataset:
     force_graph = False
 
-    file_paths = [motion_benchmaker_raw, mpinets_raw]
+    file_paths = [motion_benchmaker_raw, mpinets_raw][:]
     if args.demo:
         file_paths = [demo_raw]
 
@@ -500,8 +500,8 @@ def benchmark_mb(
                             write_robot_usd_path="benchmark/log/usd/assets/",
                             robot_usd_local_reference="assets/",
                             base_frame="/world_" + problem_name,
-                            visualize_robot_spheres=False,
-                            flatten_usd=False,
+                            visualize_robot_spheres=True,
+                            flatten_usd=True,
                         )
 
                     if write_plot:  # and result.optimized_dt.item() > 0.06:
@@ -554,12 +554,12 @@ def benchmark_mb(
                         start_state,
                         Pose.from_list(pose),
                         join_path("benchmark/log/usd/", problem_name) + "_debug",
-                        write_ik=False,
+                        write_ik=True,
                         write_trajopt=True,
-                        visualize_robot_spheres=False,
+                        visualize_robot_spheres=True,
                         grid_space=2,
                         write_robot_usd_path="benchmark/log/usd/assets/",
-                        # flatten_usd=True,
+                        flatten_usd=True,
                     )
                     print(result.status)
 

@@ -108,6 +108,9 @@ class ReacherSolveState:
         goal_buffer.retract_state = retract_config
         goal_buffer.goal_state = goal_state
         goal_buffer.links_goal_pose = link_poses
+        if goal_buffer.links_goal_pose is not None:
+            for k in goal_buffer.links_goal_pose.keys():
+                goal_buffer.links_goal_pose[k] = goal_buffer.links_goal_pose[k].contiguous()
         return goal_buffer
 
     def update_goal_buffer(
@@ -154,7 +157,7 @@ class ReacherSolveState:
                 current_goal_buffer.goal_state.copy_(goal_state)
             if link_poses is not None:
                 for k in link_poses.keys():
-                    current_goal_buffer.links_goal_pose[k].copy_(link_poses[k])
+                    current_goal_buffer.links_goal_pose[k].copy_(link_poses[k].contiguous())
 
         return current_solve_state, current_goal_buffer, update_reference
 

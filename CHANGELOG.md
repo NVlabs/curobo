@@ -10,6 +10,23 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
+## Latest Commit
+
+### New Features
+- Add mimic joint parsing and optimization support. Check `ur5e_robotiq_2f_140.yml`.
+
+### BugFixes & Misc.
+- Fix bug in `WorldVoxelCollision` where `env_query_idx` was being overwritten.
+- Fix bug in `WorldVoxelCollision` where parent collision types were not getting called in some cases.
+- Change voxelization dimensions to include 1 extra voxel per dim.
+- Added `seed` parameter to `IKSolverConfig`.
+- Added `sampler_seed` parameter `RolloutConfig`.
+- Fixed bug in `links_goal_pose` where tensor could be non contiguous.
+- Improved `ik_solver` success by removing gaussian projection of seed samples.
+- Added flag to sample from ik seeder instead of `rollout_fn` sampler.
+- Added ik startup profiler to `benchmark/curobo_python_profile.py`.
+- Reduced branching in Kinematics kernels and added mimic joint computations.
+
 ## Version 0.7.0
 ### Changes in default behavior
 - Increased default collision cache to 50 in RobotWorld.

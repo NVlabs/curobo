@@ -172,10 +172,6 @@ class TrajOptSolverConfig:
         config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
         grad_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
 
-        base_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
-        base_config_data["convergence"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
-        config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
-        grad_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
 
         config_data["model"]["horizon"] = traj_tsteps
         grad_config_data["model"]["horizon"] = traj_tsteps
