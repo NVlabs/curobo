@@ -14,15 +14,15 @@ mesh:
   Bob:
     pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     file_path: "scene/Bob.obj"
-  # Face1:
-  #   pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
-  #   file_path: "scene/Face1.obj"
-  # Face2:
-  #   pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
-  #   file_path: "scene/Face2.obj"
-  # Face3:
-  #   pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
-  #   file_path: "scene/Face3.obj"
+  Face1:
+    pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    file_path: "scene/Face1.obj"
+  Face2:
+    pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    file_path: "scene/Face2.obj"
+  Face3:
+    pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    file_path: "scene/Face3.obj"
   Cow:
     pose: [-0.4, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
     file_path: "scene/Cow.obj"
