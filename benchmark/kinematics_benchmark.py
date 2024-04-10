@@ -192,45 +192,42 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    b_list = [256,512,1024,2048,4096]
-    # b_list = [2]
+    b_list = [8, 8, 16, 32, 64, 128, 256,512,1024,2048,4096]
 
     robot_list = get_robot_list()
     robot_list = [robot_list[0]]
 
-    # world_file = "benchmark_shelf.yml"
-    world_file = "benchmark_shelf.yml"
+    world_files = ["benchmark_shelf","benchmark_shelf_dense"];
+    # world_file = "benchmark_manufacturing.yml"
 
     print("running...")
-    data = {"robot": [], "Kinematics": [], "Collision Checking": [], "Batch Size": []}
-    for robot_file in robot_list:
-        arm_sampler = load_curobo(robot_file, world_file)
+    for world in world_files:
+        data = {"robot": [], "Kinematics": [], "Collision Checking": [], "Batch Size": []}
+        world_file = world + ".yml"
+        for robot_file in robot_list:
+            arm_sampler = load_curobo(robot_file, world_file)
 
-        # create a sampler with dof:
-        for b_size in b_list:
-            # sample test configs:
-            q_test = arm_sampler.sample_random_actions(b_size).cpu().numpy()
+            counter = 1
+            # create a sampler with dof:
+            for b_size in b_list:
+                # sample test configs:
+                q_test = arm_sampler.sample_random_actions(b_size).cpu().numpy()
 
-            dt_cu_cg = bench_collision_curobo(
-                robot_file,
-                world_file,
-                q_test,
-                use_cuda_graph=True,
-            )
-            dt_kin_cg = bench_kin_curobo(
-                robot_file, q_test, use_cuda_graph=True, use_coll_spheres=True
-            )
+                dt_cu_cg = bench_collision_curobo(
+                    robot_file,
+                    world_file,
+                    q_test,
+                    use_cuda_graph=False,
+                )
+                dt_kin_cg = bench_kin_curobo(
+                    robot_file, q_test, use_cuda_graph=True, use_coll_spheres=True
+                )
 
-            data["robot"].append(robot_file)
-            data["Collision Checking"].append(dt_cu_cg)
-            data["Kinematics"].append(dt_kin_cg)
-            data["Batch Size"].append(b_size)
-    write_yaml(data, join_path(args.save_path, args.file_name + ".yml"))
-    try:
-        # Third Party
-        import pandas as pd
-
-        df = pd.DataFrame(data)
-        df.to_csv(join_path(args.save_path, args.file_name + ".csv"))
-    except ImportError:
-        pass
+                if counter == 1:    # skip the first run
+                    counter += 1
+                    continue
+                data["robot"].append(robot_file)
+                data["Collision Checking"].append(dt_cu_cg)
+                data["Kinematics"].append(dt_kin_cg)
+                data["Batch Size"].append(b_size)
+        write_yaml(data, join_path(args.save_path, args.file_name + "_" + world + ".yml"))
