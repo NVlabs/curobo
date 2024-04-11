@@ -448,7 +448,7 @@ def calculate_dt_fixed(
     max_acc: torch.Tensor,
     max_jerk: torch.Tensor,
     raw_dt: torch.Tensor,
-    interpolation_dt: float,
+    min_dt: float,
 ):
     # compute scaled dt:
     max_v_arr = torch.max(torch.abs(vel), dim=-2)[0]  # output is batch, dof
@@ -465,7 +465,7 @@ def calculate_dt_fixed(
     dt_score_jerk = raw_dt * torch.pow((torch.max(jerk_scale_dt, dim=-1)[0]), 1 / 3)
     dt_score = torch.maximum(dt_score_vel, dt_score_acc)
     dt_score = torch.maximum(dt_score, dt_score_jerk)
-    dt_score = torch.clamp(dt_score, interpolation_dt, raw_dt)
+    dt_score = torch.clamp(dt_score, min_dt, raw_dt)
     # NOTE: this dt score is not dt, rather a scaling to convert velocity, acc, jerk that was
     # computed with raw_dt to a new dt
     return dt_score
@@ -480,7 +480,7 @@ def calculate_dt(
     max_acc: torch.Tensor,
     max_jerk: torch.Tensor,
     raw_dt: float,
-    interpolation_dt: float,
+    min_dt: float,
 ):
     # compute scaled dt:
     max_v_arr = torch.max(torch.abs(vel), dim=-2)[0]  # output is batch, dof
@@ -497,7 +497,7 @@ def calculate_dt(
     dt_score_jerk = raw_dt * torch.pow((torch.max(jerk_scale_dt, dim=-1)[0]), 1 / 3)
     dt_score = torch.maximum(dt_score_vel, dt_score_acc)
     dt_score = torch.maximum(dt_score, dt_score_jerk)
-    dt_score = torch.clamp(dt_score, interpolation_dt, raw_dt)
+    dt_score = torch.clamp(dt_score, min_dt, raw_dt)
     # NOTE: this dt score is not dt, rather a scaling to convert velocity, acc, jerk that was
     # computed with raw_dt to a new dt
     return dt_score
@@ -546,7 +546,7 @@ def calculate_tsteps(
 ):
     # compute scaled dt:
     opt_dt = calculate_dt_fixed(
-        vel, acc, jerk, max_vel, max_acc, max_jerk, raw_dt, interpolation_dt
+        vel, acc, jerk, max_vel, max_acc, max_jerk, raw_dt, min_dt
     )
     if not optimize_dt:
         opt_dt[:] = raw_dt
