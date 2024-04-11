@@ -525,7 +525,7 @@ class SdfMeshWarpPy(torch.autograd.Function):
         if env_query_idx is None:
             use_batch_env = False
             env_query_idx = n_env_mesh
-
+        requires_grad = query_spheres.requires_grad
         wp.launch(
             kernel=get_closest_pt_batch_env,
             dim=b * h * n,
@@ -541,7 +541,7 @@ class SdfMeshWarpPy(torch.autograd.Function):
                 wp.from_torch(mesh_enable.view(-1), dtype=wp.uint8),
                 wp.from_torch(n_env_mesh.view(-1), dtype=wp.int32),
                 wp.from_torch(max_dist, dtype=wp.float32),
-                query_spheres.requires_grad,
+                requires_grad,
                 b,
                 h,
                 n,
@@ -608,6 +608,7 @@ class SweptSdfMeshWarpPy(torch.autograd.Function):
         if env_query_idx is None:
             use_batch_env = False
             env_query_idx = n_env_mesh
+        requires_grad = query_spheres.requires_grad
 
         wp.launch(
             kernel=get_swept_closest_pt_batch_env,
@@ -625,7 +626,7 @@ class SweptSdfMeshWarpPy(torch.autograd.Function):
                 wp.from_torch(mesh_enable.view(-1), dtype=wp.uint8),
                 wp.from_torch(n_env_mesh.view(-1), dtype=wp.int32),
                 wp.from_torch(max_dist, dtype=wp.float32),
-                query_spheres.requires_grad,
+                requires_grad,
                 b,
                 h,
                 n,

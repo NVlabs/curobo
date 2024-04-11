@@ -29,7 +29,7 @@ robot_cfg:
     
     collision_link_names: null # List[str]
     collision_spheres: null #
-    collision_sphere_buffer: 0.005
+    collision_sphere_buffer: 0.005 # float or Dict[str, float]
     extra_collision_spheres: {}
     self_collision_ignore: {} # Dict[str, List[str]]
     self_collision_buffer: {} # Dict[str, float]

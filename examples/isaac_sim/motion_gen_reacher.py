@@ -205,7 +205,7 @@ def main():
     interpolation_dt = 0.05
     if args.reactive:
         trajopt_tsteps = 40
-        trajopt_dt = 0.05
+        trajopt_dt = 0.04
         optimize_dt = False
         max_attempts = 1
         trim_steps = [1, None]
@@ -223,9 +223,6 @@ def main():
         trajopt_dt=trajopt_dt,
         trajopt_tsteps=trajopt_tsteps,
         trim_steps=trim_steps,
-        # velocity_scale=0.1,
-        # self_collision_check=False,
-        # self_collision_opt=False,
     )
     motion_gen = MotionGen(motion_gen_config)
     print("warming up...")

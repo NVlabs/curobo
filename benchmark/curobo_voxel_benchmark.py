@@ -133,7 +133,7 @@ def load_curobo(
     robot_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
     robot_cfg["kinematics"]["collision_sphere_buffer"] = -0.00
 
-    ik_seeds = 24
+    ik_seeds = 32
     if graph_mode:
         trajopt_seeds = 4
     if trajopt_seeds >= 14:
@@ -253,20 +253,8 @@ def benchmark_mb(
             collision_activation_distance = og_collision_activation_distance
             finetune_dt_scale = 0.9
             parallel_finetune = True
-            if "cage_panda" in key:
+            if "cubby_task_oriented" in key and "merged" not in key:
                 trajopt_seeds = 8
-
-            if "table_under_pick_panda" in key:
-                trajopt_seeds = 8
-                finetune_dt_scale = 0.98
-
-            if key == "cubby_task_oriented":
-                trajopt_seeds = 16
-                finetune_dt_scale = 0.98
-
-            if "dresser_task_oriented" in key:
-                trajopt_seeds = 16
-                finetune_dt_scale = 0.98
 
             mg, robot_cfg, robot_world = load_curobo(
                 0,
@@ -285,16 +273,12 @@ def benchmark_mb(
                 i += 1
                 if problem["collision_buffer_ik"] < 0.0:
                     continue
-
                 plan_config = MotionGenPlanConfig(
-                    max_attempts=10,
+                    max_attempts=20,
                     enable_graph_attempt=1,
-                    enable_finetune_trajopt=True,
+                    disable_graph_attempt=10,
                     partial_ik_opt=False,
-                    enable_graph=graph_mode,
                     timeout=60,
-                    enable_opt=not graph_mode,
-                    parallel_finetune=True,
                 )
 
                 q_start = problem["start"]
@@ -593,17 +577,31 @@ def benchmark_mb(
             )
             print(g_m.attempts)
         g_m = CuroboGroupMetrics.from_list(all_groups)
-        print(
-            "All: ",
-            f"{g_m.success:2.2f}",
-            g_m.motion_time.percent_98,
-            g_m.time.mean,
-            g_m.time.percent_75,
-            g_m.position_error.percent_75,
-            g_m.orientation_error.percent_75,
-            g_m.perception_success,
-        )
-        print(g_m.attempts)
+        try:
+            from tabulate import tabulate
+
+            headers = ["Metric", "Value"]
+
+            table = [
+                ["Success %", f"{g_m.success:2.2f}"],
+                ["Plan Time (s)", g_m.time],
+                ["Motion Time(s)", g_m.motion_time],
+                ["Path Length (rad.)", g_m.cspace_path_length],
+                ["Jerk", g_m.jerk],
+                ["Position Error (mm)", g_m.position_error],
+            ]
+            print(tabulate(table, headers, tablefmt="grid"))
+        except ImportError:
+            print(
+                "All: ",
+                f"{g_m.success:2.2f}",
+                g_m.motion_time.percent_98,
+                g_m.time.mean,
+                g_m.time.percent_75,
+                g_m.position_error.percent_75,
+                g_m.orientation_error.percent_75,
+            )
+
         if write_benchmark:
             if not mpinets_data:
                 write_yaml(problems, "mb_curobo_solution_voxel.yaml")
@@ -612,17 +610,33 @@ def benchmark_mb(
         all_files += all_groups
     g_m = CuroboGroupMetrics.from_list(all_files)
     print("######## FULL SET ############")
-    print("All: ", f"{g_m.success:2.2f}")
-    print(
-        "Perception Success (coarse, interpolated):",
-        g_m.perception_success,
-        g_m.perception_interpolated_success,
-    )
-    print("MT: ", g_m.motion_time)
-    print("PT:", g_m.time)
-    print("ST: ", g_m.solve_time)
-    print("accuracy: ", g_m.position_error, g_m.orientation_error)
-    print("Jerk: ", g_m.jerk)
+    try:
+        from tabulate import tabulate
+
+        headers = ["Metric", "Value"]
+
+        table = [
+            ["Success %", f"{g_m.success:2.2f}"],
+            ["Plan Time (s)", g_m.time],
+            ["Motion Time(s)", g_m.motion_time],
+            ["Path Length (rad.)", g_m.cspace_path_length],
+            ["Jerk", g_m.jerk],
+            ["Position Error (mm)", g_m.position_error],
+        ]
+        print(tabulate(table, headers, tablefmt="grid"))
+    except ImportError:
+
+        print("All: ", f"{g_m.success:2.2f}")
+        print(
+            "Perception Success (coarse, interpolated):",
+            g_m.perception_success,
+            g_m.perception_interpolated_success,
+        )
+        print("MT: ", g_m.motion_time)
+        print("PT:", g_m.time)
+        print("ST: ", g_m.solve_time)
+        print("accuracy: ", g_m.position_error, g_m.orientation_error)
+        print("Jerk: ", g_m.jerk)
 
 
 if __name__ == "__main__":

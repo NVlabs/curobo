@@ -10,10 +10,23 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
-## Latest Commit
+## Version 0.7.1
 
 ### New Features
 - Add mimic joint parsing and optimization support. Check `ur5e_robotiq_2f_140.yml`.
+- Add `finetune_dt_scale` as a parameter to `MotionGenPlanConfig` to dynamically change the 
+time-optimal scaling on a per problem instance.
+- `MotionGen.plan_single()` will now try finetuning in a for-loop, with larger and larger dt 
+until convergence. This also warm starts from previous failure.
+- Add `high_precision` mode to `MotionGenConfig` to support `<1mm` convergence.
+
+### Changes in default behavior
+- collision_sphere_buffer now supports having offset per link. Also, collision_sphere_buffer only 
+applies to world collision while self_collision_buffer applies for self collision. Previously, 
+self_collision_buffer was added on top of collision_sphere_buffer.
+- `TrajEvaluatorConfig` cannot be initialized without dof as now per-joint jerk and acceleration 
+limits are used. Use `TrajEvaluatorConfig.from_basic()` to initialize similar to previous behavior.
+- `finetune_dt_scale` default value is 0.9 from 0.95.
 
 ### BugFixes & Misc.
 - Fix bug in `WorldVoxelCollision` where `env_query_idx` was being overwritten.
@@ -26,6 +39,21 @@ its affiliates is strictly prohibited.
 - Added flag to sample from ik seeder instead of `rollout_fn` sampler.
 - Added ik startup profiler to `benchmark/curobo_python_profile.py`.
 - Reduced branching in Kinematics kernels and added mimic joint computations.
+- Add init_cache to WorldVoxelCollision to create cache for Mesh and Cuboid obstacles.
+- `TrajEvaluator` now uses per-joint acceleration and jerk limits.
+- Fixed regression in `batch_motion_gen_reacher.py` example where robot's position was not being 
+set correctly.
+- Switched from smooth l2 to l2 for BoundCost as that gives better convergence.
+- `requires_grad` is explicitly stored in a varaible before `tensor.detach()` in warp kernel calls
+as this can get set to False in some instances.
+- Fix dt update in `MotionGen.plan_single_js()` where dt was not reset after finetunestep, causing
+joint space planner to fail often.
+- Improve joint space planner success by changing smooth l2 distance cost to l2 distance. Also, 
+added fallback to graph planner when linear path is not possible.
+- Retuned weigths for IKSolver, now 98th percentile accuracy is 10 micrometers wtih 16 seeds 
+(vs 24 seeds previously).
+- Switch float8 precision check from `const` to macro to avoid compile errors in older nvcc, this
+fixes docker build issues for isaac sim 2023.1.0.
 
 ## Version 0.7.0
 ### Changes in default behavior

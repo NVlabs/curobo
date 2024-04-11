@@ -38,7 +38,7 @@ cost:
     use_metric: True
     
   cspace_cfg:
-    weight: 500.0
+    weight: 1000.0
     terminal: True
     run_weight: 1.0
     

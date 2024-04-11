@@ -143,6 +143,10 @@ class CudaRobotModelConfig:
     def cspace(self):
         return self.kinematics_config.cspace
 
+    @property
+    def dof(self) -> int:
+        return self.kinematics_config.n_dof
+
 
 class CudaRobotModel(CudaRobotModelConfig):
     """
@@ -366,6 +370,10 @@ class CudaRobotModel(CudaRobotModelConfig):
         return pose
 
     def get_dof(self) -> int:
+        return self.kinematics_config.n_dof
+
+    @property
+    def dof(self) -> int:
         return self.kinematics_config.n_dof
 
     @property

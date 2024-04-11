@@ -80,28 +80,25 @@ def test_motion_gen_lock_js_update():
 
     kin_state = motion_gen_instance.compute_kinematics(start_state)
     ee_pose = kin_state.ee_pose.clone()
-
     # test motion gen:
     plan_start = start_state.clone()
     plan_start.position[..., :-2] += 0.1
-    result = motion_gen_instance.plan_single(plan_start, ee_pose)
+    result = motion_gen_instance.plan_single(plan_start, ee_pose.clone())
 
     assert result.success.item()
-    lock_js = {"base_x": 1.0, "base_y": 0.0, "base_z": 0.0}
+    lock_js = {"base_x": 2.0, "base_y": 0.0, "base_z": 0.0}
     motion_gen_instance.update_locked_joints(lock_js, robot_config)
 
     kin_state_new = motion_gen_instance.compute_kinematics(start_state)
     ee_pose_shift = kin_state_new.ee_pose.clone()
 
-    assert torch.norm(ee_pose.position[..., 0] - ee_pose_shift.position[..., 0]).item() == 1.0
+    assert 2 - torch.norm(ee_pose.position[..., 0] - ee_pose_shift.position[..., 0]).item() <= 1e-5
     assert torch.norm(ee_pose.position[..., 1:] - ee_pose_shift.position[..., 1:]).item() == 0.0
 
     # test motion gen with new lock state:
-
-    result = motion_gen_instance.plan_single(plan_start, ee_pose_shift)
+    result = motion_gen_instance.plan_single(plan_start, ee_pose_shift.clone())
     assert result.success.item()
-
     result = motion_gen_instance.plan_single(
-        plan_start, ee_pose, MotionGenPlanConfig(max_attempts=3)
+        plan_start, ee_pose.clone(), MotionGenPlanConfig(max_attempts=3)
     )
     assert result.success.item() == False

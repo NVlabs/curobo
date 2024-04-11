@@ -8,22 +8,25 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+""" Module contains custom types and dataclasses used across reacher solvers. """
 from __future__ import annotations
 
 # Standard Library
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 # CuRobo
 from curobo.rollout.rollout_base import Goal
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.robot import JointState
+from curobo.types.tensor import T_BDOF
 
 
 class ReacherSolveType(Enum):
-    # TODO: how to differentiate between goal pose and goal config?
+    """Enum for different types of problems solved with reacher solvers."""
+
     SINGLE = 0
     GOALSET = 1
     BATCH = 2
@@ -34,20 +37,46 @@ class ReacherSolveType(Enum):
 
 @dataclass
 class ReacherSolveState:
+    """Dataclass for storing the current problem type of a reacher solver."""
+
+    #: Type of problem solved by the reacher solver.
     solve_type: ReacherSolveType
+
+    #: Number of problems in the batch.
     batch_size: int
+
+    #: Number of environments in the batch.
     n_envs: int
+
+    #: Number of goals per problem. Only valid for goalset problems.
     n_goalset: int = 1
+
+    #: Flag to indicate if the problems use different world environments in the batch.
     batch_env: bool = False
+
+    #: Flag to indicate if the problems use different retract configurations in the batch.
     batch_retract: bool = False
+
+    #: Flag to indicate if there is more than 1 problem to be solved.
     batch_mode: bool = False
+
+    #: Number of seeds for each problem.
     num_seeds: Optional[int] = None
+
+    #: Number of seeds for inverse kinematics problems.
     num_ik_seeds: Optional[int] = None
+
+    #: Number of seeds for graph search problems.
     num_graph_seeds: Optional[int] = None
+
+    #: Number of seeds for trajectory optimization problems.
     num_trajopt_seeds: Optional[int] = None
+
+    #: Number of seeds for model predictive control problems.
     num_mpc_seeds: Optional[int] = None
 
     def __post_init__(self):
+        """Post init method to set default flags based on input values."""
         if self.n_envs == 1:
             self.batch_env = False
         else:
@@ -63,7 +92,8 @@ class ReacherSolveState:
         if self.num_seeds is None:
             self.num_seeds = self.num_mpc_seeds
 
-    def clone(self):
+    def clone(self) -> ReacherSolveState:
+        """Method to create a deep copy of the current reacher solve state."""
         return ReacherSolveState(
             solve_type=self.solve_type,
             n_envs=self.n_envs,
@@ -79,10 +109,12 @@ class ReacherSolveState:
             num_mpc_seeds=self.num_mpc_seeds,
         )
 
-    def get_batch_size(self):
+    def get_batch_size(self) -> int:
+        """Method to get total number of optimization problems in the batch including seeds."""
         return self.num_seeds * self.batch_size
 
-    def get_ik_batch_size(self):
+    def get_ik_batch_size(self) -> int:
+        """Method to get total number of IK problems in the batch including seeds."""
         return self.num_ik_seeds * self.batch_size
 
     def create_goal_buffer(
@@ -92,8 +124,24 @@ class ReacherSolveState:
         retract_config: Optional[T_BDOF] = None,
         link_poses: Optional[Dict[str, Pose]] = None,
         tensor_args: TensorDeviceType = TensorDeviceType(),
-    ):
-        # TODO: Refactor to account for num_ik_seeds or num_trajopt_seeds
+    ) -> Goal:
+        """Method to create a goal buffer from goal pose and other problem targets.
+
+        Args:
+            goal_pose: Pose to reach with the end effector.
+            goal_state: Joint configuration to reach. If None, the goal is to reach the pose.
+            retract_config: Joint configuration to use for L2 regularization. If None,
+                `retract_config` from robot configuration file is used. An alternative value is to
+                use the start state as the retract configuration.
+            link_poses: Dictionary of link poses to reach. This is only required for multi-link
+                pose reaching, where the goal is to reach multiple poses with different links.
+            tensor_args: Device and floating precision.
+
+        Returns:
+            Goal buffer with the goal pose, goal state, retract state, and link poses.
+        """
+
+        # NOTE: Refactor to account for num_ik_seeds or num_trajopt_seeds
         batch_retract = True
         if retract_config is None or retract_config.shape[0] != goal_pose.batch:
             batch_retract = False
@@ -122,7 +170,28 @@ class ReacherSolveState:
         current_solve_state: Optional[ReacherSolveState] = None,
         current_goal_buffer: Optional[Goal] = None,
         tensor_args: TensorDeviceType = TensorDeviceType(),
-    ):
+    ) -> Tuple[ReacherSolveState, Goal, bool]:
+        """Method to update the goal buffer with new goal pose and other problem targets.
+
+        Args:
+            goal_pose: Pose to reach with the end effector.
+            goal_state: Joint configuration to reach. If None, the goal is to reach the pose.
+            retract_config: Joint configuration to use for L2 regularization. If None,
+                `retract_config` from robot configuration file is used. An alternative value is to
+                use the start state as the retract configuration.
+            link_poses: Dictionary of link poses to reach. This is only required for multi-link
+                pose reaching, where the goal is to reach multiple poses with different links. To
+                use this,
+                :var:`curobo.cuda_robot_model.cuda_robot_model.CudaRobotModelConfig.link_names`
+                should have the link names to reach.
+            current_solve_state: Current reacher solve state.
+            current_goal_buffer: Current goal buffer.
+            tensor_args: Device and floating precision.
+
+        Returns:
+            Tuple of updated reacher solve state, goal buffer, and a flag indicating if the goal
+            buffer reference has changed which is useful to break existing CUDA Graphs.
+        """
         solve_state = self
         # create goal buffer by comparing to existing solve type
         update_reference = False
@@ -167,7 +236,19 @@ class ReacherSolveState:
         current_solve_state: Optional[ReacherSolveState] = None,
         current_goal_buffer: Optional[Goal] = None,
         tensor_args: TensorDeviceType = TensorDeviceType(),
-    ):
+    ) -> Tuple[ReacherSolveState, Goal, bool]:
+        """Method to update the goal buffer with values from new Rollout goal.
+
+        Args:
+            goal: Rollout goal to update the goal buffer.
+            current_solve_state: Current reacher solve state.
+            current_goal_buffer: Current goal buffer.
+            tensor_args: Device and floating precision.
+
+        Returns:
+            Tuple of updated reacher solve state, goal buffer, and a flag indicating if the goal
+            buffer reference has changed which is useful to break existing CUDA Graphs.
+        """
         solve_state = self
         update_reference = False
         if (
@@ -204,6 +285,8 @@ class ReacherSolveState:
 
 @dataclass
 class MotionGenSolverState:
+    """Dataclass for storing the current state of a motion generation solver."""
+
     solve_type: ReacherSolveType
     ik_solve_state: ReacherSolveState
     trajopt_solve_state: ReacherSolveState
@@ -215,6 +298,22 @@ def get_padded_goalset(
     current_goal_buffer: Goal,
     new_goal_pose: Pose,
 ) -> Union[Pose, None]:
+    """Method to pad number of goals in goalset to match the cached goal buffer.
+
+    This allows for creating a goalset problem with large number of goals during the first call,
+    and subsequent calls can have fewer goals. This function will pad the new goalset with the
+    first goal to match the cached goal buffer's shape.
+
+    Args:
+        solve_state: New problem's solve state.
+        current_solve_state: Current solve state.
+        current_goal_buffer: Current goal buffer.
+        new_goal_pose: Padded goal pose to match the cached goal buffer's shape.
+
+    Returns:
+        Padded goal pose to match the cached goal buffer's shape. If the new goal can't be padded,
+        returns None.
+    """
     if (
         current_solve_state.solve_type == ReacherSolveType.GOALSET
         and solve_state.solve_type == ReacherSolveType.SINGLE

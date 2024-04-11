@@ -54,10 +54,8 @@ cost:
     run_weight: 0.00 #1
 
   bound_cfg:
-    weight: [5000.0, 50000.0, 50000.0, 50000.0] # needs to be 3 values
-    
-    smooth_weight: [0.0,50000.0, 500.0, 0.0]  # [vel, acc, jerk,] 
-    
+    weight: [10000.0, 100000.0, 500.0, 500.0] 
+    smooth_weight: [0.0,10000.0, 50.0, 0.0]
     run_weight_velocity: 0.0
     run_weight_acceleration: 1.0
     run_weight_jerk: 1.0

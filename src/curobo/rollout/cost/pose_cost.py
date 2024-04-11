@@ -105,9 +105,9 @@ class PoseCostMetric:
     @classmethod
     def create_grasp_approach_metric(
         cls,
-        offset_position: float = 0.5,
+        offset_position: float = 0.1,
         linear_axis: int = 2,
-        tstep_fraction: float = 0.6,
+        tstep_fraction: float = 0.8,
         tensor_args: TensorDeviceType = TensorDeviceType(),
     ) -> PoseCostMetric:
         """Enables moving to a pregrasp and then locked orientation movement to final grasp.
@@ -203,7 +203,6 @@ class PoseCost(CostBase, PoseCostConfig):
             self.offset_waypoint[:3].copy_(offset_rotation)
         self.offset_tstep_fraction[:] = offset_tstep_fraction
         if self._horizon <= 0:
-            print(self.weight)
             log_error(
                 "Updating offset waypoint is only possible after initializing motion gen"
                 + " run motion_gen.warmup() before adding offset_waypoint"

@@ -23,6 +23,7 @@ from pxr import UsdPhysics
 
 # CuRobo
 from curobo.util.logger import log_warn
+from curobo.util.usd_helper import set_prim_transform
 
 ISAAC_SIM_23 = False
 try:
@@ -107,8 +108,13 @@ def add_robot_to_scene(
     robot_p = Robot(
         prim_path=robot_path + "/" + base_link_name,
         name=robot_name,
-        position=position,
     )
+
+    robot_prim = robot_p.prim
+    stage = robot_prim.GetStage()
+    linkp = stage.GetPrimAtPath(robot_path)
+    set_prim_transform(linkp, [position[0], position[1], position[2], 1, 0, 0, 0])
+
     if False and ISAAC_SIM_23:  # this doesn't work in isaac sim 2023.1.1
         robot_p.set_solver_velocity_iteration_count(0)
         robot_p.set_solver_position_iteration_count(44)
@@ -116,8 +122,6 @@ def add_robot_to_scene(
         my_world._physics_context.set_solver_type("PGS")
 
     if ISAAC_SIM_23:  # fix to load robot correctly in isaac sim 2023.1.1
-        robot_prim = robot_p.prim
-        stage = robot_prim.GetStage()
         linkp = stage.GetPrimAtPath(robot_path + "/" + base_link_name)
         mass = UsdPhysics.MassAPI(linkp)
         mass.GetMassAttr().Set(0)

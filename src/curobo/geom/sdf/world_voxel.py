@@ -42,6 +42,7 @@ class WorldVoxelCollision(WorldMeshCollision):
             and self.cache["voxel"] not in [None, 0]
         ):
             self._create_voxel_cache(self.cache["voxel"])
+        return super()._init_cache()
 
     def _create_voxel_cache(self, voxel_cache: Dict[str, Any]):
         n_layers = voxel_cache["layers"]
@@ -699,7 +700,6 @@ class WorldVoxelCollision(WorldMeshCollision):
                     - self.max_esdf_distance
                 ).to(dtype=self._voxel_tensor_list[3].dtype)
             self._env_n_voxels[:] = 0
-            print(self._voxel_tensor_list)
 
     def get_voxel_grid_shape(self, env_idx: int = 0, obs_idx: int = 0):
         return self._voxel_tensor_list[3][env_idx, obs_idx].shape

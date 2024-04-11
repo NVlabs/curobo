@@ -51,14 +51,13 @@ def get_trajectory(robot_file="franka.yml", dt=1.0 / 60.0):
         robot_file,
         world_file,
         tensor_args,
-        trajopt_tsteps=24,
+        trajopt_tsteps=32,
         collision_checker_type=CollisionCheckerType.PRIMITIVE,
         use_cuda_graph=True,
         num_trajopt_seeds=2,
         num_graph_seeds=2,
         evaluate_interpolated_trajectory=True,
         interpolation_dt=dt,
-        self_collision_check=True,
     )
     motion_gen = MotionGen(motion_gen_config)
     motion_gen.warmup()
@@ -70,13 +69,15 @@ def get_trajectory(robot_file="franka.yml", dt=1.0 / 60.0):
     )
 
     retract_pose = Pose(state.ee_pos_seq.squeeze(), quaternion=state.ee_quat_seq.squeeze())
-    start_state = JointState.from_position(retract_cfg.view(1, -1).clone() + 0.5)
+    start_state = JointState.from_position(retract_cfg.view(1, -1).clone())
+    start_state.position[..., :-2] += 0.5
     result = motion_gen.plan_single(start_state, retract_pose)
     traj = result.get_interpolated_plan()  # optimized plan
     return traj
 
 
 def save_curobo_robot_world_to_usd(robot_file="franka.yml"):
+    print(robot_file)
     tensor_args = TensorDeviceType()
     world_file = "collision_test.yml"
     world_model = WorldConfig.from_dict(
@@ -87,16 +88,18 @@ def save_curobo_robot_world_to_usd(robot_file="franka.yml"):
     q_traj = get_trajectory(robot_file, dt)
     if q_traj is not None:
         q_start = q_traj[0]
-
         UsdHelper.write_trajectory_animation_with_robot_usd(
             robot_file,
             world_model,
             q_start,
             q_traj,
-            save_path="test.usda",
+            save_path="test.usd",
             robot_color=[0.5, 0.5, 0.2, 1.0],
             base_frame="/grid_world_1",
+            flatten_usd=True,
         )
+    else:
+        print("failed")
 
 
 def save_curobo_robot_to_usd(robot_file="franka.yml"):
@@ -241,5 +244,5 @@ def save_log_motion_gen(robot_file: str = "franka.yml"):
 if __name__ == "__main__":
     # save_curobo_world_to_usd()
     setup_curobo_logger("error")
-    save_log_motion_gen("franka.yml")
-    # save_curobo_robot_world_to_usd("franka.yml")
+    # save_log_motion_gen("franka.yml")
+    save_curobo_robot_world_to_usd("ur5e_robotiq_2f_140.yml")

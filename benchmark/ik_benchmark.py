@@ -67,7 +67,7 @@ def run_full_config_collision_free_ik(
         robot_cfg,
         world_cfg,
         position_threshold=position_threshold,
-        num_seeds=30,
+        num_seeds=16,
         self_collision_check=collision_free,
         self_collision_opt=collision_free,
         tensor_args=tensor_args,
@@ -123,7 +123,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    b_list = [1, 10, 100, 1000][-1:]
+    b_list = [1, 10, 100, 2000][-1:]
 
     robot_list = get_motion_gen_robot_list() + get_multi_arm_robot_list()[:2]
     world_file = "collision_test.yml"
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         "Position-Error-Collision-Free-IK(mm)": [],
         "Orientation-Error-Collision-Free-IK": [],
     }
-    for robot_file in robot_list[:1]:
+    for robot_file in robot_list[:-1]:
         # create a sampler with dof:
         for b_size in b_list:
             # sample test configs:
@@ -176,13 +176,21 @@ if __name__ == "__main__":
 
             data["Collision-Free-IK-time(ms)"].append(dt_cu_ik_cfree * 1000.0)
     write_yaml(data, join_path(args.save_path, args.file_name + ".yml"))
+
     try:
         # Third Party
         import pandas as pd
 
         df = pd.DataFrame(data)
         print("Reported errors are 98th percentile")
-        print(df)
         df.to_csv(join_path(args.save_path, args.file_name + ".csv"))
+        try:
+            from tabulate import tabulate
+
+            print(tabulate(df, headers="keys", tablefmt="grid"))
+        except ImportError:
+            print(df)
+
+            pass
     except ImportError:
         pass

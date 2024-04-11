@@ -73,7 +73,7 @@ class CudaRobotGeneratorConfig:
     collision_spheres: Union[None, str, Dict[str, Any]] = None
 
     #: Radius buffer to add to collision spheres as padding.
-    collision_sphere_buffer: float = 0.0
+    collision_sphere_buffer: Union[float, Dict[str, float]] = 0.0
 
     #: Compute jacobian of link poses. Currently not supported.
     compute_jacobian: bool = False
@@ -436,7 +436,6 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         if self._bodies[0].link_name in link_names:
             store_link_map.append(chain_link_names.index(self._bodies[0].link_name))
             ordered_link_names.append(self._bodies[0].link_name)
-            joint_offset_map.append(self._bodies[0].joint_offset)
         # get joint types:
         for i in range(1, len(self._bodies)):
             body = self._bodies[i]
@@ -614,7 +613,6 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 self.joint_names.remove(j)
                 self._n_dofs -= 1
                 self._active_joints.remove(i)
-
             self._joint_map[self._joint_map < -1] = -1
             self._joint_map = self._joint_map.to(device=self.tensor_args.device)
             self._joint_map_type = self._joint_map_type.to(device=self.tensor_args.device)
@@ -628,7 +626,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         self,
         collision_spheres: Dict,
         collision_link_names: List[str],
-        collision_sphere_buffer: float = 0.0,
+        collision_sphere_buffer: Union[float, Dict[str, float]] = 0.0,
     ):
         """
 
@@ -643,6 +641,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         # we store as [n_link, 7]
         link_sphere_idx_map = []
         cpu_tensor_args = self.tensor_args.cpu()
+        self_collision_buffer = self.self_collision_buffer.copy()
         with profiler.record_function("robot_generator/build_collision_spheres"):
             for j_idx, j in enumerate(collision_link_names):
                 # print(j_idx)
@@ -652,11 +651,22 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 )
                 # find link index in global map:
                 l_idx = self._name_to_idx_map[j]
-
+                offset_radius = 0.0
+                if isinstance(collision_sphere_buffer, float):
+                    offset_radius = collision_sphere_buffer
+                elif j in collision_sphere_buffer:
+                    offset_radius = collision_sphere_buffer[j]
+                if j in self_collision_buffer:
+                    self_collision_buffer[j] -= offset_radius
+                else:
+                    self_collision_buffer[j] = -offset_radius
                 for i in range(n_spheres):
+                    padded_radius = collision_spheres[j][i]["radius"] + offset_radius
+                    if padded_radius <= 0.0 and padded_radius > -1.0:
+                        padded_radius = 0.001
                     link_spheres[i, :] = tensor_sphere(
                         collision_spheres[j][i]["center"],
-                        collision_spheres[j][i]["radius"],
+                        padded_radius,
                         tensor_args=cpu_tensor_args,
                         tensor=link_spheres[i, :],
                     )
@@ -665,10 +675,6 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 self.total_spheres += n_spheres
 
         self._link_spheres_tensor = torch.cat(coll_link_spheres, dim=0)
-        new_radius = self._link_spheres_tensor[..., 3] + collision_sphere_buffer
-        flag = torch.logical_and(new_radius > -1.0, new_radius <= 0.0)
-        new_radius[flag] = 0.001
-        self._link_spheres_tensor[:, 3] = new_radius
         self._link_sphere_idx_map = torch.as_tensor(
             link_sphere_idx_map, dtype=torch.int16, device=cpu_tensor_args.device
         )
@@ -696,9 +702,9 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 link1_spheres_idx = torch.nonzero(self._link_sphere_idx_map == link1_idx)
 
                 rad1 = self._link_spheres_tensor[link1_spheres_idx, 3]
-                if j not in self.self_collision_buffer.keys():
-                    self.self_collision_buffer[j] = 0.0
-                c1 = self.self_collision_buffer[j]
+                if j not in self_collision_buffer.keys():
+                    self_collision_buffer[j] = 0.0
+                c1 = self_collision_buffer[j]
                 self.self_collision_offset[link1_spheres_idx] = c1
                 for _, i_name in enumerate(collision_link_names):
                     if i_name == j or i_name in ignore_links:
@@ -706,9 +712,9 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                     if i_name not in collision_link_names:
                         log_error("Self Collision Link name not found in collision_link_names")
                     # find index of this link name:
-                    if i_name not in self.self_collision_buffer.keys():
-                        self.self_collision_buffer[i_name] = 0.0
-                    c2 = self.self_collision_buffer[i_name]
+                    if i_name not in self_collision_buffer.keys():
+                        self_collision_buffer[i_name] = 0.0
+                    c2 = self_collision_buffer[i_name]
                     link2_idx = self._name_to_idx_map[i_name]
                     # update collision distance between spheres from these two links:
                     link2_spheres_idx = torch.nonzero(self._link_sphere_idx_map == link2_idx)

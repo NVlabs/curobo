@@ -109,32 +109,35 @@ def test_batch_goalset_padded(motion_gen_batch):
     # run goalset planning
     motion_gen.reset()
 
-    retract_cfg = motion_gen.get_retract_config()
+    retract_cfg = motion_gen.get_retract_config().clone()
 
     state = motion_gen.compute_kinematics(JointState.from_position(retract_cfg.view(1, -1)))
 
     goal_pose = Pose(
         state.ee_pos_seq.repeat(3 * 3, 1).view(3, -1, 3).contiguous(),
         quaternion=state.ee_quat_seq.repeat(3 * 3, 1).view(3, -1, 4).contiguous(),
-    )
+    ).clone()
     goal_pose.position[0, 1, 1] = 0.2
     goal_pose.position[1, 0, 1] = 0.2
     goal_pose.position[2, 1, 1] = 0.2
+    retract_cfg = motion_gen.get_retract_config().clone()
 
     start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.2).repeat_seeds(3)
 
-    m_config = MotionGenPlanConfig(False, True, max_attempts=10, enable_graph_attempt=20)
-    result = motion_gen.plan_batch_goalset(start_state, goal_pose, m_config.clone())
+    m_config = MotionGenPlanConfig(enable_graph_attempt=100, max_attempts=2)
+    result = motion_gen.plan_batch_goalset(start_state, goal_pose.clone(), m_config.clone())
 
     # get final solutions:
     assert torch.count_nonzero(result.success) == result.success.shape[0]
 
-    reached_state = motion_gen.compute_kinematics(result.optimized_plan.trim_trajectory(-1))
+    reached_state = motion_gen.compute_kinematics(
+        result.optimized_plan.trim_trajectory(-1).squeeze(1)
+    )
 
     #
     goal_position = torch.cat(
         [
-            goal_pose.position[x, result.goalset_index[x], :].unsqueeze(0)
+            goal_pose.position[x, result.goalset_index[x], :].clone().unsqueeze(0)
             for x in range(len(result.goalset_index))
         ]
     )
@@ -161,7 +164,7 @@ def test_batch_goalset_padded(motion_gen_batch):
 
     start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.2).repeat_seeds(3)
 
-    result = motion_gen.plan_batch_goalset(start_state, goal_pose, m_config)
+    result = motion_gen.plan_batch_goalset(start_state, goal_pose.clone(), m_config)
 
     # get final solutions:
     assert torch.count_nonzero(result.success) == result.success.shape[0]
@@ -192,7 +195,7 @@ def test_batch_goalset_padded(motion_gen_batch):
 
     goal_pose.position[1, 0] -= 0.1
 
-    result = motion_gen.plan_batch(start_state, goal_pose.clone(), m_config)
+    result = motion_gen.plan_batch(start_state, goal_pose, m_config)
     assert torch.count_nonzero(result.success) == 3
 
     # get final solutions:

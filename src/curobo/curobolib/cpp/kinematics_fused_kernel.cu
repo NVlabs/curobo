@@ -1341,13 +1341,14 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   assert(sparsity_opt);
+  const bool parallel_write = true;
   if (use_global_cumul)
   {
     if (n_joints < 16)
     {
       AT_DISPATCH_FLOATING_TYPES(
         grad_spheres.scalar_type(), "kin_fused_backward_16t", ([&] {
-        kin_fused_backward_kernel3<scalar_t, double, true, true, 16, true>
+        kin_fused_backward_kernel3<scalar_t, double, true, true, 16, parallel_write>
           << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
           grad_out.data_ptr<float>(),
           grad_nlinks_pos.data_ptr<float>(),
@@ -1371,7 +1372,7 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
     {
       AT_DISPATCH_FLOATING_TYPES(
         grad_spheres.scalar_type(), "kin_fused_backward_16t", ([&] {
-        kin_fused_backward_kernel3<scalar_t, double, true, true, 64, true>
+        kin_fused_backward_kernel3<scalar_t, double, true, true, 64, parallel_write>
           << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
           grad_out.data_ptr<float>(),
           grad_nlinks_pos.data_ptr<float>(),
@@ -1395,7 +1396,7 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
     {
       AT_DISPATCH_FLOATING_TYPES(
         grad_spheres.scalar_type(), "kin_fused_backward_16t", ([&] {
-        kin_fused_backward_kernel3<scalar_t, double, true, true, 128, true>
+        kin_fused_backward_kernel3<scalar_t, double, true, true, 128, parallel_write>
           << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
           grad_out.data_ptr<float>(),
           grad_nlinks_pos.data_ptr<float>(),
@@ -1423,7 +1424,7 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
     //
     AT_DISPATCH_FLOATING_TYPES(
       grad_spheres.scalar_type(), "kin_fused_backward_16t", ([&] {
-      kin_fused_backward_kernel3<scalar_t, double, false, true, 128, true>
+      kin_fused_backward_kernel3<scalar_t, double, false, true, 128, parallel_write>
         << < blocksPerGrid, threadsPerBlock, sharedMemSize, stream >> > (
         grad_out.data_ptr<float>(),
         grad_nlinks_pos.data_ptr<float>(),

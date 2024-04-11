@@ -19,3 +19,11 @@
 
 #define CHECK_FP8 defined(CUDA_VERSION) && CUDA_VERSION >= 11080 && TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR >= 2
 #define CHECK_INPUT_GUARD(x) CHECK_INPUT(x);   const at::cuda::OptionalCUDAGuard guard(x.device())
+
+#if CHECK_FP8
+    #define FP8_TYPE_MACRO torch::kFloat8_e4m3fn
+    //constexpr const auto fp8_type = torch::kFloat8_e4m3fn;
+#else
+    #define FP8_TYPE_MACRO torch::kHalf
+    //const constexpr auto fp8_type = torch::kHalf;
+#endif 

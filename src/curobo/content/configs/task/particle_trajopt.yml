@@ -34,7 +34,7 @@ cost:
     weight: [250.0, 5000.0, 20, 20]
     vec_convergence: [0.0,0.0,1000.0,1000.0] 
     terminal: True
-    run_weight: 1.0
+    run_weight: 0.0
     use_metric: True
   
   link_pose_cfg:

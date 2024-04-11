@@ -129,7 +129,7 @@ RUN pip3 install trimesh \
   empy
 
 # Add cache date to avoid using cached layers older than this
-ARG CACHE_DATE=2024-02-20
+ARG CACHE_DATE=2024-04-11
 
 # install warp:
 # 

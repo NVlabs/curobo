@@ -152,7 +152,6 @@ def load_curobo(
     robot_cfg["kinematics"]["collision_link_names"].remove("attached_object")
     robot_cfg["kinematics"]["ee_link"] = "panda_hand"
 
-    # del robot_cfg["kinematics"]
     if ik_seeds is None:
         ik_seeds = 32
 
@@ -211,6 +210,7 @@ def load_curobo(
         trajopt_dt=0.25,
         finetune_dt_scale=finetune_dt_scale,
         maximum_trajectory_dt=0.15,
+        high_precision=args.high_precision,
     )
     mg = MotionGen(motion_gen_config)
     mg.warmup(enable_graph=True, warmup_js_trajopt=False, parallel_finetune=parallel_finetune)
@@ -240,7 +240,7 @@ def benchmark_mb(
     og_tsteps = 32
     if override_tsteps is not None:
         og_tsteps = override_tsteps
-    og_finetune_dt_scale = 0.9
+    og_finetune_dt_scale = 0.85
     og_trajopt_seeds = 4
     og_parallel_finetune = True
     og_collision_activation_distance = 0.01
@@ -252,6 +252,7 @@ def benchmark_mb(
         if "dresser_task_oriented" in list(problems.keys()):
             mpinets_data = True
         for key, v in tqdm(problems.items()):
+
             finetune_dt_scale = og_finetune_dt_scale
             force_graph = False
             tsteps = og_tsteps
@@ -260,23 +261,12 @@ def benchmark_mb(
             parallel_finetune = og_parallel_finetune
             ik_seeds = og_ik_seeds
 
-            if "cage_panda" in key:
-                trajopt_seeds = 8
-
-            if "table_under_pick_panda" in key:
-                trajopt_seeds = 8
-                finetune_dt_scale = 0.95
-
-            if key == "cubby_task_oriented":  # or key == "merged_cubby_task_oriented":
-                trajopt_seeds = 16
-                finetune_dt_scale = 0.95
-
-            if "dresser_task_oriented" in key:
-                trajopt_seeds = 16
-                finetune_dt_scale = 0.95
-
-            scene_problems = problems[key][:]
+            scene_problems = problems[key]
             n_cubes = check_problems(scene_problems)
+
+            if "cubby_task_oriented" in key and "merged" not in key:
+                trajopt_seeds = 8
+
             mg, robot_cfg = load_curobo(
                 n_cubes,
                 enable_debug,
@@ -302,7 +292,7 @@ def benchmark_mb(
                     continue
 
                 plan_config = MotionGenPlanConfig(
-                    max_attempts=20,
+                    max_attempts=20,  # 20,
                     enable_graph_attempt=1,
                     disable_graph_attempt=10,
                     enable_finetune_trajopt=not args.no_finetune,
@@ -312,6 +302,7 @@ def benchmark_mb(
                     enable_opt=not graph_mode,
                     need_graph_success=force_graph,
                     parallel_finetune=parallel_finetune,
+                    finetune_dt_scale=finetune_dt_scale,
                 )
                 q_start = problem["start"]
                 pose = (
@@ -579,16 +570,31 @@ def benchmark_mb(
 
         g_m = CuroboGroupMetrics.from_list(all_groups)
         if not args.kpi:
-            print(
-                "All: ",
-                f"{g_m.success:2.2f}",
-                g_m.motion_time.percent_98,
-                g_m.time.mean,
-                g_m.time.percent_75,
-                g_m.position_error.percent_75,
-                g_m.orientation_error.percent_75,
-            )
 
+            try:
+                from tabulate import tabulate
+
+                headers = ["Metric", "Value"]
+
+                table = [
+                    ["Success %", f"{g_m.success:2.2f}"],
+                    ["Plan Time (s)", g_m.time],
+                    ["Motion Time(s)", g_m.motion_time],
+                    ["Path Length (rad.)", g_m.cspace_path_length],
+                    ["Jerk", g_m.jerk],
+                    ["Position Error (mm)", g_m.position_error],
+                ]
+                print(tabulate(table, headers, tablefmt="grid"))
+            except ImportError:
+                print(
+                    "All: ",
+                    f"{g_m.success:2.2f}",
+                    g_m.motion_time.percent_98,
+                    g_m.time.mean,
+                    g_m.time.percent_75,
+                    g_m.position_error.percent_75,
+                    g_m.orientation_error.percent_75,
+                )
         if write_benchmark:
             if not mpinets_data:
                 write_yaml(problems, args.file_name + "_mb_solution.yaml")
@@ -596,15 +602,32 @@ def benchmark_mb(
                 write_yaml(problems, args.file_name + "_mpinets_solution.yaml")
         all_files += all_groups
     g_m = CuroboGroupMetrics.from_list(all_files)
-    print("######## FULL SET ############")
-    print("All: ", f"{g_m.success:2.2f}")
-    print("MT: ", g_m.motion_time)
-    print("path-length: ", g_m.cspace_path_length)
-    print("PT:", g_m.time)
-    print("ST: ", g_m.solve_time)
-    print("position error (mm): ", g_m.position_error)
-    print("orientation error(%): ", g_m.orientation_error)
-    print("jerk: ", g_m.jerk)
+
+    try:
+        from tabulate import tabulate
+
+        headers = ["Metric", "Value"]
+
+        table = [
+            ["Success %", f"{g_m.success:2.2f}"],
+            ["Plan Time (s)", g_m.time],
+            ["Motion Time(s)", g_m.motion_time],
+            ["Path Length (rad.)", g_m.cspace_path_length],
+            ["Jerk", g_m.jerk],
+            ["Position Error (mm)", g_m.position_error],
+        ]
+        print(tabulate(table, headers, tablefmt="grid"))
+    except ImportError:
+
+        print("######## FULL SET ############")
+        print("All: ", f"{g_m.success:2.2f}")
+        print("MT: ", g_m.motion_time)
+        print("path-length: ", g_m.cspace_path_length)
+        print("PT:", g_m.time)
+        print("ST: ", g_m.solve_time)
+        print("position error (mm): ", g_m.position_error)
+        print("orientation error(%): ", g_m.orientation_error)
+        print("jerk: ", g_m.jerk)
 
     if args.kpi:
         kpi_data = {
@@ -712,6 +735,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--no_finetune",
+        action="store_true",
+        help="When True, runs benchmark with parameters for jetson",
+        default=False,
+    )
+    parser.add_argument(
+        "--high_precision",
         action="store_true",
         help="When True, runs benchmark with parameters for jetson",
         default=False,

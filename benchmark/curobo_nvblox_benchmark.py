@@ -147,7 +147,7 @@ def load_curobo(
                 "world": {
                     "pose": [0, 0, 0, 1, 0, 0, 0],
                     "integrator_type": "tsdf",
-                    "voxel_size": 0.01,
+                    "voxel_size": 0.02,
                 }
             }
         }
@@ -177,9 +177,9 @@ def load_curobo(
         interpolation_steps=interpolation_steps,
         collision_activation_distance=collision_activation_distance,
         trajopt_dt=0.25,
-        finetune_dt_scale=1.0,
-        maximum_trajectory_dt=0.1,
-        finetune_trajopt_iters=300,
+        finetune_dt_scale=0.9,
+        maximum_trajectory_dt=0.15,
+        finetune_trajopt_iters=200,
     )
     mg = MotionGen(motion_gen_config)
     mg.warmup(enable_graph=True, warmup_js_trajopt=False, parallel_finetune=True)
@@ -208,7 +208,7 @@ def benchmark_mb(
     # load dataset:
     graph_mode = args.graph
     interpolation_dt = 0.02
-    file_paths = [demo_raw, motion_benchmaker_raw, mpinets_raw][2:]
+    file_paths = [demo_raw, motion_benchmaker_raw, mpinets_raw][1:2]
 
     enable_debug = save_log or plot_cost
     all_files = []
@@ -237,8 +237,9 @@ def benchmark_mb(
                 mpinets_data = True
 
             if "cage_panda" in key:
-                trajopt_seeds = 16
-                finetune_dt_scale = 0.95
+                trajopt_seeds = 8
+            else:
+                continue
             if "table_under_pick_panda" in key:
                 tsteps = 44
                 trajopt_seeds = 16

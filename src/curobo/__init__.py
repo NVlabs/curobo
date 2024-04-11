@@ -10,6 +10,19 @@
 #
 
 """
+cuRobo provides accelerated modules for robotics which can be used to build high-performance 
+robotics applications. The library has several modules for numerical optimization, robot kinematics,
+geometry processing, collision checking, graph search planning. cuRobo provides high-level APIs for 
+performing tasks like collision-free inverse kinematics, model predictive control, and motion 
+planning.
+
+High-level APIs:
+
+- Inverse Kinematics: :mod:`curobo.wrap.reacher.ik_solver`.
+- Model Predictive Control: :mod:`curobo.wrap.reacher.mpc`.
+- Motion Generation / Planning: :mod:`curobo.wrap.reacher.motion_gen`.
+
+
 cuRobo package is split into several modules:
 
 - :mod:`curobo.opt` contains optimization solvers.
@@ -18,7 +31,7 @@ cuRobo package is split into several modules:
 - :mod:`curobo.geom` contains geometry processing, collision checking and frame transforms.
 - :mod:`curobo.graph` contains geometric planning with graph search methods.
 - :mod:`curobo.rollout` contains methods that map actions to costs. This class wraps instances of
-  :mod:`curobo.cuda_robot_model` and :mod:`geom` to compute costs given trajectory of actions.
+  :mod:`curobo.cuda_robot_model` and :mod:`curobo.geom` to compute costs given trajectory of actions.
 - :mod:`curobo.util` contains utility methods.
 - :mod:`curobo.wrap` adds the user-level api for task programming. Includes implementation of 
   collision-free reacher and batched robot world collision checking.

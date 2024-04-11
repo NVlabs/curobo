@@ -8,6 +8,21 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+
+""" 
+This module contains :meth:`IKSolver` to solve inverse kinematics, along with 
+:meth:`IKSolverConfig` to configure the solver, and :meth:`IKResult` to store the result.
+
+.. raw:: html
+
+    <p>
+    <video autoplay="True" loop="True" muted="True" preload="auto" width="100%"><source src="../videos/ik_obs_clip.mp4" type="video/mp4"></video>
+    </p>
+This demo is available in :ref:`isaac_ik_reachability`.
+
+"""
+from __future__ import annotations
+
 # Standard Library
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -31,7 +46,7 @@ from curobo.rollout.rollout_base import Goal, RolloutBase, RolloutMetrics
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.robot import JointState, RobotConfig
-from curobo.types.tensor import T_BDOF, T_BValue_bool, T_BValue_float
+from curobo.types.tensor import T_BDOF, T_DOF, T_BValue_bool, T_BValue_float
 from curobo.util.logger import log_error, log_warn
 from curobo.util.sample_lib import HaltonGenerator
 from curobo.util.torch_utils import get_torch_jit_decorator
@@ -48,17 +63,54 @@ from curobo.wrap.wrap_base import WrapBase, WrapConfig, WrapResult
 
 @dataclass
 class IKSolverConfig:
+    """Configuration for Inverse Kinematics Solver.
+
+    A helper function to load from robot
+    configuration is provided as :func:`IKSolverConfig.load_from_robot_config`.
+
+    """
+
+    #: representation of robot, includes kinematic model, link geometry and joint limits.
     robot_config: RobotConfig
+
+    #: Wrapped solver which has many instances of ArmReacher and two optimization
+    #: solvers (MPPI, LBFGS) as default.
     solver: WrapBase
+
+    #: Number of seeds to optimize per IK problem in parallel.
     num_seeds: int
+
+    #: Position convergence threshold in meters to use to compute success.
     position_threshold: float
+
+    #: Rotation convergence threshold to use to compute success. Currently this
+    #: measures the geodesic distance between reached quaternion and target quaternion.
+    #: A good accuracy threshold is 0.05. Check pose_distance_kernel.cu for the exact
+    #: implementation.
     rotation_threshold: float
+
+    #: Reference to an instance of ArmReacher rollout class to use for auxillary functions.
     rollout_fn: ArmReacher
+
+    #: Undeveloped functionality to use a neural network as seed for IK.
     ik_nn_seeder: Optional[str] = None
+
+    #: Reference to world collision checker to use for collision avoidance.
     world_coll_checker: Optional[WorldCollision] = None
+
+    #: Rejection ratio for sampling collision-free configurations. These samples are not
+    #: used as seeds for solving IK as starting from collision-free seeds did not improve success.
     sample_rejection_ratio: int = 50
+
+    #: Device and floating precision to use for IKSolver.
     tensor_args: TensorDeviceType = TensorDeviceType()
+
+    #: Flag to enable capturing solver iterations as a cuda graph to reduce kernel launch overhead.
+    #: Setting this to True can give upto 10x speedup while limiting the IKSolver to solving fixed
+    #: batch size of problems.
     use_cuda_graph: bool = True
+
+    #: Seed to use in pseudorandom generator used for creating IK seeds.
     seed: int = 1531
 
     @staticmethod
@@ -96,7 +148,71 @@ class IKSolverConfig:
         high_precision: bool = False,
         project_pose_to_goal_frame: bool = True,
         seed: int = 1531,
-    ):
+    ) -> IKSolverConfig:
+        """Helper function to load IKSolver configuration from a robot file and world file.
+
+        Use this function to create an instance of IKSolverConfig and load the config into IKSolver.
+
+        Args:
+            robot_cfg: representation of robot, includes kinematic model, link geometry, and
+                joint limits. This can take as input a cuRobo robot configuration yaml file path or
+                a loaded dictionary of the robot configuration file or an instance of RobotConfig.
+                Configuration files for some common robots is available at
+                :ref:`available_robot_list`. For other robots, follow :ref:`tut_robot_configuration`
+                tutorial to create a configuration file.
+            world_model: representation of the world for obtaining collision-free IK solutions.
+                The world can be represented as cuboids, meshes, from depth camera with nvblox, and
+                as an Euclidean Signed Distance Grid (ESDF). This world model can be loaded from a
+                dictionary (from disk through yaml) or from :class:`curobo.geom.types.WorldConfig`.
+                In an application, if collision computations are being used in more than one
+                instance, it's memory efficient to create one instance of
+                :class:`curobo.geom.sdf.world.WorldCollision` and share across these class. For
+                example, if an instance of IKSolver and MotionGen exists in an application, a
+                :class:`curobo.geom.sdf.world.WorldCollision` object can be created in IKSolver
+                and then when creating :class:`curobo.wrap.reacher.motion_gen.MotionGenConfig`, this
+                ``world_coll_checker`` can be passed as reference. :ref:`world_collision` discusses
+                types of obstacles in more detail.
+            tensor_args: Device and floating precision to use for IKSolver.
+            num_seeds: Number of seeds to optimize per IK problem in parallel.
+            position_threshold: Position convergence threshold in meters to use to compute success.
+            rotation_threshold: Rotation convergence threshold to use to compute success. See
+                :meth:`IKSolverConfig.rotation_threshold` for more details.
+            world_coll_checker: Reference to world collision checker to use for collision avoidance.
+            base_cfg_file: Base configuration file for IKSolver. This configuration file is used to
+                measure convergence and collision-free check after optimization is complete.
+            particle_file: Configuration file for particle optimization (uses MPPI as optimizer).
+            gradient_file: Configuration file for gradient optimization (uses LBFGS as optimizer).
+            use_cuda_graph: Flag to enable capturing solver iterations as a cuda graph to reduce
+                kernel launch overhead. Setting this to True can give upto 10x speedup while
+                limiting the IKSolver to solving fixed batch size of problems.
+            self_collision_check: Flag to enable self-collision checking.
+            self_collision_opt: Flag to enable self-collision cost during optimization.
+            grad_iters: Number of iterations for gradient optimization.
+            use_particle_opt: Flag to enable particle optimization.
+            collision_checker_type: Type of collision checker to use for collision checking.
+            sync_cuda_time: Flag to enable synchronization of cuda device with host before
+                measuring compute time. If you set this to False, then measured time will not
+                include completion of any launched CUDA kernels.
+            use_gradient_descent: Flag to enable gradient descent optimization instead of LBFGS.
+            collision_cache: Number of objects to cache for collision checking.
+            n_collision_envs: Number of collision environments to use for IK. This is useful when
+                solving IK for multiple robots in different environments in parallel.
+            ee_link_name: Name of end-effector link to use for IK.
+            use_es: Flag to enable Evolution Strategies optimization instead of MPPI.
+            es_learning_rate: Learning rate for Evolution Strategies optimization.
+            use_fixed_samples: Flag to enable fixed samples for MPPI optimization.
+            store_debug: Flag to enable storing debug information during optimization. Enabling this
+                will store solution and cost at every iteration. This will significantly slow down
+                the optimization as CUDA graph capture is disabled. Only use this for debugging.
+            regularization: Flag to enable regularization during optimization.
+            collision_activation_distance: Distance from obstacle at which to activate collision
+                cost. A good value is 0.01 (1cm).
+            high_precision: Flag to solve IK at higher pose accuracy. This will increase the number
+                of LBFGS iterations from 100 to 200. This flag is set to True when
+                position_threshold is less than or equal to 1mm (0.001).
+            project_pose_to_goal_frame: Flag to project pose to goal frame when computing distance.
+            seed: Seed to use in pseudorandom generator used for creating IK seeds.
+        """
         if position_threshold <= 0.001:
             high_precision = True
         if high_precision:
@@ -106,11 +222,11 @@ class IKSolverConfig:
         base_config_data = load_yaml(join_path(get_task_configs_path(), base_cfg_file))
         config_data = load_yaml(join_path(get_task_configs_path(), particle_file))
         grad_config_data = load_yaml(join_path(get_task_configs_path(), gradient_file))
+
         base_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
         base_config_data["convergence"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
         config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
         grad_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
-
 
         if collision_cache is not None:
             base_config_data["world_collision_checker_cfg"]["cache"] = collision_cache
@@ -132,9 +248,7 @@ class IKSolverConfig:
             robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_cfg))["robot_cfg"]
         if ee_link_name is not None:
             if isinstance(robot_cfg, RobotConfig):
-                raise NotImplementedError("ee link cannot be changed after creating RobotConfig")
-
-                robot_cfg.kinematics.ee_link = ee_link_name
+                log_error("ee link cannot be changed after creating RobotConfig")
             else:
                 robot_cfg["kinematics"]["ee_link"] = ee_link_name
         if isinstance(robot_cfg, dict):
@@ -261,21 +375,59 @@ class IKSolverConfig:
 
 @dataclass
 class IKResult(Sequence):
+    """Solution of Inverse Kinematics problem."""
+
+    #: Joint state solution for the IK problem.
     js_solution: JointState
+
+    #: Goal pose used in IK problem.
     goal_pose: Pose
+
+    #: Joint configuration Solution as tensor
     solution: T_BDOF
+
+    #: Seed that was selected as the starting point for optimization. This is currently not
+    #: available in the result and is set to None.
     seed: T_BDOF
+
+    #: Success tensor for IK problem. If planning for batch, use this to filter js_solution. If
+    #: planning for single problem, use this to check if the problem was solved successfully.
     success: T_BValue_bool
+
+    #: Position error between solved pose and goal pose in meters, computed with l-2 norm.
     position_error: T_BValue_float
 
-    #: rotation error is computed as \sqrt(q_des^T * q)
+    #: Rotation error between solved pose and goal pose, computed with geodesic distance. Roughly
+    #: \sqrt(q_des^T * q). A good accuracy threshold is 0.05.
     rotation_error: T_BValue_float
+
+    #: Total error for IK problem. This is the sum of position_error and rotation_error.
     error: T_BValue_float
+
+    #: Time taken to solve the IK problem in seconds.
     solve_time: float
+
+    #: Debug information from solver. This can be used to debug solver convergence and tune
+    #: weights between cost terms.
     debug_info: Optional[Any] = None
+
+    #: Index of goal in goalset that the IK solver reached. This is useful when solving with
+    #: :meth:`IKSolver.solve_goalset` (also :meth:`IKSolver.solve_batch_goalset`,
+    #: :meth:`IKSolver.solve_batch_env_goalset`) where the task is to find an IK solution that
+    #: reaches 1 pose in set of poses. This index is used to identify which pose was reached by the
+    #: solution.
     goalset_index: Optional[torch.Tensor] = None
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> IKResult:
+        """Get IKResult for a single problem in batch.
+
+        Args:
+            idx: Index of the problem in batch.
+
+        Returns:
+            IKResult for the problem at index idx.
+        """
+
         success = self.success[idx]
 
         return IKResult(
@@ -290,10 +442,24 @@ class IKResult(Sequence):
             goalset_index=None if self.goalset_index is None else self.goalset_index[idx],
         )
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get number of problems in IKResult."""
         return self.seed.shape[0]
 
     def get_unique_solution(self, roundoff_decimals: int = 2) -> torch.Tensor:
+        """Get unique solutions from many feasible solutions for the same problem.
+
+        Use this after solving IK with :meth:`IKSolver.solve_single` with return_seeds > 1. This
+        function will return unique solutions from the set of feasible solutions, filering out
+        solutions that are within roundoff_decimals of each other.
+
+        Args:
+            roundoff_decimals: Number of decimal places to round off the solution to measure
+                uniqueness.
+
+        Returns:
+            Unique solutions from the set of feasible solutions.
+        """
         in_solution = self.solution[self.success]
         r_sol = torch.round(in_solution, decimals=roundoff_decimals)
 
@@ -306,6 +472,21 @@ class IKResult(Sequence):
         return sol
 
     def get_batch_unique_solution(self, roundoff_decimals: int = 2) -> List[torch.Tensor]:
+        """Get unique solutions from many feasible solutions for the same problem in batch.
+
+        Use this after solving IK with :meth:`IKSolver.solve_batch` with return_seeds > 1. This
+        function will return unique solutions from the set of feasible solutions, filering out
+        solutions that are within roundoff_decimals of each other. Current implementation is not
+        efficient as it will run a for loop over the batch as each problem in the batch can have
+        different number of unique solutions.
+
+        Args:
+            roundoff_decimals: Number of decimal places to round off the solution to measure
+                uniqueness.
+
+        Returns:
+            List of unique solutions from the set of feasible solutions.
+        """
         in_solution = self.solution
         r_sol = torch.round(in_solution, decimals=roundoff_decimals)
         if not (len(in_solution.shape) == 3):
@@ -319,12 +500,29 @@ class IKResult(Sequence):
             r_k = r_sol[k][self.success[k]]
             s, i = torch.unique(r_k, dim=-2, return_inverse=True)
             sol.append(in_succ[i[: s.shape[0]]])
-            # sol.append(s)
         return sol
 
 
 class IKSolver(IKSolverConfig):
+    """Inverse Kinematics Solver for reaching Cartesian Pose with end-effector.
+
+    This also supports reaching poses for multiple links of a robot (e.g., a bimanual robot).
+    This solver creates memory buffers on the GPU, captures CUDAGraphs of the operations during the
+    very first call to any of the solve functions and reuses them for solving subsequent IK
+    problems. As such, changing the number of problems, number of seeds, number of seeds or type of
+    IKProblem to solve will cause existing CUDAGraphs to be invalidated, which currently leads to an
+    exit with error. Either use multiple instances of IKSolver to solve different types of
+    IKProblems or disable `use_cuda_graph` to avoid this issue. Disabling `use_cuda_graph` can lead
+    to a 10x slowdown in solving IK problems.
+    """
+
     def __init__(self, config: IKSolverConfig) -> None:
+        """Initializer for IK Solver.
+
+        Args:
+            config: Configuration for Inverse Kinematics Solver.
+        """
+
         super().__init__(**vars(config))
         self.batch_size = -1
         self._num_seeds = self.num_seeds
@@ -343,8 +541,6 @@ class IKSolver(IKSolverConfig):
             seed=self.seed,
         )
 
-        # load ik nn:
-
         # store og outer iters:
         self.og_newton_iters = self.solver.newton_optimizer.outer_iters
         self._goal_buffer = Goal()
@@ -352,13 +548,26 @@ class IKSolver(IKSolverConfig):
         self._kin_list = None
         self._rollout_list = None
 
-    def update_goal_buffer(
+    def _update_goal_buffer(
         self,
         solve_state: ReacherSolveState,
         goal_pose: Pose,
         retract_config: Optional[T_BDOF] = None,
         link_poses: Optional[Dict[str, Pose]] = None,
     ) -> Goal:
+        """Update goal buffer with new goal pose and retract configuration.
+
+        Args:
+            solve_state: Current IK problem parameters.
+            goal_pose: New goal pose to solve for IK.
+            retract_config: Retract configuration to use for IK. If None, the retract configuration
+                is set to the retract_config in :meth:`curobo.types.robot.RobotConfig`.
+            link_poses: New poses for other links to use for IK. This is useful when solving for
+                bimanual robots or when solving for multiple links of the same robot.
+
+        Returns:
+            Updated goal buffer. This also updates the internal goal_buffer of IKSolver.
+        """
         self._solve_state, self._goal_buffer, update_reference = solve_state.update_goal_buffer(
             goal_pose,
             None,
@@ -386,6 +595,554 @@ class IKSolver(IKSolverConfig):
 
         return self._goal_buffer
 
+    def solve_single(
+        self,
+        goal_pose: Pose,
+        retract_config: Optional[T_BDOF] = None,
+        seed_config: Optional[T_BDOF] = None,
+        return_seeds: int = 1,
+        num_seeds: Optional[int] = None,
+        use_nn_seed: bool = True,
+        newton_iters: Optional[int] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
+    ) -> IKResult:
+        """Solve single IK problem.
+
+        To get the closest IK solution from current joint configuration useful for IK servoing, set
+        retract_config and seed_config to current joint configuration, also make sure IKSolverConfig
+        was created with regularization enabled. If the solution is still not sufficiently close to
+        the current joint configuration, increase the weight for `null_space_cfg` in `convergence`
+        of `base_cfg.yml` which will select a solution that is closer to the current
+        joint configuration after optimization. You can also increase the weight of
+        `null_space_weight` in `bound_cfg` of `gradient_ik.yml` to encourage the optimization to
+        stay near the current joint configuration during iterations.
+
+        Args:
+            goal_pose: Pose to reach with end-effector.
+            retract_config: Retract configuration to use as regularization for IK. For this to work,
+                :meth:`IKSolverConfig.load_from_robot_config` should have regularization enabled.
+                This should be of shape (1, dof), where dof is the number of degrees of freedom in
+                the robot. The order of joints should match :meth:`IKSolver.joint_names`.
+            seed_config: Initial seed configuration to use for optimization. If None, a random seed
+                is generated. The n seeds passed should be of shape (n, 1, dof), where dof is
+                the number of degrees of freedom in the robot. The number of seeds do not have to
+                match the number of seeds in the IKSolver. The remaining seeds are generated
+                randomly. The order of joints should match :meth:`IKSolver.joint_names`.
+            return_seeds: Number of solutions to return for the IK problem.
+            num_seeds: Number of seeds to optimize per IK problem in parallel. Changing number of
+                seeds is not allowed when use_cuda_graph is enabled.
+            use_nn_seed: Flag to use neural network as seed for IK. This is not implemented yet.
+            newton_iters: Number of iterations to run LBFGS optimization. If None, the number
+                of iterations is set to the default value in the configuration (`gradient_ik.yml`).
+            link_poses: Poses for other links to use for IK. This is useful when solving for
+                bimanual robots or when solving for multiple links of the same robot. The link_poses
+                should be a dictionary with link name as key and pose as value.
+
+        Returns:
+            :class:`IKResult` object with solution to the IK problem. Use :meth:`IKResult.success` to check
+            if the problem was solved successfully.
+        """
+        if num_seeds is None:
+            num_seeds = self.num_seeds
+        if return_seeds > num_seeds:
+            num_seeds = return_seeds
+
+        solve_state = ReacherSolveState(
+            ReacherSolveType.SINGLE, num_ik_seeds=num_seeds, batch_size=1, n_envs=1, n_goalset=1
+        )
+
+        return self._solve_from_solve_state(
+            solve_state,
+            goal_pose,
+            num_seeds,
+            retract_config,
+            seed_config,
+            return_seeds,
+            use_nn_seed,
+            newton_iters,
+            link_poses=link_poses,
+        )
+
+    def solve_goalset(
+        self,
+        goal_pose: Pose,
+        retract_config: Optional[T_BDOF] = None,
+        seed_config: Optional[T_BDOF] = None,
+        return_seeds: int = 1,
+        num_seeds: Optional[int] = None,
+        use_nn_seed: bool = True,
+        newton_iters: Optional[int] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
+    ) -> IKResult:
+        """Solve IK problem to reach one pose in a set of poses.
+
+        To get the closest IK solution from current joint configuration useful for IK servoing, set
+        retract_config and seed_config to current joint configuration, also make sure IKSolverConfig
+        was created with regularization enabled. If the solution is still not sufficiently close to
+        the current joint configuration, increase the weight for `null_space_cfg` in `convergence`
+        of `base_cfg.yml` which will select a solution that is closer to the current
+        joint configuration after optimization. You can also increase the weight of
+        `null_space_weight` in `bound_cfg` of `gradient_ik.yml` to encourage the optimization to
+        stay near the current joint configuration during iterations.
+
+        Args:
+            goal_pose: Pose to reach with end-effector.
+            retract_config: Retract configuration to use as regularization for IK. For this to work,
+                :meth:`IKSolverConfig.load_from_robot_config` should have regularization enabled.
+                This should be of shape (1, dof), where dof is the number of degrees of freedom in
+                the robot. The order of joints should match :meth:`IKSolver.joint_names`.
+            seed_config: Initial seed configuration to use for optimization. If None, a random seed
+                is generated. The n seeds passed should be of shape (n, 1, dof), where dof is
+                the number of degrees of freedom in the robot. The number of seeds do not have to
+                match the number of seeds in the IKSolver. The remaining seeds are generated
+                randomly. The order of joints should match :meth:`IKSolver.joint_names`.
+            return_seeds: Number of solutions to return for the IK problem.
+            num_seeds: Number of seeds to optimize per IK problem in parallel. Changing number of
+                seeds is not allowed when use_cuda_graph is enabled.
+            use_nn_seed: Flag to use neural network as seed for IK. This is not implemented yet.
+            newton_iters: Number of iterations to run LBFGS optimization. If None, the number
+                of iterations is set to the default value in the configuration (`gradient_ik.yml`).
+            link_poses: Poses for other links to use for IK. This is useful when solving for
+                bimanual robots or when solving for multiple links of the same robot. The link_poses
+                should be a dictionary with link name as key and pose as value.
+
+        Returns:
+            :class:`IKResult` object with solution to the IK problem. Check :meth:`IKResult.goalset_index` to
+            identify which pose was reached by the solution. Use :meth:`IKResult.success` to check
+            if the problem was solved successfully.
+        """
+        if num_seeds is None:
+            num_seeds = self.num_seeds
+        if return_seeds > num_seeds:
+            num_seeds = return_seeds
+
+        solve_state = ReacherSolveState(
+            ReacherSolveType.GOALSET,
+            num_ik_seeds=num_seeds,
+            batch_size=1,
+            n_envs=1,
+            n_goalset=goal_pose.n_goalset,
+        )
+        return self._solve_from_solve_state(
+            solve_state,
+            goal_pose,
+            num_seeds,
+            retract_config,
+            seed_config,
+            return_seeds,
+            use_nn_seed,
+            newton_iters,
+            link_poses=link_poses,
+        )
+
+    def solve_batch(
+        self,
+        goal_pose: Pose,
+        retract_config: Optional[T_BDOF] = None,
+        seed_config: Optional[T_BDOF] = None,
+        return_seeds: int = 1,
+        num_seeds: Optional[int] = None,
+        use_nn_seed: bool = True,
+        newton_iters: Optional[int] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
+    ) -> IKResult:
+        """Solve batch of IK problems.
+
+        Changing number of problems (batch size) is not allowed when use_cuda_graph is enabled. The
+        number of problems is determined during the first call to this function.
+
+        Args:
+            goal_pose: Pose to reach with end-effector.
+            retract_config: Retract configuration to use as regularization for IK. For this to work,
+                :meth:`IKSolverConfig.load_from_robot_config` should have regularization enabled.
+                This should be of shape (batch, dof), where dof is the number of degrees of freedom in
+                the robot. The order of joints should match :meth:`IKSolver.joint_names`.
+            seed_config: Initial seed configuration to use for optimization. If None, a random seed
+                is generated. The n seeds passed should be of shape (n, batch, dof), where dof is
+                the number of degrees of freedom in the robot, and batch is number of problems in
+                batch. The number of seeds do not have to match the number of seeds in the IKSolver.
+                The remaining seeds are generated randomly. The order of joints should match
+                :meth:`IKSolver.joint_names`.
+            return_seeds: Number of solutions to return per problem in batch.
+            num_seeds: Number of seeds to optimize per IK problem in parallel. Changing number of
+                seeds is not allowed when use_cuda_graph is enabled.
+            use_nn_seed: Flag to use neural network as seed for IK. This is not implemented yet.
+            newton_iters: Number of iterations to run LBFGS optimization. If None, the number
+                of iterations is set to the default value in the configuration (`gradient_ik.yml`).
+            link_poses: Poses for other links to use for IK. This is useful when solving for
+                bimanual robots or when solving for multiple links of the same robot. The link_poses
+                should be a dictionary with link name as key and pose as value.
+
+        Returns:
+            :class:`IKResult` object with solution to the batch of IK problems. Use :meth:`IKResult.success`
+            to filter successful solutions.
+        """
+        if num_seeds is None:
+            num_seeds = self.num_seeds
+        if return_seeds > num_seeds:
+            num_seeds = return_seeds
+
+        solve_state = ReacherSolveState(
+            ReacherSolveType.BATCH,
+            num_ik_seeds=num_seeds,
+            batch_size=goal_pose.batch,
+            n_envs=1,
+            n_goalset=1,
+        )
+        return self._solve_from_solve_state(
+            solve_state,
+            goal_pose,
+            num_seeds,
+            retract_config,
+            seed_config,
+            return_seeds,
+            use_nn_seed,
+            newton_iters,
+            link_poses=link_poses,
+        )
+
+    def solve_batch_goalset(
+        self,
+        goal_pose: Pose,
+        retract_config: Optional[T_BDOF] = None,
+        seed_config: Optional[T_BDOF] = None,
+        return_seeds: int = 1,
+        num_seeds: Optional[int] = None,
+        use_nn_seed: bool = True,
+        newton_iters: Optional[int] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
+    ) -> IKResult:
+        """Solve batch of IK problems to reach one pose in a set of poses for a batch of problems.
+
+        Args:
+            goal_pose: Pose to reach with end-effector.
+            retract_config: Retract configuration to use as regularization for IK. For this to work,
+                :meth:`IKSolverConfig.load_from_robot_config` should have regularization enabled.
+                This should be of shape (batch, dof), where dof is the number of degrees of freedom in
+                the robot. The order of joints should match :meth:`IKSolver.joint_names`.
+            seed_config: Initial seed configuration to use for optimization. If None, a random seed
+                is generated. The n seeds passed should be of shape (n, batch, dof), where dof is
+                the number of degrees of freedom in the robot, and batch is number of problems in
+                batch. The number of seeds do not have to match the number of seeds in the IKSolver.
+                The remaining seeds are generated randomly. The order of joints should match
+                :meth:`IKSolver.joint_names`.
+            return_seeds: Number of solutions to return per problem in batch.
+            num_seeds: Number of seeds to optimize per IK problem in parallel. Changing number of
+                seeds is not allowed when use_cuda_graph is enabled.
+            use_nn_seed: Flag to use neural network as seed for IK. This is not implemented yet.
+            newton_iters: Number of iterations to run LBFGS optimization. If None, the number of
+                iterations is set to the default value in the configuration (`gradient_ik.yml`).
+            link_poses: Poses for other links to use for IK. This is useful when solving for
+                bimanual robots or when solving for multiple links of the same robot. The link_poses
+                should be a dictionary with link name as key and pose as value.
+
+        Returns:
+            :class:`IKResult` object with solution to the batch of IK problems. Use :meth:`IKResult.success`
+            to filter successful solutions. Use :meth:`IKResult.goalset_index` to identify which
+            pose was reached by each solution.
+        """
+        if num_seeds is None:
+            num_seeds = self.num_seeds
+        if return_seeds > num_seeds:
+            num_seeds = return_seeds
+
+        solve_state = ReacherSolveState(
+            ReacherSolveType.BATCH_GOALSET,
+            num_ik_seeds=num_seeds,
+            batch_size=goal_pose.batch,
+            n_envs=1,
+            n_goalset=goal_pose.n_goalset,
+        )
+        return self._solve_from_solve_state(
+            solve_state,
+            goal_pose,
+            num_seeds,
+            retract_config,
+            seed_config,
+            return_seeds,
+            use_nn_seed,
+            newton_iters,
+            link_poses=link_poses,
+        )
+
+    def solve_batch_env(
+        self,
+        goal_pose: Pose,
+        retract_config: Optional[T_BDOF] = None,
+        seed_config: Optional[T_BDOF] = None,
+        return_seeds: int = 1,
+        num_seeds: Optional[int] = None,
+        use_nn_seed: bool = True,
+        newton_iters: Optional[int] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
+    ) -> IKResult:
+        """Solve batch of IK problems with each problem in different world environments.
+
+        Args:
+            goal_pose: Pose to reach with end-effector.
+            retract_config: Retract configuration to use as regularization for IK. For this to work,
+                :meth:`IKSolverConfig.load_from_robot_config` should have regularization enabled.
+                This should be of shape (batch, dof), where dof is the number of degrees of freedom
+                in the robot. The order of joints should match :meth:`IKSolver.joint_names`.
+            seed_config: Initial seed configuration to use for optimization. If None, a random seed
+                is generated. The n seeds passed should be of shape (n, batch, dof), where dof is
+                the number of degrees of freedom in the robot, and batch is number of problems in
+                batch. The number of seeds do not have to match the number of seeds in the IKSolver.
+                The remaining seeds are generated randomly. The order of joints should match
+                :meth:`IKSolver.joint_names`.
+            return_seeds: Number of solutions to return per problem in batch.
+            num_seeds: Number of seeds to optimize per IK problem in parallel. Changing number of
+                seeds is not allowed when use_cuda_graph is enabled.
+            use_nn_seed: Flag to use neural network as seed for IK. This is not implemented yet.
+            newton_iters: Number of iterations to run LBFGS optimization. If None, the number of
+                iterations is set to the default value in the configuration (`gradient_ik.yml`).
+            link_poses: Poses for other links to use for IK. This is useful when solving for
+                bimanual robots or when solving for multiple links of the same robot. The link_poses
+                should be a dictionary with link name as key and pose as value.
+
+        Returns:
+            :class:`IKResult` object with solution to the batch of IK problems. Use :meth:`IKResult.success`
+            to filter successful solutions.
+        """
+        if num_seeds is None:
+            num_seeds = self.num_seeds
+        if return_seeds > num_seeds:
+            num_seeds = return_seeds
+
+        solve_state = ReacherSolveState(
+            ReacherSolveType.BATCH_ENV,
+            num_ik_seeds=num_seeds,
+            batch_size=goal_pose.batch,
+            n_envs=goal_pose.batch,
+            n_goalset=1,
+        )
+        return self._solve_from_solve_state(
+            solve_state,
+            goal_pose,
+            num_seeds,
+            retract_config,
+            seed_config,
+            return_seeds,
+            use_nn_seed,
+            newton_iters,
+            link_poses=link_poses,
+        )
+
+    def solve_batch_env_goalset(
+        self,
+        goal_pose: Pose,
+        retract_config: Optional[T_BDOF] = None,
+        seed_config: Optional[T_BDOF] = None,
+        return_seeds: int = 1,
+        num_seeds: Optional[int] = None,
+        use_nn_seed: bool = True,
+        newton_iters: Optional[int] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
+    ) -> IKResult:
+        """Solve batch of goalset IK problems with each problem in different world environments.
+
+        Args:
+            goal_pose: Pose to reach with end-effector.
+            retract_config: Retract configuration to use as regularization for IK. For this to work,
+                :meth:`IKSolverConfig.load_from_robot_config` should have regularization enabled.
+                This should be of shape (batch, dof), where dof is the number of degrees of freedom
+                in the robot. The order of joints should match :meth:`IKSolver.joint_names`.
+            seed_config: Initial seed configuration to use for optimization. If None, a random seed
+                is generated. The n seeds passed should be of shape (n, batch, dof), where dof is
+                the number of degrees of freedom in the robot, and batch is number of problems in
+                batch. The number of seeds do not have to match the number of seeds in the IKSolver.
+                The remaining seeds are generated randomly.  The order of joints should match
+                :meth:`IKSolver.joint_names`.
+            return_seeds: Number of solutions to return per problem in batch.
+            num_seeds: Number of seeds to optimize per IK problem in parallel. Changing number of
+                seeds is not allowed when use_cuda_graph is enabled.
+            use_nn_seed: Flag to use neural network as seed for IK. This is not implemented yet.
+            newton_iters: Number of iterations to run LBFGS optimization. If None, the number of
+                iterations is set to the default value in the configuration (`gradient_ik.yml`).
+            link_poses: Poses for other links to use for IK. This is useful when solving for
+                bimanual robots or when solving for multiple links of the same robot. The link_poses
+                should be a dictionary with link name as key and pose as value.
+
+        Returns:
+            :class:`IKResult` object with solution to the batch of IK problems. Use :meth:`IKResult.success`
+            to filter successful solutions. Use :meth:`IKResult.goalset_index` to identify which
+            pose was reached by each solution.
+        """
+        if num_seeds is None:
+            num_seeds = self.num_seeds
+        if return_seeds > num_seeds:
+            num_seeds = return_seeds
+
+        solve_state = ReacherSolveState(
+            ReacherSolveType.BATCH_ENV_GOALSET,
+            num_ik_seeds=num_seeds,
+            batch_size=goal_pose.batch,
+            n_envs=goal_pose.batch,
+            n_goalset=goal_pose.n_goalset,
+        )
+        return self._solve_from_solve_state(
+            solve_state,
+            goal_pose,
+            num_seeds,
+            retract_config,
+            seed_config,
+            return_seeds,
+            use_nn_seed,
+            newton_iters,
+            link_poses=link_poses,
+        )
+
+    def _solve_from_solve_state(
+        self,
+        solve_state: ReacherSolveState,
+        goal_pose: Pose,
+        num_seeds: int,
+        retract_config: Optional[T_BDOF] = None,
+        seed_config: Optional[T_BDOF] = None,
+        return_seeds: int = 1,
+        use_nn_seed: bool = True,
+        newton_iters: Optional[int] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
+    ) -> IKResult:
+        """Solve IK problem from ReacherSolveState. Called by all solve functions.
+
+        Args:
+            solve_state: ReacherSolveState with information about the type of IK problem to solve.
+            goal_pose: Pose to reach with end-effector.
+            num_seeds: Number of seeds to optimize per IK problem in parallel.
+            retract_config: Retract configuration to use as regularization for IK. For this to work,
+                :meth:`IKSolverConfig.load_from_robot_config` should have regularization enabled.
+                Shape of retract_config depends on type of IK problem being solved.
+            seed_config: Initial seed configuration to use for optimization. If None, a random seed
+                is generated. The n seeds passed should be of shape (n, batch, dof), where dof is
+                the number of degrees of freedom in the robot, and batch is number of problems in
+                batch. The number of seeds do not have to match the number of seeds in the IKSolver.
+                The remaining seeds are generated randomly. The order of joints should match
+                :meth:`IKSolver.joint_names`. When solving for single IK problem types, batch==1.
+            return_seeds: Number of solutions to return per problem in batch.
+            use_nn_seed: Flag to use neural network as seed for IK. This is not implemented yet.
+            newton_iters: Number of iterations to run LBFGS optimization. If None, the number of
+                iterations is set to the default value in the configuration (`gradient_ik.yml`).
+            link_poses: Poses for other links to use for IK. This is useful when solving for
+                bimanual robots or when solving for multiple links of the same robot. The link_poses
+                should be a dictionary with link name as key and pose as value.
+
+        Returns:
+            :class:`IKResult` object with solution to the IK problem. Use :meth:`IKResult.success`
+            to check if the problem was solved successfully.
+        """
+        # create goal buffer:
+        goal_buffer = self._update_goal_buffer(solve_state, goal_pose, retract_config, link_poses)
+        coord_position_seed = self.get_seed(
+            num_seeds, goal_buffer.goal_pose, use_nn_seed, seed_config
+        )
+
+        if newton_iters is not None:
+            self.solver.newton_optimizer.outer_iters = newton_iters
+        self.solver.reset()
+        result = self.solver.solve(goal_buffer, coord_position_seed)
+        if newton_iters is not None:
+            self.solver.newton_optimizer.outer_iters = self.og_newton_iters
+        ik_result = self._get_result(num_seeds, result, goal_buffer.goal_pose, return_seeds)
+        if ik_result.goalset_index is not None:
+            ik_result.goalset_index[ik_result.goalset_index >= goal_pose.n_goalset] = 0
+
+        return ik_result
+
+    @profiler.record_function("ik/get_result")
+    def _get_result(
+        self, num_seeds: int, result: WrapResult, goal_pose: Pose, return_seeds: int
+    ) -> IKResult:
+        """Get IKResult from WrapResult after optimization.
+
+        Args:
+            num_seeds: number of seeds used for optimization.
+            result: result from optimization.
+            goal_pose: goal poses used for IK problems.
+            return_seeds: number of seeds to return per problem.
+
+        Returns:
+            IKResult object with solutions to the IK problems.
+        """
+        success = self._get_success(result.metrics, num_seeds=num_seeds)
+
+        if result.metrics.null_space_error is not None:
+            result.metrics.pose_error += result.metrics.null_space_error
+        if result.metrics.cspace_error is not None:
+            result.metrics.pose_error += result.metrics.cspace_error
+
+        q_sol, success, position_error, rotation_error, total_error, goalset_index = get_result(
+            result.metrics.pose_error,
+            result.metrics.position_error,
+            result.metrics.rotation_error,
+            result.metrics.goalset_index,
+            success,
+            result.action.position,
+            self._col,
+            goal_pose.batch,
+            return_seeds,
+            num_seeds,
+        )
+        # check if locked joints exist and create js solution:
+
+        new_js = JointState(q_sol, joint_names=self.rollout_fn.kinematics.joint_names)
+        sol_js = self.rollout_fn.get_full_dof_from_solution(new_js)
+        # reindex success to get successful poses?
+        ik_result = IKResult(
+            success=success,
+            goal_pose=goal_pose,
+            solution=q_sol,
+            seed=None,
+            js_solution=sol_js,
+            # seed=coord_position_seed[idx].view(goal_pose.batch, return_seeds, -1).detach(),
+            position_error=position_error,
+            rotation_error=rotation_error,
+            solve_time=result.solve_time,
+            error=total_error,
+            debug_info={"solver": result.debug},
+            goalset_index=goalset_index,
+        )
+        return ik_result
+
+    @profiler.record_function("ik/get_seed")
+    def get_seed(
+        self, num_seeds: int, goal_pose: Pose, use_nn_seed, seed_config: Optional[T_BDOF] = None
+    ) -> torch.Tensor:
+        """Get seed joint configurations for optimization.
+
+        Args:
+            num_seeds: number of seeds to generate.
+            goal_pose: goal poses for IK problems. This is used to generate seeds with a
+                neural network. Not implemented yet.
+            use_nn_seed: flag to use neural network as seed for IK. This is not implemented yet.
+            seed_config: seed configuration to use for optimization. If None, random seeds are
+                generated. seed config should be of shape (batch, n, dof), where n can be lower
+                or equal to num_seeds. The order of joints should match
+                :meth:`IKSolver.joint_names`.
+
+        Returns:
+            seed joint configurations for optimization.
+        """
+        if seed_config is None:
+            coord_position_seed = self.generate_seed(
+                num_seeds=num_seeds,
+                batch=goal_pose.batch,
+                use_nn_seed=use_nn_seed,
+                pose=goal_pose,
+            )
+        elif seed_config.shape[1] < num_seeds:
+            coord_position_seed = self.generate_seed(
+                num_seeds=num_seeds - seed_config.shape[1],
+                batch=goal_pose.batch,
+                use_nn_seed=use_nn_seed,
+                pose=goal_pose,
+            )
+            coord_position_seed = torch.cat((seed_config, coord_position_seed), dim=1)
+        else:
+            coord_position_seed = seed_config
+        coord_position_seed = coord_position_seed.view(-1, 1, self.dof)
+        return coord_position_seed
+
     def solve_any(
         self,
         solve_type: ReacherSolveType,
@@ -398,6 +1155,7 @@ class IKSolver(IKSolverConfig):
         newton_iters: Optional[int] = None,
         link_poses: Optional[Dict[str, Pose]] = None,
     ) -> IKResult:
+        """Solve IK problem with any solve type."""
         if solve_type == ReacherSolveType.SINGLE:
             return self.solve_single(
                 goal_pose,
@@ -461,312 +1219,6 @@ class IKSolver(IKSolverConfig):
                 newton_iters,
             )
 
-    def solve_single(
-        self,
-        goal_pose: Pose,
-        retract_config: Optional[T_BDOF] = None,
-        seed_config: Optional[T_BDOF] = None,
-        return_seeds: int = 1,
-        num_seeds: Optional[int] = None,
-        use_nn_seed: bool = True,
-        newton_iters: Optional[int] = None,
-        link_poses: Optional[Dict[str, Pose]] = None,
-    ) -> IKResult:
-        if num_seeds is None:
-            num_seeds = self.num_seeds
-        if return_seeds > num_seeds:
-            num_seeds = return_seeds
-
-        solve_state = ReacherSolveState(
-            ReacherSolveType.SINGLE, num_ik_seeds=num_seeds, batch_size=1, n_envs=1, n_goalset=1
-        )
-
-        return self.solve_from_solve_state(
-            solve_state,
-            goal_pose,
-            num_seeds,
-            retract_config,
-            seed_config,
-            return_seeds,
-            use_nn_seed,
-            newton_iters,
-            link_poses=link_poses,
-        )
-
-    def solve_goalset(
-        self,
-        goal_pose: Pose,
-        retract_config: Optional[T_BDOF] = None,
-        seed_config: Optional[T_BDOF] = None,
-        return_seeds: int = 1,
-        num_seeds: Optional[int] = None,
-        use_nn_seed: bool = True,
-        newton_iters: Optional[int] = None,
-        link_poses: Optional[Dict[str, Pose]] = None,
-    ) -> IKResult:
-        if num_seeds is None:
-            num_seeds = self.num_seeds
-        if return_seeds > num_seeds:
-            num_seeds = return_seeds
-
-        solve_state = ReacherSolveState(
-            ReacherSolveType.GOALSET,
-            num_ik_seeds=num_seeds,
-            batch_size=1,
-            n_envs=1,
-            n_goalset=goal_pose.n_goalset,
-        )
-        return self.solve_from_solve_state(
-            solve_state,
-            goal_pose,
-            num_seeds,
-            retract_config,
-            seed_config,
-            return_seeds,
-            use_nn_seed,
-            newton_iters,
-            link_poses=link_poses,
-        )
-
-    def solve_batch(
-        self,
-        goal_pose: Pose,
-        retract_config: Optional[T_BDOF] = None,
-        seed_config: Optional[T_BDOF] = None,
-        return_seeds: int = 1,
-        num_seeds: Optional[int] = None,
-        use_nn_seed: bool = True,
-        newton_iters: Optional[int] = None,
-        link_poses: Optional[Dict[str, Pose]] = None,
-    ) -> IKResult:
-        if num_seeds is None:
-            num_seeds = self.num_seeds
-        if return_seeds > num_seeds:
-            num_seeds = return_seeds
-
-        solve_state = ReacherSolveState(
-            ReacherSolveType.BATCH,
-            num_ik_seeds=num_seeds,
-            batch_size=goal_pose.batch,
-            n_envs=1,
-            n_goalset=1,
-        )
-        return self.solve_from_solve_state(
-            solve_state,
-            goal_pose,
-            num_seeds,
-            retract_config,
-            seed_config,
-            return_seeds,
-            use_nn_seed,
-            newton_iters,
-            link_poses=link_poses,
-        )
-
-    def solve_batch_goalset(
-        self,
-        goal_pose: Pose,
-        retract_config: Optional[T_BDOF] = None,
-        seed_config: Optional[T_BDOF] = None,
-        return_seeds: int = 1,
-        num_seeds: Optional[int] = None,
-        use_nn_seed: bool = True,
-        newton_iters: Optional[int] = None,
-        link_poses: Optional[Dict[str, Pose]] = None,
-    ) -> IKResult:
-        if num_seeds is None:
-            num_seeds = self.num_seeds
-        if return_seeds > num_seeds:
-            num_seeds = return_seeds
-
-        solve_state = ReacherSolveState(
-            ReacherSolveType.BATCH_GOALSET,
-            num_ik_seeds=num_seeds,
-            batch_size=goal_pose.batch,
-            n_envs=1,
-            n_goalset=goal_pose.n_goalset,
-        )
-        return self.solve_from_solve_state(
-            solve_state,
-            goal_pose,
-            num_seeds,
-            retract_config,
-            seed_config,
-            return_seeds,
-            use_nn_seed,
-            newton_iters,
-            link_poses=link_poses,
-        )
-
-    def solve_batch_env(
-        self,
-        goal_pose: Pose,
-        retract_config: Optional[T_BDOF] = None,
-        seed_config: Optional[T_BDOF] = None,
-        return_seeds: int = 1,
-        num_seeds: Optional[int] = None,
-        use_nn_seed: bool = True,
-        newton_iters: Optional[int] = None,
-        link_poses: Optional[Dict[str, Pose]] = None,
-    ) -> IKResult:
-        if num_seeds is None:
-            num_seeds = self.num_seeds
-        if return_seeds > num_seeds:
-            num_seeds = return_seeds
-
-        solve_state = ReacherSolveState(
-            ReacherSolveType.BATCH_ENV,
-            num_ik_seeds=num_seeds,
-            batch_size=goal_pose.batch,
-            n_envs=goal_pose.batch,
-            n_goalset=1,
-        )
-        return self.solve_from_solve_state(
-            solve_state,
-            goal_pose,
-            num_seeds,
-            retract_config,
-            seed_config,
-            return_seeds,
-            use_nn_seed,
-            newton_iters,
-            link_poses=link_poses,
-        )
-
-    def solve_batch_env_goalset(
-        self,
-        goal_pose: Pose,
-        retract_config: Optional[T_BDOF] = None,
-        seed_config: Optional[T_BDOF] = None,
-        return_seeds: int = 1,
-        num_seeds: Optional[int] = None,
-        use_nn_seed: bool = True,
-        newton_iters: Optional[int] = None,
-        link_poses: Optional[Dict[str, Pose]] = None,
-    ) -> IKResult:
-        if num_seeds is None:
-            num_seeds = self.num_seeds
-        if return_seeds > num_seeds:
-            num_seeds = return_seeds
-
-        solve_state = ReacherSolveState(
-            ReacherSolveType.BATCH_ENV_GOALSET,
-            num_ik_seeds=num_seeds,
-            batch_size=goal_pose.batch,
-            n_envs=goal_pose.batch,
-            n_goalset=goal_pose.n_goalset,
-        )
-        return self.solve_from_solve_state(
-            solve_state,
-            goal_pose,
-            num_seeds,
-            retract_config,
-            seed_config,
-            return_seeds,
-            use_nn_seed,
-            newton_iters,
-            link_poses=link_poses,
-        )
-
-    def solve_from_solve_state(
-        self,
-        solve_state: ReacherSolveState,
-        goal_pose: Pose,
-        num_seeds: int,
-        retract_config: Optional[T_BDOF] = None,
-        seed_config: Optional[T_BDOF] = None,
-        return_seeds: int = 1,
-        use_nn_seed: bool = True,
-        newton_iters: Optional[int] = None,
-        link_poses: Optional[Dict[str, Pose]] = None,
-    ) -> IKResult:
-        # create goal buffer:
-        goal_buffer = self.update_goal_buffer(solve_state, goal_pose, retract_config, link_poses)
-        coord_position_seed = self.get_seed(
-            num_seeds, goal_buffer.goal_pose, use_nn_seed, seed_config
-        )
-
-        if newton_iters is not None:
-            self.solver.newton_optimizer.outer_iters = newton_iters
-        self.solver.reset()
-        result = self.solver.solve(goal_buffer, coord_position_seed)
-        if newton_iters is not None:
-            self.solver.newton_optimizer.outer_iters = self.og_newton_iters
-        ik_result = self.get_result(num_seeds, result, goal_buffer.goal_pose, return_seeds)
-        if ik_result.goalset_index is not None:
-            ik_result.goalset_index[ik_result.goalset_index >= goal_pose.n_goalset] = 0
-
-        return ik_result
-
-    @profiler.record_function("ik/get_result")
-    def get_result(
-        self, num_seeds: int, result: WrapResult, goal_pose: Pose, return_seeds: int
-    ) -> IKResult:
-        success = self.get_success(result.metrics, num_seeds=num_seeds)
-        # if result.metrics.cost is not None:
-        #    result.metrics.pose_error += result.metrics.cost * 0.0001
-        if result.metrics.null_space_error is not None:
-            result.metrics.pose_error += result.metrics.null_space_error
-        if result.metrics.cspace_error is not None:
-            result.metrics.pose_error += result.metrics.cspace_error
-
-        q_sol, success, position_error, rotation_error, total_error, goalset_index = get_result(
-            result.metrics.pose_error,
-            result.metrics.position_error,
-            result.metrics.rotation_error,
-            result.metrics.goalset_index,
-            success,
-            result.action.position,
-            self._col,
-            goal_pose.batch,
-            return_seeds,
-            num_seeds,
-        )
-        # check if locked joints exist and create js solution:
-
-        new_js = JointState(q_sol, joint_names=self.rollout_fn.kinematics.joint_names)
-        sol_js = self.rollout_fn.get_full_dof_from_solution(new_js)
-        # reindex success to get successful poses?
-        ik_result = IKResult(
-            success=success,
-            goal_pose=goal_pose,
-            solution=q_sol,
-            seed=None,
-            js_solution=sol_js,
-            # seed=coord_position_seed[idx].view(goal_pose.batch, return_seeds, -1).detach(),
-            position_error=position_error,
-            rotation_error=rotation_error,
-            solve_time=result.solve_time,
-            error=total_error,
-            debug_info={"solver": result.debug},
-            goalset_index=goalset_index,
-        )
-        return ik_result
-
-    @profiler.record_function("ik/get_seed")
-    def get_seed(
-        self, num_seeds: int, goal_pose: Pose, use_nn_seed, seed_config: Optional[T_BDOF] = None
-    ) -> torch.Tensor:
-        if seed_config is None:
-            coord_position_seed = self.generate_seed(
-                num_seeds=num_seeds,
-                batch=goal_pose.batch,
-                use_nn_seed=use_nn_seed,
-                pose=goal_pose,
-            )
-        elif seed_config.shape[1] < num_seeds:
-            coord_position_seed = self.generate_seed(
-                num_seeds=num_seeds - seed_config.shape[1],
-                batch=goal_pose.batch,
-                use_nn_seed=use_nn_seed,
-                pose=goal_pose,
-            )
-            coord_position_seed = torch.cat((seed_config, coord_position_seed), dim=1)
-        else:
-            coord_position_seed = seed_config
-        coord_position_seed = coord_position_seed.view(-1, 1, self.dof)
-        return coord_position_seed
-
     def solve(
         self,
         goal_pose: Pose,
@@ -777,20 +1229,7 @@ class IKSolver(IKSolverConfig):
         use_nn_seed: bool = True,
         newton_iters: Optional[int] = None,
     ) -> IKResult:  # pragma : no cover
-        """Ik solver
-
-        Args:
-            goal_pose (Pose): _description_
-            retract_config (Optional[T_BDOF], optional): _description_. Defaults to None.
-            seed_config (Optional[T_BDOF], optional): _description_. Defaults to None.
-            return_seeds (int, optional): _description_. Defaults to 1.
-            num_seeds (Optional[int], optional): _description_. Defaults to None.
-            use_nn_seed (bool, optional): _description_. Defaults to True.
-            newton_iters (Optional[int], optional): _description_. Defaults to None.
-
-        Returns:
-            IKResult: _description_
-        """
+        """Deprecated API for solving single or batch problems."""
         log_warn("IKSolver.solve() is deprecated, use solve_single() or others instead")
         if goal_pose.batch == 1 and goal_pose.n_goalset == 1:
             return self.solve_single(
@@ -843,20 +1282,7 @@ class IKSolver(IKSolverConfig):
         use_nn_seed: bool = True,
         newton_iters: Optional[int] = None,
     ) -> IKResult:  # pragma : no cover
-        """Ik solver
-
-        Args:
-            goal_pose (Pose): _description_
-            retract_config (Optional[T_BDOF], optional): _description_. Defaults to None.
-            seed_config (Optional[T_BDOF], optional): _description_. Defaults to None.
-            return_seeds (int, optional): _description_. Defaults to 1.
-            num_seeds (Optional[int], optional): _description_. Defaults to None.
-            use_nn_seed (bool, optional): _description_. Defaults to True.
-            newton_iters (Optional[int], optional): _description_. Defaults to None.
-
-        Returns:
-            IKResult: _description_
-        """
+        """Deprecated API, use solve_batch_env() or solve_batch_env_goalset() instead."""
         log_warn(
             "IKSolver.batch_env_solve() is deprecated, use solve_batch_env() or others instead"
         )
@@ -883,7 +1309,16 @@ class IKSolver(IKSolverConfig):
 
     @torch.no_grad()
     @profiler.record_function("ik/get_success")
-    def get_success(self, metrics: RolloutMetrics, num_seeds: int) -> torch.Tensor:
+    def _get_success(self, metrics: RolloutMetrics, num_seeds: int) -> torch.Tensor:
+        """Get success of IK optimization.
+
+        Args:
+            metrics: RolloutMetrics with feasibility, pose error, and other costs.
+            num_seeds: Number of seeds used for IK optimization.
+
+        Returns:
+            Success of IK optimization as a boolean tensor of shape (batch, num_seeds).
+        """
         success = get_success(
             metrics.feasible,
             metrics.position_error,
@@ -904,15 +1339,16 @@ class IKSolver(IKSolverConfig):
         use_nn_seed: bool = False,
         pose: Optional[Pose] = None,
     ) -> torch.Tensor:
-        """Generate seeds for a batch. Given a pose set, this will create all
-        the seeds: [batch + batch*random_restarts]
+        """Generate seeds for IK optimization.
 
         Args:
-            batch (int, optional): [description]. Defaults to 1.
-            num_seeds (Optional[int], optional): [description]. Defaults to None.
+            num_seeds: Number of seeds to generate using pseudo-random generator.
+            batch: Number of problems in batch.
+            use_nn_seed: Flag to use neural network as seed for IK. This is not implemented yet.
+            pose: Pose to use for generating seeds. This is not implemented yet.
 
         Returns:
-            [type]: [description]
+            Seed configurations for IK optimization.
         """
         num_random_seeds = num_seeds
         seed_list = []
@@ -923,34 +1359,72 @@ class IKSolver(IKSolverConfig):
             seed_list.append(nn_seed)
         if num_random_seeds > 0:
             random_seed = self.q_sample_gen.get_samples(
-                num_random_seeds * batch, bounded=True
+                num_random_seeds * batch,
+                bounded=True,
             ).view(batch, num_random_seeds, self.dof)
-
             seed_list.append(random_seed)
         coord_position_seed = torch.cat(seed_list, dim=1)
         return coord_position_seed
 
-    def update_world(self, world: WorldConfig) -> bool:
+    def update_world(self, world: WorldConfig) -> None:
+        """Update world in IKSolver.
+
+        If the new world configuration has more obstacles than initial cache, the collision cache
+        will be recreated, breaking existing cuda graphs. This will lead to an exit with error if
+        use_cuda_graph is enabled.
+
+        Args:
+            world: World configuration to update in IKSolver.
+        """
         self.world_coll_checker.load_collision_model(world)
-        return True
 
     def reset_seed(self) -> None:
+        """Reset seed generator in IKSolver."""
         self.q_sample_gen.reset()
 
     def check_constraints(self, q: JointState) -> RolloutMetrics:
+        """Check constraints for joint state.
+
+        Args:
+            q: Joint state to check constraints for.
+
+        Returns:
+            RolloutMetrics with feasibility of joint state.
+        """
         metrics = self.rollout_fn.rollout_constraint(q.position.unsqueeze(1))
         return metrics
 
     def sample_configs(
-        self, n: int, use_batch_env=False, sample_from_ik_seeder: bool = False
+        self,
+        n: int,
+        use_batch_env=False,
+        sample_from_ik_seeder: bool = False,
+        rejection_ratio: Optional[int] = None,
     ) -> torch.Tensor:
+        """Sample n feasible joint configurations. Only samples with environment=0.
+
+        Args:
+            n: Number of joint configurations to sample.
+            use_batch_env: Flag to sample from batch environments. This is not implemented yet.
+            sample_from_ik_seeder: Flag to sample from IK seeder. This is not implemented yet.
+            rejection_ratio: Ratio of samples to generate to get n feasible samples. If None, the
+                rejection ratio is set to the default value meth:`IKSolver.sample_rejection_ratio`.
+
+        Returns:
+            Joint configurations sampled from the IK seeder of shape (n, dof).
         """
-        Only works for environment=0
-        """
+
+        if use_batch_env:
+            log_warn(
+                "IKSolver.sample_configs() does not work with batch environments,"
+                + " sampling only from env=0"
+            )
+        if rejection_ratio is None:
+            rejection_ratio = self.sample_rejection_ratio
         if sample_from_ik_seeder:
-            samples = self.q_sample_gen.get_samples(n * self.sample_rejection_ratio, bounded=True)
+            samples = self.q_sample_gen.get_samples(n * rejection_ratio, bounded=True)
         else:
-            samples = self.rollout_fn.sample_random_actions(n * self.sample_rejection_ratio)
+            samples = self.rollout_fn.sample_random_actions(n * rejection_ratio)
         metrics = self.rollout_fn.rollout_constraint(
             samples.unsqueeze(1), use_batch_env=use_batch_env
         )
@@ -958,28 +1432,43 @@ class IKSolver(IKSolverConfig):
 
     @property
     def kinematics(self) -> CudaRobotModel:
+        """Get kinematics instance in IKSolver."""
         return self.rollout_fn.dynamics_model.robot_model
 
-    def get_all_rollout_instances(self) -> List[RolloutBase]:
+    def get_all_rollout_instances(self) -> List[ArmReacher]:
+        """Get all rollout instances in IKSolver.
+
+        Returns:
+            List of all rollout instances in IKSolver.
+        """
         if self._rollout_list is None:
             self._rollout_list = [self.rollout_fn] + self.solver.get_all_rollout_instances()
         return self._rollout_list
 
     def get_all_kinematics_instances(self) -> List[CudaRobotModel]:
-        if self._kin_list is None:
-            self._kin_list = [
-                i.dynamics_model.robot_model for i in self.get_all_rollout_instances()
-            ]
-        return self._kin_list
+        """Deprecated API, use kinematics instead."""
+        log_warn("IKSolver.get_all_kinematics_instances() is deprecated, use kinematics instead")
+
+        return [self.kinematics for _ in range(len(self.get_all_rollout_instances))]
 
     def fk(self, q: torch.Tensor) -> CudaRobotModelState:
+        """Forward kinematics for the robot.
+
+        Args:
+            q: Joint configuration of the robot, with joint values in order of :meth:`joint_names`.
+
+        Returns:
+            :class:`CudaRobotModelState` with link poses, and link spheres for the robot.
+        """
         return self.kinematics.get_state(q)
 
     def reset_cuda_graph(self) -> None:
+        """Reset the cuda graph for all rollout instances in IKSolver. Does not work currently."""
         self.solver.reset_cuda_graph()
         self.rollout_fn.reset_cuda_graph()
 
     def reset_shape(self):
+        """Reset the shape of the rollout function and solver to the original shape."""
         self.solver.reset_shape()
         self.rollout_fn.reset_shape()
 
@@ -989,28 +1478,56 @@ class IKSolver(IKSolverConfig):
         sphere_tensor: Optional[torch.Tensor] = None,
         link_name: str = "attached_object",
     ) -> None:
-        for k in self.get_all_kinematics_instances():
-            k.attach_object(
-                sphere_radius=sphere_radius, sphere_tensor=sphere_tensor, link_name=link_name
-            )
+        """Attach object to robot for collision checking.
+
+        Args:
+            sphere_radius: Radius of the sphere to attach to robot.
+            sphere_tensor: Tensor of shape (n, 4) to attach to robot, where n is the number of
+                spheres for that link. If None, only radius is updated for the existing spheres.
+            link_name: Name of the link to attach object spheres to.
+        """
+
+        # get single kinematics instance:
+        self.kinematics.kinematics_config.attach_object(
+            sphere_radius=sphere_radius, sphere_tensor=sphere_tensor, link_name=link_name
+        )
 
     def detach_object_from_robot(self, link_name: str = "attached_object") -> None:
-        for k in self.get_all_kinematics_instances():
-            k.detach_object(link_name)
+        """Detach all attached objects from robot.
 
-    def get_retract_config(self):
+        This currently will reset the spheres for link_name to -10, disabling collision checking
+        for that link.
+
+        Args:
+            link_name: Name of the link to detach object from.
+        """
+
+        self.kinematics.kinematics_config.detach_object(link_name=link_name)
+
+    def get_retract_config(self) -> T_DOF:
+        """Get retract configuration from robot model."""
         return self.rollout_fn.dynamics_model.retract_config
 
     def update_pose_cost_metric(
         self,
         metric: PoseCostMetric,
     ):
+        """Update pose cost metric for all rollout instances in IKSolver.
+
+        Args:
+            metric: New values for Pose cost metric to update.
+        """
         rollouts = self.get_all_rollout_instances()
         [
             rollout.update_pose_cost_metric(metric)
             for rollout in rollouts
             if isinstance(rollout, ArmReacher)
         ]
+
+    @property
+    def joint_names(self) -> List[str]:
+        """Get ordered names of all joints used in optimization with IKSolver."""
+        return self.rollout_fn.kinematics.joint_names
 
 
 @get_torch_jit_decorator()
@@ -1022,6 +1539,7 @@ def get_success(
     position_threshold: float,
     rotation_threshold: float,
 ):
+    """JIT compatible function to get the success of IK solutions."""
     feasible = feasible.view(-1, num_seeds)
     converge = torch.logical_and(
         position_error <= position_threshold,
@@ -1044,6 +1562,7 @@ def get_result(
     return_seeds: int,
     num_seeds: int,
 ):
+    """JIT compatible function to get the best IK solutions."""
     error = pose_error.view(-1, num_seeds)
     error[~success] += 1000.0
     _, idx = torch.topk(error, k=return_seeds, largest=False, dim=-1)

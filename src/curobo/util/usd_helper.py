@@ -823,7 +823,6 @@ class UsdHelper:
                 config_file["robot_cfg"]["kinematics"], tensor_args=tensor_args
             )
             kin_model = CudaRobotModel(robot_cfg)
-
         m = kin_model.get_robot_link_meshes()
         offsets = [x.pose for x in m]
         robot_mesh_model = WorldConfig(mesh=m)

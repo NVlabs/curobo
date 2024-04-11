@@ -162,7 +162,7 @@ class CuroboController(BaseController):
         pose_metric = None
         if constrain_grasp_approach:
             pose_metric = PoseCostMetric.create_grasp_approach_metric(
-                offset_position=0.1, tstep_fraction=0.6
+                offset_position=0.1, tstep_fraction=0.8
             )
 
         self.plan_config = MotionGenPlanConfig(

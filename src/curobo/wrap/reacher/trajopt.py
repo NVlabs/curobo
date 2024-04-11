@@ -31,17 +31,14 @@ from curobo.opt.particle.parallel_es import ParallelES, ParallelESConfig
 from curobo.opt.particle.parallel_mppi import ParallelMPPI, ParallelMPPIConfig
 from curobo.rollout.arm_reacher import ArmReacher, ArmReacherConfig
 from curobo.rollout.cost.pose_cost import PoseCostMetric
-from curobo.rollout.dynamics_model.integration_utils import (
-    action_interpolate_kernel,
-    interpolate_kernel,
-)
+from curobo.rollout.dynamics_model.integration_utils import interpolate_kernel
 from curobo.rollout.rollout_base import Goal, RolloutBase, RolloutMetrics
 from curobo.types.base import TensorDeviceType
 from curobo.types.robot import JointState, RobotConfig
 from curobo.types.tensor import T_BDOF, T_DOF, T_BValue_bool, T_BValue_float
 from curobo.util.helpers import list_idx_if_not_none
 from curobo.util.logger import log_error, log_info, log_warn
-from curobo.util.torch_utils import get_torch_jit_decorator, is_torch_compile_available
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.trajectory import (
     InterpolateType,
     calculate_dt_no_clamp,
@@ -69,7 +66,7 @@ class TrajOptSolverConfig:
     num_seeds: int = 1
     bias_node: Optional[T_DOF] = None
     interpolation_dt: float = 0.01
-    traj_evaluator_config: TrajEvaluatorConfig = TrajEvaluatorConfig()
+    traj_evaluator_config: Optional[TrajEvaluatorConfig] = None
     traj_evaluator: Optional[TrajEvaluator] = None
     evaluate_interpolated_trajectory: bool = True
     cspace_threshold: float = 0.1
@@ -109,7 +106,7 @@ class TrajOptSolverConfig:
         seed_ratio: Dict[str, int] = {"linear": 1.0, "bias": 0.0, "start": 0.0, "end": 0.0},
         use_particle_opt: bool = True,
         collision_checker_type: Optional[CollisionCheckerType] = CollisionCheckerType.MESH,
-        traj_evaluator_config: TrajEvaluatorConfig = TrajEvaluatorConfig(),
+        traj_evaluator_config: Optional[TrajEvaluatorConfig] = None,
         traj_evaluator: Optional[TrajEvaluator] = None,
         minimize_jerk: bool = True,
         use_gradient_descent: bool = False,
@@ -171,7 +168,6 @@ class TrajOptSolverConfig:
         base_config_data["convergence"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
         config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
         grad_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
-
 
         config_data["model"]["horizon"] = traj_tsteps
         grad_config_data["model"]["horizon"] = traj_tsteps
@@ -325,6 +321,12 @@ class TrajOptSolverConfig:
             sync_cuda_time=sync_cuda_time,
         )
         trajopt = WrapBase(cfg)
+        if traj_evaluator_config is None:
+            traj_evaluator_config = TrajEvaluatorConfig.from_basic(
+                min_dt=interpolation_dt,
+                dof=robot_cfg.kinematics.dof,
+                tensor_args=tensor_args,
+            )
         trajopt_cfg = TrajOptSolverConfig(
             robot_config=robot_cfg,
             rollout_fn=aux_rollout,
@@ -375,6 +377,7 @@ class TrajResult(Sequence):
     raw_solution: Optional[JointState] = None
     raw_action: Optional[torch.Tensor] = None
     goalset_index: Optional[torch.Tensor] = None
+    optimized_seeds: Optional[torch.Tensor] = None
 
     def __getitem__(self, idx):
         # position_error = rotation_error = cspace_error = path_buffer_last_tstep = None
@@ -405,6 +408,7 @@ class TrajResult(Sequence):
             rotation_error=idx_vals[4],
             cspace_error=idx_vals[5],
             goalset_index=idx_vals[6],
+            optimized_seeds=self.optimized_seeds,
         )
 
     def __len__(self):
@@ -918,6 +922,7 @@ class TrajOptSolver(TrajOptSolverConfig):
                 raw_solution=result.action,
                 raw_action=result.raw_action,
                 goalset_index=result.metrics.goalset_index,
+                optimized_seeds=result.raw_action,
             )
         else:
             # get path length:
@@ -938,79 +943,38 @@ class TrajOptSolver(TrajOptSolverConfig):
                 )
 
             with profiler.record_function("trajopt/best_select"):
-                if True:  # not get_torch_jit_decorator() == torch.jit.script:
-                    # This only works if torch compile is available:
-                    (
-                        idx,
-                        position_error,
-                        rotation_error,
-                        cspace_error,
-                        goalset_index,
-                        opt_dt,
-                        success,
-                    ) = jit_trajopt_best_select(
-                        success,
-                        smooth_label,
-                        result.metrics.cspace_error,
-                        result.metrics.pose_error,
-                        result.metrics.position_error,
-                        result.metrics.rotation_error,
-                        result.metrics.goalset_index,
-                        result.metrics.cost,
-                        smooth_cost,
-                        batch_mode,
-                        goal.batch,
-                        num_seeds,
-                        self._col,
-                        opt_dt,
-                    )
-                    if batch_mode:
-                        last_tstep = [last_tstep[i] for i in idx]
-                    else:
-                        last_tstep = [last_tstep[idx.item()]]
-                    best_act_seq = result.action[idx]
-                    best_raw_action = result.raw_action[idx]
-                    interpolated_traj = interpolated_trajs[idx]
-
+                (
+                    idx,
+                    position_error,
+                    rotation_error,
+                    cspace_error,
+                    goalset_index,
+                    opt_dt,
+                    success,
+                ) = jit_trajopt_best_select(
+                    success,
+                    smooth_label,
+                    result.metrics.cspace_error,
+                    result.metrics.pose_error,
+                    result.metrics.position_error,
+                    result.metrics.rotation_error,
+                    result.metrics.goalset_index,
+                    result.metrics.cost,
+                    smooth_cost,
+                    batch_mode,
+                    goal.batch,
+                    num_seeds,
+                    self._col,
+                    opt_dt,
+                )
+                if batch_mode:
+                    last_tstep = [last_tstep[i] for i in idx]
                 else:
-                    success[~smooth_label] = False
-                    # get the best solution:
-                    if result.metrics.pose_error is not None:
-                        convergence_error = result.metrics.pose_error[..., -1]
-                    elif result.metrics.cspace_error is not None:
-                        convergence_error = result.metrics.cspace_error[..., -1]
-                    else:
-                        raise ValueError(
-                            "convergence check requires either goal_pose or goal_state"
-                        )
-                    running_cost = torch.mean(result.metrics.cost, dim=-1) * 0.0001
-                    error = convergence_error + smooth_cost + running_cost
-                    error[~success] += 10000.0
-                    if batch_mode:
-                        idx = torch.argmin(error.view(goal.batch, num_seeds), dim=-1)
-                        idx = idx + num_seeds * self._col
-                        last_tstep = [last_tstep[i] for i in idx]
-                        success = success[idx]
-                    else:
-                        idx = torch.argmin(error, dim=0)
+                    last_tstep = [last_tstep[idx.item()]]
+                best_act_seq = result.action[idx]
+                best_raw_action = result.raw_action[idx]
+                interpolated_traj = interpolated_trajs[idx]
 
-                        last_tstep = [last_tstep[idx.item()]]
-                        success = success[idx : idx + 1]
-
-                    best_act_seq = result.action[idx]
-                    best_raw_action = result.raw_action[idx]
-                    interpolated_traj = interpolated_trajs[idx]
-                    goalset_index = position_error = rotation_error = cspace_error = None
-                    if result.metrics.position_error is not None:
-                        position_error = result.metrics.position_error[idx, -1]
-                    if result.metrics.rotation_error is not None:
-                        rotation_error = result.metrics.rotation_error[idx, -1]
-                    if result.metrics.cspace_error is not None:
-                        cspace_error = result.metrics.cspace_error[idx, -1]
-                    if result.metrics.goalset_index is not None:
-                        goalset_index = result.metrics.goalset_index[idx, -1]
-
-                    opt_dt = opt_dt[idx]
             if self.sync_cuda_time:
                 torch.cuda.synchronize()
             if len(best_act_seq.shape) == 3:
@@ -1046,6 +1010,7 @@ class TrajOptSolver(TrajOptSolverConfig):
                 raw_solution=best_act_seq,
                 raw_action=best_raw_action,
                 goalset_index=goalset_index,
+                optimized_seeds=result.raw_action,
             )
         return traj_result
 
@@ -1306,6 +1271,10 @@ class TrajOptSolver(TrajOptSolverConfig):
             for rollout in rollouts
             if isinstance(rollout, ArmReacher)
         ]
+
+    @property
+    def newton_iters(self):
+        return self._og_newton_iters
 
 
 @get_torch_jit_decorator()

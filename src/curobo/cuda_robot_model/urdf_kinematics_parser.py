@@ -68,12 +68,12 @@ class UrdfKinematicsParser(KinematicsParser):
                 "velocity": joint.limit.velocity,
             }
         else:
-            log_warn("Converting continuous joint to revolute with limits[-10,10]")
+            log_warn("Converting continuous joint to revolute with limits[-6.28,6.28]")
             joint_type = "revolute"
             joint_limits = {
                 "effort": joint.limit.effort,
-                "lower": -10,
-                "upper": 10,
+                "lower": -3.14 * 2,
+                "upper": 3.14 * 2,
                 "velocity": joint.limit.velocity,
             }
         return joint_limits, joint_type
@@ -181,6 +181,7 @@ class UrdfKinematicsParser(KinematicsParser):
                     log_error("Joint type not supported")
                 if joint_axis[0] == -1 or joint_axis[1] == -1 or joint_axis[2] == -1:
                     joint_offset[0] = -1.0 * joint_offset[0]
+                    joint_axis = [abs(x) for x in joint_axis]
                 body_params["joint_type"] = joint_type
                 body_params["joint_offset"] = joint_offset
 
