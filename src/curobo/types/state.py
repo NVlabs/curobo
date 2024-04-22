@@ -193,6 +193,13 @@ class JointState(State):
         state_tensor = torch.cat((self.position, velocity, acceleration, jerk), dim=-1)
         return state_tensor
 
+    @property
+    def augmented_state(self):
+        velocity = self.velocity
+        if velocity is None:
+            velocity = self.position * 0.0
+        return torch.cat((self.position, velocity), dim=-1)
+
     @staticmethod
     def from_state_tensor(state_tensor, joint_names=None, dof=7):
         return JointState(
