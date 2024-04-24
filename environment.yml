@@ -1,0 +1,13 @@
+name: curobo-comparison-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - pytorch>=1.10
+  - tensorboard=2.16.2
+  - pip=24.0
+  - pip:
+    - "ray==2.10.0"
+    - "pyparsing>=2.3.1"

@@ -23,7 +23,7 @@ from curobo.types.robot import JointState, RobotConfig
 from curobo.util.logger import setup_curobo_logger
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
-
+import scipy.io as sio
 
 def plot_traj(trajectory, dt):
     # Third Party
@@ -164,19 +164,19 @@ def demo_motion_gen(js=False):
     goal_state = start_state.clone()
 
     start_state.position[0, 0] += 0.25
-    # goal_state.position[0,0] += 0.5
+    goal_state.position[0,0] += 0.5
     if js:
         result = motion_gen.plan_single_js(
             start_state,
             goal_state,
-            MotionGenPlanConfig(max_attempts=1, parallel_finetune=True),
+            MotionGenPlanConfig(max_attempts=2000, timeout=10, parallel_finetune=True),
         )
     else:
         result = motion_gen.plan_single(
             start_state,
             retract_pose,
             MotionGenPlanConfig(
-                max_attempts=1, parallel_finetune=True, enable_finetune_trajopt=True
+                max_attempts=10, timeout=1, parallel_finetune=True, enable_finetune_trajopt=True
             ),
         )
     print(
@@ -186,6 +186,16 @@ def demo_motion_gen(js=False):
         result.status,
         result.optimized_dt,
     )
+
+    result_filename = 'curobo_trajectory.mat'
+    # result_filename = 'comparison-results/curobo_trajectory_'+str(obs_num)+'_'+str(test_id)+'.mat'
+    sio.savemat(result_filename, \
+                {'if_success': result.success.cpu().numpy(), \
+                 'q': result.optimized_plan.position.cpu().numpy(), \
+                 'solve_time': result.solve_time, \
+                 'start_state': start_state.position.cpu().numpy(), \
+                 'goal_state': goal_state.position.cpu().numpy()})
+
     if PLOT and result.success.item():
         traj = result.get_interpolated_plan()
 
@@ -430,7 +440,7 @@ def demo_motion_gen_batch_env(n_envs: int = 10):
 
 if __name__ == "__main__":
     setup_curobo_logger("error")
-    demo_motion_gen(js=False)
+    demo_motion_gen(js=True)
     # demo_motion_gen_batch()
     # demo_motion_gen_goalset()
     # n = [2, 10]

@@ -8,11 +8,9 @@ disclosure or distribution of this material and related documentation
 without an express license agreement from NVIDIA CORPORATION or
 its affiliates is strictly prohibited.
 -->
-# cuRobo
+# cuRobo (For SPARROWS comparison)
 
 *CUDA Accelerated Robot Library*
-
-**Check [curobo.org](https://curobo.org) for installing and getting started with examples!**
 
 Use [Discussions](https://github.com/NVlabs/curobo/discussions) for questions on using this package.
 
@@ -20,6 +18,50 @@ Use [Issues](https://github.com/NVlabs/curobo/issues) if you find a bug.
 
 
 For business inquiries, please visit our website and submit the form: [NVIDIA Research Licensing](https://www.nvidia.com/en-us/research/inquiries/)
+
+**Check [curobo.org](https://curobo.org) for installing and getting started with examples!**
+
+## Installation
+Run the following command to create a conda environment before running any examples:
+```
+conda env create -f environment.yml
+```
+
+Then run the following command to activate this environment:
+```
+conda activate curobo-comparison-env
+```
+
+Check your python version by running the following command. curobo only works on python<=3.10
+```
+python3 --version
+```
+
+Install curobo by running the following command:
+```
+pip install -e . --no-build-isolation
+```
+
+Test if the installation is successful by running the following command for testing:
+```
+python3 -m pytest .
+```
+
+## Run comparisons
+You need to copy `no_filter_planning_results/` folder under `curobo/` first.
+
+Go to `examples/` folder and run
+```
+python3 comparison_for_sparrows.py 
+```
+
+You can edit the `world_file` as a yaml file.
+Refer to `../src/curobo/content/configs/world/simple_scenario.yml` as an example, where you only need to define a couple of boxes (cuboids).
+
+Edit `start_state_tensor` and `goal_state_tensor` for start and goal.
+
+The results are automatically stored in a mat file called `curobo_trajectory.mat`.
+You can use a simple matlab script `visualize_trajectory.m` to plot the robot motion.
 
 ## Overview
 

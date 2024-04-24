@@ -57,20 +57,20 @@ collision_spheres:
       - "center": [0.0, -0.05, -0.05]
         "radius": 0.04
   robotiq_arg2f_base_link:
-      - "center": [0.0, -0.0, 0.04]
-        "radius": 0.04
+      - "center": [0.0, -0.0, 100000.04]
+        "radius": 0.000004
   left_outer_finger:
-      - "center": [0.0, -0.01, 0.02]
-        "radius": 0.03
+      - "center": [0.0, -0.01, 100000.02]
+        "radius": 0.000003
   left_inner_finger_pad:
-      - "center": [0.0, -0.0, 0.0]
-        "radius": 0.01
+      - "center": [0.0, -0.0, 100000.0]
+        "radius": 0.0000001
   right_outer_finger:
-      - "center": [0.0, -0.01, 0.02]
-        "radius": 0.03
+      - "center": [0.0, -0.01, 100000.02]
+        "radius": 0.0000003
   right_inner_finger_pad:
-      - "center": [0.0, -0.0, 0.0]
-        "radius": 0.01
+      - "center": [0.0, -0.0, 100000.0]
+        "radius": 0.00000001
   
   
   

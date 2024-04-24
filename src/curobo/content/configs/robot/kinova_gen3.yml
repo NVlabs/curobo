@@ -37,12 +37,6 @@ robot_cfg:
       spherical_wrist_1_link : 0.0
       spherical_wrist_2_link : 0.0
       bracelet_link: 0.0
-      robotiq_arg2f_base_link: 0.0
-      left_outer_finger: 0.0
-      left_inner_finger_pad: 0.0
-      right_outer_finger: 0.0
-      right_inner_finger_pad: 0.0
-      left_outer_knuckle: 0.0
     self_collision_ignore: {
       base_link: [shoulder_link],
       shoulder_link: [half_arm_1_link],
