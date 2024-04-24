@@ -200,7 +200,8 @@ nvidia_curobo*/
 
 *tfevents*
 
-*.pkl
-
 *.csv
 docs/*
+
+*.pkl
+*.mat

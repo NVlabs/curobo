@@ -49,16 +49,24 @@ python3 -m pytest .
 
 ## Run comparisons
 You need to copy `no_filter_planning_results/` folder under `curobo/` first.
+This is the result of SPARROWS, which stores the obstacles information and the trajectory information as well. 
 
-Go to `examples/` folder and run
+Go to `examples/` folder and create a folder to store the comparison results:
+```
+mkdir comparison-results/
+```
+
+Run the following python script to test curobo on SPARROWS scenarios.
+Change the value of variable `obs_num` at the front of the script to 10, 20, 40 to test scenarios with different number of obstacles.
 ```
 python3 comparison_for_sparrows.py 
 ```
 
+## Setup a simple example
 You can edit the `world_file` as a yaml file.
 Refer to `../src/curobo/content/configs/world/simple_scenario.yml` as an example, where you only need to define a couple of boxes (cuboids).
 
-Edit `start_state_tensor` and `goal_state_tensor` for start and goal.
+Edit variables `start_state_tensor` and `goal_state_tensor` for start and goal.
 
 The results are automatically stored in a mat file called `curobo_trajectory.mat`.
 You can use a simple matlab script `visualize_trajectory.m` to plot the robot motion.
