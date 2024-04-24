@@ -27,7 +27,7 @@ from curobo.util.logger import setup_curobo_logger
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
-obs_num = 40
+obs_num = 10
 datadir = '../no_filter_planning_results/planning_results_pi_6/3d7links'+str(obs_num)+'obs/'
 filename = 'armtd_1branched_t0.5_stats_3d7links100trials'+str(obs_num)+'obs150steps_0.5limit.pkl'
 # datadir = '../'
@@ -73,14 +73,11 @@ def demo_motion_gen(test_id):
     result = motion_gen.plan_single_js(
         start_state,
         goal_state,
-        MotionGenPlanConfig(max_attempts=10, \
+        MotionGenPlanConfig(max_attempts=1, \
                             enable_graph=True, \
                             parallel_finetune=True, \
                             timeout=2.0, \
-                            finetune_attempts=10, \
-                            enable_finetune_trajopt=True, \
-                            num_graph_seeds=4, \
-                            num_trajopt_seeds=12),
+                            enable_finetune_trajopt=True)
     )
 
     if_success = result.success.cpu().numpy()
