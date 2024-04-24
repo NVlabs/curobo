@@ -55,7 +55,7 @@ def demo_motion_gen(test_id):
     )
 
     motion_gen = MotionGen(motion_gen_config)
-    motion_gen.warmup(parallel_finetune=True)
+    # motion_gen.warmup(parallel_finetune=True)
 
     with open(datadir + filename, 'rb') as f:
         data = pickle.load(f)
