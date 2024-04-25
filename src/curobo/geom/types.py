@@ -58,9 +58,9 @@ class Obstacle:
     texture: Optional[str] = None
 
     #: material properties to apply in visualization.
-    material: Material = Material()
+    material: Material = field(default_factory=Material)
 
-    tensor_args: TensorDeviceType = TensorDeviceType()
+    tensor_args: TensorDeviceType = field(default_factory=TensorDeviceType)
 
     def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
         """Create a trimesh instance from the obstacle representation.

@@ -24,11 +24,7 @@ from curobo.cuda_robot_model.cuda_robot_generator import (
     CudaRobotGeneratorConfig,
 )
 from curobo.cuda_robot_model.kinematics_parser import KinematicsParser
-from curobo.cuda_robot_model.types import (
-    CudaRobotModelState,
-    KinematicsTensorConfig,
-    SelfCollisionKinematicsConfig,
-)
+from curobo.cuda_robot_model.types import KinematicsTensorConfig, SelfCollisionKinematicsConfig
 from curobo.curobolib.kinematics import get_cuda_kinematics
 from curobo.geom.types import Mesh, Sphere
 from curobo.types.base import TensorDeviceType
@@ -148,14 +144,67 @@ class CudaRobotModelConfig:
         return self.kinematics_config.n_dof
 
 
+@dataclass
+class CudaRobotModelState:
+    """Dataclass that stores kinematics information."""
+
+    #: End-effector position stored as x,y,z in meters [b, 3]. End-effector is defined by
+    #: :attr:`CudaRobotModel.ee_link`.
+    ee_position: torch.Tensor
+
+    #: End-effector orientaiton stored as quaternion qw, qx, qy, qz [b,4]. End-effector is defined
+    #: by :attr:`CudaRobotModel.ee_link`.
+    ee_quaternion: torch.Tensor
+
+    #: Linear Jacobian. Currently not supported.
+    lin_jacobian: Optional[torch.Tensor] = None
+
+    #: Angular Jacobian. Currently not supported.
+    ang_jacobian: Optional[torch.Tensor] = None
+
+    #: Position of links specified by link_names  (:attr:`CudaRobotModel.link_names`).
+    links_position: Optional[torch.Tensor] = None
+
+    #: Quaternions of links specified by link names (:attr:`CudaRobotModel.link_names`).
+    links_quaternion: Optional[torch.Tensor] = None
+
+    #: Position of spheres specified by collision spheres (:attr:`CudaRobotModel.robot_spheres`)
+    #: in x, y, z, r format [b,n,4].
+    link_spheres_tensor: Optional[torch.Tensor] = None
+
+    #: Names of links that each index in :attr:`links_position` and :attr:`links_quaternion`
+    #: corresponds to.
+    link_names: Optional[str] = None
+
+    @property
+    def ee_pose(self) -> Pose:
+        """Get end-effector pose as a Pose object."""
+        return Pose(self.ee_position, self.ee_quaternion)
+
+    def get_link_spheres(self) -> torch.Tensor:
+        """Get spheres representing robot geometry as a tensor with [batch,4],  [x,y,z,radius]."""
+        return self.link_spheres_tensor
+
+    @property
+    def link_pose(self) -> Dict[str, Pose]:
+        """Get link poses as a dictionary of link name to Pose object."""
+        link_poses = None
+        if self.link_names is not None:
+            link_poses = {}
+            link_pos = self.links_position.contiguous()
+            link_quat = self.links_quaternion.contiguous()
+            for i, v in enumerate(self.link_names):
+                link_poses[v] = Pose(link_pos[..., i, :], link_quat[..., i, :])
+        return link_poses
+
+
 class CudaRobotModel(CudaRobotModelConfig):
     """
     CUDA Accelerated Robot Model
 
-    NOTE: Currently dof is created only for links that we need to compute kinematics.
-    E.g., for robots with many serial chains, add all links of the robot to get the correct dof.
-    This is not an issue if you are loading collision spheres as that will cover the full geometry
-    of the robot.
+    Currently dof is created only for links that we need to compute kinematics. E.g., for robots
+    with many serial chains, add all links of the robot to get the correct dof. This is not an
+    issue if you are loading collision spheres as that will cover the full geometry of the robot.
     """
 
     def __init__(self, config: CudaRobotModelConfig):
@@ -420,6 +469,10 @@ class CudaRobotModel(CudaRobotModelConfig):
     @property
     def base_link(self):
         return self.kinematics_config.base_link
+
+    @property
+    def robot_spheres(self):
+        return self.kinematics_config.link_spheres
 
     def update_kinematics_config(self, new_kin_config: KinematicsTensorConfig):
         self.kinematics_config.copy_(new_kin_config)

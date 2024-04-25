@@ -40,6 +40,7 @@ class RobotSegmenter:
         distance_threshold: float = 0.05,
         use_cuda_graph: bool = True,
         ops_dtype: torch.dtype = torch.float32,
+        depth_to_meter: float = 0.001,
     ):
         self._robot_world = robot_world
         self._projection_rays = None
@@ -53,6 +54,7 @@ class RobotSegmenter:
         self.tensor_args = robot_world.tensor_args
         self.distance_threshold = distance_threshold
         self._ops_dtype = ops_dtype
+        self._depth_to_meter = depth_to_meter
 
     @staticmethod
     def from_robot_file(
@@ -95,7 +97,10 @@ class RobotSegmenter:
         if len(intrinsics.shape) == 2:
             intrinsics = intrinsics.unsqueeze(0)
         project_rays = get_projection_rays(
-            camera_obs.depth_image.shape[-2], camera_obs.depth_image.shape[-1], intrinsics
+            camera_obs.depth_image.shape[-2],
+            camera_obs.depth_image.shape[-1],
+            intrinsics,
+            self._depth_to_meter,
         ).to(dtype=self._ops_dtype)
 
         if self._projection_rays is None:

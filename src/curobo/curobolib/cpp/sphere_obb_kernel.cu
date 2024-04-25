@@ -194,13 +194,13 @@ namespace Curobo
       const scalar_t x     = transform_mat[4];
       const scalar_t y     = transform_mat[5];
       const scalar_t z     = transform_mat[6];
-
-      if ((x != 0) || (y != 0) || (z != 0))
+      if(x != 0 || y!= 0 || z!=0)
       {
         C.x = p_arr.x + w * w * sphere_pos.x + 2 * y * w * sphere_pos.z -
               2 * z * w * sphere_pos.y + x * x * sphere_pos.x +
               2 * y * x * sphere_pos.y + 2 * z * x * sphere_pos.z -
               z * z * sphere_pos.x - y * y * sphere_pos.x;
+      
         C.y = p_arr.y + 2 * x * y * sphere_pos.x + y * y * sphere_pos.y +
               2 * z * y * sphere_pos.z + 2 * w * z * sphere_pos.x -
               z * z * sphere_pos.y + w * w * sphere_pos.y - 2 * x * w * sphere_pos.z -
@@ -714,7 +714,7 @@ float4 &sum_pt)
       
       
       // compute interpolation distance between voxel origin and sphere location:
-      get_array_value(grid_features, voxel_idx, interpolated_distance);// + 0.5 * loc_grid_params.w;
+      get_array_value(grid_features, voxel_idx, interpolated_distance);
       if(!INTERPOLATION)
       {
         interpolated_distance += 0.5 * loc_grid_params.w;//max(0.0, (0.3 * loc_grid_params.w) - loc_sphere.w);
@@ -821,7 +821,7 @@ float4 &sum_pt)
     
     d_grad = (d_plus - d_minus) * (1/(2*voxel_size));
     }
-    else
+    if (!CENTRAL_DIFFERENCE)
     {
         // x difference:
     int x_minus,y_minus, z_minus;
@@ -1252,7 +1252,9 @@ float4 &sum_pt)
       const int32_t env_idx,
       const int bn_sph_idx,
       const int sph_idx,
-      dist_scalar_t *out_distance, grad_scalar_t *closest_pt, uint8_t *sparsity_idx,
+      dist_scalar_t *out_distance, 
+      grad_scalar_t *closest_pt, 
+      uint8_t *sparsity_idx,
       const float *weight, 
       const float *activation_distance,
       const float *max_distance,
@@ -1863,7 +1865,9 @@ float4 &sum_pt)
       const int32_t env_idx,
       const int bn_sph_idx,
       const int sph_idx,
-      dist_scalar_t *out_distance, grad_scalar_t *closest_pt, uint8_t *sparsity_idx,
+      dist_scalar_t *out_distance, 
+      grad_scalar_t *closest_pt, 
+      uint8_t *sparsity_idx,
       const float *weight, 
       const float *activation_distance,
       const float *max_distance,
@@ -1879,7 +1883,6 @@ float4 &sum_pt)
       const float eta = max_distance_local;
       float max_dist  = -1 * max_distance_local;
       max_distance_local = -1 * max_distance_local;
-;
 
       float3 max_grad = make_float3(0.0, 0.0, 0.0);
 

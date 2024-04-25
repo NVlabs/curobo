@@ -18,8 +18,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 
 # CuRobo
-from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
-from curobo.cuda_robot_model.types import CudaRobotModelState
+from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel, CudaRobotModelState
 from curobo.geom.sdf.utils import create_collision_checker
 from curobo.geom.sdf.world import CollisionCheckerType, WorldCollision, WorldCollisionConfig
 from curobo.geom.types import WorldConfig

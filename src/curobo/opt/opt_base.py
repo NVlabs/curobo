@@ -169,7 +169,7 @@ class Optimizer(OptimizerConfig):
         st_time = time.time()
         out = self._optimize(opt_tensor, shift_steps, n_iters)
         if self.sync_cuda_time:
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(device=self.tensor_args.device)
         self.opt_dt = time.time() - st_time
         return out
 

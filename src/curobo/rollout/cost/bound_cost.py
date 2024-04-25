@@ -21,6 +21,7 @@ import warp as wp
 from curobo.cuda_robot_model.types import JointLimits
 from curobo.types.robot import JointState
 from curobo.types.tensor import T_DOF
+from curobo.util.logger import log_error
 from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp import init_warp
 
@@ -53,6 +54,16 @@ class BoundCostConfig(CostConfig):
         self.joint_limits = bounds.clone()
         if teleport_mode:
             self.cost_type = BoundCostType.POSITION
+        if self.cost_type != BoundCostType.POSITION:
+            if torch.max(self.joint_limits.velocity[1] - self.joint_limits.velocity[0]) == 0.0:
+                log_error("Joint velocity limits is zero")
+            if (
+                torch.max(self.joint_limits.acceleration[1] - self.joint_limits.acceleration[0])
+                == 0.0
+            ):
+                log_error("Joint acceleration limits is zero")
+            if torch.max(self.joint_limits.jerk[1] - self.joint_limits.jerk[0]) == 0.0:
+                log_error("Joint jerk limits is zero")
 
     def __post_init__(self):
         if isinstance(self.activation_distance, List):
@@ -675,8 +686,14 @@ def forward_bound_pos_warp(
         target_p = retract_config[target_id]
     p_l = p_b[d_id]
     p_u = p_b[dof + d_id]
+
+    p_range = p_u - p_l
+    eta_p = eta_p * (p_range)
     p_l += eta_p
     p_u -= eta_p
+    if p_range < 1.0:
+        w = (1.0 / p_range) * w
+
     # compute cost:
     b_addrs = b_id * horizon * dof + h_id * dof + d_id
 
@@ -690,33 +707,15 @@ def forward_bound_pos_warp(
         g_p = 2.0 * n_w * error
 
     # bound cost:
-    # if c_p < p_l:
-    #    delta = p_l - c_p
-    #    if (delta) > eta_p or eta_p == 0.0:
-    #        c_total += w * (delta - 0.5 * eta_p)
-    #        g_p += -w
-    #    else:
-    #        c_total += w * (0.5 / eta_p) * delta * delta
-    #        g_p += -w * (1.0 / eta_p) * delta
-    # elif c_p > p_u:
-    #    delta = c_p - p_u
-    #    if (delta) > eta_p or eta_p == 0.0:
-    #        c_total += w * (delta - 0.5 * eta_p)
-    #        g_p += w
-    #    else:
-    #        c_total += w * (0.5 / eta_p) * delta * delta
-    #        g_p += w * (1.0 / eta_p) * delta
 
-    # bound cost:
+    delta = 0.0
     if c_p < p_l:
         delta = c_p - p_l
-        c_total += w * delta * delta
-        g_p += 2.0 * w * delta
     elif c_p > p_u:
         delta = c_p - p_u
-        c_total += w * delta * delta
-        g_p += 2.0 * w * delta
 
+    c_total += w * delta * delta
+    g_p += 2.0 * w * delta
     out_cost[b_addrs] = c_total
 
     # compute gradient
@@ -807,16 +806,33 @@ def forward_bound_warp(
 
     c_j = jerk[b_addrs]
 
-    p_l = p_b[d_id] + eta_p
-    p_u = p_b[dof + d_id] - eta_p
+    p_l = p_b[d_id]
+    p_u = p_b[dof + d_id]
+    p_range = p_u - p_l
+    eta_p = eta_p * (p_range)
+    p_l += eta_p
+    p_u -= eta_p
 
-    v_l = v_b[d_id] + eta_v
-    v_u = v_b[dof + d_id] - eta_v
-    a_l = a_b[d_id] + eta_a
-    a_u = a_b[dof + d_id] - eta_a
+    v_l = v_b[d_id]
+    v_u = v_b[dof + d_id]
+    v_range = v_u - v_l
+    eta_v = eta_v * (v_range)
+    v_l += eta_v
+    v_u -= eta_v
 
-    j_l = j_b[d_id] + eta_j
-    j_u = j_b[dof + d_id] - eta_j
+    a_l = a_b[d_id]
+    a_u = a_b[dof + d_id]
+    a_range = a_u - a_l
+    eta_a = eta_a * (a_range)
+    a_l += eta_a
+    a_u -= eta_a
+
+    j_l = j_b[d_id]
+    j_u = j_b[dof + d_id]
+    j_range = j_u - j_l
+    eta_j = eta_j * (j_range)
+    j_l += eta_j
+    j_u -= eta_j
 
     delta = float(0.0)
     if n_w > 0.0:
@@ -826,6 +842,7 @@ def forward_bound_warp(
 
     # bound cost:
     delta = 0.0
+
     if c_p < p_l:
         delta = c_p - p_l
     elif c_p > p_u:
@@ -995,19 +1012,47 @@ def forward_bound_smooth_warp(
     r_wj = run_weight_jerk[h_id]
     c_j = jerk[b_addrs]
 
-    p_l = p_b[d_id] + eta_p
-    p_u = p_b[dof + d_id] - eta_p
+    p_l = p_b[d_id]
+    p_u = p_b[dof + d_id]
+    p_range = p_u - p_l
+    eta_p = eta_p * (p_range)
+    p_l += eta_p
+    p_u -= eta_p
 
-    v_l = v_b[d_id] + eta_v
-    v_u = v_b[dof + d_id] - eta_v
-    a_l = a_b[d_id] + eta_a
-    a_u = a_b[dof + d_id] - eta_a
+    v_l = v_b[d_id]
+    v_u = v_b[dof + d_id]
+    v_range = v_u - v_l
+    eta_v = eta_v * (v_range)
+    v_l += eta_v
+    v_u -= eta_v
 
-    j_l = j_b[d_id] + eta_j
-    j_u = j_b[dof + d_id] - eta_j
+    a_l = a_b[d_id]
+    a_u = a_b[dof + d_id]
+    a_range = a_u - a_l
+    eta_a = eta_a * (a_range)
+    a_l += eta_a
+    a_u -= eta_a
+
+    j_l = j_b[d_id]
+    j_u = j_b[dof + d_id]
+    j_range = j_u - j_l
+    eta_j = eta_j * (j_range)
+    j_l += eta_j
+    j_u -= eta_j
 
     delta = float(0.0)
 
+    if p_range < 1.0:
+        w = w * (1.0 / (p_range * p_range))
+
+    if v_range < 1.0:
+        b_wv = b_wv * (1.0 / (v_range * v_range))
+    if a_range < 1.0:
+        b_wa = b_wa * (1.0 / (a_range * a_range))
+        w_a = w_a * (1.0 / (a_range * a_range))
+    if j_range < 1.0:
+        b_wj = b_wj * (1.0 / (j_range * j_range))
+        w_j = w_j * (1.0 / (j_range * j_range))
     # position:
     if n_w > 0.0:
         error = c_p - target_p

@@ -271,7 +271,7 @@ class Pose(Sequence):
         if tensor_args is None and device is None:
             log_error("Pose.to() requires tensor_args or device")
         if tensor_args is not None:
-            t_type = vars(tensor_args.as_torch_dict())
+            t_type = tensor_args.as_torch_dict()
         else:
             t_type = {"device": device}
         if self.position is not None:

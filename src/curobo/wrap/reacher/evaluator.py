@@ -78,7 +78,7 @@ class TrajEvaluatorConfig:
         max_jerk: float = 500.0,
         cost_weight: float = 0.01,
         min_dt: float = 0.001,
-        max_dt: float = 0.1,
+        max_dt: float = 0.15,
         tensor_args: TensorDeviceType = TensorDeviceType(),
     ) -> TrajEvaluatorConfig:
         """Creates TrajEvaluatorConfig object from basic parameters.
@@ -169,6 +169,7 @@ def compute_smoothness(
     traj_dt: torch.Tensor,
     min_dt: float,
     max_dt: float,
+    epsilon: float = 1e-6,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """JIT compatible function to compute smoothness.
 
@@ -185,6 +186,8 @@ def compute_smoothness(
         traj_dt: dt of trajectory tensor of shape (batch, horizon) or (1, horizon)
         min_dt: minimum delta time allowed between steps/waypoints in a trajectory.
         max_dt: maximum delta time allowed between steps/waypoints in a trajectory.
+        epsilon: relaxes evaluation of velocity, acceleration, and jerk limits to allow for
+            numerical errors.
 
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: success label tensor of shape (batch) and
@@ -211,7 +214,7 @@ def compute_smoothness(
 
     # clamp dt score:
 
-    dt_score = torch.clamp(dt_score, min_dt, max_dt)
+    dt_score = torch.clamp(dt_score * (1 + epsilon), min_dt, max_dt)
     scale_dt = (1 / dt_score).view(-1, 1, 1)
     abs_acc = torch.abs(acc) * (scale_dt**2)
     # mean_acc_val = torch.max(torch.mean(abs_acc, dim=-1), dim=-1)[0]
@@ -376,7 +379,9 @@ class TrajEvaluator(TrajEvaluatorConfig):
         label, cost = compute_smoothness_opt_dt(
             js.velocity, js.acceleration, js.jerk, max_vel, self.max_acc, self.max_jerk, opt_dt
         )
+
         label = torch.logical_and(label, opt_dt <= self.max_dt)
+
         pl_cost = compute_path_length_cost(js.velocity, cspace_distance_weight)
         return label, pl_cost + self.cost_weight * cost
 

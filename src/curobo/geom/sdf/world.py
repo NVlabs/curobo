@@ -264,7 +264,7 @@ class WorldCollisionConfig:
     n_envs: int = 1
     checker_type: CollisionCheckerType = CollisionCheckerType.PRIMITIVE
     max_distance: Union[torch.Tensor, float] = 0.1
-    max_esdf_distance: Union[torch.Tensor, float] = 1000.0
+    max_esdf_distance: Union[torch.Tensor, float] = 100.0
 
     def __post_init__(self):
         if self.world_model is not None and isinstance(self.world_model, list):
@@ -398,6 +398,7 @@ class WorldCollision(WorldCollisionConfig):
             self._cache_voxelization is None
             or self._cache_voxelization.voxel_size != new_grid.voxel_size
             or self._cache_voxelization.dims != new_grid.dims
+            or self._cache_voxelization.xyzr_tensor is None
         ):
             self._cache_voxelization = new_grid
             self._cache_voxelization.xyzr_tensor = self._cache_voxelization.create_xyzr_tensor(
@@ -458,7 +459,6 @@ class WorldCollision(WorldCollisionConfig):
         self.update_cache_voxelization(new_grid)
 
         xyzr = self._cache_voxelization.xyzr_tensor
-        voxel_shape = xyzr.shape
         xyzr = xyzr.view(-1, 1, 1, 4)
 
         weight = self.tensor_args.to_device([1.0])

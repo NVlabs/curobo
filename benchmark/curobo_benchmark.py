@@ -209,7 +209,6 @@ def load_curobo(
         collision_activation_distance=collision_activation_distance,
         trajopt_dt=0.25,
         finetune_dt_scale=finetune_dt_scale,
-        maximum_trajectory_dt=0.15,
         high_precision=args.high_precision,
     )
     mg = MotionGen(motion_gen_config)
@@ -296,7 +295,6 @@ def benchmark_mb(
                     enable_graph_attempt=1,
                     disable_graph_attempt=10,
                     enable_finetune_trajopt=not args.no_finetune,
-                    partial_ik_opt=False,
                     enable_graph=graph_mode or force_graph,
                     timeout=60,
                     enable_opt=not graph_mode,
@@ -572,6 +570,7 @@ def benchmark_mb(
         if not args.kpi:
 
             try:
+                # Third Party
                 from tabulate import tabulate
 
                 headers = ["Metric", "Value"]
@@ -604,6 +603,7 @@ def benchmark_mb(
     g_m = CuroboGroupMetrics.from_list(all_files)
 
     try:
+        # Third Party
         from tabulate import tabulate
 
         headers = ["Metric", "Value"]

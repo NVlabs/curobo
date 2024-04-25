@@ -92,6 +92,7 @@ def voxel_fit_surface_mesh(
 
 
 def get_voxelgrid_from_mesh(mesh: trimesh.Trimesh, n_spheres: int, voxelize_method: str = "ray"):
+    """Get voxel grid from mesh using :py:func:`trimesh.voxel.creation.voxelize`."""
     pitch = get_voxel_pitch(mesh, n_spheres)
     radius = pitch / 2.0
     try:

@@ -80,6 +80,9 @@ class WorldVoxelCollision(WorldMeshCollision):
         if feature_dtype in [torch.float32, torch.float16, torch.bfloat16]:
             voxel_features[:] = -1.0 * self.max_esdf_distance
         else:
+            if self.max_esdf_distance > 100.0:
+                log_warn("Using fp8 for WorldVoxelCollision will reduce max_esdf_distance to 100")
+                self.max_esdf_distance = 100.0
             voxel_features = (voxel_features.to(dtype=torch.float16) - self.max_esdf_distance).to(
                 dtype=feature_dtype
             )
@@ -503,9 +506,10 @@ class WorldVoxelCollision(WorldMeshCollision):
             False,
             use_batch_env,
             False,
-            True,
+            False,
             False,
         )
+
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
             "mesh" not in self.collision_types or not self.collision_types["mesh"]
         ):

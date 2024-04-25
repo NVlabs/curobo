@@ -263,7 +263,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                     goal_cost = self.goal_cost.forward(
                         ee_pos_batch, ee_quat_batch, self._goal_buffer
                     )
-
+                # print(self._compute_g_dist, goal_cost.view(-1))
                 cost_list.append(goal_cost)
         with profiler.record_function("cost/link_poses"):
             if self._goal_buffer.links_goal_pose is not None and self.cost_cfg.pose_cfg is not None:
@@ -286,6 +286,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             and self.cost_cfg.cspace_cfg is not None
             and self.dist_cost.enabled
         ):
+
             joint_cost = self.dist_cost.forward_target_idx(
                 self._goal_buffer.goal_state.position,
                 state_batch.position,
