@@ -10,18 +10,17 @@
 #
 
 """
-cuRobo provides accelerated modules for robotics which can be used to build high-performance
+cuRobo provides accelerated modules for robotics which can be used to build high-performance 
 robotics applications. The library has several modules for numerical optimization, robot kinematics,
-geometry processing, collision checking, graph search planning. cuRobo provides high-level APIs for
-performing tasks like collision-free inverse kinematics, model predictive control, and motion
+geometry processing, collision checking, graph search planning. cuRobo provides high-level APIs for 
+performing tasks like collision-free inverse kinematics, model predictive control, and motion 
 planning.
 
 High-level APIs:
 
-- Motion Generation / Planning: :mod:`curobo.wrap.reacher.motion_gen`.
 - Inverse Kinematics: :mod:`curobo.wrap.reacher.ik_solver`.
 - Model Predictive Control: :mod:`curobo.wrap.reacher.mpc`.
-- Trajectory Optimization: :mod:`curobo.wrap.reacher.trajopt`.
+- Motion Generation / Planning: :mod:`curobo.wrap.reacher.motion_gen`.
 
 
 cuRobo package is split into several modules:
@@ -34,11 +33,10 @@ cuRobo package is split into several modules:
 - :mod:`curobo.rollout` contains methods that map actions to costs. This class wraps instances of
   :mod:`curobo.cuda_robot_model` and :mod:`curobo.geom` to compute costs given trajectory of actions.
 - :mod:`curobo.util` contains utility methods.
-- :mod:`curobo.wrap` adds the user-level api for task programming. Includes implementation of
+- :mod:`curobo.wrap` adds the user-level api for task programming. Includes implementation of 
   collision-free reacher and batched robot world collision checking.
-- :mod:`curobo.types` contains custom dataclasses for common data types in robotics, including
-  :py:meth:`~types.state.JointState`, :py:meth:`~types.camera.CameraObservation`,
-  :py:meth:`~types.math.Pose`.
+- :mod:`curobo.types` contains custom dataclasses for common data types in robotics, including 
+  :meth:`types.state.JointState`, :meth:`types.camera.CameraObservation`, :meth:`types.math.Pose`.
 """
 
 

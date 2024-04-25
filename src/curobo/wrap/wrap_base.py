@@ -127,10 +127,6 @@ class WrapBase(WrapConfig):
     def rollout_fn(self):
         return self.safety_rollout
 
-    @property
-    def tensor_args(self):
-        return self.safety_rollout.tensor_args
-
     def solve(self, goal: Goal, seed: Optional[torch.Tensor] = None):
         metrics = None
 

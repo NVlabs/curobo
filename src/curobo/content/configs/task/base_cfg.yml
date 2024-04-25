@@ -11,8 +11,8 @@
 
 
 world_collision_checker_cfg:
-  cache: null 
-  checker_type: "PRIMITIVE"
+  cache: null #{"cube": 41, "capsule": 0, "sphere": 0}
+  checker_type: "PRIMITIVE" # ["PRIMITIVE", "BLOX", "MESH"]
   max_distance: 0.1
  
 

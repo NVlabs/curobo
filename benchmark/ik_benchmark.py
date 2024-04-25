@@ -185,7 +185,6 @@ if __name__ == "__main__":
         print("Reported errors are 98th percentile")
         df.to_csv(join_path(args.save_path, args.file_name + ".csv"))
         try:
-            # Third Party
             from tabulate import tabulate
 
             print(tabulate(df, headers="keys", tablefmt="grid"))

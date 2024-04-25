@@ -144,12 +144,17 @@ def main():
         robot_cfg,
         world_cfg_list,
         tensor_args,
+        trajopt_tsteps=32,
         collision_checker_type=CollisionCheckerType.MESH,
         use_cuda_graph=True,
+        num_trajopt_seeds=12,
+        num_graph_seeds=12,
         interpolation_dt=0.03,
-        collision_cache={"obb": 10, "mesh": 10},
+        collision_cache={"obb": 6, "mesh": 6},
         collision_activation_distance=0.025,
+        self_collision_check=True,
         maximum_trajectory_dt=0.25,
+        fixed_iters_trajopt=True,
     )
     motion_gen = MotionGen(motion_gen_config)
     j_names = robot_cfg["kinematics"]["cspace"]["joint_names"]
@@ -157,9 +162,7 @@ def main():
 
     print("warming up...")
     motion_gen.warmup(
-        batch=n_envs,
-        batch_env_mode=True,
-        warmup_js_trajopt=False,
+        enable_graph=False, warmup_js_trajopt=False, batch=n_envs, batch_env_mode=True
     )
 
     add_extensions(simulation_app, args.headless_mode)
@@ -173,7 +176,7 @@ def main():
     x_sph[..., 3] = radius
     env_query_idx = torch.arange(n_envs, device=tensor_args.device, dtype=torch.int32)
     plan_config = MotionGenPlanConfig(
-        enable_graph=False, max_attempts=2, enable_finetune_trajopt=True
+        enable_graph=False, enable_graph_attempt=4, max_attempts=2, enable_finetune_trajopt=True
     )
     prev_goal = None
     cmd_plan = [None, None]

@@ -11,7 +11,6 @@
 
 # Standard Library
 import argparse
-import time
 from copy import deepcopy
 from typing import Optional
 
@@ -25,8 +24,7 @@ from robometrics.datasets import demo_raw, motion_benchmaker_raw, mpinets_raw
 from tqdm import tqdm
 
 # CuRobo
-from curobo.geom.sdf.world import CollisionCheckerType, WorldCollisionConfig, WorldConfig
-from curobo.geom.sdf.world_blox import WorldBloxCollision
+from curobo.geom.sdf.world import CollisionCheckerType, WorldConfig
 from curobo.geom.types import Cuboid as curobo_Cuboid
 from curobo.geom.types import Mesh
 from curobo.types.base import TensorDeviceType
@@ -37,7 +35,6 @@ from curobo.types.state import JointState
 from curobo.util.logger import setup_curobo_logger
 from curobo.util.metrics import CuroboGroupMetrics, CuroboMetrics
 from curobo.util_file import (
-    file_exists,
     get_assets_path,
     get_robot_configs_path,
     get_world_configs_path,
@@ -133,10 +130,8 @@ def load_curobo(
 ):
     robot_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
     robot_cfg["kinematics"]["collision_sphere_buffer"] = 0.0
-    robot_cfg["kinematics"]["collision_link_names"].remove("attached_object")
-    robot_cfg["kinematics"]["ee_link"] = "panda_hand"
 
-    ik_seeds = 32
+    ik_seeds = 30
     if graph_mode:
         trajopt_seeds = 4
     if trajopt_seeds >= 14:
@@ -152,30 +147,11 @@ def load_curobo(
                 "world": {
                     "pose": [0, 0, 0, 1, 0, 0, 0],
                     "integrator_type": "tsdf",
-                    "voxel_size": 0.01,
+                    "voxel_size": 0.02,
                 }
             }
         }
     )
-    world_nvblox_config = WorldCollisionConfig.load_from_dict(
-        {"cache": None, "checker_type": "BLOX"},
-        world_cfg,
-        TensorDeviceType(),
-    )
-    world_nvblox = WorldBloxCollision(world_nvblox_config)
-    world_cfg = WorldConfig.from_dict(
-        {
-            "voxel": {
-                "base": {
-                    "dims": [2.4, 2.4, 2.4],
-                    "pose": [0, 0, 0, 1, 0, 0, 0],
-                    "voxel_size": 0.005,
-                    "feature_dtype": torch.float8_e4m3fn,
-                },
-            }
-        }
-    )
-
     interpolation_steps = 2000
     if graph_mode:
         interpolation_steps = 100
@@ -188,7 +164,7 @@ def load_curobo(
         robot_cfg_instance,
         world_cfg,
         trajopt_tsteps=tsteps,
-        collision_checker_type=CollisionCheckerType.VOXEL,
+        collision_checker_type=CollisionCheckerType.BLOX,
         use_cuda_graph=cuda_graph,
         position_threshold=0.005,  # 0.5 cm
         rotation_threshold=0.05,
@@ -201,6 +177,7 @@ def load_curobo(
         interpolation_steps=interpolation_steps,
         collision_activation_distance=collision_activation_distance,
         trajopt_dt=0.25,
+        finetune_dt_scale=0.9,
         maximum_trajectory_dt=0.15,
         finetune_trajopt_iters=200,
     )
@@ -211,15 +188,12 @@ def load_curobo(
         robot_cfg_instance,
         "collision_table.yml",
         collision_activation_distance=0.0,
-        collision_checker_type=CollisionCheckerType.MESH,
+        collision_checker_type=CollisionCheckerType.PRIMITIVE,
         n_cuboids=50,
-        n_meshes=50,
     )
-    mg.clear_world_cache()
     robot_world = RobotWorld(config)
-    robot_world.clear_world_cache()
 
-    return mg, robot_cfg, robot_world, world_nvblox
+    return mg, robot_cfg, robot_world
 
 
 def benchmark_mb(
@@ -234,7 +208,7 @@ def benchmark_mb(
     # load dataset:
     graph_mode = args.graph
     interpolation_dt = 0.02
-    file_paths = [demo_raw, motion_benchmaker_raw, mpinets_raw][2:]
+    file_paths = [demo_raw, motion_benchmaker_raw, mpinets_raw][1:2]
 
     enable_debug = save_log or plot_cost
     all_files = []
@@ -242,9 +216,8 @@ def benchmark_mb(
     if override_tsteps is not None:
         og_tsteps = override_tsteps
 
-    og_trajopt_seeds = 4
-    og_collision_activation_distance = 0.025
-    count = [0, 0, 0, 0]
+    og_trajopt_seeds = 12
+    og_collision_activation_distance = 0.03  # 0.03
     if args.graph:
         og_trajopt_seeds = 4
     for file_path in file_paths:
@@ -255,7 +228,6 @@ def benchmark_mb(
         for key, v in tqdm(problems.items()):
             scene_problems = problems[key]
             m_list = []
-            count[3] += 1
             i = -1
             ik_fail = 0
             trajopt_seeds = og_trajopt_seeds
@@ -264,7 +236,32 @@ def benchmark_mb(
             if "dresser_task_oriented" in list(problems.keys()):
                 mpinets_data = True
 
-            mg, robot_cfg, robot_world, world_nvblox = load_curobo(
+            if "cage_panda" in key:
+                trajopt_seeds = 8
+            else:
+                continue
+            if "table_under_pick_panda" in key:
+                tsteps = 44
+                trajopt_seeds = 16
+                finetune_dt_scale = 0.98
+
+            if "cubby_task_oriented" in key and "merged" not in key:
+                trajopt_seeds = 24
+                finetune_dt_scale = 0.95
+                collision_activation_distance = 0.035
+            if "dresser_task_oriented" in key:
+                trajopt_seeds = 24
+                finetune_dt_scale = 0.95
+                collision_activation_distance = 0.035  # 0.035
+
+            if "merged_cubby_task_oriented" in key:
+                collision_activation_distance = 0.025  # 0.035
+            if "tabletop_task_oriented" in key:
+                collision_activation_distance = 0.025  # 0.035
+            if key in ["dresser_neutral_goal"]:
+                trajopt_seeds = 24
+                collision_activation_distance = og_collision_activation_distance
+            mg, robot_cfg, robot_world = load_curobo(
                 1,
                 enable_debug,
                 tsteps,
@@ -283,6 +280,7 @@ def benchmark_mb(
                     max_attempts=10,
                     enable_graph_attempt=1,
                     enable_finetune_trajopt=True,
+                    partial_ik_opt=False,
                     enable_graph=graph_mode,
                     timeout=60,
                     enable_opt=not graph_mode,
@@ -300,60 +298,14 @@ def benchmark_mb(
                 mg.reset(reset_seed=False)
                 world = WorldConfig.from_dict(problem["obstacles"])
 
-                world_nvblox.clear_cache()
-                world_nvblox.update_blox_hashes()
-                mg.clear_world_cache()
+                mg.world_coll_checker.clear_cache()
+                mg.world_coll_checker.update_blox_hashes()
 
-                save_path = "benchmark/log/nvblox_640_new/" + key + "_" + str(i)
-                save_path = (
-                    "/home/bala/code/raven_internship/data/render_mpinets_640/reformat/"
-                    + key
-                    + "_"
-                    + str(i)
-                )
-                # save_path = "/home/bala/code/raven_internship/data/render_26k/_0_8/reformat/" + key + "_" + str(i)
+                save_path = "benchmark/log/nvblox/" + key + "_" + str(i)
 
-                if not file_exists(save_path):
-                    continue
                 m_dataset = Sun3dDataset(save_path)
 
                 tensor_args = mg.tensor_args
-
-                if i == 0:
-                    for j in tqdm(range(min(10, len(m_dataset))), leave=False):
-                        data = m_dataset[j]
-                        cam_obs = CameraObservation(
-                            rgb_image=tensor_args.to_device(data["rgba"])
-                            .squeeze()
-                            .to(dtype=torch.uint8)
-                            .permute(1, 2, 0),  # data[rgba]: 4 x H x W -> H x W x 4
-                            depth_image=tensor_args.to_device(data["depth"]),
-                            intrinsics=data["intrinsics"],
-                            pose=Pose.from_matrix(data["pose"].to(device=mg.tensor_args.device)),
-                        )
-                        cam_obs = cam_obs
-                        torch.cuda.synchronize()
-                        st_int_time = time.time()
-                        world_nvblox.add_camera_frame(cam_obs, "world")
-                        torch.cuda.synchronize()
-                    world_nvblox.process_camera_frames("world", False)
-                    torch.cuda.synchronize()
-                    world_nvblox.update_blox_hashes()
-
-                    # get esdf grid:
-                    esdf = world_nvblox.get_esdf_in_bounding_box(
-                        curobo_Cuboid(
-                            name="base", pose=[0, 0, 0, 1, 0, 0, 0], dims=[2.4, 2.4, 2.4]
-                        ),
-                        voxel_size=0.005,
-                        dtype=torch.float32,
-                    )
-                    mg.world_coll_checker.update_voxel_data(esdf)
-                    world_nvblox.clear_cache()
-                    world_nvblox.update_blox_hashes()
-                    mg.clear_world_cache()
-
-                int_time = 0
                 for j in tqdm(range(min(1, len(m_dataset))), leave=False):
                     data = m_dataset[j]
                     cam_obs = CameraObservation(
@@ -366,26 +318,18 @@ def benchmark_mb(
                         pose=Pose.from_matrix(data["pose"].to(device=mg.tensor_args.device)),
                     )
                     cam_obs = cam_obs
-                    torch.cuda.synchronize()
-                    st_int_time = time.time()
-                    world_nvblox.add_camera_frame(cam_obs, "world")
-                    torch.cuda.synchronize()
-                    int_time += time.time() - st_int_time
-                st_time = time.time()
-                world_nvblox.process_camera_frames("world", False)
-                torch.cuda.synchronize()
-                world_nvblox.update_blox_hashes()
 
-                # get esdf grid:
-                esdf = world_nvblox.get_esdf_in_bounding_box(
-                    curobo_Cuboid(name="base", pose=[0, 0, 0, 1, 0, 0, 0], dims=[2.4, 2.4, 2.4]),
-                    voxel_size=0.005,
-                    dtype=torch.float32,
-                )
-                mg.world_coll_checker.update_voxel_data(esdf)
+                    mg.add_camera_frame(cam_obs, "world")
 
+                mg.process_camera_frames("world", False)
                 torch.cuda.synchronize()
-                perception_time = time.time() - st_time + int_time
+                mg.world_coll_checker.update_blox_hashes()
+                torch.cuda.synchronize()
+                # if i > 2:
+                #    mg.world_coll_checker.clear_cache()
+                #    mg.world_coll_checker.update_blox_hashes()
+
+                # mg.world_coll_checker.save_layer("world", "test.nvblx")
 
                 start_state = JointState.from_position(mg.tensor_args.to_device([q_start]))
                 result = mg.plan_single(
@@ -428,31 +372,6 @@ def benchmark_mb(
                                 ),
                                 log_scale=False,
                             )
-                if save_log or write_usd:
-                    world.randomize_color(r=[0.5, 0.9], g=[0.2, 0.5], b=[0.0, 0.2])
-
-                    # nvblox_obs = world_nvblox.get_mesh_from_blox_layer(
-                    #    "world",
-                    # )
-                    # nvblox_obs.vertex_colors = None
-
-                    # if nvblox_obs.vertex_colors is not None:
-                    #    nvblox_obs.vertex_colors = nvblox_obs.vertex_colors.cpu().numpy()
-                    # else:
-                    #    nvblox_obs.color = [0.0, 0.0, 0.8, 0.8]
-
-                    # nvblox_obs.name = "nvblox_mesh_world"
-                    # world.add_obstacle(nvblox_obs)
-
-                    coll_mesh = mg.world_coll_checker.get_mesh_in_bounding_box(
-                        curobo_Cuboid(name="new_test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[2, 2, 2]),
-                        voxel_size=0.01,
-                    )
-
-                    coll_mesh.color = [0.0, 0.8, 0.8, 0.8]
-
-                    coll_mesh.name = "nvblox_voxel_world"
-                    world.add_obstacle(coll_mesh)
                 if result.success.item():
                     q_traj = result.get_interpolated_plan()
                     problem["goal_ik"] = q_traj.position.cpu().squeeze().numpy()[-1, :].tolist()
@@ -506,10 +425,10 @@ def benchmark_mb(
                         "valid_query": result.valid_query,
                     }
                     problem["solution_debug"] = debug
-                    world_coll = WorldConfig.from_dict(problem["obstacles"]).get_mesh_world()
+                    world_coll = WorldConfig.from_dict(problem["obstacles"]).get_obb_world()
 
                     # check if path is collision free w.r.t. ground truth mesh:
-                    robot_world.world_model.clear_cache()
+                    # robot_world.world_model.clear_cache()
                     robot_world.update_world(world_coll)
 
                     q_int_traj = result.get_interpolated_plan().position.unsqueeze(0)
@@ -529,9 +448,6 @@ def benchmark_mb(
                     # if not d_mask:
                     #    write_usd = True
                     #    #print(torch.max(d_world).item(), problem_name)
-                    if d_int_mask:
-                        count[0] += 1
-
                     current_metrics = CuroboMetrics(
                         skip=False,
                         success=True,
@@ -549,11 +465,37 @@ def benchmark_mb(
                         motion_time=result.motion_time.item(),
                         solve_time=result.solve_time,
                         jerk=torch.max(torch.abs(result.optimized_plan.jerk)).item(),
-                        perception_time=perception_time,
                     )
 
+                    if save_log or write_usd:
+                        world.randomize_color(r=[0.5, 0.9], g=[0.2, 0.5], b=[0.0, 0.2])
+
+                        nvblox_obs = mg.world_coll_checker.get_mesh_from_blox_layer(
+                            "world",
+                        )
+                        # nvblox_obs.vertex_colors = None
+
+                        if nvblox_obs.vertex_colors is not None:
+                            nvblox_obs.vertex_colors = nvblox_obs.vertex_colors.cpu().numpy()
+                        else:
+                            nvblox_obs.color = [0.0, 0.0, 0.8, 0.8]
+
+                        nvblox_obs.name = "nvblox_mesh_world"
+                        world.add_obstacle(nvblox_obs)
+
+                        coll_mesh = mg.world_coll_checker.get_mesh_in_bounding_box(
+                            curobo_Cuboid(
+                                name="test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[1.5, 1.5, 1]
+                            ),
+                            voxel_size=0.005,
+                        )
+
+                        coll_mesh.color = [0.0, 0.8, 0.8, 0.8]
+
+                        coll_mesh.name = "nvblox_voxel_world"
+                        world.add_obstacle(coll_mesh)
                     # run planner
-                    if write_usd and not d_mask:
+                    if write_usd:
                         # CuRobo
                         from curobo.util.usd_helper import UsdHelper
 
@@ -570,7 +512,7 @@ def benchmark_mb(
                             robot_usd_local_reference="assets/",
                             base_frame="/world_" + problem_name,
                             visualize_robot_spheres=True,
-                            flatten_usd=True,
+                            # flatten_usd=True,
                         )
                         # write_usd = False
                         # exit()
@@ -595,9 +537,7 @@ def benchmark_mb(
 
                     m_list.append(current_metrics)
                     all_groups.append(current_metrics)
-                    count[1] += 1
                 elif result.valid_query:
-                    count[1] += 1
                     current_metrics = CuroboMetrics()
                     debug = {
                         "used_graph": result.used_graph,
@@ -615,7 +555,6 @@ def benchmark_mb(
                     m_list.append(current_metrics)
                     all_groups.append(current_metrics)
                 else:
-                    count[2] += 1
                     # print("invalid: " + problem_name)
                     debug = {
                         "used_graph": result.used_graph,
@@ -644,7 +583,7 @@ def benchmark_mb(
                         write_trajopt=True,
                         visualize_robot_spheres=True,
                         grid_space=2,
-                        flatten_usd=True,
+                        # flatten_usd=True,
                     )
                     exit()
             g_m = CuroboGroupMetrics.from_list(m_list)
@@ -660,7 +599,6 @@ def benchmark_mb(
                 g_m.cspace_path_length.percent_98,
                 g_m.motion_time.percent_98,
                 g_m.perception_interpolated_success,
-                g_m.perception_time.mean,
                 # g_m.orientation_error.median,
             )
             print(g_m.attempts)
@@ -695,7 +633,6 @@ def benchmark_mb(
     print("ST: ", g_m.solve_time)
     print("accuracy: ", g_m.position_error, g_m.orientation_error)
     print("Jerk: ", g_m.jerk)
-    print(count)
 
 
 if __name__ == "__main__":

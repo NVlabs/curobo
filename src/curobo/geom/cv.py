@@ -47,9 +47,7 @@ def project_depth_to_pointcloud(depth_image: torch.Tensor, intrinsics_matrix: to
 
 
 @get_torch_jit_decorator()
-def get_projection_rays(
-    height: int, width: int, intrinsics_matrix: torch.Tensor, depth_to_meter: float = 0.001
-):
+def get_projection_rays(height: int, width: int, intrinsics_matrix: torch.Tensor):
     """Projects numpy depth image to point cloud.
 
     Args:
@@ -84,7 +82,7 @@ def get_projection_rays(
     rays = torch.stack([output_x, output_y, input_z], -1).reshape(
         intrinsics_matrix.shape[0], width * height, 3
     )
-    rays = rays * depth_to_meter
+    rays = rays * (1.0 / 1000.0)
     return rays
 
 

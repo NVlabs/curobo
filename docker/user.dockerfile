@@ -10,12 +10,12 @@
 ##
 
 # Check architecture and load:
-ARG IMAGE_TAG
+ARG IMAGE_TAG 
 FROM curobo_docker:${IMAGE_TAG}
 # Set variables
 ARG USERNAME
 ARG USER_ID
-ARG CACHE_DATE=2024-04-25
+ARG CACHE_DATE=2023-04-11 
 
 # Set environment variables
 
@@ -29,7 +29,7 @@ RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 
 # Set user
-# RUN mkdir /home/$USERNAME && chown $USERNAME:$USERNAME /home/$USERNAME
+# RUN mkdir /home/$USERNAME && chown $USERNAME:$USERNAME /home/$USERNAME 
 USER $USERNAME
 WORKDIR /home/$USERNAME
 ENV USER=$USERNAME
