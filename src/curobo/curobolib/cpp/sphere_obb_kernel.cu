@@ -59,9 +59,9 @@ namespace Curobo
     {
 
       __nv_fp8_storage_t value_in = (reinterpret_cast<const __nv_fp8_storage_t*> (grid_features))[voxel_idx];
-    
+
       float value = __half2float(__nv_cvt_fp8_to_halfraw(value_in, __NV_E4M3));
-      
+
       return value;
     }
 
@@ -70,21 +70,21 @@ namespace Curobo
     {
 
       __nv_fp8_storage_t value_in = (reinterpret_cast<const __nv_fp8_storage_t*> (grid_features))[voxel_idx];
-    
+
       value = __half2float(__nv_cvt_fp8_to_halfraw(value_in, __NV_E4M3));
-      
+
     }
 
     #endif
-    
+
     __device__ __forceinline__ float
     get_array_value(const at::BFloat16 *grid_features, const int voxel_idx)
     {
 
       __nv_bfloat16 value_in = (reinterpret_cast<const __nv_bfloat16*> (grid_features))[voxel_idx];
-    
+
       float value = __bfloat162float(value_in);
-      
+
       return value;
     }
 
@@ -93,9 +93,9 @@ namespace Curobo
     {
 
       __nv_half value_in = (reinterpret_cast<const __nv_half*> (grid_features))[voxel_idx];
-    
+
       float value = __half2float(value_in);
-      
+
       return value;
     }
 
@@ -104,7 +104,7 @@ namespace Curobo
     {
 
       float value = grid_features[voxel_idx];
-    
+
       return value;
     }
 
@@ -113,7 +113,7 @@ namespace Curobo
     {
 
       float value = (float) grid_features[voxel_idx];
-    
+
       return value;
     }
 
@@ -123,9 +123,9 @@ namespace Curobo
     {
 
       __nv_bfloat16 value_in = (reinterpret_cast<const __nv_bfloat16*> (grid_features))[voxel_idx];
-    
+
       value = __bfloat162float(value_in);
-      
+
     }
 
     __device__ __forceinline__ void
@@ -133,9 +133,9 @@ namespace Curobo
     {
 
       __nv_half value_in = (reinterpret_cast<const __nv_half*> (grid_features))[voxel_idx];
-    
+
       value = __half2float(value_in);
-      
+
     }
 
     __device__ __forceinline__ void
@@ -143,7 +143,7 @@ namespace Curobo
     {
 
       value = grid_features[voxel_idx];
-    
+
     }
 
     __device__ __forceinline__ void
@@ -151,7 +151,7 @@ namespace Curobo
     {
 
       value = (float) grid_features[voxel_idx];
-    
+
     }
 
     template<typename scalar_t>
@@ -200,7 +200,7 @@ namespace Curobo
               2 * z * w * sphere_pos.y + x * x * sphere_pos.x +
               2 * y * x * sphere_pos.y + 2 * z * x * sphere_pos.z -
               z * z * sphere_pos.x - y * y * sphere_pos.x;
-      
+
         C.y = p_arr.y + 2 * x * y * sphere_pos.x + y * y * sphere_pos.y +
               2 * z * y * sphere_pos.z + 2 * w * z * sphere_pos.x -
               z * z * sphere_pos.y + w * w * sphere_pos.y - 2 * x * w * sphere_pos.z -
@@ -402,17 +402,17 @@ namespace Curobo
     {
       float3 pt = make_float3(sphere.x, sphere.y, sphere.z);
       bool inside = true;
-      
+
       if (max(max(fabs(sphere.x) - bounds.x, fabs(sphere.y) - bounds.y),
               fabs(sphere.z) - bounds.z) >= (0.0))
       {
         inside = false;
       }
-      
+
 
       float3 val = make_float3(sphere.x,sphere.y,sphere.z);
       val = bounds - fabs(val);
-      
+
       if(!inside)
       {
 
@@ -435,16 +435,16 @@ namespace Curobo
       }
       else
       {
-      
-      
-        val = fabs(val);
-      
 
-      
-        
+
+        val = fabs(val);
+
+
+
+
         if (val.y <= val.x && val.y <= val.z)
         {
-        
+
           if(sphere.y > 0)
           {
             pt.y = bounds.y;
@@ -454,7 +454,7 @@ namespace Curobo
             pt.y = -1 * bounds.y;
           }
         }
-        
+
         else if (val.x <= val.y && val.x <= val.z)
         {
           if(sphere.x > 0)
@@ -468,7 +468,7 @@ namespace Curobo
         }
         else if (val.z <= val.x && val.z <= val.y)
         {
-          
+
           if(sphere.z > 0)
           {
             pt.z = bounds.z;
@@ -477,15 +477,15 @@ namespace Curobo
           {
             pt.z = -1 * bounds.z;
           }
-        } 
-        
-        
-      
- 
-      } 
+        }
+
+
+
+
+      }
 
       delta = make_float3(pt.x - sphere.x, pt.y - sphere.y, pt.z - sphere.z);
-      
+
       distance = length(delta);
 
       if (!inside)
@@ -502,10 +502,10 @@ namespace Curobo
         delta = normalize(delta);
 
       }
-      sph_distance = distance + sphere.w; 
+      sph_distance = distance + sphere.w;
       //
-      
-    
+
+
     }
 
     /**
@@ -523,7 +523,7 @@ namespace Curobo
     {
       // if((fabs(sphere.x) - bounds.x) >= sphere.w || fabs(sphere.y) - bounds.y >=
       // sphere.w || (fabs(sphere.z) - bounds.z) >= sphere.w)
-      
+
       inside = false;
 
 
@@ -553,13 +553,13 @@ namespace Curobo
       float& distance,
       bool& inside) // pass in cl_pt
     {
-      
+
       // compute distance:
       float4 loc_sphere = sphere;
       loc_sphere.w = max_distance;
       distance = max_distance;
       check_sphere_aabb(bounds, loc_sphere, inside, delta, distance, sph_dist);
-      
+
       //distance = fabsf(distance);
       return distance;
     }
@@ -593,15 +593,15 @@ float4 &sum_pt)
       //sum_pt.x = sum_pt.x * (1/sph_dist);
       //sum_pt.y = sum_pt.y * (1/sph_dist);
       //sum_pt.z = sum_pt.z * (1/sph_dist);
-      
-    if (sph_dist> eta) 
+
+    if (sph_dist> eta)
     {
       sum_pt.w = sph_dist - 0.5 * eta;
 
 
-    } else if (sph_dist <= eta) 
+    } else if (sph_dist <= eta)
     {
-      
+
       sum_pt.w = (0.5 / eta) * (sph_dist) * (sph_dist);
       const float scale = (1 / eta) * (sph_dist);
       sum_pt.x = scale * sum_pt.x;
@@ -610,7 +610,7 @@ float4 &sum_pt)
     }
 
     }
-    
+
   }
 }
 
@@ -618,18 +618,18 @@ float4 &sum_pt)
     __device__ __forceinline__ void scale_eta_metric(
       const float3 delta,
       const float sph_dist,
-      const float eta, 
+      const float eta,
       float4& sum_pt)
     {
       // compute distance:
       //float sph_dist = 0;
-      
+
       sum_pt.x =  delta.x;
       sum_pt.y =  delta.y;
       sum_pt.z =  delta.z;
       sum_pt.w = sph_dist;
 
-      
+
       if(SCALE_METRIC)
       {
 
@@ -656,15 +656,15 @@ float4 &sum_pt)
           sum_pt.y = 0.0;
           sum_pt.z = 0.0;
           sum_pt.w = 0.0;
-        
+
         }
-      
+
       }
-      
-      
-      
-      
-      
+
+
+
+
+
     }
 
 
@@ -678,8 +678,8 @@ float4 &sum_pt)
       float distance = 0;
 
       scale_eta_metric<SCALE_METRIC>(sphere, cl_pt, eta, inside, sum_pt, distance);
-      
-      
+
+
     }
 
 
@@ -687,15 +687,15 @@ float4 &sum_pt)
     __device__ __forceinline__ void
     compute_voxel_location_params(
     const grid_scalar_t *grid_features,
-    const float4& loc_grid_params, 
+    const float4& loc_grid_params,
     const float4& loc_sphere,
     int3 &xyz_loc,
     int3 &xyz_grid,
     float &interpolated_distance,
     int &voxel_idx)
-    { 
+    {
 
-      
+
       // convert location to index: can use floor to cast to int.
       // to account for negative values, add 0.5 * bounds.
       const float3 loc_grid = make_float3(loc_grid_params.x, loc_grid_params.y, loc_grid_params.z);
@@ -703,16 +703,16 @@ float4 &sum_pt)
       //xyz_loc = make_int3(floorf((sphere  + 0.5 * loc_grid) / loc_grid_params.w));
       const float inv_voxel_size = 1.0/loc_grid_params.w;
       //xyz_loc = make_int3(sphere * inv_voxel_size)  + make_int3(0.5 * loc_grid * inv_voxel_size);
-      
+
       xyz_loc = make_int3((sphere  + 0.5 * loc_grid) * inv_voxel_size);
 
       //xyz_loc = make_int3(sphere / loc_grid_params.w) + make_int3(floorf(0.5 * loc_grid/loc_grid_params.w));
       xyz_grid = make_int3((loc_grid * inv_voxel_size)) + 1;
-      
+
       // find next nearest voxel to current point and then do weighted interpolation:
       voxel_idx = xyz_loc.x * xyz_grid.y * xyz_grid.z  + xyz_loc.y * xyz_grid.z + xyz_loc.z;
-      
-      
+
+
       // compute interpolation distance between voxel origin and sphere location:
       get_array_value(grid_features, voxel_idx, interpolated_distance);
       if(!INTERPOLATION)
@@ -721,10 +721,10 @@ float4 &sum_pt)
       }
       if(INTERPOLATION)
       {
-      // 
+      //
       float3 voxel_origin = (make_float3(xyz_loc) * loc_grid_params.w) - (loc_grid/2);
-      
-      
+
+
       float3 delta =  sphere - voxel_origin;
       int3 next_loc = make_int3(((make_float3(xyz_loc) + normalize(delta))));
       float ratio = length(delta) * inv_voxel_size;
@@ -733,11 +733,11 @@ float4 &sum_pt)
 
       interpolated_distance = ratio * interpolated_distance + (1 - ratio) * get_array_value(grid_features, next_voxel_idx) +
        max(0.0, (ratio * loc_grid_params.w) - loc_sphere.w);;
-      
+
       }
-     
-     
-   
+
+
+
 
     }
 
@@ -745,7 +745,7 @@ float4 &sum_pt)
     __device__ __forceinline__ void
     compute_voxel_index(
     const grid_scalar_t *grid_features,
-    const float4& loc_grid_params, 
+    const float4& loc_grid_params,
     const float4& loc_sphere,
     int &voxel_idx,
     int3 &xyz_loc,
@@ -756,23 +756,23 @@ float4 &sum_pt)
       // loc_grid_params.x contains bounds
       float4 local_bounds = 0.5*loc_grid_params - 2*loc_grid_params.w;
 
-      if (loc_sphere.x <= -1 * (local_bounds.x) || 
-          loc_sphere.x >= (local_bounds.x) || 
+      if (loc_sphere.x <= -1 * (local_bounds.x) ||
+          loc_sphere.x >= (local_bounds.x) ||
           loc_sphere.y <= -1 * (local_bounds.y) ||
           loc_sphere.y >=  (local_bounds.y) ||
-          loc_sphere.z <= -1 * (local_bounds.z) || 
+          loc_sphere.z <= -1 * (local_bounds.z) ||
           loc_sphere.z >=  (local_bounds.z))
       {
         voxel_idx = -1;
         return;
       }
-      
+
       compute_voxel_location_params(grid_features, loc_grid_params, loc_sphere, xyz_loc, xyz_grid, interpolated_distance, voxel_idx);
       // convert location to index: can use floor to cast to int.
       // to account for negative values, add 0.5 * bounds.
-      
-      
-      
+
+
+
 
 
     }
@@ -780,64 +780,64 @@ float4 &sum_pt)
 
 
 
-    
+
     template<typename grid_scalar_t, bool NORMALIZE=true, bool CENTRAL_DIFFERENCE=true, bool ADD_NOISE=false>
-    __device__ __forceinline__ void 
+    __device__ __forceinline__ void
     compute_voxel_fd_gradient(
-    const grid_scalar_t *grid_features, 
-    const int voxel_layer_start_idx, 
+    const grid_scalar_t *grid_features,
+    const int voxel_layer_start_idx,
     const int3& xyz_loc,
     const int3& xyz_grid,
     const float voxel_size,
     float4 &cl_pt)
     {
-    
+
     float3 d_grad;
     if (CENTRAL_DIFFERENCE)
     {
 
     // x difference:
     int x_plus, x_minus, y_plus, y_minus, z_plus, z_minus;
-  
+
     x_plus = (xyz_loc.x + 1) * xyz_grid.y * xyz_grid.z + xyz_loc.y * xyz_grid.z + xyz_loc.z;
     x_minus = (xyz_loc.x - 1)* xyz_grid.y * xyz_grid.z + xyz_loc.y * xyz_grid.z + xyz_loc.z;
-    
+
     y_plus = (xyz_loc.x) * xyz_grid.y * xyz_grid.z + (xyz_loc.y + 1) * xyz_grid.z + xyz_loc.z;
     y_minus = (xyz_loc.x )* xyz_grid.y * xyz_grid.z + (xyz_loc.y -1) * xyz_grid.z + xyz_loc.z;
-    
+
     z_plus = (xyz_loc.x) * xyz_grid.y * xyz_grid.z + xyz_loc.y * xyz_grid.z + xyz_loc.z + 1;
     z_minus = (xyz_loc.x)* xyz_grid.y * xyz_grid.z + xyz_loc.y * xyz_grid.z + xyz_loc.z - 1;
 
-    
+
     float3 d_plus = make_float3(
-      get_array_value(grid_features,voxel_layer_start_idx + x_plus), 
-      get_array_value(grid_features, voxel_layer_start_idx + y_plus), 
+      get_array_value(grid_features,voxel_layer_start_idx + x_plus),
+      get_array_value(grid_features, voxel_layer_start_idx + y_plus),
       get_array_value(grid_features,voxel_layer_start_idx + z_plus));
     float3 d_minus = make_float3(
-      get_array_value(grid_features,voxel_layer_start_idx + x_minus), 
-      get_array_value(grid_features, voxel_layer_start_idx + y_minus), 
+      get_array_value(grid_features,voxel_layer_start_idx + x_minus),
+      get_array_value(grid_features, voxel_layer_start_idx + y_minus),
       get_array_value(grid_features,voxel_layer_start_idx + z_minus));
-    
-    
+
+
     d_grad = (d_plus - d_minus) * (1/(2*voxel_size));
     }
     if (!CENTRAL_DIFFERENCE)
     {
         // x difference:
     int x_minus,y_minus, z_minus;
-  
-    x_minus = (xyz_loc.x - 1)* xyz_grid.y * xyz_grid.z + xyz_loc.y * xyz_grid.z + xyz_loc.z;    
+
+    x_minus = (xyz_loc.x - 1)* xyz_grid.y * xyz_grid.z + xyz_loc.y * xyz_grid.z + xyz_loc.z;
     y_minus = (xyz_loc.x )* xyz_grid.y * xyz_grid.z + (xyz_loc.y -1) * xyz_grid.z + xyz_loc.z;
     z_minus = (xyz_loc.x)* xyz_grid.y * xyz_grid.z + xyz_loc.y * xyz_grid.z + xyz_loc.z - 1;
 
-    
+
     float3 d_plus = make_float3(cl_pt.w, cl_pt.w, cl_pt.w);
     float3 d_minus = make_float3(
-      get_array_value(grid_features,voxel_layer_start_idx + x_minus), 
-      get_array_value(grid_features, voxel_layer_start_idx + y_minus), 
+      get_array_value(grid_features,voxel_layer_start_idx + x_minus),
+      get_array_value(grid_features, voxel_layer_start_idx + y_minus),
       get_array_value(grid_features,voxel_layer_start_idx + z_minus));
-    
-    
+
+
     d_grad = (d_plus - d_minus) * (1/voxel_size);
     }
 
@@ -860,16 +860,16 @@ float4 &sum_pt)
       cl_pt.y = 0.001;
       }
     }
-   
+
     }
 
     template<typename grid_scalar_t, bool SCALE_METRIC=true>
     __device__ __forceinline__ void
-    compute_sphere_voxel_gradient(const grid_scalar_t *grid_features, 
-    const int voxel_layer_start_idx, 
+    compute_sphere_voxel_gradient(const grid_scalar_t *grid_features,
+    const int voxel_layer_start_idx,
     const int num_voxels,
-    const float4& loc_grid_params, 
-    const float4& loc_sphere, 
+    const float4& loc_grid_params,
+    const float4& loc_sphere,
     float4 &sum_pt,
     float &signed_distance,
     const float eta = 0.0,
@@ -887,11 +887,11 @@ float4 &sum_pt)
         signed_distance = VOXEL_UNOBSERVED_DISTANCE;
         return;
       }
-      
-      
+
+
         //sum_pt.w = get_array_value(grid_features,voxel_layer_start_idx + voxel_idx);
         sum_pt.w = interpolated_distance;
-        
+
         if ((!SCALE_METRIC && transform_back)|| (transform_back && sum_pt.w > -loc_sphere.w ))
         {
           // compute closest point:
@@ -901,15 +901,15 @@ float4 &sum_pt)
         signed_distance = sum_pt.w;
 
         sum_pt.w += loc_sphere.w;
-      
+
 
         scale_eta_metric_vector<SCALE_METRIC>(eta, sum_pt);
-      
+
 
     }
 
-    
-    
+
+
 
 
     __device__ __forceinline__ void check_jump_distance(
@@ -920,7 +920,7 @@ float4 &sum_pt)
       float& sph_dist,
       float& distance,
       bool& inside,
-      const float eta, 
+      const float eta,
       float4& sum_pt,
       float& curr_jump_distance) // we can pass in interpolated sphere here, also
                                  // need to pass cl_pt for use in
@@ -934,12 +934,12 @@ float4 &sum_pt)
         float4 loc_grad = make_float4(0,0,0,0);
         scale_eta_metric<true>(delta, sph_dist, eta, loc_grad);
         sum_pt += loc_grad;
-       
+
       }
       else
       {
         compute_distance_fn(
-          bounds, 
+          bounds,
           interpolated_sphere,
           max_distance,
           delta,
@@ -996,7 +996,7 @@ float4 &sum_pt)
       float distance = 0.0;
       float sph_dist = 0.0;
       float3 delta = make_float3(0,0,0);
-      
+
       for (int box_idx = 0; box_idx < nboxes; box_idx++)
       {
         if (obb_enable[start_box_idx + box_idx] == 0) // disabled obstacle
@@ -1008,7 +1008,7 @@ float4 &sum_pt)
         load_obb_bounds(&obb_bounds[(start_box_idx + box_idx) * 4], loc_bounds);
 
         transform_sphere_quat(obb_pos, obb_quat, sphere_cache, loc_sphere);
-        
+
 
         // first check if point is inside or outside box:
 
@@ -1018,9 +1018,9 @@ float4 &sum_pt)
             max_dist = 1;
             break; // we exit without checking other cuboids if we found a collision.
         }
-          
+
       }
-      
+
       out_distance[bn_sph_idx] = weight[0] * max_dist;
     }
 
@@ -1081,7 +1081,7 @@ float4 &sum_pt)
         load_obb_bounds(&obb_bounds[(start_box_idx + box_idx) * 4], loc_bounds);
 
         transform_sphere_quat(obb_pos, obb_quat, sphere_cache, loc_sphere);
-       
+
         // first check if point is inside or outside box:
         if (check_sphere_aabb(loc_bounds, loc_sphere, inside, delta, distance, sph_dist))
         {
@@ -1091,7 +1091,7 @@ float4 &sum_pt)
           // using same primitive functions:
           scale_eta_metric<SCALE_METRIC>(delta, sph_dist, eta, loc_grad);
 
-          
+
           if (SUM_COLLISIONS)
           {
             if (loc_grad.w > 0)
@@ -1117,7 +1117,7 @@ float4 &sum_pt)
 
             }
           }
-          
+
           }
 
         }
@@ -1219,12 +1219,12 @@ float4 &sum_pt)
         if (check_sphere_aabb(loc_bounds, loc_sphere, inside, delta, distance, sph_dist))
         {
           // compute closest point:
-          
+
 
           // using same primitive functions:
           scale_eta_metric<SCALE_METRIC>(delta, sph_dist, eta, loc_grad);
 
-          
+
           if (loc_grad.w > max_dist)
           {
             max_dist = loc_grad.w;
@@ -1252,16 +1252,16 @@ float4 &sum_pt)
       const int32_t env_idx,
       const int bn_sph_idx,
       const int sph_idx,
-      dist_scalar_t *out_distance, 
-      grad_scalar_t *closest_pt, 
+      dist_scalar_t *out_distance,
+      grad_scalar_t *closest_pt,
       uint8_t *sparsity_idx,
-      const float *weight, 
+      const float *weight,
       const float *activation_distance,
       const float *max_distance,
       const grid_scalar_t *grid_features,
       const float *grid_params,
-      const float *obb_mat, 
-      const uint8_t *obb_enable, 
+      const float *obb_mat,
+      const uint8_t *obb_enable,
       const int max_nobs,
       const int num_voxels,
       const bool transform_back)
@@ -1304,11 +1304,11 @@ float4 &sum_pt)
       for (int layer_idx=0; layer_idx < NUM_LAYERS; layer_idx++)
       {
 
-      
+
       int local_env_layer_idx = local_env_idx + layer_idx;
       if (obb_enable[local_env_layer_idx] != 0) // disabled obstacle
       {
-      
+
         load_obb_pose(&obb_mat[(local_env_layer_idx) * 8], obb_pos,
                       obb_quat);
         loc_grid_params = *(float4 *)&grid_params[local_env_layer_idx*4];
@@ -1317,8 +1317,8 @@ float4 &sum_pt)
         int voxel_layer_start_idx = local_env_layer_idx * num_voxels;
         // check distance:
         float4 cl;
-        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features, 
-        voxel_layer_start_idx, num_voxels, 
+        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features,
+        voxel_layer_start_idx, num_voxels,
         loc_grid_params, loc_sphere, cl, signed_distance, eta,
         max_distance_local, transform_back);
         if (cl.w>0.0)
@@ -1337,16 +1337,16 @@ float4 &sum_pt)
       {
 
 
-      
+
 
       for (int layer_idx=0; layer_idx < max_nobs; layer_idx++)
       {
 
-      
+
       int local_env_layer_idx = local_env_idx + layer_idx;
       if (obb_enable[local_env_layer_idx] != 0) // disabled obstacle
       {
-      
+
         load_obb_pose(&obb_mat[(local_env_layer_idx) * 8], obb_pos,
                       obb_quat);
         loc_grid_params = *(float4 *)&grid_params[local_env_layer_idx*4];
@@ -1355,8 +1355,8 @@ float4 &sum_pt)
         int voxel_layer_start_idx = local_env_layer_idx * num_voxels;
         // check distance:
         float4 cl;
-        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features, 
-        voxel_layer_start_idx, num_voxels, 
+        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features,
+        voxel_layer_start_idx, num_voxels,
         loc_grid_params, loc_sphere, cl, signed_distance, eta,
         max_distance_local, transform_back);
         if (cl.w>0.0)
@@ -1399,38 +1399,37 @@ float4 &sum_pt)
       sparsity_idx[bn_sph_idx] = 1;
     }
 
-    
+
     template<typename grid_scalar_t, typename scalar_t=float, typename dist_scalar_t=float,
     bool SCALE_METRIC=true, bool ENABLE_SPEED_METRIC=true, bool SUM_COLLISIONS=true,
     int NUM_LAYERS=100>
     __device__ __forceinline__ void swept_sphere_voxel_distance_fn(
       const scalar_t *sphere_position,
-      const int env_idx, 
+      const int env_idx,
       const int b_idx,
-      const int h_idx, 
+      const int h_idx,
       const int sph_idx,
       dist_scalar_t *out_distance,
       scalar_t *closest_pt,
       uint8_t *sparsity_idx,
       const float *weight,
-      const float *activation_distance, 
+      const float *activation_distance,
       const float *max_distance,
       const float *speed_dt,
-      const grid_scalar_t *grid_features, 
+      const grid_scalar_t *grid_features,
       const float *grid_params,
       const float *grid_pose,
       const uint8_t *grid_enable,
       const int max_nobs,
       const int env_ngrid,
-      const int num_voxels, 
-      const int batch_size, 
+      const int num_voxels,
+      const int batch_size,
       const int horizon,
       const int nspheres,
       const int sweep_steps,
       const bool transform_back)
     {
       const int   sw_steps      = sweep_steps;
-      const int   start_box_idx = max_nobs * env_idx;
       const int   b_addrs       =
         b_idx * horizon * nspheres; // + h_idx * n_spheres + sph_idx;
 
@@ -1442,7 +1441,7 @@ float4 &sum_pt)
 
 
 
-      
+
 
       float max_dist  = 0.0;
       float max_distance_local = max_distance[0];
@@ -1516,23 +1515,23 @@ float4 &sum_pt)
       float4 sum_grad = make_float4(0.0, 0.0, 0.0, 0.0);
       float4 cl;
       float jump_mid_distance = 0.0;
-      float k0, k1;
+      float k0;
       float temp_jump_distance = 0.0;
 
       if (NUM_LAYERS <= 4)
       {
 
-      
+
       #pragma unroll
       for (int layer_idx=0; layer_idx < NUM_LAYERS; layer_idx++)
       {
       float curr_jump_distance = 0.0;
-      
+
       int local_env_layer_idx = local_env_idx + layer_idx;
       sum_grad *= 0.0;
       if (grid_enable[local_env_layer_idx] != 0) // disabled obstacle
       {
-      
+
         load_obb_pose(&grid_pose[(local_env_layer_idx) * 8], obb_pos,
                       obb_quat);
         loc_grid_params = *(float4 *)&grid_params[local_env_layer_idx*4];
@@ -1543,8 +1542,8 @@ float4 &sum_pt)
 
         int voxel_layer_start_idx = local_env_layer_idx * num_voxels;
         // check distance:
-        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features, 
-        voxel_layer_start_idx, num_voxels, 
+        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features,
+        voxel_layer_start_idx, num_voxels,
         loc_grid_params, loc_sphere, cl, signed_distance, eta,
         max_distance_local, transform_back);
         if (cl.w>0.0)
@@ -1556,8 +1555,8 @@ float4 &sum_pt)
         {
           jump_mid_distance = -1 * signed_distance;
         }
-          
-        
+
+
         jump_mid_distance = max(jump_mid_distance, loc_sphere.w);
         curr_jump_distance = jump_mid_distance;
         if (sweep_back && curr_jump_distance < sphere_0_distance/2)
@@ -1575,8 +1574,8 @@ float4 &sum_pt)
             (k0)*loc_sphere + (1 - k0) * loc_sphere_0;
 
             compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(
-              grid_features, 
-              voxel_layer_start_idx, num_voxels, 
+              grid_features,
+              voxel_layer_start_idx, num_voxels,
               loc_grid_params, interpolated_sphere, cl, signed_distance, eta,
               max_distance_local, transform_back);
             if (cl.w>0.0)
@@ -1591,7 +1590,7 @@ float4 &sum_pt)
             temp_jump_distance = max(temp_jump_distance, loc_sphere.w);
             curr_jump_distance += temp_jump_distance;
 
-            
+
           }
         }
         curr_jump_distance = jump_mid_distance;
@@ -1608,10 +1607,10 @@ float4 &sum_pt)
             // compute collision
             const float4 interpolated_sphere =
             (k0)*loc_sphere + (1 - k0) * loc_sphere_2;
-             
+
              compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(
-             grid_features, 
-             voxel_layer_start_idx, num_voxels, 
+             grid_features,
+             voxel_layer_start_idx, num_voxels,
              loc_grid_params, interpolated_sphere, cl, signed_distance, eta,
              max_distance_local, transform_back);
              if (cl.w>0.0)
@@ -1632,32 +1631,32 @@ float4 &sum_pt)
         {
           max_dist += sum_grad.w;
           if (transform_back)
-          { 
+          {
             inv_transform_vec_quat_add(obb_pos, obb_quat, sum_grad, max_grad);
           }
-          
+
         }
 
 
 
-      
+
       }
       }
       }
       else
       {
 
-      
+
 
       for (int layer_idx=0; layer_idx < max_nobs; layer_idx++)
       {
       float curr_jump_distance = 0.0;
-      
+
       int local_env_layer_idx = local_env_idx + layer_idx;
       sum_grad *= 0.0;
       if (grid_enable[local_env_layer_idx] != 0) // disabled obstacle
       {
-      
+
         load_obb_pose(&grid_pose[(local_env_layer_idx) * 8], obb_pos,
                       obb_quat);
         loc_grid_params = *(float4 *)&grid_params[local_env_layer_idx*4];
@@ -1668,8 +1667,8 @@ float4 &sum_pt)
 
         int voxel_layer_start_idx = local_env_layer_idx * num_voxels;
         // check distance:
-        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features, 
-        voxel_layer_start_idx, num_voxels, 
+        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features,
+        voxel_layer_start_idx, num_voxels,
         loc_grid_params, loc_sphere, cl, signed_distance, eta,
         max_distance_local, transform_back);
         if (cl.w>0.0)
@@ -1681,8 +1680,8 @@ float4 &sum_pt)
         {
           jump_mid_distance = -1 * signed_distance;
         }
-          
-        
+
+
         jump_mid_distance = max(jump_mid_distance, loc_sphere.w);
         curr_jump_distance = jump_mid_distance;
         if (sweep_back && curr_jump_distance < sphere_0_distance/2)
@@ -1700,8 +1699,8 @@ float4 &sum_pt)
             (k0)*loc_sphere + (1 - k0) * loc_sphere_0;
 
             compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(
-              grid_features, 
-              voxel_layer_start_idx, num_voxels, 
+              grid_features,
+              voxel_layer_start_idx, num_voxels,
               loc_grid_params, interpolated_sphere, cl, signed_distance, eta,
               max_distance_local, transform_back);
             if (cl.w>0.0)
@@ -1716,7 +1715,7 @@ float4 &sum_pt)
             temp_jump_distance = max(temp_jump_distance, loc_sphere.w);
             curr_jump_distance += temp_jump_distance;
 
-            
+
           }
         }
         curr_jump_distance = jump_mid_distance;
@@ -1733,10 +1732,10 @@ float4 &sum_pt)
             // compute collision
             const float4 interpolated_sphere =
             (k0)*loc_sphere + (1 - k0) * loc_sphere_2;
-             
+
              compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(
-             grid_features, 
-             voxel_layer_start_idx, num_voxels, 
+             grid_features,
+             voxel_layer_start_idx, num_voxels,
              loc_grid_params, interpolated_sphere, cl, signed_distance, eta,
              max_distance_local, transform_back);
              if (cl.w>0.0)
@@ -1757,15 +1756,15 @@ float4 &sum_pt)
         {
           max_dist += sum_grad.w;
           if (transform_back)
-          { 
+          {
             inv_transform_vec_quat_add(obb_pos, obb_quat, sum_grad, max_grad);
           }
-          
+
         }
 
 
 
-      
+
       }
       }
       }
@@ -1785,7 +1784,7 @@ float4 &sum_pt)
         out_distance[bhs_idx] = 0.0;
         return;
       }
-      
+
        // computer speed metric here:
       if (ENABLE_SPEED_METRIC)
       {
@@ -1804,12 +1803,12 @@ float4 &sum_pt)
       }
       out_distance[bhs_idx] = max_dist;
       sparsity_idx[bhs_idx] = 1;
-    
+
     }
 
 
     template<typename grid_scalar_t, typename scalar_t,   typename dist_scalar_t=float,
-    bool BATCH_ENV_T=true, 
+    bool BATCH_ENV_T=true,
     bool SCALE_METRIC=true,
     bool ENABLE_SPEED_METRIC=true,
     bool SUM_COLLISIONS=false,
@@ -1846,14 +1845,14 @@ float4 &sum_pt)
       {
         env_idx = env_query_idx[b_idx];
       }
-      
+
       const int env_nboxes = n_env_grid[env_idx];
-      swept_sphere_voxel_distance_fn<grid_scalar_t, scalar_t,dist_scalar_t, SCALE_METRIC, 
+      swept_sphere_voxel_distance_fn<grid_scalar_t, scalar_t,dist_scalar_t, SCALE_METRIC,
       ENABLE_SPEED_METRIC, SUM_COLLISIONS, NUM_LAYERS>(
-        sphere_position,  env_idx, b_idx, h_idx, sph_idx, 
+        sphere_position,  env_idx, b_idx, h_idx, sph_idx,
         out_distance, closest_pt,
-        sparsity_idx, weight, activation_distance, max_distance, 
-        speed_dt, 
+        sparsity_idx, weight, activation_distance, max_distance,
+        speed_dt,
         grid_features,
         grid_params, grid_pose, grid_enable, max_nobs, env_nboxes, num_voxels, batch_size,
         horizon, nspheres, sweep_steps, transform_back);
@@ -1865,16 +1864,16 @@ float4 &sum_pt)
       const int32_t env_idx,
       const int bn_sph_idx,
       const int sph_idx,
-      dist_scalar_t *out_distance, 
-      grad_scalar_t *closest_pt, 
+      dist_scalar_t *out_distance,
+      grad_scalar_t *closest_pt,
       uint8_t *sparsity_idx,
-      const float *weight, 
+      const float *weight,
       const float *activation_distance,
       const float *max_distance,
       const grid_scalar_t *grid_features,
       const float *grid_params,
-      const float *obb_mat, 
-      const uint8_t *obb_enable, 
+      const float *obb_mat,
+      const uint8_t *obb_enable,
       const int max_nobs,
       const int num_voxels,
       const bool transform_back)
@@ -1917,11 +1916,11 @@ float4 &sum_pt)
       for (int layer_idx=0; layer_idx < max_nobs; layer_idx++)
       {
 
-      
+
       int local_env_layer_idx = local_env_idx + layer_idx;
       if (obb_enable[local_env_layer_idx] != 0) // disabled obstacle
       {
-      
+
         load_obb_pose(&obb_mat[(local_env_layer_idx) * 8], obb_pos,
                       obb_quat);
         loc_grid_params = *(float4 *)&grid_params[local_env_layer_idx*4];
@@ -1930,9 +1929,9 @@ float4 &sum_pt)
         int voxel_layer_start_idx = local_env_layer_idx * num_voxels;
         // check distance:
         float4 cl;
-        
-        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features, 
-        voxel_layer_start_idx, num_voxels, 
+
+        compute_sphere_voxel_gradient<grid_scalar_t,SCALE_METRIC>(grid_features,
+        voxel_layer_start_idx, num_voxels,
         loc_grid_params, loc_sphere, cl, signed_distance, eta,
         max_distance_local, transform_back);
         if (cl.w>max_dist)
@@ -1946,10 +1945,10 @@ float4 &sum_pt)
         }
       }
       }
-      
-     
 
-      
+
+
+
       max_dist = max_dist - sphere_radius;
       if (transform_back)
       {
@@ -1959,7 +1958,7 @@ float4 &sum_pt)
 
     }
 
-  
+
     template<typename scalar_t,  typename dist_scalar_t=float, bool ENABLE_SPEED_METRIC=true, bool SUM_COLLISIONS=true, int SWEEP_STEPS=-1>
     __device__ __forceinline__ void swept_sphere_obb_distance_fn(
       const scalar_t *sphere_position,
@@ -2097,7 +2096,7 @@ float4 &sum_pt)
         // check at exact timestep:
         if (check_sphere_aabb(loc_bounds, loc_sphere_1, inside, delta, curr_jump_distance, sph_dist))
         {
-          
+
           scale_eta_metric<true>(delta, sph_dist, eta, sum_pt);
         }
         else if (sweep_back || sweep_fwd)
@@ -2133,9 +2132,9 @@ float4 &sum_pt)
               break;
             }
             k0 = 1 - (curr_jump_distance / sphere_0_len);
-            check_jump_distance(loc_sphere_1, loc_sphere_0, 
+            check_jump_distance(loc_sphere_1, loc_sphere_0,
             k0,
-            loc_bounds, 
+            loc_bounds,
             max_distance,
             delta,
             sph_dist,
@@ -2159,9 +2158,9 @@ float4 &sum_pt)
               break;
             }
             k0 = 1 - curr_jump_distance / sphere_2_len;
-            check_jump_distance(loc_sphere_1, loc_sphere_2, 
+            check_jump_distance(loc_sphere_1, loc_sphere_2,
             k0,
-            loc_bounds, 
+            loc_bounds,
             max_distance,
             delta,
             sph_dist,
@@ -2246,7 +2245,7 @@ float4 &sum_pt)
 
       out_distance[bhs_idx] = max_dist;
     }
-    
+
 
     /**
      * @brief Swept Collision checking. Note: This function currently does not
@@ -2297,7 +2296,6 @@ float4 &sum_pt)
       float3 delta = make_float3(0,0,0);
       bool inside = false;
       float curr_jump_distance = 0.0;
-      float distance = 0.0;
       float sph_dist = 0.0;
       // We read the same obstacles across
 
@@ -2354,14 +2352,14 @@ float4 &sum_pt)
         transform_sphere_quat(&in_obb_mat[0], sphere_1_cache, loc_sphere_1);
 
         max_dist += box_idx;
-        
+
         if (check_sphere_aabb(loc_bounds, loc_sphere_1, inside, delta, curr_jump_distance, sph_dist))
         {
-         
+
             max_dist = 1;
             break;
         }
-        
+
 
         if (h_idx > 0)
         {
@@ -2378,10 +2376,10 @@ float4 &sum_pt)
 
             if (check_sphere_aabb(loc_bounds, interpolated_sphere, inside, delta, curr_jump_distance, sph_dist))
             {
-              
+
                 max_dist = 1;
                 break;
-              
+
             }
           }
         }
@@ -2418,7 +2416,7 @@ float4 &sum_pt)
       const scalar_t *sphere_position,
       dist_scalar_t *out_distance,
       scalar_t *closest_pt, uint8_t *sparsity_idx, const float *weight,
-      const float *activation_distance, 
+      const float *activation_distance,
       const float *max_distance,
       const float *obb_accel,
       const float *obb_bounds, const float *obb_mat,
@@ -2449,7 +2447,7 @@ float4 &sum_pt)
       {
         env_idx =
           env_query_idx[b_idx]; // read env idx from current batch idx
-        
+
       }
       const int env_nboxes = n_env_obb[env_idx];   // read nboxes in current environment
       if (COMPUTE_ESDF)
@@ -2468,7 +2466,7 @@ float4 &sum_pt)
                              env_nboxes, transform_back);
 
       }
-      
+
       // return the sphere distance here:
       // sync threads and do block level reduction:
     }
@@ -2478,11 +2476,11 @@ float4 &sum_pt)
     __global__ void sphere_voxel_distance_kernel(
       const geom_scalar_t *sphere_position,
       dist_scalar_t *out_distance,
-      grad_scalar_t *closest_pt, 
-      uint8_t *sparsity_idx, 
+      grad_scalar_t *closest_pt,
+      uint8_t *sparsity_idx,
       const float *weight,
-      const float *activation_distance, 
-      const float *max_distance, 
+      const float *activation_distance,
+      const float *max_distance,
       const grid_scalar_t *grid_features,
       const float *grid_params, const float *obb_mat,
       const uint8_t *obb_enable, const int32_t *n_env_obb,
@@ -2507,18 +2505,16 @@ float4 &sum_pt)
         b_idx * horizon * nspheres + h_idx * nspheres + sph_idx;
 
       int env_idx    = 0;
-      int env_nboxes = n_env_obb[0];
 
       if (BATCH_ENV_T)
       {
         env_idx =
           env_query_idx[b_idx]; // read env idx from current batch idx
-        env_nboxes =
-          n_env_obb[env_idx];   // read nboxes in current environment
+
       }
       if (COMPUTE_ESDF)
       {
-      
+
         sphere_voxel_esdf_fn<grid_scalar_t, geom_scalar_t, dist_scalar_t, grad_scalar_t, SCALE_METRIC, NUM_LAYERS>(sphere_position, env_idx, bn_sph_idx, sph_idx, out_distance,
                              closest_pt, sparsity_idx, weight, activation_distance, max_distance,
                              grid_features, grid_params, obb_mat, obb_enable, max_nobs, num_voxels,
@@ -2532,12 +2528,12 @@ float4 &sum_pt)
                              grid_features, grid_params, obb_mat, obb_enable, max_nobs, num_voxels,
                              transform_back);
       }
-      
+
       // return the sphere distance here:
       // sync threads and do block level reduction:
     }
 
-    
+
     template<typename scalar_t, typename dist_scalar_t, bool BATCH_ENV_T, bool ENABLE_SPEED_METRIC, bool SUM_COLLISIONS=false, int SWEEP_STEPS=-1>
     __global__ void swept_sphere_obb_distance_jump_kernel(
       const scalar_t *sphere_position,
@@ -2574,7 +2570,7 @@ float4 &sum_pt)
       {
         env_idx = env_query_idx[b_idx];
       }
-      
+
       const int env_nboxes = n_env_obb[env_idx];
 
       swept_sphere_obb_distance_fn<scalar_t, dist_scalar_t, ENABLE_SPEED_METRIC, SUM_COLLISIONS, SWEEP_STEPS>(
@@ -2674,9 +2670,9 @@ float4 &sum_pt)
       {
         env_idx = env_query_idx[b_idx];
       }
-      
+
       const int env_nboxes = n_env_obb[env_idx];
-   
+
       const int bn_sph_idx =
         b_idx * horizon * nspheres + h_idx * nspheres + sph_idx;
       sphere_obb_collision_fn(sphere_position, env_idx, bn_sph_idx, sph_idx, out_distance,
@@ -2721,7 +2717,7 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 3
 
   if (!compute_distance)
   {
-    
+
   AT_DISPATCH_FLOATING_TYPES(
     distance.scalar_type(), "SphereObb_clpt_collision", ([&]{
     auto collision_kernel = sphere_obb_collision_batch_env_kernel<scalar_t, float, false>;
@@ -2731,7 +2727,7 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 3
     {
         selected_k = batch_collision_kernel;
     }
-    
+
       selected_k<< < blocksPerGrid, threadsPerBlock, 0, stream >> > (
           sphere_position.data_ptr<scalar_t>(),
           distance.data_ptr<float>(), weight.data_ptr<float>(),
@@ -2748,7 +2744,7 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 3
   }
   else
   {
-      
+
   // typename scalar_t, typename dist_scalar_t=float, bool BATCH_ENV_T=true, bool SCALE_METRIC=true, bool SUM_COLLISIONS=true, bool COMPUTE_ESDF=false
   AT_DISPATCH_FLOATING_TYPES_AND2(torch::kBFloat16, FP8_TYPE_MACRO,
       distance.scalar_type(), "SphereObb_clpt", ([&]{
@@ -2765,7 +2761,7 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 3
 
       distance_kernel =  sphere_obb_distance_kernel<scalar_t,scalar_t,  true, scale_metric, sum_collisions_, false>;
       }
-      
+
     }
     else if (compute_esdf)
     {
@@ -2785,14 +2781,14 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 3
           obb_pose.data_ptr<float>(),
           obb_enable.data_ptr<uint8_t>(),
           n_env_obb.data_ptr<int32_t>(),
-          env_query_idx.data_ptr<int32_t>(), 
+          env_query_idx.data_ptr<int32_t>(),
           max_nobs, batch_size,
           horizon, n_spheres, transform_back);
-  
+
 
   }));
   }
-    
+
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 
   return { distance, closest_point, sparsity_idx };
@@ -2805,7 +2801,7 @@ std::vector<torch::Tensor>swept_sphere_obb_clpt(
   torch::Tensor
   closest_point,                       // batch size, 4 -> written out as x,y,z,0 for gradient
   torch::Tensor sparsity_idx, const torch::Tensor weight,
-  const torch::Tensor activation_distance, 
+  const torch::Tensor activation_distance,
   const torch::Tensor speed_dt,
   const torch::Tensor obb_accel,       // n_boxes, 4, 4
   const torch::Tensor obb_bounds,      // n_boxes, 3
@@ -2820,7 +2816,7 @@ std::vector<torch::Tensor>swept_sphere_obb_clpt(
   const bool sum_collisions)
 {
   using namespace Curobo::Geometry;
- 
+
   // const int max_batches_per_block = 128;
 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -2842,7 +2838,7 @@ std::vector<torch::Tensor>swept_sphere_obb_clpt(
   if (sum_collisions)
   {
     const bool sum_collisions_ = true;
-  
+
   if (use_batch_env)
   {
     if (compute_distance)
@@ -2949,7 +2945,7 @@ std::vector<torch::Tensor>swept_sphere_obb_clpt(
         else
         {
 
-        
+
         AT_DISPATCH_FLOATING_TYPES(
           distance.scalar_type(), "Swept_SphereObb_clpt", ([&] {
           swept_sphere_obb_distance_jump_kernel<scalar_t, float, false, true, sum_collisions_>
@@ -3211,7 +3207,7 @@ sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
 
 
   AT_DISPATCH_FLOATING_TYPES_AND2(torch::kBFloat16, FP8_TYPE_MACRO,
-  grid_features.scalar_type(), "SphereVoxel_clpt", ([&] 
+  grid_features.scalar_type(), "SphereVoxel_clpt", ([&]
   {
 
     auto kernel_esdf = sphere_voxel_distance_kernel<scalar_t, float, float, float, false, false, true, 100>;
@@ -3262,17 +3258,17 @@ sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
         obb_pose.data_ptr<float>(),
         obb_enable.data_ptr<uint8_t>(),
         n_env_obb.data_ptr<int32_t>(),
-        env_query_idx.data_ptr<int32_t>(), 
-        max_nobs, 
+        env_query_idx.data_ptr<int32_t>(),
+        max_nobs,
         num_voxels,
         batch_size,
         horizon, n_spheres, transform_back);
     }));
-    
-  
-  
-  
- 
+
+
+
+
+
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 
   return { distance, closest_point, sparsity_idx };
@@ -3287,21 +3283,21 @@ swept_sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
                 torch::Tensor sparsity_idx, const torch::Tensor weight,
                 const torch::Tensor activation_distance,
                 const torch::Tensor max_distance,
-                const torch::Tensor speed_dt, 
+                const torch::Tensor speed_dt,
                 const torch::Tensor grid_features,       // n_boxes, 4, 4
                 const torch::Tensor grid_params,      // n_boxes, 3
                 const torch::Tensor grid_pose,        // n_boxes, 4, 4
                 const torch::Tensor grid_enable,      // n_boxes, 4, 4
                 const torch::Tensor n_env_grid,
                 const torch::Tensor env_query_idx,   // n_boxes, 4, 4
-                const int max_nobs, 
-                const int batch_size, 
+                const int max_nobs,
+                const int batch_size,
                 const int horizon,
-                const int n_spheres, 
+                const int n_spheres,
                 const int sweep_steps,
                 const bool enable_speed_metric,
                 const bool transform_back,
-                const bool compute_distance, 
+                const bool compute_distance,
                 const bool use_batch_env,
                 const bool sum_collisions)
 {
@@ -3377,15 +3373,15 @@ swept_sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
         grid_pose.data_ptr<float>(),
         grid_enable.data_ptr<uint8_t>(),
         n_env_grid.data_ptr<int32_t>(),
-        env_query_idx.data_ptr<int32_t>(), 
-        max_nobs, 
+        env_query_idx.data_ptr<int32_t>(),
+        max_nobs,
         num_voxels,
         batch_size,
         horizon, n_spheres, sweep_steps, transform_back);
     }));
 
-  
- 
+
+
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 
   return { distance, closest_point, sparsity_idx };
