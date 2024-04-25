@@ -161,7 +161,6 @@ class MotionGenConfig:
     #: tried again until :attr:`MotionGenPlanConfig.finetune_attempts`.
     optimize_dt: bool = True
 
-    @profiler.record_function("motion_gen_config/load_from_robot_config")
     @staticmethod
     def load_from_robot_config(
         robot_cfg: Union[Union[str, Dict], RobotConfig],
