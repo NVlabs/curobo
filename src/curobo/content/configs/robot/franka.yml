@@ -28,7 +28,7 @@ robot_cfg:
     "panda_finger_joint1": "Y",
      "panda_finger_joint2":  "Y",
     }
-    
+
     usd_flip_joint_limits: ["panda_finger_joint2"]
     urdf_path: "robot/franka_description/franka_panda.urdf"
     asset_root_path: "robot/franka_description"
@@ -67,13 +67,13 @@ robot_cfg:
         "panda_hand": ["panda_leftfinger", "panda_rightfinger","attached_object"],
         "panda_leftfinger": ["panda_rightfinger", "attached_object"],
         "panda_rightfinger": ["attached_object"],
-        
+
       }
-    
+
     self_collision_buffer:
       {
-        "panda_link0": 0.1, 
-        "panda_link1": 0.05, 
+        "panda_link0": 0.1,
+        "panda_link1": 0.05,
         "panda_link2": 0.0,
         "panda_link3": 0.0,
         "panda_link4": 0.0,
@@ -101,7 +101,7 @@ robot_cfg:
         "panda_rightfinger",
       ]
     lock_joints: {"panda_finger_joint1": 0.04, "panda_finger_joint2": 0.04}
-    extra_links: {"attached_object":{"parent_link_name": "panda_hand" , 
+    extra_links: {"attached_object":{"parent_link_name": "panda_hand" ,
     "link_name": "attached_object", "fixed_transform": [0,0,0,1,0,0,0], "joint_type":"FIXED",
     "joint_name": "attach_joint" }}
     cspace:

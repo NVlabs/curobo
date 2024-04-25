@@ -36,7 +36,7 @@ np.random.seed(0)
 def generate_images():
     # load dataset:
 
-    file_paths = [demo_raw, motion_benchmaker_raw, mpinets_raw][1:]
+    file_paths = [demo_raw, motion_benchmaker_raw, mpinets_raw][1:2]
 
     for file_path in file_paths:
         problems = file_path()
@@ -57,7 +57,7 @@ def generate_images():
 
                 # generate images and write to disk:
                 MeshDataset(
-                    None, n_frames=50, image_size=640, save_data_dir=save_path, trimesh_mesh=mesh
+                    None, n_frames=1, image_size=640, save_data_dir=save_path, trimesh_mesh=mesh
                 )
 
 

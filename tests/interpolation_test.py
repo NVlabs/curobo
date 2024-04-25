@@ -43,16 +43,21 @@ def test_linear_interpolation():
 
     # create max_velocity buffer:
     out_traj_gpu, _, _ = get_batch_interpolated_trajectory(
-        in_traj, int_dt, max_vel, max_acc=max_acc, max_jerk=max_jerk, raw_dt=raw_dt
+        in_traj,
+        raw_dt,
+        int_dt,
+        max_vel,
+        max_acc=max_acc,
+        max_jerk=max_jerk,
     )
     #
     out_traj_gpu = out_traj_gpu.clone()
 
     out_traj_cpu, _, _ = get_batch_interpolated_trajectory(
         in_traj,
+        raw_dt,
         int_dt,
         max_vel,
-        raw_dt=raw_dt,
         kind=InterpolateType.LINEAR,
         max_acc=max_acc,
         max_jerk=max_jerk,

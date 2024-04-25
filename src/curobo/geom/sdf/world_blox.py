@@ -127,6 +127,7 @@ class WorldBloxCollision(WorldVoxelCollision):
         collision_query_buffer: CollisionQueryBuffer,
         weight,
         activation_distance,
+        return_loss: bool = False,
         compute_esdf: bool = False,
     ):
         d = self._blox_mapper.query_sphere_sdf_cost(
@@ -136,8 +137,11 @@ class WorldBloxCollision(WorldVoxelCollision):
             collision_query_buffer.blox_collision_buffer.sparsity_index_buffer,
             weight,
             activation_distance,
+            self.max_esdf_distance,
             self._blox_tensor_list[0],
             self._blox_tensor_list[1],
+            return_loss,
+            compute_esdf,
         )
         return d
 
@@ -191,12 +195,12 @@ class WorldBloxCollision(WorldVoxelCollision):
                 sum_collisions=sum_collisions,
                 compute_esdf=compute_esdf,
             )
-
         d = self._get_blox_sdf(
             query_sphere,
             collision_query_buffer,
             weight=weight,
             activation_distance=activation_distance,
+            return_loss=return_loss,
             compute_esdf=compute_esdf,
         )
 
@@ -246,6 +250,7 @@ class WorldBloxCollision(WorldVoxelCollision):
             collision_query_buffer,
             weight=weight,
             activation_distance=activation_distance,
+            return_loss=return_loss,
         )
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
             "mesh" not in self.collision_types or not self.collision_types["mesh"]
@@ -404,7 +409,7 @@ class WorldBloxCollision(WorldVoxelCollision):
         cuboid: Cuboid,
         layer_name: Optional[str] = None,
     ):
-        raise NotImplementedError
+        log_error("Not implemented")
 
     def get_bounding_spheres(
         self,
@@ -418,7 +423,8 @@ class WorldBloxCollision(WorldVoxelCollision):
         clear_region: bool = False,
     ) -> List[Sphere]:
         mesh = self.get_mesh_in_bounding_box(bounding_box, obstacle_name, clear_region=clear_region)
-
+        if clear_region:
+            self.clear_bounding_box(bounding_box, obstacle_name)
         spheres = mesh.get_bounding_spheres(
             n_spheres=n_spheres,
             surface_sphere_radius=surface_sphere_radius,

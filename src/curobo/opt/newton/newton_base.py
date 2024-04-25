@@ -125,7 +125,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
 
     def _shift(self, shift_steps=1):
         # TODO: shift best q?:
-        self.best_cost[:] = 500000.0
+        self.best_cost[:] = 5000000.0
         self.best_iteration[:] = 0
         self.current_iteration[:] = 0
         return True
@@ -159,8 +159,9 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
         with profiler.record_function("newton/reset"):
             self.i = -1
             self._opt_finished = False
-            self.best_cost[:] = 500000.0
+            self.best_cost[:] = 5000000.0
             self.best_iteration[:] = 0
+            self.current_iteration[:] = 0
 
         super().reset()
 
@@ -448,6 +449,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
                 self.cost_delta_threshold,
                 self.cost_relative_threshold,
             )
+            # print(self.best_cost[0], self.best_q[0])
         else:
             cost = cost.detach()
             q = q.detach()

@@ -23,7 +23,7 @@ robot_cfg:
     base_link: "base_link"
     ee_link: "grasp_frame"
     link_names: null
-    lock_joints: {'finger_joint': 0.7}
+    lock_joints: {'finger_joint': 0.3}
 
     extra_links: null #{"attached_object":{"parent_link_name": "grasp_frame" , 
     #"link_name": "attached_object", "fixed_transform": [0,0,0,1,0,0,0], "joint_type":"FIXED",
