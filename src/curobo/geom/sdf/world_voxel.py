@@ -704,6 +704,7 @@ class WorldVoxelCollision(WorldMeshCollision):
                     - self.max_esdf_distance
                 ).to(dtype=self._voxel_tensor_list[3].dtype)
             self._env_n_voxels[:] = 0
+        super().clear_cache()
 
     def get_voxel_grid_shape(self, env_idx: int = 0, obs_idx: int = 0):
         return self._voxel_tensor_list[3][env_idx, obs_idx].shape
