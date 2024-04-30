@@ -218,7 +218,7 @@ def compute_smoothness(
     scale_dt = (1 / dt_score).view(-1, 1, 1)
     abs_acc = torch.abs(acc) * (scale_dt**2)
     # mean_acc_val = torch.max(torch.mean(abs_acc, dim=-1), dim=-1)[0]
-    max_acc_val = torch.max(abs_acc, dim=-2)[0] # batch x dof
+    max_acc_val = torch.max(abs_acc, dim=-2)[0]  # batch x dof
     abs_jerk = torch.abs(jerk) * scale_dt**3
     # calculate max mean jerk:
     # mean_jerk_val = torch.max(torch.mean(abs_jerk, dim=-1), dim=-1)[0]
