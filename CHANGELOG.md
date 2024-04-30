@@ -10,6 +10,12 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
+## Latest Commit
+
+### BugFixes & Misc.
+- Fix bug in evaluator to account for dof maximum acceleration and jerk.
+- Add unit test for different acceleration and jerk limits.
+
 ## Version 0.7.2
 
 ### New Features

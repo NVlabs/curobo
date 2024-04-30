@@ -81,7 +81,7 @@ class JointState(State):
     @staticmethod
     def from_numpy(
         joint_names: List[str],
-        position: np.ndarry,
+        position: np.ndarray,
         velocity: Optional[np.ndarray] = None,
         acceleration: Optional[np.ndarray] = None,
         jerk: Optional[np.ndarray] = None,
@@ -91,6 +91,8 @@ class JointState(State):
         vel = acc = je = None
         if velocity is not None:
             vel = tensor_args.to_device(velocity)
+        else:
+            vel = pos * 0.0
         if acceleration is not None:
             acc = tensor_args.to_device(acceleration)
         else:
