@@ -11,6 +11,7 @@
 
 
 # Third Party
+import pytest
 import torch
 
 # CuRobo
@@ -18,7 +19,8 @@ from curobo.types.robot import JointState
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
 
-def test_motion_gen_plan_js():
+@pytest.mark.parametrize("parallel_finetune", [True, False])
+def test_motion_gen_plan_js(parallel_finetune):
     world_file = "collision_table.yml"
     robot_file = "ur5e.yml"
     motion_gen_config = MotionGenConfig.load_from_robot_config(
@@ -31,7 +33,7 @@ def test_motion_gen_plan_js():
         evaluate_interpolated_trajectory=True,
     )
     motion_gen = MotionGen(motion_gen_config)
-    motion_gen.warmup(warmup_js_trajopt=True)
+    motion_gen.warmup(warmup_js_trajopt=True, parallel_finetune=parallel_finetune)
 
     retract_cfg = motion_gen.get_retract_config()
 

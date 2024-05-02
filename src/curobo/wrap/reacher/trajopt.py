@@ -1568,7 +1568,18 @@ class TrajOptSolver(TrajOptSolverConfig):
             )
             seed_traj = torch.cat((seed_traj, new_seeds), dim=0)
 
-        if len(seed_traj.shape) == 3:
+        if len(seed_traj.shape) == 2:
+            if (
+                total_seeds != 1
+                or seed_traj.shape[0] != self.action_horizon
+                or seed_traj.shape[1] != self.dof
+            ):
+                log_error(
+                    f"Seed traj shape should be [{num_seeds} * {goal.batch}, {self.action_horizon}, {self.dof}]"
+                    + " current shape is "
+                    + str(seed_traj.shape)
+                )
+        elif len(seed_traj.shape) == 3:
             if (
                 seed_traj.shape[0] != total_seeds
                 or seed_traj.shape[1] != self.action_horizon
