@@ -142,6 +142,9 @@ class MotionGenConfig:
     #: number of iterations to run trajectory optimization when seeded from a graph plan.
     graph_trajopt_iters: Optional[int] = None
 
+    #: number of iterations to run finetuning trajectory optimization.
+    finetune_js_trajopt_iters: Optional[int] = None
+
     #: store debugging information in MotionGenResult
     store_debug_in_result: bool = False
 
@@ -226,6 +229,7 @@ class MotionGenConfig:
         trim_steps: Optional[List[int]] = None,
         store_debug_in_result: bool = False,
         finetune_trajopt_iters: Optional[int] = None,
+        finetune_js_trajopt_iters: Optional[int] = None,
         smooth_weight: List[float] = None,
         finetune_smooth_weight: Optional[List[float]] = None,
         state_finite_difference_mode: Optional[str] = None,
@@ -834,6 +838,7 @@ class MotionGenConfig:
             tensor_args=tensor_args,
             partial_ik_iters=partial_ik_iters,
             graph_trajopt_iters=graph_trajopt_iters,
+            finetune_js_trajopt_iters=finetune_js_trajopt_iters,
             store_debug_in_result=store_debug_in_result,
             interpolation_dt=interpolation_dt,
             finetune_dt_scale=finetune_dt_scale,
@@ -3497,6 +3502,10 @@ class MotionGen(MotionGenConfig):
             # run finetune
             if plan_config.enable_finetune_trajopt and torch.count_nonzero(traj_result.success) > 0:
                 with profiler.record_function("motion_gen/finetune_trajopt"):
+                    if self.finetune_js_trajopt_iters is None:
+                        finetune_js_trajopt_iters = trajopt_newton_iters + 4
+                    else:
+                        finetune_js_trajopt_iters = self.finetune_js_trajopt_iters
                     seed_traj = traj_result.raw_action.clone()  # solution.position.clone()
                     seed_traj = seed_traj.contiguous()
                     og_solve_time = traj_result.solve_time
@@ -3513,7 +3522,7 @@ class MotionGen(MotionGenConfig):
                         seed_traj,
                         trajopt_instance=self.js_trajopt_solver,
                         num_seeds_override=solve_state.num_trajopt_seeds,
-                        newton_iters=trajopt_newton_iters + 4,
+                        newton_iters=finetune_js_trajopt_iters,
                     )
                     self.js_trajopt_solver.update_solver_dt(og_dt)
 
