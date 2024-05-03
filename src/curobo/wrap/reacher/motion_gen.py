@@ -3509,24 +3509,34 @@ class MotionGen(MotionGenConfig):
                     seed_traj = traj_result.raw_action.clone()  # solution.position.clone()
                     seed_traj = seed_traj.contiguous()
                     og_solve_time = traj_result.solve_time
+                    opt_dt = traj_result.optimized_dt[traj_result.success]
 
-                    scaled_dt = torch.clamp(
-                        torch.max(traj_result.optimized_dt[traj_result.success]),
-                        self.trajopt_solver.minimum_trajectory_dt,
-                    )
-                    og_dt = self.js_trajopt_solver.solver_dt.clone()
-                    self.js_trajopt_solver.update_solver_dt(scaled_dt.item())
-                    traj_result = self._solve_trajopt_from_solve_state(
-                        goal,
-                        solve_state,
-                        seed_traj,
-                        trajopt_instance=self.js_trajopt_solver,
-                        num_seeds_override=solve_state.num_trajopt_seeds,
-                        newton_iters=finetune_js_trajopt_iters,
-                    )
-                    self.js_trajopt_solver.update_solver_dt(og_dt)
+                    finetune_time = 0
+                    for k in range(plan_config.finetune_attempts):
+                        scaled_dt = torch.clamp(
+                            torch.max(opt_dt) * self.finetune_dt_scale * (plan_config.finetune_dt_decay ** (k)),
+                            self.trajopt_solver.minimum_trajectory_dt,
+                        )
+                        log_info(f"Finetune attempt {k} with scaled_dt {scaled_dt}")
 
-                result.finetune_time = traj_result.solve_time
+
+                        og_dt = self.js_trajopt_solver.solver_dt.clone()
+                        self.js_trajopt_solver.update_solver_dt(scaled_dt.item())
+                        traj_result = self._solve_trajopt_from_solve_state(
+                            goal,
+                            solve_state,
+                            seed_traj,
+                            trajopt_instance=self.js_trajopt_solver,
+                            num_seeds_override=solve_state.num_trajopt_seeds,
+                            newton_iters=finetune_js_trajopt_iters,
+                        )
+                        self.js_trajopt_solver.update_solver_dt(og_dt)
+                        finetune_time += traj_result.solve_time
+                        if torch.count_nonzero(traj_result.success) > 0:
+                            break
+                        seed_traj = traj_result.optimized_seeds.detach().clone()
+
+                result.finetune_time = finetune_time
 
                 traj_result.solve_time = og_solve_time
                 if self.store_debug_in_result:
