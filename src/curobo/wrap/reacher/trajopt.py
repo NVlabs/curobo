@@ -1575,7 +1575,7 @@ class TrajOptSolver(TrajOptSolverConfig):
                 or seed_traj.shape[1] != self.dof
             ):
                 log_error(
-                    f"Seed traj shape should be [{num_seeds} * {goal.batch}, {self.action_horizon}, {self.dof}]"
+                    f"Seed traj shape should be [num_seeds * batch, action_horizon, dof]"
                     + " current shape is "
                     + str(seed_traj.shape)
                 )
