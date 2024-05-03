@@ -172,6 +172,7 @@ class MotionGenConfig:
         num_batch_ik_seeds: int = 32,
         num_batch_trajopt_seeds: int = 1,
         num_trajopt_noisy_seeds: int = 1,
+        num_js_trajopt_seeds: int = 4,
         position_threshold: float = 0.005,
         rotation_threshold: float = 0.05,
         cspace_threshold: float = 0.05,
@@ -262,6 +263,8 @@ class MotionGenConfig:
             num_trajopt_seeds: Number of seeds to use for trajectory optimization per problem
                 query. Default of 4 is found to be a good number for most cases. Increasing this
                 will increase memory usage.
+            num_js_trajopt_seeds: Number of seeds to use for joint-space trajectory optimization per problem
+                query.
             num_batch_ik_seeds: Number of seeds to use for inverse kinematics during batched
                 planning. Default of 32 is found to be a good number for most cases.
             num_batch_trajopt_seeds: Number of seeds to use for trajectory optimization during
@@ -760,6 +763,7 @@ class MotionGenConfig:
             minimize_jerk=minimize_jerk,
             filter_robot_command=filter_robot_command,
             optimize_dt=optimize_dt,
+            num_seeds=num_js_trajopt_seeds,
         )
         js_trajopt_solver = TrajOptSolver(js_trajopt_cfg)
 
