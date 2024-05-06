@@ -976,4 +976,6 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         joint_limits["velocity"][0] *= self.cspace.velocity_scale
         joint_limits["velocity"][1] *= self.cspace.velocity_scale
 
+        self.cspace.velocity_scale = None
+
         self._joint_limits = JointLimits(joint_names=self.joint_names, **joint_limits)
