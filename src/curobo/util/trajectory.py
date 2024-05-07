@@ -329,17 +329,18 @@ def get_interpolated_trajectory(
     max_deviation: float = 0.05,
     tensor_args: TensorDeviceType = TensorDeviceType(),
 ) -> JointState:
-    try:
-        # Third Party
-        from trajectory_smoothing import TrajectorySmoother
+    if kind == InterpolateType.KUNZ_STILMAN_OPTIMAL:
+        try:
+            # Third Party
+            from trajectory_smoothing import TrajectorySmoother
 
-    except:
-        log_info(
-            "trajectory_smoothing package not found, InterpolateType.KUNZ_STILMAN_OPTIMAL"
-            + " is disabled. to enable, try installing curobo with"
-            + " pip install .[smooth]"
-        )
-        kind = InterpolateType.LINEAR
+        except:
+            log_info(
+                "trajectory_smoothing package not found, InterpolateType.KUNZ_STILMAN_OPTIMAL"
+                + " is disabled. to enable, try installing curobo with"
+                + " pip install .[smooth]"
+            )
+            kind = InterpolateType.LINEAR
     dof = trajectory[0].shape[-1]
     last_tsteps = []
     opt_dt = []
