@@ -32,7 +32,7 @@ def test_sdf_pose():
         new_mesh,
         env_idx=0,
     )
-    query_spheres = torch.zeros((1, 1, 2, 4), **vars(tensor_args))
+    query_spheres = torch.zeros((1, 1, 2, 4), **(tensor_args.as_torch_dict()))
     query_spheres[..., 2] = 10.0
     query_spheres[..., 1, :] = 0.0
     query_spheres[..., 3] = 1.0
@@ -59,7 +59,7 @@ def test_swept_sdf_speed_pose():
         new_mesh,
         env_idx=0,
     )
-    query_spheres = torch.zeros((1, 1, 2, 4), **vars(tensor_args))
+    query_spheres = torch.zeros((1, 1, 2, 4), **(tensor_args.as_torch_dict()))
     query_spheres[..., 2] = 10.0
     query_spheres[..., 1, :] = 0.0
     query_spheres[..., 3] = 1.0
@@ -88,7 +88,7 @@ def test_swept_sdf_pose():
         new_mesh,
         env_idx=0,
     )
-    query_spheres = torch.zeros((1, 1, 2, 4), **vars(tensor_args))
+    query_spheres = torch.zeros((1, 1, 2, 4), **(tensor_args.as_torch_dict()))
     query_spheres[..., 2] = 10.0
     query_spheres[..., 1, :] = 0.0
     query_spheres[..., 3] = 1.0

@@ -39,7 +39,13 @@ robot_cfg:
       }
     urdf_path: robot/iiwa_allegro_description/iiwa.urdf
     asset_root_path: robot/iiwa_allegro_description
-  
+    mesh_link_names:
+      - iiwa7_link_1
+      - iiwa7_link_2
+      - iiwa7_link_3
+      - iiwa7_link_4
+      - iiwa7_link_5
+      - iiwa7_link_6
     cspace:
       joint_names:
         [

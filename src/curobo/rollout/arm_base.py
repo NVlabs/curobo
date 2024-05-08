@@ -39,8 +39,8 @@ from curobo.rollout.rollout_base import Goal, RolloutBase, RolloutConfig, Rollou
 from curobo.types.base import TensorDeviceType
 from curobo.types.robot import CSpaceConfig, RobotConfig
 from curobo.types.state import JointState
-from curobo.util.logger import log_info, log_warn
-from curobo.util.tensor_util import cat_sum
+from curobo.util.logger import log_error, log_info, log_warn
+from curobo.util.tensor_util import cat_sum, cat_sum_horizon
 
 
 @dataclass
@@ -104,10 +104,10 @@ class ArmCostConfig:
 
 @dataclass
 class ArmBaseConfig(RolloutConfig):
-    model_cfg: KinematicModelConfig
-    cost_cfg: ArmCostConfig
-    constraint_cfg: ArmCostConfig
-    convergence_cfg: ArmCostConfig
+    model_cfg: Optional[KinematicModelConfig] = None
+    cost_cfg: Optional[ArmCostConfig] = None
+    constraint_cfg: Optional[ArmCostConfig] = None
+    convergence_cfg: Optional[ArmCostConfig] = None
     world_coll_checker: Optional[WorldCollision] = None
 
     @staticmethod
@@ -322,7 +322,9 @@ class ArmBase(RolloutBase, ArmBaseConfig):
             self.null_convergence = DistCost(self.convergence_cfg.null_space_cfg)
 
         # set start state:
-        start_state = torch.randn((1, self.dynamics_model.d_state), **vars(self.tensor_args))
+        start_state = torch.randn(
+            (1, self.dynamics_model.d_state), **(self.tensor_args.as_torch_dict())
+        )
         self._start_state = JointState(
             position=start_state[:, : self.dynamics_model.d_dof],
             velocity=start_state[:, : self.dynamics_model.d_dof],
@@ -367,7 +369,10 @@ class ArmBase(RolloutBase, ArmBaseConfig):
                 cost_list.append(coll_cost)
         if return_list:
             return cost_list
-        cost = cat_sum(cost_list)
+        if self.sum_horizon:
+            cost = cat_sum_horizon(cost_list)
+        else:
+            cost = cat_sum(cost_list)
         return cost
 
     def constraint_fn(
@@ -409,7 +414,9 @@ class ArmBase(RolloutBase, ArmBaseConfig):
             constraint_list.append(self_constraint)
 
         constraint = cat_sum(constraint_list)
+
         feasible = constraint == 0.0
+
         if out_metrics is None:
             out_metrics = RolloutMetrics()
         out_metrics.feasible = feasible
@@ -431,6 +438,7 @@ class ArmBase(RolloutBase, ArmBaseConfig):
         out_metrics = self.constraint_fn(state)
         out_metrics.state = state
         out_metrics = self.convergence_fn(state, out_metrics)
+        out_metrics.cost = self.cost_fn(state)
         return out_metrics
 
     def get_metrics_cuda_graph(self, state: JointState):
@@ -458,6 +466,8 @@ class ArmBase(RolloutBase, ArmBaseConfig):
             with torch.cuda.graph(self.cu_metrics_graph, stream=s):
                 self._cu_out_metrics = self.get_metrics(self._cu_metrics_state_in)
             self._metrics_cuda_graph_init = True
+        if self._cu_metrics_state_in.position.shape != state.position.shape:
+            log_error("cuda graph changed")
         self._cu_metrics_state_in.copy_(state)
         self.cu_metrics_graph.replay()
         out_metrics = self._cu_out_metrics
@@ -469,17 +479,6 @@ class ArmBase(RolloutBase, ArmBaseConfig):
     ):
         if out_metrics is None:
             out_metrics = RolloutMetrics()
-        if (
-            self.convergence_cfg.null_space_cfg is not None
-            and self.null_convergence.enabled
-            and self._goal_buffer.batch_retract_state_idx is not None
-        ):
-            out_metrics.cost = self.null_convergence.forward_target_idx(
-                self._goal_buffer.retract_state,
-                state.state_seq.position,
-                self._goal_buffer.batch_retract_state_idx,
-            )
-
         return out_metrics
 
     def _get_augmented_state(self, state: JointState) -> KinematicModelState:
@@ -695,9 +694,11 @@ class ArmBase(RolloutBase, ArmBaseConfig):
         act_seq = self.dynamics_model.init_action_mean.unsqueeze(0).repeat(self.batch_size, 1, 1)
         return act_seq
 
-    def reset_cuda_graph(self):
+    def reset_shape(self):
         self._goal_idx_update = True
+        super().reset_shape()
 
+    def reset_cuda_graph(self):
         super().reset_cuda_graph()
 
     def get_action_from_state(self, state: JointState):

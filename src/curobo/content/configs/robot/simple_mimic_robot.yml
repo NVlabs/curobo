@@ -1,0 +1,47 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+robot_cfg:
+  kinematics:
+    use_usd_kinematics: False
+    isaac_usd_path: null
+    usd_path: "robot/simple/three_link_mimic.usda"
+    usd_robot_root: "/base_link"
+    urdf_path: "robot/simple/simple_mimic_robot.urdf"
+    asset_root_path: "robot/simple"
+    base_link: "base_link"
+    ee_link: "ee_link"
+    collision_link_names: null
+    collision_spheres: null
+    collision_sphere_buffer: 0.004 # 0.0025
+    extra_collision_spheres: null
+    use_global_cumul: True
+    self_collision_ignore: null
+    
+    
+    self_collision_buffer: null
+    mesh_link_names:
+      [
+        "base_link",
+        "chain_1_link_1",
+        "chain_1_link_2",
+        "ee_link",
+      
+      ]
+    lock_joints: {"chain_1_active_joint_1": 0.2}
+    extra_links: null
+    cspace:
+      joint_names: ["chain_1_active_joint_1", "active_joint_2"]
+      retract_config: [0.3, 0.0]
+      null_space_weight: [1,1]
+      cspace_distance_weight: [1,1]
+      max_acceleration: 15.0
+      max_jerk: 500.0

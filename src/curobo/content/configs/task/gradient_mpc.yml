@@ -83,7 +83,7 @@ lbfgs:
   epsilon: 0.01
   history: 15 #15
   use_cuda_graph: True
-  n_envs: 1
+  n_problems: 1
   store_debug: False
   use_cuda_kernel: True
   stable_mode: True

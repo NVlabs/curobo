@@ -18,6 +18,7 @@ import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo.types.base import TensorDeviceType
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 class SquashType(Enum):
@@ -74,7 +75,7 @@ def get_stomp_cov(
     return cov, scale_tril
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def get_stomp_cov_jit(
     horizon: int,
     d_action: int,
@@ -121,7 +122,7 @@ def get_stomp_cov_jit(
                     else:
                         A[k * horizon + i, k * horizon + index] = fd_array[j + 3]
 
-    R = torch.matmul(A.transpose(-2, -1), A)
+    R = torch.matmul(A.transpose(-2, -1).clone(), A.clone())
     M = torch.inverse(R)
     scaled_M = (1 / horizon) * M / (torch.max(torch.abs(M), dim=1)[0].unsqueeze(0))
     cov = M / torch.max(torch.abs(M))
@@ -132,7 +133,6 @@ def get_stomp_cov_jit(
         scale_tril = torch.linalg.cholesky(cov)
     else:
         scale_tril = cov
-
     """
     k = 0
     act_cov_matrix = cov[k * horizon:k * horizon + horizon, k * horizon:k * horizon + horizon]
@@ -246,7 +246,7 @@ def gaussian_kl(mean0, cov0, mean1, cov1, cov_type="full"):
     return term1 + mahalanobis_dist + term3
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def cost_to_go(cost_seq, gamma_seq, only_first=False):
     # type: (Tensor, Tensor, bool) -> Tensor
 

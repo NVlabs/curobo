@@ -78,13 +78,13 @@ ENV TORCH_CUDA_ARCH_LIST "7.0+PTX"
 ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 
 # Add cache date to avoid using cached layers older than this
-ARG CACHE_DATE=2023-12-15 
+ARG CACHE_DATE=2024-04-25
 
 
 RUN pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
 # if you want to use a different version of curobo, create folder as docker/pkgs and put your
-# version of curobo there. Then uncomment below line and comment the next line that clones from 
+# version of curobo there. Then uncomment below line and comment the next line that clones from
 # github
 
 # COPY pkgs /pkgs
@@ -125,3 +125,6 @@ RUN python -m pip install pyrealsense2 opencv-python transforms3d
 
 # install benchmarks:
 RUN python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
+
+# update ucx path: https://github.com/openucx/ucc/issues/476
+RUN export LD_LIBRARY_PATH=/opt/hpcx/ucx/lib:$LD_LIBRARY_PATH

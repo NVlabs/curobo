@@ -39,7 +39,8 @@ except ImportError:
 
 class LBFGScu(Function):
     @staticmethod
-    def _call_cuda(
+    def forward(
+        ctx,
         step_vec,
         rho_buffer,
         y_buffer,
@@ -50,6 +51,7 @@ class LBFGScu(Function):
         grad_0,
         epsilon=0.1,
         stable_mode=False,
+        use_shared_buffers=True,
     ):
         m, b, v_dim, _ = y_buffer.shape
 
@@ -67,43 +69,17 @@ class LBFGScu(Function):
             m,
             v_dim,
             stable_mode,
+            use_shared_buffers,
         )
         step_v = R[0].view(step_vec.shape)
 
-        return step_v
-
-    @staticmethod
-    def forward(
-        ctx,
-        step_vec,
-        rho_buffer,
-        y_buffer,
-        s_buffer,
-        q,
-        grad_q,
-        x_0,
-        grad_0,
-        epsilon=0.1,
-        stable_mode=False,
-    ):
-        R = LBFGScu._call_cuda(
-            step_vec,
-            rho_buffer,
-            y_buffer,
-            s_buffer,
-            q,
-            grad_q,
-            x_0,
-            grad_0,
-            epsilon=epsilon,
-            stable_mode=stable_mode,
-        )
         # ctx.save_for_backward(batch_spheres, robot_spheres, link_mats, link_sphere_map)
-        return R
+        return step_v
 
     @staticmethod
     def backward(ctx, grad_output):
         return (
+            None,
             None,
             None,
             None,

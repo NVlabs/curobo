@@ -172,7 +172,7 @@
     <dynamics damping="10.0"/>
     <limit effort="12" lower="-2.8973" upper="2.8973" velocity="2.6100"/>
   </joint>
-  <!--
+  
   <link name="panda_link8"/>
   <joint name="panda_joint8" type="fixed">
     <origin rpy="0 0 0" xyz="0 0 0.107"/>
@@ -180,18 +180,11 @@
     <child link="panda_link8"/>
     <axis xyz="0 0 0"/>
   </joint>
-  Removing this joint seems to help with some stability things
-  -->
   <joint name="panda_hand_joint" type="fixed">
-    <!--
     <parent link="panda_link8"/>
-    -->
-    <parent link="panda_link7"/>
     <child link="panda_hand"/>
-    <origin rpy="0 0 -0.785398163397" xyz="0 0 0.107"/>
-    <!--
+    
     <origin rpy="0 0 -0.785398163397" xyz="0 0 0"/>
-    -->
   </joint>
   <link name="panda_hand">
     <visual>

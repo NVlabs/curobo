@@ -24,39 +24,52 @@ from curobo.geom.sdf.world import CollisionCheckerType
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.robot import JointState, RobotConfig
+from curobo.util.logger import setup_curobo_logger
 from curobo.util_file import get_robot_configs_path, get_robot_path, join_path, load_yaml
+from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
 
-def demo_motion_gen():
-    # Standard Library
-
+def demo_motion_gen(robot_file, motion_gen=None):
     st_time = time.time()
-    tensor_args = TensorDeviceType()
-    world_file = "collision_table.yml"
-    robot_file = "franka.yml"
-    motion_gen_config = MotionGenConfig.load_from_robot_config(
-        robot_file,
-        world_file,
-        tensor_args,
-        trajopt_tsteps=44,
-        collision_checker_type=CollisionCheckerType.PRIMITIVE,
-        use_cuda_graph=False,
-        num_trajopt_seeds=24,
-        num_graph_seeds=24,
-        evaluate_interpolated_trajectory=True,
-        interpolation_dt=0.02,
-    )
-    motion_gen = MotionGen(motion_gen_config)
 
-    # st_time = time.time()
-    motion_gen.warmup(enable_graph=True, warmup_js_trajopt=False)
-    print("motion gen time:", time.time() - st_time)
+    if motion_gen is None:
+        setup_curobo_logger("warn")
+        # Standard Library
+
+        tensor_args = TensorDeviceType()
+        world_file = "collision_table.yml"
+        robot_file = "ur5e.yml"
+        motion_gen_config = MotionGenConfig.load_from_robot_config(
+            robot_file,
+            world_file,
+            tensor_args,
+            trajopt_tsteps=32,
+            collision_checker_type=CollisionCheckerType.PRIMITIVE,
+            use_cuda_graph=True,
+            num_trajopt_seeds=4,
+            num_graph_seeds=4,
+            evaluate_interpolated_trajectory=True,
+            interpolation_dt=0.02,
+        )
+        motion_gen = MotionGen(motion_gen_config)
+
+        # st_time = time.time()
+        torch.cuda.synchronize()
+        print("LOAD TIME: ", time.time() - st_time)
+        st_time = time.time()
+
+        motion_gen.warmup(enable_graph=True, warmup_js_trajopt=False)
+
+        torch.cuda.synchronize()
+
+        print("warmup TIME: ", time.time() - st_time)
+
+        return motion_gen
 
     # print(time.time() - st_time)
     # return
     retract_cfg = motion_gen.get_retract_config()
-    print(retract_cfg)
     state = motion_gen.rollout_fn.compute_kinematics(
         JointState.from_position(retract_cfg.view(1, -1))
     )
@@ -66,15 +79,58 @@ def demo_motion_gen():
     result = motion_gen.plan(
         start_state,
         retract_pose,
-        enable_graph=True,
+        enable_graph=False,
         enable_opt=True,
         max_attempts=1,
-        need_graph_success=True,
+        # need_graph_success=True,
     )
-    print(result.status)
-    print(result.optimized_plan.position.shape)
     traj = result.get_interpolated_plan()  # $.position.view(-1, 7)  # optimized plan
-    print("Trajectory Generated: ", result.success, result.optimized_dt.item())
+    print("Trajectory Generated: ", result.success, time.time() - st_time)
+    return motion_gen
+
+
+def demo_basic_ik(config_file="ur10e.yml"):
+    st_time = time.time()
+
+    tensor_args = TensorDeviceType()
+
+    config_file = load_yaml(join_path(get_robot_configs_path(), config_file))
+    urdf_file = config_file["kinematics"]["urdf_path"]  # Send global path starting with "/"
+    base_link = config_file["kinematics"]["base_link"]
+    ee_link = config_file["kinematics"]["ee_link"]
+    robot_cfg = RobotConfig.from_basic(urdf_file, base_link, ee_link, tensor_args)
+
+    ik_config = IKSolverConfig.load_from_robot_config(
+        robot_cfg,
+        None,
+        rotation_threshold=0.05,
+        position_threshold=0.005,
+        num_seeds=20,
+        self_collision_check=False,
+        self_collision_opt=False,
+        tensor_args=tensor_args,
+        use_cuda_graph=False,
+    )
+    ik_solver = IKSolver(ik_config)
+    torch.cuda.synchronize()
+    print("IK load time:", time.time() - st_time)
+    st_time = time.time()
+    # print(kin_state)
+
+    q_sample = ik_solver.sample_configs(100)
+    kin_state = ik_solver.fk(q_sample)
+    goal = Pose(kin_state.ee_position, kin_state.ee_quaternion)
+
+    torch.cuda.synchronize()
+    print("FK time:", time.time() - st_time)
+
+    st_time = time.time()
+    result = ik_solver.solve_batch(goal)
+    torch.cuda.synchronize()
+    print(
+        "Cold Start Solve Time(s) ",
+        result.solve_time,
+    )
 
 
 def demo_basic_robot():
@@ -122,7 +178,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_path",
         type=str,
-        default="log/trace",
+        default="benchmark/log/trace",
         help="path to save file",
     )
     parser.add_argument(
@@ -138,7 +194,19 @@ if __name__ == "__main__":
         default=False,
     )
     parser.add_argument(
+        "--motion_gen_plan",
+        action="store_true",
+        help="When True, runs startup for motion generation",
+        default=False,
+    )
+    parser.add_argument(
         "--kinematics",
+        action="store_true",
+        help="When True, runs startup for kinematics",
+        default=False,
+    )
+    parser.add_argument(
+        "--inverse_kinematics",
         action="store_true",
         help="When True, runs startup for kinematics",
         default=False,
@@ -172,21 +240,59 @@ if __name__ == "__main__":
         filename = join_path(args.save_path, args.file_name) + "_kinematics_trace.json"
         prof.export_chrome_trace(filename)
 
-    if args.motion_gen_once:
-        demo_motion_gen()
-
-    if args.motion_gen:
-        for _ in range(5):
-            demo_motion_gen()
+    if args.inverse_kinematics:
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+            demo_basic_ik(config_file)
+        filename = join_path(args.save_path, args.file_name) + "_inverse_kinematics_trace.json"
+        prof.export_chrome_trace(filename)
 
         pr = cProfile.Profile()
         pr.enable()
-        demo_motion_gen()
+        demo_basic_ik(config_file)
+        pr.disable()
+        filename = join_path(args.save_path, args.file_name) + "_inverse_kinematics_cprofile.prof"
+        pr.dump_stats(filename)
+
+    if args.motion_gen_once:
+        pr = cProfile.Profile()
+        pr.enable()
+        demo_motion_gen(config_file)
         pr.disable()
         filename = join_path(args.save_path, args.file_name) + "_motion_gen_cprofile.prof"
         pr.dump_stats(filename)
 
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
-            demo_motion_gen()
+            demo_motion_gen(config_file)
+        filename = join_path(args.save_path, args.file_name) + "_motion_gen_trace.json"
+        prof.export_chrome_trace(filename)
+
+    if args.motion_gen_plan:
+        motion_gen = demo_motion_gen(config_file)
+
+        pr = cProfile.Profile()
+        pr.enable()
+        demo_motion_gen(config_file, motion_gen)
+        pr.disable()
+        filename = join_path(args.save_path, args.file_name) + "_motion_gen_plan_cprofile.prof"
+        pr.dump_stats(filename)
+
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+            demo_motion_gen(config_file, motion_gen)
+        filename = join_path(args.save_path, args.file_name) + "_motion_gen_plan_trace.json"
+        prof.export_chrome_trace(filename)
+
+    if args.motion_gen:
+        for _ in range(5):
+            demo_motion_gen(config_file)
+
+        pr = cProfile.Profile()
+        pr.enable()
+        demo_motion_gen(config_file)
+        pr.disable()
+        filename = join_path(args.save_path, args.file_name) + "_motion_gen_cprofile.prof"
+        pr.dump_stats(filename)
+
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+            demo_motion_gen(config_file)
         filename = join_path(args.save_path, args.file_name) + "_motion_gen_trace.json"
         prof.export_chrome_trace(filename)

@@ -43,6 +43,8 @@ class RobotConfig:
 
     @staticmethod
     def from_dict(data_dict_in, tensor_args=TensorDeviceType()):
+        if "robot_cfg" in data_dict_in:
+            data_dict_in = data_dict_in["robot_cfg"]
         data_dict = deepcopy(data_dict_in)
         if isinstance(data_dict["kinematics"], dict):
             data_dict["kinematics"] = CudaRobotModelConfig.from_config(

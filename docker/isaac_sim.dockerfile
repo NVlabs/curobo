@@ -161,7 +161,7 @@ RUN echo "alias omni_python='/isaac-sim/python.sh'" >> /.bashrc
 
 
 # Add cache date to avoid using cached layers older than this
-ARG CACHE_DATE=2023-12-15 
+ARG CACHE_DATE=2024-04-11
 
 RUN $omni_python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 

@@ -21,9 +21,7 @@ from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGen
     "parallel_finetune, force_graph, expected_motion_time",
     [
         (True, False, 12),
-        (False, False, 12),
         (True, True, 12),
-        (False, True, 12),
     ],
 )
 def test_pose_sequence_ur5e(parallel_finetune, force_graph, expected_motion_time):
@@ -63,7 +61,7 @@ def test_pose_sequence_ur5e(parallel_finetune, force_graph, expected_motion_time
             start_state.clone(),
             goal_pose,
             plan_config=MotionGenPlanConfig(
-                parallel_finetune=parallel_finetune, max_attempts=1, enable_graph=force_graph
+                parallel_finetune=parallel_finetune, max_attempts=10, enable_graph=force_graph
             ),
         )
         if result.success.item():

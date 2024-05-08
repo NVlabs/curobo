@@ -10,16 +10,18 @@
 ##
 
 # Check architecture and load:
-ARG IMAGE_TAG 
+ARG IMAGE_TAG
 FROM curobo_docker:${IMAGE_TAG}
 # Set variables
 ARG USERNAME
 ARG USER_ID
+ARG CACHE_DATE=2024-04-25
 
 # Set environment variables
 
 # Set up sudo user
 #RUN /sbin/adduser --disabled-password --gecos '' --uid $USER_ID $USERNAME
+# RUN useradd -l -u 1000 $USERNAME
 RUN useradd -l -u $USER_ID -g users $USERNAME
 
 RUN /sbin/adduser $USERNAME sudo
@@ -27,6 +29,7 @@ RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 
 # Set user
+# RUN mkdir /home/$USERNAME && chown $USERNAME:$USERNAME /home/$USERNAME
 USER $USERNAME
 WORKDIR /home/$USERNAME
 ENV USER=$USERNAME

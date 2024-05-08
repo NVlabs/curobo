@@ -134,11 +134,11 @@ collision_spheres:
           "radius": 0.022
     panda_leftfinger:
         - "center": [0.0, 0.01, 0.043]
-          "radius": 0.011 # 25 
+          "radius": 0.011 
         - "center": [0.0, 0.02, 0.015]
-          "radius": 0.011 # 25
+          "radius": 0.011 
     panda_rightfinger:
         - "center": [0.0, -0.01, 0.043]
-          "radius": 0.011 #25 
+          "radius": 0.011 
         - "center": [0.0, -0.02, 0.015]
-          "radius": 0.011 #25
+          "radius": 0.011 

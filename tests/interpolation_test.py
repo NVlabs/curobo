@@ -19,10 +19,11 @@ from curobo.util.trajectory import InterpolateType, get_batch_interpolated_traje
 
 
 def test_linear_interpolation():
-    b, h, dof = 1, 24, 1
-    raw_dt = 0.4
-    int_dt = 0.01
     tensor_args = TensorDeviceType()
+
+    b, h, dof = 1, 24, 1
+    raw_dt = tensor_args.to_device(0.4)
+    int_dt = 0.01
     # initialize raw trajectory:
     in_traj = JointState.zeros((b, h, dof), tensor_args)
     in_traj.position = torch.zeros((b, h, dof), device=tensor_args.device)
@@ -42,16 +43,21 @@ def test_linear_interpolation():
 
     # create max_velocity buffer:
     out_traj_gpu, _, _ = get_batch_interpolated_trajectory(
-        in_traj, int_dt, max_vel, max_acc=max_acc, max_jerk=max_jerk, raw_dt=raw_dt
+        in_traj,
+        raw_dt,
+        int_dt,
+        max_vel,
+        max_acc=max_acc,
+        max_jerk=max_jerk,
     )
     #
     out_traj_gpu = out_traj_gpu.clone()
 
     out_traj_cpu, _, _ = get_batch_interpolated_trajectory(
         in_traj,
+        raw_dt,
         int_dt,
         max_vel,
-        raw_dt=raw_dt,
         kind=InterpolateType.LINEAR,
         max_acc=max_acc,
         max_jerk=max_jerk,
@@ -62,6 +68,3 @@ def test_linear_interpolation():
         ).item()
         < 0.05
     )
-
-
-# test_linear_interpolation()

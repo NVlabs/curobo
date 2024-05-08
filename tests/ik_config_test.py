@@ -146,5 +146,5 @@ def test_eval(config, expected):
     result = ik_solver.solve_single(goal)
 
     success = result.success
-    if expected is not -100:
+    if expected != -100:
         assert success.item() == expected

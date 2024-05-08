@@ -73,7 +73,7 @@ class CudaRobotGeneratorConfig:
     collision_spheres: Union[None, str, Dict[str, Any]] = None
 
     #: Radius buffer to add to collision spheres as padding.
-    collision_sphere_buffer: float = 0.0
+    collision_sphere_buffer: Union[float, Dict[str, float]] = 0.0
 
     #: Compute jacobian of link poses. Currently not supported.
     compute_jacobian: bool = False
@@ -144,6 +144,9 @@ class CudaRobotGeneratorConfig:
 
     #: cspace config
     cspace: Union[None, CSpaceConfig, Dict[str, List[Any]]] = None
+
+    #: Enable loading meshes from kinematics parser.
+    load_meshes: bool = False
 
     def __post_init__(self):
         # add root path:
@@ -283,7 +286,10 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             )
         else:
             self._kinematics_parser = UrdfKinematicsParser(
-                self.urdf_path, mesh_root=self.asset_root_path, extra_links=self.extra_links
+                self.urdf_path,
+                mesh_root=self.asset_root_path,
+                extra_links=self.extra_links,
+                load_meshes=self.load_meshes,
             )
 
         if self.lock_joints is None:
@@ -308,6 +314,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             link_map=self._link_map,
             joint_map=self._joint_map,
             joint_map_type=self._joint_map_type,
+            joint_offset_map=self._joint_offset_map,
             store_link_map=self._store_link_map,
             link_chain_map=self._link_chain_map,
             link_names=self.link_names,
@@ -326,6 +333,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             base_link=self.base_link,
             ee_link=self.ee_link,
             lock_jointstate=self.lock_jointstate,
+            mimic_joints=self._mimic_joint_data,
         )
         if self.asset_root_path != "":
             self._kinematics_parser.add_absolute_path_to_link_meshes(self.asset_root_path)
@@ -362,9 +370,8 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
     @profiler.record_function("robot_generator/build_chain")
     def _build_chain(self, base_link, ee_link, other_links, link_names):
         self._n_dofs = 0
-        self._controlled_joints = []
+        self._controlled_links = []
         self._bodies = []
-
         self._name_to_idx_map = dict()
         self.base_link = base_link
         self.ee_link = ee_link
@@ -397,20 +404,34 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         self.non_fixed_joint_names = self.joint_names.copy()
         return chain_link_names
 
+    def _get_mimic_joint_data(self):
+        # get joint types:
+        mimic_joint_data = {}
+        for i in range(1, len(self._bodies)):
+            body = self._bodies[i]
+            if i in self._controlled_links:
+                if body.mimic_joint_name is not None:
+                    if body.joint_name not in mimic_joint_data:
+                        mimic_joint_data[body.joint_name] = []
+                    mimic_joint_data[body.joint_name].append(i)
+        return mimic_joint_data
+
     @profiler.record_function("robot_generator/build_kinematics_tensors")
     def _build_kinematics_tensors(self, base_link, ee_link, link_names, chain_link_names):
+        self._active_joints = []
+        self._mimic_joint_data = {}
         link_map = [0 for i in range(len(self._bodies))]
         store_link_map = []  # [-1 for i in range(len(self._bodies))]
 
         joint_map = [
-            -1 if i not in self._controlled_joints else i for i in range(len(self._bodies))
+            -1 if i not in self._controlled_links else i for i in range(len(self._bodies))
         ]  #
         joint_map_type = [
-            -1 if i not in self._controlled_joints else i for i in range(len(self._bodies))
+            -1 if i not in self._controlled_links else i for i in range(len(self._bodies))
         ]
         all_joint_names = []
-        j_count = 0
         ordered_link_names = []
+        joint_offset_map = [[1.0, 0.0]]
         # add body 0 details:
         if self._bodies[0].link_name in link_names:
             store_link_map.append(chain_link_names.index(self._bodies[0].link_name))
@@ -420,14 +441,23 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             body = self._bodies[i]
             parent_name = body.parent_link_name
             link_map[i] = self._name_to_idx_map[parent_name]
-            all_joint_names.append(body.joint_name)
+            joint_offset_map.append(body.joint_offset)
+            joint_map_type[i] = body.joint_type.value
             if body.link_name in link_names:
                 store_link_map.append(chain_link_names.index(body.link_name))
                 ordered_link_names.append(body.link_name)
-            if i in self._controlled_joints:
-                joint_map[i] = j_count
-                joint_map_type[i] = body.joint_type.value
-                j_count += 1
+            if body.joint_name not in all_joint_names:
+                all_joint_names.append(body.joint_name)
+            if i in self._controlled_links:
+                joint_map[i] = self.joint_names.index(body.joint_name)
+                if body.mimic_joint_name is not None:
+                    if body.joint_name not in self._mimic_joint_data:
+                        self._mimic_joint_data[body.joint_name] = []
+                    self._mimic_joint_data[body.joint_name].append(
+                        {"joint_offset": body.joint_offset, "joint_name": body.mimic_joint_name}
+                    )
+                else:
+                    self._active_joints.append(i)
         self.link_names = ordered_link_names
         # do a for loop to get link matrix:
         link_chain_map = torch.eye(
@@ -452,6 +482,10 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         self._store_link_map = torch.as_tensor(
             store_link_map, device=self.tensor_args.device, dtype=torch.int16
         )
+        self._joint_offset_map = torch.as_tensor(
+            joint_offset_map, device=self.tensor_args.device, dtype=torch.float32
+        )
+        self._joint_offset_map = self._joint_offset_map.view(-1).contiguous()
         self._link_chain_map = link_chain_map.to(device=self.tensor_args.device)
         self._fixed_transform = torch.cat((self._fixed_transform), dim=0).to(
             device=self.tensor_args.device
@@ -483,12 +517,18 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         joint_data = self._get_joint_links(lock_joint_names)
 
         lock_links = list(
-            set(
-                [joint_data[j]["parent"] for j in joint_data.keys()]
-                + [joint_data[j]["child"] for j in joint_data.keys()]
-            )
+            [joint_data[j]["parent"] for j in joint_data.keys()]
+            + [joint_data[j]["child"] for j in joint_data.keys()]
         )
-        new_link_names = link_names + lock_links
+
+        for k in lock_joint_names:
+            if "mimic" in joint_data[k]:
+                mimic_link_names = [[x["parent"], x["child"]] for x in joint_data[k]["mimic"]]
+                mimic_link_names = [x for xs in mimic_link_names for x in xs]
+                lock_links += mimic_link_names
+        lock_links = list(set(lock_links))
+
+        new_link_names = list(set(link_names + lock_links))
 
         # rebuild kinematic tree with link names added to link pose computation:
         self._build_kinematics_tensors(base_link, ee_link, new_link_names, chain_link_names)
@@ -514,6 +554,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             link_map=self._link_map,
             joint_map=self._joint_map,
             joint_map_type=self._joint_map_type,
+            joint_offset_map=self._joint_offset_map,
             store_link_map=self._store_link_map,
             link_chain_map=self._link_chain_map,
             link_names=self.link_names,
@@ -525,14 +566,12 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             total_spheres=self.total_spheres,
         )
         link_poses = self._get_link_poses(q, lock_links, kinematics_config)
-
         # remove lock links from store map:
         store_link_map = [chain_link_names.index(l) for l in link_names]
         self._store_link_map = torch.as_tensor(
             store_link_map, device=self.tensor_args.device, dtype=torch.int16
         )
         self.link_names = link_names
-
         # compute a fixed transform for fixing joints:
         with profiler.record_function("cuda_robot_generator/fix_locked_joints"):
             # convert tensors to cpu:
@@ -548,14 +587,32 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                     .multiply(link_poses.get_index(0, w_child))
                 )
                 # Make this joint as fixed
-                i = self._all_joint_names.index(j) + 1
+                i = joint_data[j]["link_index"]
+                self._fixed_transform[i] = parent_t_child.get_matrix()
+
+                if "mimic" in joint_data[j]:
+                    for mimic_joint in joint_data[j]["mimic"]:
+                        w_parent = lock_links.index(mimic_joint["parent"])
+                        w_child = lock_links.index(mimic_joint["child"])
+                        parent_t_child = (
+                            link_poses.get_index(0, w_parent)
+                            .inverse()
+                            .multiply(link_poses.get_index(0, w_child))
+                        )
+                        i_q = mimic_joint["link_index"]
+                        self._fixed_transform[i_q] = parent_t_child.get_matrix()
+                        self._controlled_links.remove(i_q)
+                        self._joint_map_type[i_q] = -1
+                        self._joint_map[i_q] = -1
+
+                i = joint_data[j]["link_index"]
                 self._joint_map_type[i] = -1
                 self._joint_map[i:] -= 1
                 self._joint_map[i] = -1
-                self._n_dofs -= 1
-                self._fixed_transform[i] = parent_t_child.get_matrix()
-                self._controlled_joints.remove(i)
+                self._controlled_links.remove(i)
                 self.joint_names.remove(j)
+                self._n_dofs -= 1
+                self._active_joints.remove(i)
             self._joint_map[self._joint_map < -1] = -1
             self._joint_map = self._joint_map.to(device=self.tensor_args.device)
             self._joint_map_type = self._joint_map_type.to(device=self.tensor_args.device)
@@ -569,7 +626,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         self,
         collision_spheres: Dict,
         collision_link_names: List[str],
-        collision_sphere_buffer: float = 0.0,
+        collision_sphere_buffer: Union[float, Dict[str, float]] = 0.0,
     ):
         """
 
@@ -584,6 +641,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         # we store as [n_link, 7]
         link_sphere_idx_map = []
         cpu_tensor_args = self.tensor_args.cpu()
+        self_collision_buffer = self.self_collision_buffer.copy()
         with profiler.record_function("robot_generator/build_collision_spheres"):
             for j_idx, j in enumerate(collision_link_names):
                 # print(j_idx)
@@ -593,11 +651,22 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 )
                 # find link index in global map:
                 l_idx = self._name_to_idx_map[j]
-
+                offset_radius = 0.0
+                if isinstance(collision_sphere_buffer, float):
+                    offset_radius = collision_sphere_buffer
+                elif j in collision_sphere_buffer:
+                    offset_radius = collision_sphere_buffer[j]
+                if j in self_collision_buffer:
+                    self_collision_buffer[j] -= offset_radius
+                else:
+                    self_collision_buffer[j] = -offset_radius
                 for i in range(n_spheres):
+                    padded_radius = collision_spheres[j][i]["radius"] + offset_radius
+                    if padded_radius <= 0.0 and padded_radius > -1.0:
+                        padded_radius = 0.001
                     link_spheres[i, :] = tensor_sphere(
                         collision_spheres[j][i]["center"],
-                        collision_spheres[j][i]["radius"],
+                        padded_radius,
                         tensor_args=cpu_tensor_args,
                         tensor=link_spheres[i, :],
                     )
@@ -606,10 +675,6 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 self.total_spheres += n_spheres
 
         self._link_spheres_tensor = torch.cat(coll_link_spheres, dim=0)
-        new_radius = self._link_spheres_tensor[..., 3] + collision_sphere_buffer
-        flag = torch.logical_and(new_radius > -1.0, new_radius <= 0.0)
-        new_radius[flag] = 0.001
-        self._link_spheres_tensor[:, 3] = new_radius
         self._link_sphere_idx_map = torch.as_tensor(
             link_sphere_idx_map, dtype=torch.int16, device=cpu_tensor_args.device
         )
@@ -637,9 +702,9 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 link1_spheres_idx = torch.nonzero(self._link_sphere_idx_map == link1_idx)
 
                 rad1 = self._link_spheres_tensor[link1_spheres_idx, 3]
-                if j not in self.self_collision_buffer.keys():
-                    self.self_collision_buffer[j] = 0.0
-                c1 = self.self_collision_buffer[j]
+                if j not in self_collision_buffer.keys():
+                    self_collision_buffer[j] = 0.0
+                c1 = self_collision_buffer[j]
                 self.self_collision_offset[link1_spheres_idx] = c1
                 for _, i_name in enumerate(collision_link_names):
                     if i_name == j or i_name in ignore_links:
@@ -647,9 +712,9 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                     if i_name not in collision_link_names:
                         log_error("Self Collision Link name not found in collision_link_names")
                     # find index of this link name:
-                    if i_name not in self.self_collision_buffer.keys():
-                        self.self_collision_buffer[i_name] = 0.0
-                    c2 = self.self_collision_buffer[i_name]
+                    if i_name not in self_collision_buffer.keys():
+                        self_collision_buffer[i_name] = 0.0
+                    c2 = self_collision_buffer[i_name]
                     link2_idx = self._name_to_idx_map[i_name]
                     # update collision distance between spheres from these two links:
                     link2_spheres_idx = torch.nonzero(self._link_sphere_idx_map == link2_idx)
@@ -709,7 +774,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             if not valid_data:
                 break
             if torch.max(coll_cpu[i]) == -torch.inf:
-                print("skip", i)
+                log_info("skip" + str(i))
             for j in range(i + 1, n_spheres):
                 if sl_idx > thread_loc.shape[0] - 1:
                     valid_data = False
@@ -770,9 +835,10 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
         rigid_body_params = self._kinematics_parser.get_link_parameters(link_name, base=base)
         self._bodies.append(rigid_body_params)
         if rigid_body_params.joint_type != JointType.FIXED:
-            self._controlled_joints.append(body_idx)
-            self.joint_names.append(rigid_body_params.joint_name)
-            self._n_dofs = self._n_dofs + 1
+            self._controlled_links.append(body_idx)
+            if rigid_body_params.joint_name not in self.joint_names:
+                self.joint_names.append(rigid_body_params.joint_name)
+                self._n_dofs = self._n_dofs + 1
         self._fixed_transform.append(
             torch.as_tensor(
                 rigid_body_params.fixed_transform,
@@ -784,21 +850,34 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
 
     def _get_joint_links(self, joint_names: List[str]):
         j_data = {}
+
         for j in joint_names:
-            for b in self._bodies:
+            for bi, b in enumerate(self._bodies):
                 if b.joint_name == j:
-                    j_data[j] = {"parent": b.parent_link_name, "child": b.link_name}
+                    if j not in j_data:
+                        j_data[j] = {}
+                    if b.mimic_joint_name is None:
+                        j_data[j]["parent"] = b.parent_link_name
+                        j_data[j]["child"] = b.link_name
+                        j_data[j]["link_index"] = bi
+                    else:
+                        if "mimic" not in j_data[j]:
+                            j_data[j]["mimic"] = []
+                        j_data[j]["mimic"].append(
+                            {
+                                "parent": b.parent_link_name,
+                                "child": b.link_name,
+                                "link_index": bi,
+                                "joint_offset": b.joint_offset,
+                            }
+                        )
+
         return j_data
 
     @profiler.record_function("robot_generator/get_link_poses")
     def _get_link_poses(
         self, q: torch.Tensor, link_names: List[str], kinematics_config: KinematicsTensorConfig
     ) -> Pose:
-        if q.is_contiguous():
-            q_in = q.view(-1)
-        else:
-            q_in = q.reshape(-1)  # .reshape(-1)
-        # q_in = q.reshape(-1)
         link_pos_seq = torch.zeros(
             (1, len(self.link_names), 3),
             device=self.tensor_args.device,
@@ -825,12 +904,11 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             dtype=self.tensor_args.dtype,
         )
         link_pos_seq, link_quat_seq, _ = get_cuda_kinematics(
-            # self._link_mat_seq,  # data will be stored here
             link_pos_seq,
             link_quat_seq,
             batch_robot_spheres,
             global_cumul_mat,
-            q_in,
+            q,
             kinematics_config.fixed_transforms,
             kinematics_config.link_spheres,
             kinematics_config.link_map,  # tells which link is attached to which link i
@@ -839,6 +917,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             kinematics_config.store_link_map,
             kinematics_config.link_sphere_idx_map,  # sphere idx map
             kinematics_config.link_chain_map,
+            kinematics_config.joint_offset_map,
             grad_out_q,
             self.use_global_cumul,
         )
@@ -867,7 +946,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
     def _get_joint_position_velocity_limits(self):
         joint_limits = {"position": [[], []], "velocity": [[], []]}
 
-        for idx in self._controlled_joints:
+        for idx in self._active_joints:
             joint_limits["position"][0].append(self._bodies[idx].joint_limits[0])
             joint_limits["position"][1].append(self._bodies[idx].joint_limits[1])
             joint_limits["velocity"][0].append(self._bodies[idx].joint_velocity_limits[0])
@@ -891,7 +970,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
             ]
         )
         # clip joint position:
-        # TODO: change this to be per joint
+        # NOTE: change this to be per joint
         joint_limits["position"][0] += self.cspace.position_limit_clip
         joint_limits["position"][1] -= self.cspace.position_limit_clip
         joint_limits["velocity"][0] *= self.cspace.velocity_scale

@@ -11,11 +11,14 @@
 # Third Party
 import torch
 
+# CuRobo
+from curobo.util.torch_utils import get_torch_jit_decorator
+
 # Local Folder
 from .cost_base import CostBase
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def squared_sum(cost: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     # return  weight * torch.square(torch.linalg.norm(cost, dim=-1, ord=1))
     # return  weight * torch.sum(torch.square(cost), dim=-1)
@@ -24,7 +27,7 @@ def squared_sum(cost: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     return torch.sum(torch.square(cost) * weight, dim=-1)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def run_squared_sum(
     cost: torch.Tensor, weight: torch.Tensor, run_weight: torch.Tensor
 ) -> torch.Tensor:
@@ -35,13 +38,13 @@ def run_squared_sum(
     # return torch.sum(torch.square(cost), dim=-1) * weight * run_weight
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def backward_squared_sum(cost_vec, w):
     return 2.0 * w * cost_vec  # * g_out.unsqueeze(-1)
     # return   w * g_out.unsqueeze(-1)
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def backward_run_squared_sum(cost_vec, w, r_w):
     return 2.0 * w * r_w.unsqueeze(-1) * cost_vec  # * g_out.unsqueeze(-1)
     # return   w * r_w.unsqueeze(-1) * cost_vec * g_out.unsqueeze(-1)

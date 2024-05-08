@@ -31,7 +31,7 @@ torch.backends.cudnn.allow_tf32 = True
 def demo_basic_ik():
     tensor_args = TensorDeviceType()
 
-    config_file = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))
+    config_file = load_yaml(join_path(get_robot_configs_path(), "ur10e.yml"))
     urdf_file = config_file["robot_cfg"]["kinematics"][
         "urdf_path"
     ]  # Send global path starting with "/"
@@ -48,13 +48,13 @@ def demo_basic_ik():
         self_collision_check=False,
         self_collision_opt=False,
         tensor_args=tensor_args,
-        use_cuda_graph=False,
+        use_cuda_graph=True,
     )
     ik_solver = IKSolver(ik_config)
 
     # print(kin_state)
     for _ in range(10):
-        q_sample = ik_solver.sample_configs(5000)
+        q_sample = ik_solver.sample_configs(100)
         kin_state = ik_solver.fk(q_sample)
         goal = Pose(kin_state.ee_position, kin_state.ee_quaternion)
 
@@ -62,12 +62,12 @@ def demo_basic_ik():
         result = ik_solver.solve_batch(goal)
         torch.cuda.synchronize()
         print(
-            "Success, Solve Time(s), Total Time(s) ",
+            "Success, Solve Time(s), hz ",
             torch.count_nonzero(result.success).item() / len(q_sample),
             result.solve_time,
             q_sample.shape[0] / (time.time() - st_time),
-            torch.mean(result.position_error) * 100.0,
-            torch.mean(result.rotation_error) * 100.0,
+            torch.mean(result.position_error),
+            torch.mean(result.rotation_error),
         )
 
 
@@ -97,7 +97,7 @@ def demo_full_config_collision_free_ik():
     # print(kin_state)
     print("Running Single IK")
     for _ in range(10):
-        q_sample = ik_solver.sample_configs(5000)
+        q_sample = ik_solver.sample_configs(1)
         kin_state = ik_solver.fk(q_sample)
         goal = Pose(kin_state.ee_position, kin_state.ee_quaternion)
 
@@ -107,7 +107,7 @@ def demo_full_config_collision_free_ik():
         total_time = (time.time() - st_time) / q_sample.shape[0]
         print(
             "Success, Solve Time(s), Total Time(s)",
-            torch.count_nonzero(result.success).item() / len(q_sample),
+            torch.count_nonzero(result.success).item(),
             result.solve_time,
             total_time,
             1.0 / total_time,

@@ -18,7 +18,7 @@ import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo.geom.sdf.world import CollisionQueryBuffer, WorldCollisionConfig
-from curobo.geom.sdf.world_mesh import WorldMeshCollision
+from curobo.geom.sdf.world_voxel import WorldVoxelCollision
 from curobo.geom.types import Cuboid, Mesh, Sphere, SphereFitType, WorldConfig
 from curobo.types.camera import CameraObservation
 from curobo.types.math import Pose
@@ -33,7 +33,7 @@ except ImportError:
     from abc import ABC as Mapper
 
 
-class WorldBloxCollision(WorldMeshCollision):
+class WorldBloxCollision(WorldVoxelCollision):
     """World Collision Representaiton using Nvidia's nvblox library.
 
     This class depends on pytorch wrapper for nvblox.
@@ -55,7 +55,7 @@ class WorldBloxCollision(WorldMeshCollision):
         self._blox_voxel_sizes = [0.02]
         super().__init__(config)
 
-    def load_collision_model(self, world_model: WorldConfig):
+    def load_collision_model(self, world_model: WorldConfig, fix_cache_reference: bool = False):
         # load nvblox mesh
         if len(world_model.blox) > 0:
             # check if there is a mapper instance:
@@ -109,15 +109,17 @@ class WorldBloxCollision(WorldMeshCollision):
             self._blox_names = names
             self.collision_types["blox"] = True
 
-        return super().load_collision_model(world_model)
+        return super().load_collision_model(world_model, fix_cache_reference=fix_cache_reference)
 
     def clear_cache(self):
         self._blox_mapper.clear()
+        self._blox_mapper.update_hashmaps()
         super().clear_cache()
 
     def clear_blox_layer(self, layer_name: str):
         index = self._blox_names.index(layer_name)
         self._blox_mapper.clear(index)
+        self._blox_mapper.update_hashmaps()
 
     def _get_blox_sdf(
         self,
@@ -125,6 +127,8 @@ class WorldBloxCollision(WorldMeshCollision):
         collision_query_buffer: CollisionQueryBuffer,
         weight,
         activation_distance,
+        return_loss: bool = False,
+        compute_esdf: bool = False,
     ):
         d = self._blox_mapper.query_sphere_sdf_cost(
             query_spheres,
@@ -133,8 +137,11 @@ class WorldBloxCollision(WorldMeshCollision):
             collision_query_buffer.blox_collision_buffer.sparsity_index_buffer,
             weight,
             activation_distance,
+            self.max_esdf_distance,
             self._blox_tensor_list[0],
             self._blox_tensor_list[1],
+            return_loss,
+            compute_esdf,
         )
         return d
 
@@ -147,6 +154,7 @@ class WorldBloxCollision(WorldMeshCollision):
         speed_dt,
         sweep_steps,
         enable_speed_metric,
+        return_loss=False,
     ):
         d = self._blox_mapper.query_sphere_trajectory_sdf_cost(
             query_spheres,
@@ -160,6 +168,8 @@ class WorldBloxCollision(WorldMeshCollision):
             self._blox_tensor_list[1],
             sweep_steps,
             enable_speed_metric,
+            return_loss,
+            use_experimental=False,
         )
         return d
 
@@ -171,6 +181,8 @@ class WorldBloxCollision(WorldMeshCollision):
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_collisions: bool = True,
+        compute_esdf: bool = False,
     ):
         if "blox" not in self.collision_types or not self.collision_types["blox"]:
             return super().get_sphere_distance(
@@ -180,13 +192,16 @@ class WorldBloxCollision(WorldMeshCollision):
                 activation_distance,
                 env_query_idx,
                 return_loss,
+                sum_collisions=sum_collisions,
+                compute_esdf=compute_esdf,
             )
-
         d = self._get_blox_sdf(
             query_sphere,
             collision_query_buffer,
             weight=weight,
             activation_distance=activation_distance,
+            return_loss=return_loss,
+            compute_esdf=compute_esdf,
         )
 
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
@@ -200,8 +215,13 @@ class WorldBloxCollision(WorldMeshCollision):
             activation_distance,
             env_query_idx,
             return_loss,
+            sum_collisions=sum_collisions,
+            compute_esdf=compute_esdf,
         )
-        d = d + d_base
+        if compute_esdf:
+            d = torch.maximum(d, d_base)
+        else:
+            d = d + d_base
 
         return d
 
@@ -213,6 +233,7 @@ class WorldBloxCollision(WorldMeshCollision):
         activation_distance: torch.Tensor,
         env_query_idx=None,
         return_loss: bool = False,
+        **kwargs,
     ):
         if "blox" not in self.collision_types or not self.collision_types["blox"]:
             return super().get_sphere_collision(
@@ -229,6 +250,7 @@ class WorldBloxCollision(WorldMeshCollision):
             collision_query_buffer,
             weight=weight,
             activation_distance=activation_distance,
+            return_loss=return_loss,
         )
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
             "mesh" not in self.collision_types or not self.collision_types["mesh"]
@@ -257,6 +279,7 @@ class WorldBloxCollision(WorldMeshCollision):
         enable_speed_metric=False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_collisions: bool = True,
     ):
         if "blox" not in self.collision_types or not self.collision_types["blox"]:
             return super().get_swept_sphere_distance(
@@ -269,6 +292,7 @@ class WorldBloxCollision(WorldMeshCollision):
                 enable_speed_metric,
                 env_query_idx,
                 return_loss=return_loss,
+                sum_collisions=sum_collisions,
             )
 
         d = self._get_blox_swept_sdf(
@@ -279,6 +303,7 @@ class WorldBloxCollision(WorldMeshCollision):
             speed_dt=speed_dt,
             sweep_steps=sweep_steps,
             enable_speed_metric=enable_speed_metric,
+            return_loss=return_loss,
         )
 
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
@@ -295,6 +320,7 @@ class WorldBloxCollision(WorldMeshCollision):
             enable_speed_metric,
             env_query_idx,
             return_loss=return_loss,
+            sum_collisions=sum_collisions,
         )
         d = d + d_base
 
@@ -332,6 +358,7 @@ class WorldBloxCollision(WorldMeshCollision):
             speed_dt=speed_dt,
             sweep_steps=sweep_steps,
             enable_speed_metric=enable_speed_metric,
+            return_loss=return_loss,
         )
 
         if ("primitive" not in self.collision_types or not self.collision_types["primitive"]) and (
@@ -382,7 +409,7 @@ class WorldBloxCollision(WorldMeshCollision):
         cuboid: Cuboid,
         layer_name: Optional[str] = None,
     ):
-        raise NotImplementedError
+        log_error("Not implemented")
 
     def get_bounding_spheres(
         self,
@@ -396,7 +423,8 @@ class WorldBloxCollision(WorldMeshCollision):
         clear_region: bool = False,
     ) -> List[Sphere]:
         mesh = self.get_mesh_in_bounding_box(bounding_box, obstacle_name, clear_region=clear_region)
-
+        if clear_region:
+            self.clear_bounding_box(bounding_box, obstacle_name)
         spheres = mesh.get_bounding_spheres(
             n_spheres=n_spheres,
             surface_sphere_radius=surface_sphere_radius,

@@ -19,6 +19,8 @@ import torch
 from curobo.geom.sdf.world import CollisionQueryBuffer, WorldCollision
 from curobo.rollout.cost.cost_base import CostBase, CostConfig
 from curobo.rollout.dynamics_model.integration_utils import interpolate_kernel, sum_matrix
+from curobo.util.logger import log_info
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 @dataclass
@@ -48,7 +50,11 @@ class PrimitiveCollisionCostConfig(CostConfig):
     #: post optimization interpolation to not hit any obstacles.
     activation_distance: Union[torch.Tensor, float] = 0.0
 
+    #: Setting this flag to true will sum the distance colliding obstacles.
+    sum_collisions: bool = True
+
     #: Setting this flag to true will sum the distance across spheres of the robot.
+    #: Setting to False will only take the max distance
     sum_distance: bool = True
 
     def __post_init__(self):
@@ -103,6 +109,9 @@ class PrimitiveCollisionCost(CostBase, PrimitiveCollisionCostConfig):
         self._collision_query_buffer.update_buffer_shape(
             robot_spheres_in.shape, self.tensor_args, self.world_coll_checker.collision_types
         )
+        if not self.sum_distance:
+            log_info("sum_distance=False will be slower than sum_distance=True")
+            self.return_loss = True
         dist = self.sweep_check_fn(
             robot_spheres_in,
             self._collision_query_buffer,
@@ -115,9 +124,9 @@ class PrimitiveCollisionCost(CostBase, PrimitiveCollisionCostConfig):
             return_loss=self.return_loss,
         )
         if self.classify:
-            cost = weight_collision(dist, self.weight, self.sum_distance)
+            cost = weight_collision(dist, self.sum_distance)
         else:
-            cost = weight_distance(dist, self.weight, self.sum_distance)
+            cost = weight_distance(dist, self.sum_distance)
         return cost
 
     def sweep_fn(self, robot_spheres_in, env_query_idx: Optional[torch.Tensor] = None):
@@ -140,6 +149,9 @@ class PrimitiveCollisionCost(CostBase, PrimitiveCollisionCostConfig):
         self._collision_query_buffer.update_buffer_shape(
             sampled_spheres.shape, self.tensor_args, self.world_coll_checker.collision_types
         )
+        if not self.sum_distance:
+            log_info("sum_distance=False will be slower than sum_distance=True")
+            self.return_loss = True
         dist = self.coll_check_fn(
             sampled_spheres.contiguous(),
             self._collision_query_buffer,
@@ -151,9 +163,9 @@ class PrimitiveCollisionCost(CostBase, PrimitiveCollisionCostConfig):
         dist = dist.view(batch_size, new_horizon, n_spheres)
 
         if self.classify:
-            cost = weight_sweep_collision(self.int_sum_mat, dist, self.weight, self.sum_distance)
+            cost = weight_sweep_collision(self.int_sum_mat, dist, self.sum_distance)
         else:
-            cost = weight_sweep_distance(self.int_sum_mat, dist, self.weight, self.sum_distance)
+            cost = weight_sweep_distance(self.int_sum_mat, dist, self.sum_distance)
 
         return cost
 
@@ -161,6 +173,9 @@ class PrimitiveCollisionCost(CostBase, PrimitiveCollisionCostConfig):
         self._collision_query_buffer.update_buffer_shape(
             robot_spheres_in.shape, self.tensor_args, self.world_coll_checker.collision_types
         )
+        if not self.sum_distance:
+            log_info("sum_distance=False will be slower than sum_distance=True")
+            self.return_loss = True
         dist = self.coll_check_fn(
             robot_spheres_in,
             self._collision_query_buffer,
@@ -168,12 +183,13 @@ class PrimitiveCollisionCost(CostBase, PrimitiveCollisionCostConfig):
             env_query_idx=env_query_idx,
             activation_distance=self.activation_distance,
             return_loss=self.return_loss,
+            sum_collisions=self.sum_collisions,
         )
 
         if self.classify:
-            cost = weight_collision(dist, self.weight, self.sum_distance)
+            cost = weight_collision(dist, self.sum_distance)
         else:
-            cost = weight_distance(dist, self.weight, self.sum_distance)
+            cost = weight_distance(dist, self.sum_distance)
         return cost
 
     def update_dt(self, dt: Union[float, torch.Tensor]):
@@ -184,31 +200,43 @@ class PrimitiveCollisionCost(CostBase, PrimitiveCollisionCostConfig):
         return self._collision_query_buffer.get_gradient_buffer()
 
 
-@torch.jit.script
-def weight_sweep_distance(int_mat, dist, weight, sum_cost: bool):
-    dist = torch.sum(dist, dim=-1)
+@get_torch_jit_decorator()
+def weight_sweep_distance(int_mat, dist, sum_cost: bool):
+    if sum_cost:
+        dist = torch.sum(dist, dim=-1)
+    else:
+        dist = torch.max(dist, dim=-1)[0]
     dist = dist @ int_mat
     return dist
 
 
-@torch.jit.script
-def weight_sweep_collision(int_mat, dist, weight, sum_cost: bool):
-    dist = torch.sum(dist, dim=-1)
+@get_torch_jit_decorator()
+def weight_sweep_collision(int_mat, dist, sum_cost: bool):
+    if sum_cost:
+        dist = torch.sum(dist, dim=-1)
+    else:
+        dist = torch.max(dist, dim=-1)[0]
+
     dist = torch.where(dist > 0, dist + 1.0, dist)
     dist = dist @ int_mat
     return dist
 
 
-@torch.jit.script
-def weight_distance(dist, weight, sum_cost: bool):
+@get_torch_jit_decorator()
+def weight_distance(dist, sum_cost: bool):
     if sum_cost:
         dist = torch.sum(dist, dim=-1)
+    else:
+        dist = torch.max(dist, dim=-1)[0]
     return dist
 
 
-@torch.jit.script
-def weight_collision(dist, weight, sum_cost: bool):
+@get_torch_jit_decorator()
+def weight_collision(dist, sum_cost: bool):
     if sum_cost:
         dist = torch.sum(dist, dim=-1)
+    else:
+        dist = torch.max(dist, dim=-1)[0]
+
     dist = torch.where(dist > 0, dist + 1.0, dist)
     return dist

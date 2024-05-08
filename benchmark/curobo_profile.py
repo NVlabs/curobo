@@ -73,14 +73,15 @@ def load_curobo(
         position_threshold=0.005,
         rotation_threshold=0.05,
         num_ik_seeds=30,
-        num_trajopt_seeds=10,
-        interpolation_dt=0.02,
+        num_trajopt_seeds=12,
+        interpolation_dt=0.025,
+        finetune_trajopt_iters=200,
         # grad_trajopt_iters=200,
         store_ik_debug=enable_log,
         store_trajopt_debug=enable_log,
     )
     mg = MotionGen(motion_gen_config)
-    mg.warmup(enable_graph=False)
+    mg.warmup(enable_graph=False, warmup_js_trajopt=False)
     return mg
 
 
@@ -91,7 +92,7 @@ def benchmark_mb(args):
         spheres = load_yaml(join_path(get_robot_configs_path(), spheres))["collision_spheres"]
 
     plan_config = MotionGenPlanConfig(
-        max_attempts=2,
+        max_attempts=1,
         enable_graph_attempt=3,
         enable_finetune_trajopt=True,
         partial_ik_opt=False,
@@ -130,17 +131,27 @@ def benchmark_mb(args):
                     world = WorldConfig.from_dict(problem["obstacles"]).get_obb_world()
 
                 mg.update_world(world)
+                start_state = JointState.from_position(mg.tensor_args.to_device([q_start]))
+
+                result = mg.plan_single(
+                    start_state,
+                    Pose.from_list(pose),
+                    plan_config,
+                )
+                print(result.total_time, result.solve_time)
                 # continue
                 # load obstacles
-
+                # exit()
                 # run planner
-                start_state = JointState.from_position(mg.tensor_args.to_device([q_start]))
                 with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+                    # torch.cuda.profiler.start()
                     result = mg.plan_single(
                         start_state,
                         Pose.from_list(pose),
                         plan_config,
                     )
+                    # torch.cuda.profiler.stop()
+
                 print("Exporting the trace..")
                 prof.export_chrome_trace(join_path(args.save_path, args.file_name) + ".json")
                 print(result.success, result.status)
@@ -184,5 +195,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    setup_curobo_logger("error")
+    setup_curobo_logger("warn")
     benchmark_mb(args)

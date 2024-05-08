@@ -16,7 +16,15 @@ from typing import Optional
 import torch
 
 # CuRobo
-from curobo.opt.particle.parallel_mppi import CovType, ParallelMPPI, ParallelMPPIConfig
+from curobo.opt.particle.parallel_mppi import (
+    CovType,
+    ParallelMPPI,
+    ParallelMPPIConfig,
+    Trajectory,
+    jit_blend_mean,
+)
+from curobo.opt.particle.particle_opt_base import SampleMode
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 @dataclass
@@ -38,14 +46,72 @@ class ParallelES(ParallelMPPI, ParallelESConfig):
         )
         # get the new means from here
         # use Evolutionary Strategy Mean here:
+        new_mean = jit_blend_mean(self.mean_action, new_mean, self.step_size_mean)
         return new_mean
+
+    def _exp_util_from_costs(self, costs):
+        total_costs = self._compute_total_cost(costs)
+        w = self._exp_util(total_costs)
+        return w
 
     def _exp_util(self, total_costs):
         w = calc_exp(total_costs)
         return w
 
+    def _compute_mean_covariance(self, costs, actions):
+        w = self._exp_util_from_costs(costs)
+        w = w.unsqueeze(-1).unsqueeze(-1)
+        new_mean = self._compute_mean(w, actions)
+        new_cov = self._compute_covariance(w, actions)
+        self._update_cov_scale(new_cov)
 
-@torch.jit.script
+        return new_mean, new_cov
+
+    @torch.no_grad()
+    def _update_distribution(self, trajectories: Trajectory):
+        costs = trajectories.costs
+        actions = trajectories.actions
+
+        # Let's reshape to n_problems now:
+
+        # first find the means before doing exponential utility:
+
+        # Update best action
+        if self.sample_mode == SampleMode.BEST:
+            w = self._exp_util_from_costs(costs)
+
+            best_idx = torch.argmax(w, dim=-1)
+            self.best_traj.copy_(actions[self.problem_col, best_idx])
+
+        if self.store_rollouts and self.visual_traj is not None:
+            total_costs = self._compute_total_cost(costs)
+            vis_seq = getattr(trajectories.state, self.visual_traj)
+            top_values, top_idx = torch.topk(total_costs, 20, dim=1)
+            self.top_values = top_values
+            self.top_idx = top_idx
+            top_trajs = torch.index_select(vis_seq, 0, top_idx[0])
+            for i in range(1, top_idx.shape[0]):
+                trajs = torch.index_select(
+                    vis_seq, 0, top_idx[i] + (self.particles_per_problem * i)
+                )
+                top_trajs = torch.cat((top_trajs, trajs), dim=0)
+            if self.top_trajs is None or top_trajs.shape != self.top_trajs:
+                self.top_trajs = top_trajs
+            else:
+                self.top_trajs.copy_(top_trajs)
+
+        if not self.update_cov:
+            w = w.unsqueeze(-1).unsqueeze(-1)
+
+            new_mean = self._compute_mean(w, actions)
+        else:
+            new_mean, new_cov = self._compute_mean_covariance(costs, actions)
+            self.cov_action.copy_(new_cov)
+
+        self.mean_action.copy_(new_mean)
+
+
+@get_torch_jit_decorator()
 def calc_exp(
     total_costs,
 ):
@@ -58,7 +124,7 @@ def calc_exp(
     return w
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def compute_es_mean(
     w, actions, mean_action, full_inv_cov, num_particles: int, learning_rate: float
 ):

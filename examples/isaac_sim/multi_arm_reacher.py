@@ -136,7 +136,6 @@ def main():
         robot_cfg,
         world_cfg,
         tensor_args,
-        trajopt_tsteps=40,
         collision_checker_type=CollisionCheckerType.MESH,
         use_cuda_graph=True,
         num_trajopt_seeds=12,
@@ -146,6 +145,7 @@ def main():
         collision_activation_distance=0.025,
         acceleration_scale=1.0,
         fixed_iters_trajopt=True,
+        trajopt_tsteps=40,
     )
     motion_gen = MotionGen(motion_gen_config)
     print("warming up...")
@@ -154,7 +154,9 @@ def main():
     print("Curobo is Ready")
     add_extensions(simulation_app, args.headless_mode)
     plan_config = MotionGenPlanConfig(
-        enable_graph=False, enable_graph_attempt=4, max_attempts=10, enable_finetune_trajopt=True
+        enable_graph=False,
+        enable_graph_attempt=4,
+        max_attempts=10,
     )
 
     usd_help.load_stage(my_world.stage)
