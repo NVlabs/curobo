@@ -58,7 +58,7 @@ collision_spheres:
       radius: 0.07
   tool0:
     - center: [0, 0, 0.12]
-      radius: 0.05
+      radius: -0.01
   camera_mount:
     - center: [0, 0.11, -0.01]
       radius: 0.06

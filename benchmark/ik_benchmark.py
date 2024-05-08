@@ -59,21 +59,22 @@ def run_full_config_collision_free_ik(
     robot_cfg = RobotConfig.from_dict(robot_data)
     world_cfg = WorldConfig.from_dict(load_yaml(join_path(get_world_configs_path(), world_file)))
     position_threshold = 0.005
+    grad_iters = None
     if high_precision:
         position_threshold = 0.001
+        grad_iters = 100
     ik_config = IKSolverConfig.load_from_robot_config(
         robot_cfg,
         world_cfg,
-        rotation_threshold=0.05,
         position_threshold=position_threshold,
-        num_seeds=24,
+        num_seeds=16,
         self_collision_check=collision_free,
         self_collision_opt=collision_free,
         tensor_args=tensor_args,
         use_cuda_graph=use_cuda_graph,
         high_precision=high_precision,
         regularization=False,
-        # grad_iters=500,
+        grad_iters=grad_iters,
     )
     ik_solver = IKSolver(ik_config)
 
@@ -122,7 +123,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    b_list = [1, 10, 100, 1000][-1:]
+    b_list = [1, 10, 100, 2000][-1:]
 
     robot_list = get_motion_gen_robot_list() + get_multi_arm_robot_list()[:2]
     world_file = "collision_test.yml"
@@ -140,7 +141,7 @@ if __name__ == "__main__":
         "Position-Error-Collision-Free-IK(mm)": [],
         "Orientation-Error-Collision-Free-IK": [],
     }
-    for robot_file in robot_list:
+    for robot_file in robot_list[:-1]:
         # create a sampler with dof:
         for b_size in b_list:
             # sample test configs:
@@ -175,13 +176,22 @@ if __name__ == "__main__":
 
             data["Collision-Free-IK-time(ms)"].append(dt_cu_ik_cfree * 1000.0)
     write_yaml(data, join_path(args.save_path, args.file_name + ".yml"))
+
     try:
         # Third Party
         import pandas as pd
 
         df = pd.DataFrame(data)
         print("Reported errors are 98th percentile")
-        print(df)
         df.to_csv(join_path(args.save_path, args.file_name + ".csv"))
+        try:
+            # Third Party
+            from tabulate import tabulate
+
+            print(tabulate(df, headers="keys", tablefmt="grid"))
+        except ImportError:
+            print(df)
+
+            pass
     except ImportError:
         pass

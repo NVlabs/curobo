@@ -53,13 +53,13 @@ class WrapMpc(WrapBase):
 
         self.update_params(goal)
         if self.sync_cuda_time:
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(device=self.tensor_args.device)
         # print("In: ", seed[0,:,0])
         start_time = time.time()
         with profiler.record_function("mpc/opt"):
             act_seq = self.optimize(seed, shift_steps=shift_steps)
         if self.sync_cuda_time:
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(device=self.tensor_args.device)
         self.opt_dt = time.time() - start_time
         with profiler.record_function("mpc/filter"):
             act = self.safety_rollout.get_robot_command(

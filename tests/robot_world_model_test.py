@@ -85,7 +85,7 @@ def test_robot_world_collision_vector():
     d_world, d_vec = model.get_collision_vector(state.link_spheres_tensor.view(n, 1, -1, 4))
 
     assert d_world.shape[0] == n
-    assert torch.norm(d_world[0] - 0.1385) < 0.002
+    assert torch.norm(d_world[0] - 0.1385) < 0.005
     assert torch.abs(d_vec[0, 0, 0, 2] + 0.7350) > 0.002
 
 

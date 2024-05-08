@@ -24,15 +24,12 @@ from curobo.cuda_robot_model.cuda_robot_generator import (
     CudaRobotGeneratorConfig,
 )
 from curobo.cuda_robot_model.kinematics_parser import KinematicsParser
-from curobo.cuda_robot_model.types import (
-    CudaRobotModelState,
-    KinematicsTensorConfig,
-    SelfCollisionKinematicsConfig,
-)
+from curobo.cuda_robot_model.types import KinematicsTensorConfig, SelfCollisionKinematicsConfig
 from curobo.curobolib.kinematics import get_cuda_kinematics
-from curobo.geom.types import Sphere
+from curobo.geom.types import Mesh, Sphere
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
+from curobo.types.state import JointState
 from curobo.util.logger import log_error
 from curobo.util_file import get_robot_path, join_path, load_yaml
 
@@ -142,15 +139,72 @@ class CudaRobotModelConfig:
     def cspace(self):
         return self.kinematics_config.cspace
 
+    @property
+    def dof(self) -> int:
+        return self.kinematics_config.n_dof
+
+
+@dataclass
+class CudaRobotModelState:
+    """Dataclass that stores kinematics information."""
+
+    #: End-effector position stored as x,y,z in meters [b, 3]. End-effector is defined by
+    #: :attr:`CudaRobotModel.ee_link`.
+    ee_position: torch.Tensor
+
+    #: End-effector orientaiton stored as quaternion qw, qx, qy, qz [b,4]. End-effector is defined
+    #: by :attr:`CudaRobotModel.ee_link`.
+    ee_quaternion: torch.Tensor
+
+    #: Linear Jacobian. Currently not supported.
+    lin_jacobian: Optional[torch.Tensor] = None
+
+    #: Angular Jacobian. Currently not supported.
+    ang_jacobian: Optional[torch.Tensor] = None
+
+    #: Position of links specified by link_names  (:attr:`CudaRobotModel.link_names`).
+    links_position: Optional[torch.Tensor] = None
+
+    #: Quaternions of links specified by link names (:attr:`CudaRobotModel.link_names`).
+    links_quaternion: Optional[torch.Tensor] = None
+
+    #: Position of spheres specified by collision spheres (:attr:`CudaRobotModel.robot_spheres`)
+    #: in x, y, z, r format [b,n,4].
+    link_spheres_tensor: Optional[torch.Tensor] = None
+
+    #: Names of links that each index in :attr:`links_position` and :attr:`links_quaternion`
+    #: corresponds to.
+    link_names: Optional[str] = None
+
+    @property
+    def ee_pose(self) -> Pose:
+        """Get end-effector pose as a Pose object."""
+        return Pose(self.ee_position, self.ee_quaternion)
+
+    def get_link_spheres(self) -> torch.Tensor:
+        """Get spheres representing robot geometry as a tensor with [batch,4],  [x,y,z,radius]."""
+        return self.link_spheres_tensor
+
+    @property
+    def link_pose(self) -> Dict[str, Pose]:
+        """Get link poses as a dictionary of link name to Pose object."""
+        link_poses = None
+        if self.link_names is not None:
+            link_poses = {}
+            link_pos = self.links_position.contiguous()
+            link_quat = self.links_quaternion.contiguous()
+            for i, v in enumerate(self.link_names):
+                link_poses[v] = Pose(link_pos[..., i, :], link_quat[..., i, :])
+        return link_poses
+
 
 class CudaRobotModel(CudaRobotModelConfig):
     """
     CUDA Accelerated Robot Model
 
-    NOTE: Currently dof is created only for links that we need to compute kinematics.
-    E.g., for robots with many serial chains, add all links of the robot to get the correct dof.
-    This is not an issue if you are loading collision spheres as that will cover the full geometry
-    of the robot.
+    Currently dof is created only for links that we need to compute kinematics. E.g., for robots
+    with many serial chains, add all links of the robot to get the correct dof. This is not an
+    issue if you are loading collision spheres as that will cover the full geometry of the robot.
     """
 
     def __init__(self, config: CudaRobotModelConfig):
@@ -180,7 +234,7 @@ class CudaRobotModel(CudaRobotModelConfig):
             self._batch_robot_spheres = torch.zeros(
                 (self._batch_size, self.kinematics_config.total_spheres, 4),
                 device=self.tensor_args.device,
-                dtype=self.tensor_args.dtype,
+                dtype=self.tensor_args.collision_geometry_dtype,
             )
             self._grad_out_q = torch.zeros(
                 (self._batch_size, self.get_dof()),
@@ -322,7 +376,6 @@ class CudaRobotModel(CudaRobotModelConfig):
 
     def _cuda_forward(self, q):
         link_pos, link_quat, robot_spheres = get_cuda_kinematics(
-            # self._link_mat_seq,  # data will be stored here
             self._link_pos_seq,
             self._link_quat_seq,
             self._batch_robot_spheres,
@@ -336,11 +389,10 @@ class CudaRobotModel(CudaRobotModelConfig):
             self.kinematics_config.store_link_map,
             self.kinematics_config.link_sphere_idx_map,  # sphere idx map
             self.kinematics_config.link_chain_map,
+            self.kinematics_config.joint_offset_map,
             self._grad_out_q,
             self.use_global_cumul,
         )
-        # if(robot_spheres.shape[0]<10):
-        #    print(robot_spheres)
         return link_pos, link_quat, robot_spheres
 
     @property
@@ -370,6 +422,10 @@ class CudaRobotModel(CudaRobotModelConfig):
         return self.kinematics_config.n_dof
 
     @property
+    def dof(self) -> int:
+        return self.kinematics_config.n_dof
+
+    @property
     def joint_names(self) -> List[str]:
         return self.kinematics_config.joint_names
 
@@ -381,6 +437,31 @@ class CudaRobotModel(CudaRobotModelConfig):
     def lock_jointstate(self):
         return self.kinematics_config.lock_jointstate
 
+    def get_full_js(self, js: JointState):
+        all_joint_names = self.all_articulated_joint_names
+        lock_joint_state = self.lock_jointstate
+
+        new_js = js.get_augmented_joint_state(all_joint_names, lock_joint_state)
+        return new_js
+
+    def get_mimic_js(self, js: JointState):
+        if self.kinematics_config.mimic_joints is None:
+            return None
+        extra_joints = {"position": [], "joint_names": []}
+        # for every joint in mimic_joints, get active joint name
+        for j in self.kinematics_config.mimic_joints:
+            active_q = js.position[..., js.joint_names.index(j)]
+            for k in self.kinematics_config.mimic_joints[j]:
+                extra_joints["joint_names"].append(k["joint_name"])
+                extra_joints["position"].append(
+                    k["joint_offset"][0] * active_q + k["joint_offset"][1]
+                )
+        extra_js = JointState.from_position(
+            position=torch.stack(extra_joints["position"]), joint_names=extra_joints["joint_names"]
+        )
+        new_js = js.get_augmented_joint_state(js.joint_names + extra_js.joint_names, extra_js)
+        return new_js
+
     @property
     def ee_link(self):
         return self.kinematics_config.ee_link
@@ -389,5 +470,13 @@ class CudaRobotModel(CudaRobotModelConfig):
     def base_link(self):
         return self.kinematics_config.base_link
 
+    @property
+    def robot_spheres(self):
+        return self.kinematics_config.link_spheres
+
     def update_kinematics_config(self, new_kin_config: KinematicsTensorConfig):
-        self.kinematics_config.copy(new_kin_config)
+        self.kinematics_config.copy_(new_kin_config)
+
+    @property
+    def retract_config(self):
+        return self.kinematics_config.cspace.retract_config

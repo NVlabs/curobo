@@ -11,4 +11,4 @@
 cuboid:
   table:
     dims: [5.0, 5.0, 0.2] # x, y, z
-    pose: [0.0, 0.0, -0.1, 1, 0, 0, 0.0] # x, y, z, qx, qy, qz, qw
+    pose: [0.0, 0.0, -0.1, 1, 0, 0, 0.0] # x, y, z, qx, qy, qz, qw                                                                                                                                                                                                                                                            

@@ -20,21 +20,24 @@ import torch.autograd.profiler as profiler
 # CuRobo
 from curobo.curobolib.opt import LBFGScu
 from curobo.opt.newton.newton_base import NewtonOptBase, NewtonOptConfig
-from curobo.util.logger import log_warn
+from curobo.util.logger import log_info
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 # kernel for l-bfgs:
-# @torch.jit.script
-def compute_step_direction(
-    alpha_buffer,
-    rho_buffer,
-    y_buffer,
-    s_buffer,
-    grad_q,
+@get_torch_jit_decorator(only_valid_for_compile=True)
+def jit_lbfgs_compute_step_direction(
+    alpha_buffer: torch.Tensor,
+    rho_buffer: torch.Tensor,
+    y_buffer: torch.Tensor,
+    s_buffer: torch.Tensor,
+    grad_q: torch.Tensor,
     m: int,
     epsilon: float,
     stable_mode: bool = True,
 ):
+    grad_q = grad_q.transpose(-1, -2)
+
     # m = 15 (int)
     # y_buffer, s_buffer: m x b x 175
     # q, grad_q: b x 175
@@ -60,12 +63,39 @@ def compute_step_direction(
     return -1.0 * r
 
 
+@get_torch_jit_decorator()
+def jit_lbfgs_update_buffers(
+    q, grad_q, s_buffer, y_buffer, rho_buffer, x_0, grad_0, stable_mode: bool
+):
+    grad_q = grad_q.transpose(-1, -2)
+    q = q.unsqueeze(-1)
+
+    y = grad_q - grad_0
+    s = q - x_0
+    rho = 1 / (y.transpose(-1, -2) @ s)
+    if stable_mode:
+        rho = torch.nan_to_num(rho, 0.0, 0.0, 0.0)
+    s_buffer[0] = s
+    s_buffer[:] = torch.roll(s_buffer, -1, dims=0)
+    y_buffer[0] = y
+    y_buffer[:] = torch.roll(y_buffer, -1, dims=0)  # .copy_(y_buff)
+
+    rho_buffer[0] = rho
+
+    rho_buffer[:] = torch.roll(rho_buffer, -1, dims=0)
+
+    x_0.copy_(q)
+    grad_0.copy_(grad_q)
+    return s_buffer, y_buffer, rho_buffer, x_0, grad_0
+
+
 @dataclass
 class LBFGSOptConfig(NewtonOptConfig):
     history: int = 10
     epsilon: float = 0.01
     use_cuda_kernel: bool = True
     stable_mode: bool = True
+    use_shared_buffers_kernel: bool = True
 
     def __post_init__(self):
         return super().__post_init__()
@@ -77,11 +107,15 @@ class LBFGSOpt(NewtonOptBase, LBFGSOptConfig):
         if config is not None:
             LBFGSOptConfig.__init__(self, **vars(config))
         NewtonOptBase.__init__(self)
-        if self.d_opt >= 1024 or self.history > 15:
-            log_warn("LBFGS: Not using LBFGS Cuda Kernel as d_opt>1024 or history>15")
+        if (
+            self.d_opt >= 1024
+            or self.history > 31
+            or ((self.d_opt * self.history + 33) * 4 >= 48000)
+        ):
+            log_info("LBFGS: Not using LBFGS Cuda Kernel as d_opt>1024 or history>15")
             self.use_cuda_kernel = False
-        if self.history >= self.d_opt:
-            log_warn("LBFGS: history >= d_opt, reducing history to d_opt-1")
+        if self.history > self.d_opt:
+            log_info("LBFGS: history >= d_opt, reducing history to d_opt-1")
             self.history = self.d_opt - 1
 
     @profiler.record_function("lbfgs/reset")
@@ -95,9 +129,9 @@ class LBFGSOpt(NewtonOptBase, LBFGSOptConfig):
         self.step_q_buffer[:] = 0.0
         return super().reset()
 
-    def update_nenvs(self, n_envs):
-        self.init_hessian(b=n_envs)
-        return super().update_nenvs(n_envs)
+    def update_nproblems(self, n_problems):
+        self.init_hessian(b=n_problems)
+        return super().update_nproblems(n_problems)
 
     def init_hessian(self, b=1):
         self.x_0 = torch.zeros(
@@ -130,7 +164,7 @@ class LBFGSOpt(NewtonOptBase, LBFGSOptConfig):
     def _get_step_direction(self, cost, q, grad_q):
         if self.use_cuda_kernel:
             with profiler.record_function("lbfgs/fused"):
-                dq = LBFGScu._call_cuda(
+                dq = LBFGScu.apply(
                     self.step_q_buffer,
                     self.rho_buffer,
                     self.y_buffer,
@@ -141,13 +175,14 @@ class LBFGSOpt(NewtonOptBase, LBFGSOptConfig):
                     self.grad_0,
                     self.epsilon,
                     self.stable_mode,
+                    self.use_shared_buffers_kernel,
                 )
 
         else:
-            grad_q = grad_q.transpose(-1, -2)
-            q = q.unsqueeze(-1)
+
             self._update_buffers(q, grad_q)
-            dq = compute_step_direction(
+
+            dq = jit_lbfgs_compute_step_direction(
                 self.alpha_buffer,
                 self.rho_buffer,
                 self.y_buffer,
@@ -177,6 +212,23 @@ class LBFGSOpt(NewtonOptBase, LBFGSOptConfig):
         return -1.0 * r
 
     def _update_buffers(self, q, grad_q):
+        if True:
+            self.s_buffer, self.y_buffer, self.rho_buffer, self.x_0, self.grad_0 = (
+                jit_lbfgs_update_buffers(
+                    q,
+                    grad_q,
+                    self.s_buffer,
+                    self.y_buffer,
+                    self.rho_buffer,
+                    self.x_0,
+                    self.grad_0,
+                    self.stable_mode,
+                )
+            )
+            return
+        grad_q = grad_q.transpose(-1, -2)
+        q = q.unsqueeze(-1)
+
         y = grad_q - self.grad_0
         s = q - self.x_0
         rho = 1 / (y.transpose(-1, -2) @ s)

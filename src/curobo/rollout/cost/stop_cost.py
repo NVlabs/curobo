@@ -17,6 +17,7 @@ import torch
 
 # CuRobo
 from curobo.rollout.dynamics_model.kinematic_model import TimeTrajConfig
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 # Local Folder
 from .cost_base import CostBase, CostConfig
@@ -68,9 +69,14 @@ class StopCost(CostBase, StopCostConfig):
             self.max_vel = (sum_matrix @ delta_vel).unsqueeze(-1)
 
     def forward(self, vels):
-        vel_abs = torch.abs(vels)
-        vel_abs = torch.nn.functional.relu(vel_abs - self.max_vel)
-
-        cost = self.weight * (torch.sum(vel_abs**2, dim=-1))
-
+        cost = velocity_cost(vels, self.weight, self.max_vel)
         return cost
+
+
+@get_torch_jit_decorator()
+def velocity_cost(vels, weight, max_vel):
+    vel_abs = torch.abs(vels)
+    vel_abs = torch.nn.functional.relu(vel_abs - max_vel[: vels.shape[1]])
+    cost = weight * (torch.sum(vel_abs**2, dim=-1))
+
+    return cost

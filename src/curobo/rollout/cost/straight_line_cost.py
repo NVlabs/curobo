@@ -13,11 +13,14 @@
 # Third Party
 import torch
 
+# CuRobo
+from curobo.util.torch_utils import get_torch_jit_decorator
+
 # Local Folder
 from .cost_base import CostBase, CostConfig
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def st_cost(ee_pos_batch, vec_weight, weight):
     ee_plus_one = torch.roll(ee_pos_batch, 1, dims=1)
 

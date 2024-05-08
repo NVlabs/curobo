@@ -24,5 +24,5 @@ def init_warp(quiet=True, tensor_args: TensorDeviceType = TensorDeviceType()):
     # wp.config.enable_backward = True
     wp.init()
 
-    wp.force_load(wp.device_from_torch(tensor_args.device))
+    # wp.force_load(wp.device_from_torch(tensor_args.device))
     return True

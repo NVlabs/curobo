@@ -19,7 +19,10 @@ import torch
 @dataclass(frozen=True)
 class TensorDeviceType:
     device: torch.device = torch.device("cuda", 0)
-    dtype: torch.float32 = torch.float32
+    dtype: torch.dtype = torch.float32
+    collision_geometry_dtype: torch.dtype = torch.float32
+    collision_gradient_dtype: torch.dtype = torch.float32
+    collision_distance_dtype: torch.dtype = torch.float32
 
     @staticmethod
     def from_basic(device: str, dev_id: int):
@@ -36,3 +39,6 @@ class TensorDeviceType:
 
     def cpu(self):
         return TensorDeviceType(device=torch.device("cpu"), dtype=self.dtype)
+
+    def as_torch_dict(self):
+        return {"device": self.device, "dtype": self.dtype}

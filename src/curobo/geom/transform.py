@@ -18,6 +18,7 @@ import warp as wp
 # CuRobo
 from curobo.curobolib.kinematics import rotation_matrix_to_quaternion
 from curobo.util.logger import log_error
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp import init_warp
 
 
@@ -27,11 +28,11 @@ def transform_points(
     if out_points is None:
         out_points = torch.zeros((points.shape[0], 3), device=points.device, dtype=points.dtype)
     if out_gp is None:
-        out_gp = torch.zeros((position.shape[0], 3), device=position.device)
+        out_gp = torch.zeros((position.shape[0], 3), device=position.device, dtype=points.dtype)
     if out_gq is None:
-        out_gq = torch.zeros((quaternion.shape[0], 4), device=quaternion.device)
+        out_gq = torch.zeros((quaternion.shape[0], 4), device=quaternion.device, dtype=points.dtype)
     if out_gpt is None:
-        out_gpt = torch.zeros((points.shape[0], 3), device=position.device)
+        out_gpt = torch.zeros((points.shape[0], 3), device=position.device, dtype=points.dtype)
     out_points = TransformPoint.apply(
         position, quaternion, points, out_points, out_gp, out_gq, out_gpt
     )
@@ -46,18 +47,20 @@ def batch_transform_points(
             (points.shape[0], points.shape[1], 3), device=points.device, dtype=points.dtype
         )
     if out_gp is None:
-        out_gp = torch.zeros((position.shape[0], 3), device=position.device)
+        out_gp = torch.zeros((position.shape[0], 3), device=position.device, dtype=points.dtype)
     if out_gq is None:
-        out_gq = torch.zeros((quaternion.shape[0], 4), device=quaternion.device)
+        out_gq = torch.zeros((quaternion.shape[0], 4), device=quaternion.device, dtype=points.dtype)
     if out_gpt is None:
-        out_gpt = torch.zeros((points.shape[0], points.shape[1], 3), device=position.device)
+        out_gpt = torch.zeros(
+            (points.shape[0], points.shape[1], 3), device=position.device, dtype=points.dtype
+        )
     out_points = BatchTransformPoint.apply(
         position, quaternion, points, out_points, out_gp, out_gq, out_gpt
     )
     return out_points
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def get_inv_transform(w_rot_c, w_trans_c):
     # type: (Tensor, Tensor) -> Tuple[Tensor, Tensor]
     c_rot_w = w_rot_c.transpose(-1, -2)
@@ -65,7 +68,7 @@ def get_inv_transform(w_rot_c, w_trans_c):
     return c_rot_w, c_trans_w
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def transform_point_inverse(point, rot, trans):
     # type: (Tensor, Tensor, Tensor) -> Tensor
 
@@ -229,6 +232,61 @@ def pose_inverse(
 
 
 @wp.kernel
+def compute_pose_inverse(
+    position: wp.array(dtype=wp.vec3),
+    quat: wp.array(dtype=wp.vec4),
+    out_position: wp.array(dtype=wp.vec3),
+    out_quat: wp.array(dtype=wp.vec4),
+):  # b pose_1 and b pose_2, compute pose_1 * pose_2
+    b_idx = wp.tid()
+    # read data:
+
+    in_position = position[b_idx]
+    in_quat = quat[b_idx]
+
+    # read point
+    # create a transform from a vector/quaternion:
+    t_1 = wp.transform(in_position, wp.quaternion(in_quat[1], in_quat[2], in_quat[3], in_quat[0]))
+    t_3 = wp.transform_inverse(t_1)
+
+    # write pt:
+    out_q = wp.transform_get_rotation(t_3)
+
+    out_v = wp.vec4()
+    out_v[0] = out_q[3]  # out_q[3]
+    out_v[1] = out_q[0]  # [0]
+    out_v[2] = out_q[1]  # wp.extract(out_q, 1)
+    out_v[3] = out_q[2]  # wp.extract(out_q, 2)
+
+    out_position[b_idx] = wp.transform_get_translation(t_3)
+    out_quat[b_idx] = out_v
+
+
+@wp.kernel
+def compute_matrix_to_quat(
+    in_mat: wp.array(dtype=wp.mat33),
+    out_quat: wp.array(dtype=wp.vec4),
+):
+    # b pose_1 and b pose_2, compute pose_1 * pose_2
+    b_idx = wp.tid()
+    # read data:
+
+    in_m = in_mat[b_idx]
+
+    # read point
+    # create a transform from a vector/quaternion:
+    out_q = wp.quat_from_matrix(in_m)
+
+    out_v = wp.vec4()
+    out_v[0] = out_q[3]  # wp.extract(out_q, 3)
+    out_v[1] = out_q[0]  # wp.extract(out_q, 0)
+    out_v[2] = out_q[1]  # wp.extract(out_q, 1)
+    out_v[3] = out_q[2]  # wp.extract(out_q, 2)
+    # write pt:
+    out_quat[b_idx] = out_v
+
+
+@wp.kernel
 def compute_transform_point(
     position: wp.array(dtype=wp.vec3),
     quat: wp.array(dtype=wp.vec4),
@@ -332,37 +390,6 @@ def compute_batch_pose_multipy(
 
 
 @wp.kernel
-def compute_pose_inverse(
-    position: wp.array(dtype=wp.vec3),
-    quat: wp.array(dtype=wp.vec4),
-    out_position: wp.array(dtype=wp.vec3),
-    out_quat: wp.array(dtype=wp.vec4),
-):  # b pose_1 and b pose_2, compute pose_1 * pose_2
-    b_idx = wp.tid()
-    # read data:
-
-    in_position = position[b_idx]
-    in_quat = quat[b_idx]
-
-    # read point
-    # create a transform from a vector/quaternion:
-    t_1 = wp.transform(in_position, wp.quaternion(in_quat[1], in_quat[2], in_quat[3], in_quat[0]))
-    t_3 = wp.transform_inverse(t_1)
-
-    # write pt:
-    out_q = wp.transform_get_rotation(t_3)
-
-    out_v = wp.vec4()
-    out_v[0] = out_q[3]
-    out_v[1] = out_q[0]
-    out_v[2] = out_q[1]
-    out_v[3] = out_q[2]
-
-    out_position[b_idx] = wp.transform_get_translation(t_3)
-    out_quat[b_idx] = out_v
-
-
-@wp.kernel
 def compute_quat_to_matrix(
     quat: wp.array(dtype=wp.vec4),
     out_mat: wp.array(dtype=wp.mat33),
@@ -380,30 +407,6 @@ def compute_quat_to_matrix(
 
     # write pt:
     out_mat[b_idx] = m_1
-
-
-@wp.kernel
-def compute_matrix_to_quat(
-    in_mat: wp.array(dtype=wp.mat33),
-    out_quat: wp.array(dtype=wp.vec4),
-):
-    # b pose_1 and b pose_2, compute pose_1 * pose_2
-    b_idx = wp.tid()
-    # read data:
-
-    in_m = in_mat[b_idx]
-
-    # read point
-    # create a transform from a vector/quaternion:
-    out_q = wp.quat_from_matrix(in_m)
-
-    out_v = wp.vec4()
-    out_v[0] = out_q[3]
-    out_v[1] = out_q[0]
-    out_v[2] = out_q[1]
-    out_v[3] = out_q[2]
-    # write pt:
-    out_quat[b_idx] = out_v
 
 
 @wp.kernel
@@ -941,7 +944,6 @@ class PoseInverse(torch.autograd.Function):
         adj_position: torch.Tensor,
         adj_quaternion: torch.Tensor,
     ):
-        b, _ = position.shape
 
         if out_position is None:
             out_position = torch.zeros_like(position)
@@ -951,7 +953,8 @@ class PoseInverse(torch.autograd.Function):
             adj_position = torch.zeros_like(position)
         if adj_quaternion is None:
             adj_quaternion = torch.zeros_like(quaternion)
-
+        b, _ = position.view(-1, 3).shape
+        ctx.b = b
         init_warp()
         ctx.save_for_backward(
             position,
@@ -961,7 +964,7 @@ class PoseInverse(torch.autograd.Function):
             adj_position,
             adj_quaternion,
         )
-        ctx.b = b
+
         wp.launch(
             kernel=compute_pose_inverse,
             dim=b,
@@ -975,9 +978,6 @@ class PoseInverse(torch.autograd.Function):
             ],
             stream=wp.stream_from_torch(position.device),
         )
-        # remove close to zero values:
-        # out_position[torch.abs(out_position)<1e-8] = 0.0
-        # out_quaternion[torch.abs(out_quaternion)<1e-8] = 0.0
 
         return out_position, out_quaternion
 
@@ -1071,6 +1071,7 @@ class QuatToMatrix(torch.autograd.Function):
             adj_quaternion,
         )
         ctx.b = b
+
         wp.launch(
             kernel=compute_quat_to_matrix,
             dim=b,
@@ -1153,6 +1154,7 @@ class MatrixToQuaternion(torch.autograd.Function):
             adj_mat,
         )
         ctx.b = b
+
         wp.launch(
             kernel=compute_matrix_to_quat,
             dim=b,

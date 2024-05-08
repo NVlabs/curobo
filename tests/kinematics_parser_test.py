@@ -73,7 +73,7 @@ def usd_parser(robot_params_all):
 def urdf_parser(robot_params_all):
     robot_params = robot_params_all["kinematics"]
     robot_urdf = join_path(get_assets_path(), robot_params["urdf_path"])
-    kinematics_parser = UrdfKinematicsParser(robot_urdf)
+    kinematics_parser = UrdfKinematicsParser(robot_urdf, build_scene_graph=True)
     return kinematics_parser
 
 
@@ -140,3 +140,8 @@ def test_basic_ee_pose(usd_cuda_robot, urdf_cuda_robot, retract_state):
     p_d, q_d = usd_pose.distance(urdf_pose)
     assert p_d < 1e-5
     assert q_d < 1e-5
+
+
+def test_urdf_parser(urdf_parser):
+    assert urdf_parser.root_link == "base_link"
+    assert len(urdf_parser.get_controlled_joint_names()) == 9

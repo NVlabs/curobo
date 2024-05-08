@@ -11,7 +11,7 @@
 # Standard Library
 import math
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # Third Party
 import numpy as np
@@ -25,6 +25,7 @@ from curobo.types.base import TensorDeviceType
 from curobo.types.robot import JointState
 from curobo.util.logger import log_error, log_info, log_warn
 from curobo.util.sample_lib import bspline
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp_interpolation import get_cuda_linear_interpolation
 
 
@@ -114,49 +115,63 @@ def get_spline_interpolated_trajectory(raw_traj, des_horizon, degree=5):
 
     for i in range(cpu_traj.shape[-1]):
         retimed_traj[:, i] = bspline(cpu_traj[:, i], n=des_horizon, degree=degree)
-    retimed_traj = retimed_traj.to(**vars(tensor_args))
+    retimed_traj = retimed_traj.to(**(tensor_args.as_torch_dict()))
     return retimed_traj
 
 
 def get_batch_interpolated_trajectory(
     raw_traj: JointState,
+    raw_dt: torch.Tensor,
     interpolation_dt: float,
-    max_vel: torch.Tensor,
-    max_acc: torch.Tensor,
-    max_jerk: torch.Tensor,
-    raw_dt: float,
+    max_vel: Optional[torch.Tensor] = None,
+    max_acc: Optional[torch.Tensor] = None,
+    max_jerk: Optional[torch.Tensor] = None,
     kind: InterpolateType = InterpolateType.LINEAR_CUDA,
     out_traj_state: Optional[JointState] = None,
     tensor_args: TensorDeviceType = TensorDeviceType(),
     max_deviation: float = 0.1,
     min_dt: float = 0.02,
+    max_dt: float = 0.15,
     optimize_dt: bool = True,
 ):
     # compute dt across trajectory:
+    if len(raw_traj.shape) == 2:
+        raw_traj = raw_traj.unsqueeze(0)
     b, horizon, dof = raw_traj.position.shape  # horizon
     # given the dt required to run trajectory at maximum velocity,
     # we find the number of timesteps required:
-    traj_steps, steps_max, opt_dt = calculate_tsteps(
-        raw_traj.velocity,
-        raw_traj.acceleration,
-        raw_traj.jerk,
-        interpolation_dt,
-        max_vel,
-        max_acc,
-        max_jerk,
-        raw_dt,
-        min_dt,
-        horizon,
-        optimize_dt,
-    )
+    if optimize_dt:
+        traj_steps, steps_max, opt_dt = calculate_tsteps(
+            raw_traj.velocity,
+            raw_traj.acceleration,
+            raw_traj.jerk,
+            interpolation_dt,
+            max_vel,
+            max_acc,
+            max_jerk,
+            raw_dt,
+            min_dt,
+            max_dt,
+            horizon,
+            optimize_dt,
+        )
+    else:
+        traj_steps, steps_max = calculate_traj_steps(raw_dt, interpolation_dt, horizon)
+        opt_dt = raw_dt
     # traj_steps contains the tsteps for each trajectory
-    assert steps_max > 0
-    # To do linear interpolation, we
+    if steps_max <= 0:
+        log_error("Steps max is less than 0")
+
+    if out_traj_state is not None and out_traj_state.position.shape[1] < steps_max:
+        log_warn(
+            "Interpolation buffer shape is smaller than steps_max,"
+            + " creating new buffer of shape "
+            + str(steps_max)
+        )
+        out_traj_state = None
+
     if out_traj_state is None:
         out_traj_state = JointState.zeros([b, steps_max, dof], tensor_args)
-
-    if out_traj_state.position.shape[1] < steps_max:
-        log_error("Interpolation buffer shape is smaller than steps_max")
 
     if kind in [InterpolateType.LINEAR, InterpolateType.CUBIC]:
         # plot and save:
@@ -186,7 +201,7 @@ def get_batch_interpolated_trajectory(
         )
     else:
         raise ValueError("Unknown interpolation type")
-    # opt_dt = (raw_dt) / opt_dt
+
     return out_traj_state, traj_steps, opt_dt
 
 
@@ -385,7 +400,7 @@ def get_interpolated_trajectory(
                     kind=kind,
                     last_step=des_horizon,
                 )
-            retimed_traj = retimed_traj.to(**vars(tensor_args))
+            retimed_traj = retimed_traj.to(**(tensor_args.as_torch_dict()))
             out_traj_state.position[b, :interpolation_steps, :] = retimed_traj
             out_traj_state.position[b, interpolation_steps:, :] = retimed_traj[
                 interpolation_steps - 1 : interpolation_steps, :
@@ -438,16 +453,18 @@ def linear_smooth(
     return y_new
 
 
-@torch.jit.script
-def calculate_dt(
+@get_torch_jit_decorator()
+def calculate_dt_fixed(
     vel: torch.Tensor,
     acc: torch.Tensor,
     jerk: torch.Tensor,
     max_vel: torch.Tensor,
     max_acc: torch.Tensor,
     max_jerk: torch.Tensor,
-    raw_dt: float,
-    interpolation_dt: float,
+    raw_dt: torch.Tensor,
+    min_dt: float,
+    max_dt: float,
+    epsilon: float = 1e-6,
 ):
     # compute scaled dt:
     max_v_arr = torch.max(torch.abs(vel), dim=-2)[0]  # output is batch, dof
@@ -464,13 +481,47 @@ def calculate_dt(
     dt_score_jerk = raw_dt * torch.pow((torch.max(jerk_scale_dt, dim=-1)[0]), 1 / 3)
     dt_score = torch.maximum(dt_score_vel, dt_score_acc)
     dt_score = torch.maximum(dt_score, dt_score_jerk)
-    dt_score = torch.clamp(dt_score, interpolation_dt, raw_dt)
+
+    dt_score = torch.clamp(dt_score * (1.0 + epsilon), min_dt, max_dt)
+
+    return dt_score
+
+
+@get_torch_jit_decorator(force_jit=True)
+def calculate_dt(
+    vel: torch.Tensor,
+    acc: torch.Tensor,
+    jerk: torch.Tensor,
+    max_vel: torch.Tensor,
+    max_acc: torch.Tensor,
+    max_jerk: torch.Tensor,
+    raw_dt: float,
+    min_dt: float,
+    epsilon: float = 1e-6,
+):
+    # compute scaled dt:
+    max_v_arr = torch.max(torch.abs(vel), dim=-2)[0]  # output is batch, dof
+
+    max_acc_arr = torch.max(torch.abs(acc), dim=-2)[0]
+    max_jerk_arr = torch.max(torch.abs(jerk), dim=-2)[0]
+
+    vel_scale_dt = (max_v_arr) / (max_vel.view(1, max_v_arr.shape[-1]))  # batch,dof
+    acc_scale_dt = max_acc_arr / (max_acc.view(1, max_acc_arr.shape[-1]))
+    jerk_scale_dt = max_jerk_arr / (max_jerk.view(1, max_jerk_arr.shape[-1]))
+
+    dt_score_vel = raw_dt * torch.max(vel_scale_dt, dim=-1)[0]  # batch, 1
+    dt_score_acc = raw_dt * torch.sqrt((torch.max(acc_scale_dt, dim=-1)[0]))
+    dt_score_jerk = raw_dt * torch.pow((torch.max(jerk_scale_dt, dim=-1)[0]), 1 / 3)
+    dt_score = torch.maximum(dt_score_vel, dt_score_acc)
+    dt_score = torch.maximum(dt_score, dt_score_jerk)
+    dt_score = torch.clamp(dt_score * (1.0 + epsilon), min_dt, raw_dt)
+
     # NOTE: this dt score is not dt, rather a scaling to convert velocity, acc, jerk that was
     # computed with raw_dt to a new dt
     return dt_score
 
 
-@torch.jit.script
+@get_torch_jit_decorator(force_jit=True)
 def calculate_dt_no_clamp(
     vel: torch.Tensor,
     acc: torch.Tensor,
@@ -478,6 +529,7 @@ def calculate_dt_no_clamp(
     max_vel: torch.Tensor,
     max_acc: torch.Tensor,
     max_jerk: torch.Tensor,
+    epsilon: float = 1e-6,
 ):
     # compute scaled dt:
     max_v_arr = torch.max(torch.abs(vel), dim=-2)[0]  # output is batch, dof
@@ -494,10 +546,20 @@ def calculate_dt_no_clamp(
     dt_score_jerk = torch.pow((torch.max(jerk_scale_dt, dim=-1)[0]), 1 / 3)
     dt_score = torch.maximum(dt_score_vel, dt_score_acc)
     dt_score = torch.maximum(dt_score, dt_score_jerk)
+    dt_score = dt_score * (1.0 + epsilon)
     return dt_score
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
+def calculate_traj_steps(
+    opt_dt: torch.Tensor, interpolation_dt: float, horizon: int
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    traj_steps = (torch.ceil((horizon - 1) * ((opt_dt) / interpolation_dt))).to(dtype=torch.int32)
+    steps_max = torch.max(traj_steps)
+    return traj_steps, steps_max
+
+
+@get_torch_jit_decorator()
 def calculate_tsteps(
     vel: torch.Tensor,
     acc: torch.Tensor,
@@ -506,15 +568,25 @@ def calculate_tsteps(
     max_vel: torch.Tensor,
     max_acc: torch.Tensor,
     max_jerk: torch.Tensor,
-    raw_dt: float,
+    raw_dt: torch.Tensor,
     min_dt: float,
+    max_dt: float,
     horizon: int,
     optimize_dt: bool = True,
 ):
     # compute scaled dt:
-    opt_dt = calculate_dt(vel, acc, jerk, max_vel, max_acc, max_jerk, raw_dt, interpolation_dt)
+    opt_dt = calculate_dt_fixed(
+        vel,
+        acc,
+        jerk,
+        max_vel,
+        max_acc,
+        max_jerk,
+        raw_dt,
+        min_dt,
+        max_dt,
+    )
     if not optimize_dt:
         opt_dt[:] = raw_dt
-    traj_steps = (torch.ceil((horizon - 1) * ((opt_dt) / interpolation_dt))).to(dtype=torch.int32)
-    steps_max = torch.max(traj_steps)
+    traj_steps, steps_max = calculate_traj_steps(opt_dt, interpolation_dt, horizon)
     return traj_steps, steps_max, opt_dt

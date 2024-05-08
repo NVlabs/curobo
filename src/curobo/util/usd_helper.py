@@ -16,7 +16,6 @@ from typing import Dict, List, Optional, Union
 # Third Party
 import numpy as np
 import torch
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 from tqdm import tqdm
 
 # CuRobo
@@ -46,6 +45,15 @@ from curobo.util_file import (
     load_yaml,
 )
 from curobo.wrap.reacher.motion_gen import MotionGenResult
+
+try:
+    # Third Party
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+except ImportError:
+    raise ImportError(
+        "usd-core failed to import, install with pip install usd-core"
+        + " NOTE: Do not install this if using with ISAAC SIM."
+    )
 
 
 def set_prim_translate(prim, translation):
@@ -815,7 +823,6 @@ class UsdHelper:
                 config_file["robot_cfg"]["kinematics"], tensor_args=tensor_args
             )
             kin_model = CudaRobotModel(robot_cfg)
-
         m = kin_model.get_robot_link_meshes()
         offsets = [x.pose for x in m]
         robot_mesh_model = WorldConfig(mesh=m)
@@ -834,7 +841,7 @@ class UsdHelper:
             usd_helper.add_world_to_stage(world_model, base_frame=base_frame)
 
         animation_links = kin_model.kinematics_config.mesh_link_names
-        animation_poses = kin_model.get_link_poses(q_traj.position, animation_links)
+        animation_poses = kin_model.get_link_poses(q_traj.position.contiguous(), animation_links)
         # add offsets for visual mesh:
         for i, ival in enumerate(offsets):
             offset_pose = Pose.from_list(ival)

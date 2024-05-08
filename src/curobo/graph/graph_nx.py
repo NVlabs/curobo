@@ -10,9 +10,18 @@
 #
 
 
+# Standard Library
+import random
+
 # Third Party
 import networkx as nx
+import numpy as np
 import torch
+
+# This is needed to get deterministic results from networkx.
+# Note: it has to be set in global space.
+np.random.seed(2)
+random.seed(2)
 
 
 class NetworkxGraph(object):

@@ -72,7 +72,11 @@ class WorldMeshCollision(WorldPrimitiveCollision):
         return super()._init_cache()
 
     def load_collision_model(
-        self, world_model: WorldConfig, env_idx: int = 0, load_obb_obs: bool = True
+        self,
+        world_model: WorldConfig,
+        env_idx: int = 0,
+        load_obb_obs: bool = True,
+        fix_cache_reference: bool = False,
     ):
         max_nmesh = len(world_model.mesh)
         if max_nmesh > 0:
@@ -85,20 +89,23 @@ class WorldMeshCollision(WorldPrimitiveCollision):
             self._mesh_tensor_list[0][env_idx, :max_nmesh] = w_mid
             self._mesh_tensor_list[1][env_idx, :max_nmesh, :7] = w_inv_pose
             self._mesh_tensor_list[2][env_idx, :max_nmesh] = 1
+            self._mesh_tensor_list[2][env_idx, max_nmesh:] = 0
 
             self._env_mesh_names[env_idx][:max_nmesh] = name_list
             self._env_n_mesh[env_idx] = max_nmesh
 
             self.collision_types["mesh"] = True
         if load_obb_obs:
-            super().load_collision_model(world_model, env_idx)
+            super().load_collision_model(
+                world_model, env_idx, fix_cache_reference=fix_cache_reference
+            )
         else:
             self.world_model = world_model
 
     def load_batch_collision_model(self, world_config_list: List[WorldConfig]):
         max_nmesh = max([len(x.mesh) for x in world_config_list])
         if self._mesh_tensor_list is None or self._mesh_tensor_list[0].shape[1] < max_nmesh:
-            log_info("Creating new Mesh cache: " + str(max_nmesh))
+            log_warn("Creating new Mesh cache: " + str(max_nmesh))
             self._create_mesh_cache(max_nmesh)
 
         for env_idx, world_model in enumerate(world_config_list):
@@ -349,6 +356,7 @@ class WorldMeshCollision(WorldPrimitiveCollision):
         activation_distance: torch.Tensor,
         env_query_idx=None,
         return_loss=False,
+        compute_esdf=False,
     ):
         d = SdfMeshWarpPy.apply(
             query_spheres,
@@ -364,6 +372,7 @@ class WorldMeshCollision(WorldPrimitiveCollision):
             self.max_distance,
             env_query_idx,
             return_loss,
+            compute_esdf,
         )
         return d
 
@@ -391,9 +400,9 @@ class WorldMeshCollision(WorldPrimitiveCollision):
             self._mesh_tensor_list[1],
             self._mesh_tensor_list[2],
             self._env_n_mesh,
+            self.max_distance,
             sweep_steps,
             enable_speed_metric,
-            self.max_distance,
             env_query_idx,
             return_loss,
         )
@@ -407,6 +416,8 @@ class WorldMeshCollision(WorldPrimitiveCollision):
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_collisions: bool = True,
+        compute_esdf: bool = False,
     ):
         # TODO: if no mesh object exist, call primitive
         if "mesh" not in self.collision_types or not self.collision_types["mesh"]:
@@ -417,6 +428,8 @@ class WorldMeshCollision(WorldPrimitiveCollision):
                 activation_distance=activation_distance,
                 env_query_idx=env_query_idx,
                 return_loss=return_loss,
+                sum_collisions=sum_collisions,
+                compute_esdf=compute_esdf,
             )
 
         d = self._get_sdf(
@@ -426,6 +439,7 @@ class WorldMeshCollision(WorldPrimitiveCollision):
             activation_distance=activation_distance,
             env_query_idx=env_query_idx,
             return_loss=return_loss,
+            compute_esdf=compute_esdf,
         )
 
         if "primitive" not in self.collision_types or not self.collision_types["primitive"]:
@@ -437,8 +451,13 @@ class WorldMeshCollision(WorldPrimitiveCollision):
             activation_distance=activation_distance,
             env_query_idx=env_query_idx,
             return_loss=return_loss,
+            sum_collisions=sum_collisions,
+            compute_esdf=compute_esdf,
         )
-        d_val = d.view(d_prim.shape) + d_prim
+        if compute_esdf:
+            d_val = torch.maximum(d.view(d_prim.shape), d_prim)
+        else:
+            d_val = d.view(d_prim.shape) + d_prim
         return d_val
 
     def get_sphere_collision(
@@ -449,6 +468,7 @@ class WorldMeshCollision(WorldPrimitiveCollision):
         activation_distance: torch.Tensor,
         env_query_idx=None,
         return_loss=False,
+        **kwargs,
     ):
         if "mesh" not in self.collision_types or not self.collision_types["mesh"]:
             return super().get_sphere_collision(
@@ -495,6 +515,7 @@ class WorldMeshCollision(WorldPrimitiveCollision):
         enable_speed_metric=False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_collisions: bool = True,
     ):
         # log_warn("Swept: Mesh + Primitive Collision Checking is experimental")
         if "mesh" not in self.collision_types or not self.collision_types["mesh"]:
@@ -508,6 +529,7 @@ class WorldMeshCollision(WorldPrimitiveCollision):
                 speed_dt=speed_dt,
                 enable_speed_metric=enable_speed_metric,
                 return_loss=return_loss,
+                sum_collisions=sum_collisions,
             )
 
         d = self._get_swept_sdf(
@@ -534,6 +556,7 @@ class WorldMeshCollision(WorldPrimitiveCollision):
             speed_dt=speed_dt,
             enable_speed_metric=enable_speed_metric,
             return_loss=return_loss,
+            sum_collisions=sum_collisions,
         )
         d_val = d.view(d_prim.shape) + d_prim
 
@@ -596,4 +619,11 @@ class WorldMeshCollision(WorldPrimitiveCollision):
         self._wp_mesh_cache = {}
         if self._mesh_tensor_list is not None:
             self._mesh_tensor_list[2][:] = 0
+        if self._env_n_mesh is not None:
+            self._env_n_mesh[:] = 0
+        if self._env_mesh_names is not None:
+            self._env_mesh_names = [
+                [None for _ in range(self.cache["mesh"])] for _ in range(self.n_envs)
+            ]
+
         super().clear_cache()

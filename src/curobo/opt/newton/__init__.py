@@ -10,5 +10,5 @@
 #
 
 """
-This module contains code for cuda accelerated kinematics.
+This module contains Newton/Quasi-Newton solvers.
 """

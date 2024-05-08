@@ -29,6 +29,7 @@ class CuroboMetrics(TrajectoryMetrics):
     cspace_path_length: float = 0.0
     perception_success: bool = False
     perception_interpolated_success: bool = False
+    jerk: float = np.inf
 
 
 @dataclass
@@ -37,6 +38,7 @@ class CuroboGroupMetrics(TrajectoryGroupMetrics):
     cspace_path_length: Optional[Statistic] = None
     perception_success: float = 0.0
     perception_interpolated_success: float = 0.0
+    jerk: float = np.inf
 
     @classmethod
     def from_list(cls, group: List[CuroboMetrics]):
@@ -49,5 +51,6 @@ class CuroboGroupMetrics(TrajectoryGroupMetrics):
         data.perception_interpolated_success = percent_true(
             [m.perception_interpolated_success for m in group]
         )
+        data.jerk = Statistic.from_list([m.jerk for m in successes])
 
         return data

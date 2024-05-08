@@ -33,7 +33,8 @@ def test_world_primitive():
     coll_cfg = WorldCollisionConfig(world_model=world_cfg, tensor_args=TensorDeviceType())
     coll_check = WorldPrimitiveCollision(coll_cfg)
     x_sph = torch.as_tensor(
-        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]], **vars(tensor_args)
+        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]],
+        **(tensor_args.as_torch_dict())
     ).view(1, 1, -1, 4)
     # create buffers:
     query_buffer = CollisionQueryBuffer.initialize_from_shape(
@@ -58,7 +59,8 @@ def test_batch_world_primitive():
     coll_cfg = WorldCollisionConfig(world_model=world_cfg, tensor_args=TensorDeviceType())
     coll_check = WorldPrimitiveCollision(coll_cfg)
     x_sph = torch.as_tensor(
-        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]], **vars(tensor_args)
+        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]],
+        **(tensor_args.as_torch_dict())
     ).view(-1, 1, 1, 4)
     env_query_idx = torch.zeros((x_sph.shape[0]), device=tensor_args.device, dtype=torch.int32)
     # create buffers:
@@ -90,7 +92,8 @@ def test_swept_world_primitive():
     new_cube = Cuboid("cube_1", [0, 0, 1, 1, 0, 0, 0], None, [0.1, 0.2, 0.2])
     coll_check.add_obb(new_cube, 0)
     x_sph = torch.as_tensor(
-        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]], **vars(tensor_args)
+        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]],
+        **(tensor_args.as_torch_dict())
     ).view(1, 1, -1, 4)
     env_query_idx = None
     env_query_idx = torch.zeros((x_sph.shape[0]), device=tensor_args.device, dtype=torch.int32)
@@ -125,7 +128,8 @@ def test_world_primitive_mesh_instance():
     coll_cfg = WorldCollisionConfig(world_model=world_cfg, tensor_args=TensorDeviceType())
     coll_check = WorldMeshCollision(coll_cfg)
     x_sph = torch.as_tensor(
-        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]], **vars(tensor_args)
+        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]],
+        **(tensor_args.as_torch_dict())
     ).view(1, 1, -1, 4)
     # create buffers:
     query_buffer = CollisionQueryBuffer.initialize_from_shape(
@@ -150,7 +154,8 @@ def test_batch_world_primitive_mesh_instance():
     coll_cfg = WorldCollisionConfig(world_model=world_cfg, tensor_args=TensorDeviceType())
     coll_check = WorldMeshCollision(coll_cfg)
     x_sph = torch.as_tensor(
-        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]], **vars(tensor_args)
+        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]],
+        **(tensor_args.as_torch_dict())
     ).view(-1, 1, 1, 4)
     env_query_idx = torch.zeros((x_sph.shape[0]), device=tensor_args.device, dtype=torch.int32)
     # create buffers:
@@ -184,7 +189,8 @@ def test_swept_world_primitive_mesh_instance():
     w_obj_pose = Pose.from_list([0, 0, 1, 1, 0, 0, 0], tensor_args)
     coll_check.add_obb_from_raw("cube_1", dims, 0, w_obj_pose=w_obj_pose)
     x_sph = torch.as_tensor(
-        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]], **vars(tensor_args)
+        [[0.0, 0.0, 0.0, 0.1], [10.0, 0.0, 0.0, 0.0], [0.01, 0.01, 0.0, 0.1]],
+        **(tensor_args.as_torch_dict())
     ).view(1, 1, -1, 4)
     env_query_idx = None
     env_query_idx = torch.zeros((x_sph.shape[0]), device=tensor_args.device, dtype=torch.int32)

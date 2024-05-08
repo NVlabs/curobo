@@ -25,6 +25,7 @@ from curobo.curobolib.tensor_step import (
 )
 from curobo.types.base import TensorDeviceType
 from curobo.types.robot import JointState
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 def build_clique_matrix(horizon, dt, device="cpu", dtype=torch.float32):
@@ -154,7 +155,7 @@ def build_start_state_mask(horizon, tensor_args: TensorDeviceType):
     return mask, n_mask
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def tensor_step_jerk(state, act, state_seq, dt_h, n_dofs, integrate_matrix, fd_matrix=None):
     # type: (Tensor, Tensor, Tensor, Tensor, int, Tensor, Optional[Tensor]) -> Tensor
 
@@ -176,7 +177,7 @@ def tensor_step_jerk(state, act, state_seq, dt_h, n_dofs, integrate_matrix, fd_m
     return state_seq
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def euler_integrate(q_0, u, diag_dt, integrate_matrix):
     # q_new = q_0 + torch.matmul(integrate_matrix, torch.matmul(diag_dt, u))
     q_new = q_0 + torch.matmul(integrate_matrix, u)
@@ -184,7 +185,7 @@ def euler_integrate(q_0, u, diag_dt, integrate_matrix):
     return q_new
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def tensor_step_acc(state, act, state_seq, dt_h, n_dofs, integrate_matrix, fd_matrix=None):
     # type: (Tensor, Tensor, Tensor, Tensor, int, Tensor, Optional[Tensor]) -> Tensor
     # This is batch,n_dof
@@ -207,7 +208,7 @@ def tensor_step_acc(state, act, state_seq, dt_h, n_dofs, integrate_matrix, fd_ma
     return state_seq
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def jit_tensor_step_pos_clique_contiguous(pos_act, start_position, mask, n_mask, fd_1, fd_2, fd_3):
     state_position = (start_position.unsqueeze(1).transpose(1, 2) @ mask.transpose(0, 1)) + (
         pos_act.transpose(1, 2) @ n_mask.transpose(0, 1)
@@ -222,7 +223,7 @@ def jit_tensor_step_pos_clique_contiguous(pos_act, start_position, mask, n_mask,
     return state_position, state_vel, state_acc, state_jerk
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def jit_tensor_step_pos_clique(pos_act, start_position, mask, n_mask, fd_1, fd_2, fd_3):
     state_position = mask @ start_position.unsqueeze(1) + n_mask @ pos_act
     state_vel = fd_1 @ state_position
@@ -231,7 +232,7 @@ def jit_tensor_step_pos_clique(pos_act, start_position, mask, n_mask, fd_1, fd_2
     return state_position, state_vel, state_acc, state_jerk
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def jit_backward_pos_clique(grad_p, grad_v, grad_a, grad_j, n_mask, fd_1, fd_2, fd_3):
     p_grad = (
         grad_p
@@ -247,7 +248,7 @@ def jit_backward_pos_clique(grad_p, grad_v, grad_a, grad_j, n_mask, fd_1, fd_2, 
     return u_grad
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def jit_backward_pos_clique_contiguous(grad_p, grad_v, grad_a, grad_j, n_mask, fd_1, fd_2, fd_3):
     p_grad = grad_p + (
         grad_j.transpose(-1, -2) @ fd_3
@@ -532,7 +533,7 @@ class CliqueTensorStepIdxCentralDifferenceKernel(torch.autograd.Function):
             start_position,
             start_velocity,
             start_acceleration,
-            start_idx,
+            start_idx.contiguous(),
             traj_dt,
             out_position.shape[0],
             out_position.shape[1],
@@ -750,7 +751,7 @@ class AccelerationTensorStepIdxKernel(torch.autograd.Function):
         return u_grad, None, None, None, None, None, None, None, None, None, None
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def tensor_step_pos_clique(
     state: JointState,
     act: torch.Tensor,
@@ -786,7 +787,7 @@ def step_acc_semi_euler(state, act, diag_dt, n_dofs, integrate_matrix):
     return state_seq
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def tensor_step_acc_semi_euler(
     state, act, state_seq, diag_dt, integrate_matrix, integrate_matrix_pos
 ):
@@ -806,7 +807,7 @@ def tensor_step_acc_semi_euler(
     return state_seq
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def tensor_step_vel(state, act, state_seq, dt_h, n_dofs, integrate_matrix, fd_matrix):
     # type: (Tensor, Tensor, Tensor, Tensor, int, Tensor, Tensor) -> Tensor
 
@@ -830,7 +831,7 @@ def tensor_step_vel(state, act, state_seq, dt_h, n_dofs, integrate_matrix, fd_ma
     return state_seq
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def tensor_step_pos(state, act, state_seq, fd_matrix):
     # This is batch,n_dof
     state_seq.position[:, 0, :] = state.position
@@ -850,7 +851,7 @@ def tensor_step_pos(state, act, state_seq, fd_matrix):
     return state_seq
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def tensor_step_pos_ik(act, state_seq):
     state_seq.position = act
     return state_seq
@@ -869,7 +870,7 @@ def tensor_linspace(start_tensor, end_tensor, steps=10):
 
 
 def sum_matrix(h, int_steps, tensor_args):
-    sum_mat = torch.zeros(((h - 1) * int_steps, h), **vars(tensor_args))
+    sum_mat = torch.zeros(((h - 1) * int_steps, h), **(tensor_args.as_torch_dict()))
     for i in range(h - 1):
         sum_mat[i * int_steps : i * int_steps + int_steps, i] = 1.0
     # hack:

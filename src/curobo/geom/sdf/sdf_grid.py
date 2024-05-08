@@ -11,8 +11,10 @@
 # Third Party
 import torch
 
+# from curobo.util.torch_utils import get_torch_jit_decorator
 
-# @torch.jit.script
+
+# @get_torch_jit_decorator()
 def lookup_distance(pt, dist_matrix_flat, num_voxels):
     # flatten:
     ind_pt = (
@@ -22,7 +24,7 @@ def lookup_distance(pt, dist_matrix_flat, num_voxels):
     return dist
 
 
-# @torch.jit.script
+# @get_torch_jit_decorator()
 def compute_sdf_gradient(pt, dist_matrix_flat, num_voxels, dist):
     grad_l = []
     for i in range(3):  # x,y,z

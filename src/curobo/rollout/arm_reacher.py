@@ -10,7 +10,7 @@
 #
 # Standard Library
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 # Third Party
 import torch
@@ -20,17 +20,18 @@ import torch.autograd.profiler as profiler
 from curobo.geom.sdf.world import WorldCollision
 from curobo.rollout.cost.cost_base import CostConfig
 from curobo.rollout.cost.dist_cost import DistCost, DistCostConfig
-from curobo.rollout.cost.pose_cost import PoseCost, PoseCostConfig
+from curobo.rollout.cost.pose_cost import PoseCost, PoseCostConfig, PoseCostMetric
 from curobo.rollout.cost.straight_line_cost import StraightLineCost
 from curobo.rollout.cost.zero_cost import ZeroCost
 from curobo.rollout.dynamics_model.kinematic_model import KinematicModelState
 from curobo.rollout.rollout_base import Goal, RolloutMetrics
 from curobo.types.base import TensorDeviceType
 from curobo.types.robot import RobotConfig
-from curobo.types.tensor import T_BValue_float
+from curobo.types.tensor import T_BValue_float, T_BValue_int
 from curobo.util.helpers import list_idx_if_not_none
-from curobo.util.logger import log_info
-from curobo.util.tensor_util import cat_max, cat_sum
+from curobo.util.logger import log_error, log_info, log_warn
+from curobo.util.tensor_util import cat_max
+from curobo.util.torch_utils import get_torch_jit_decorator
 
 # Local Folder
 from .arm_base import ArmBase, ArmBaseConfig, ArmCostConfig
@@ -42,6 +43,8 @@ class ArmReacherMetrics(RolloutMetrics):
     position_error: Optional[T_BValue_float] = None
     rotation_error: Optional[T_BValue_float] = None
     pose_error: Optional[T_BValue_float] = None
+    goalset_index: Optional[T_BValue_int] = None
+    null_space_error: Optional[T_BValue_float] = None
 
     def __getitem__(self, idx):
         d_list = [
@@ -53,6 +56,8 @@ class ArmReacherMetrics(RolloutMetrics):
             self.position_error,
             self.rotation_error,
             self.pose_error,
+            self.goalset_index,
+            self.null_space_error,
         ]
         idx_vals = list_idx_if_not_none(d_list, idx)
         return ArmReacherMetrics(*idx_vals)
@@ -65,10 +70,14 @@ class ArmReacherMetrics(RolloutMetrics):
             constraint=None if self.constraint is None else self.constraint.clone(),
             feasible=None if self.feasible is None else self.feasible.clone(),
             state=None if self.state is None else self.state,
-            cspace_error=None if self.cspace_error is None else self.cspace_error,
-            position_error=None if self.position_error is None else self.position_error,
-            rotation_error=None if self.rotation_error is None else self.rotation_error,
-            pose_error=None if self.pose_error is None else self.pose_error,
+            cspace_error=None if self.cspace_error is None else self.cspace_error.clone(),
+            position_error=None if self.position_error is None else self.position_error.clone(),
+            rotation_error=None if self.rotation_error is None else self.rotation_error.clone(),
+            pose_error=None if self.pose_error is None else self.pose_error.clone(),
+            goalset_index=None if self.goalset_index is None else self.goalset_index.clone(),
+            null_space_error=(
+                None if self.null_space_error is None else self.null_space_error.clone()
+            ),
         )
 
 
@@ -137,7 +146,7 @@ class ArmReacherConfig(ArmBaseConfig):
         )
 
 
-@torch.jit.script
+@get_torch_jit_decorator()
 def _compute_g_dist_jit(rot_err_norm, goal_dist):
     # goal_cost = goal_cost.view(cost.shape)
     # rot_err_norm = rot_err_norm.view(cost.shape)
@@ -254,6 +263,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                     goal_cost = self.goal_cost.forward(
                         ee_pos_batch, ee_quat_batch, self._goal_buffer
                     )
+                # print(self._compute_g_dist, goal_cost.view(-1))
                 cost_list.append(goal_cost)
         with profiler.record_function("cost/link_poses"):
             if self._goal_buffer.links_goal_pose is not None and self.cost_cfg.pose_cfg is not None:
@@ -264,7 +274,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                         current_fn = self._link_pose_costs[k]
                         if current_fn.enabled:
                             # get link pose
-                            current_pose = link_poses[k]
+                            current_pose = link_poses[k].contiguous()
                             current_pos = current_pose.position
                             current_quat = current_pose.quaternion
 
@@ -276,6 +286,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             and self.cost_cfg.cspace_cfg is not None
             and self.dist_cost.enabled
         ):
+
             joint_cost = self.dist_cost.forward_target_idx(
                 self._goal_buffer.goal_state.position,
                 state_batch.position,
@@ -296,36 +307,26 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                 g_dist,
             )
 
-            # cost += z_acc
             cost_list.append(z_acc)
-        # print(self.cost_cfg.zero_jerk_cfg)
-        if (
-            self.cost_cfg.zero_jerk_cfg is not None
-            and self.zero_jerk_cost.enabled
-            # and g_dist is not None
-        ):
-            # jerk = self.dynamics_model._aux_matrix @ state_batch.acceleration
+        if self.cost_cfg.zero_jerk_cfg is not None and self.zero_jerk_cost.enabled:
             z_jerk = self.zero_jerk_cost.forward(
                 state_batch.jerk,
                 g_dist,
             )
             cost_list.append(z_jerk)
-            # cost +=  z_jerk
 
-        if (
-            self.cost_cfg.zero_vel_cfg is not None
-            and self.zero_vel_cost.enabled
-            # and g_dist is not None
-        ):
+        if self.cost_cfg.zero_vel_cfg is not None and self.zero_vel_cost.enabled:
             z_vel = self.zero_vel_cost.forward(
                 state_batch.velocity,
                 g_dist,
             )
-            # cost += z_vel
-            # print(z_vel.shape)
             cost_list.append(z_vel)
-        cost = cat_sum(cost_list)
-        # print(cost[:].T)
+        with profiler.record_function("cat_sum"):
+            if self.sum_horizon:
+                cost = cat_sum_horizon_reacher(cost_list)
+            else:
+                cost = cat_sum_reacher(cost_list)
+
         return cost
 
     def convergence_fn(
@@ -350,6 +351,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             ) = self.pose_convergence.forward_out_distance(
                 state.ee_pos_seq, state.ee_quat_seq, self._goal_buffer
             )
+            out_metrics.goalset_index = self.pose_convergence.goalset_index_buffer  # .clone()
         if (
             self._goal_buffer.links_goal_pose is not None
             and self.convergence_cfg.pose_cfg is not None
@@ -389,6 +391,17 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                 True,
             )
 
+        if (
+            self.convergence_cfg.null_space_cfg is not None
+            and self.null_convergence.enabled
+            and self._goal_buffer.batch_retract_state_idx is not None
+        ):
+            out_metrics.null_space_error = self.null_convergence.forward_target_idx(
+                self._goal_buffer.retract_state,
+                state.state_seq.position,
+                self._goal_buffer.batch_retract_state_idx,
+            )
+
         return out_metrics
 
     def update_params(
@@ -420,3 +433,55 @@ class ArmReacher(ArmBase, ArmReacherConfig):
         else:
             self.dist_cost.disable_cost()
             self.cspace_convergence.disable_cost()
+
+    def get_pose_costs(self, include_link_pose: bool = False, include_convergence: bool = True):
+        pose_costs = [self.goal_cost]
+        if include_convergence:
+            pose_costs += [self.pose_convergence]
+        if include_link_pose:
+            log_error("Not implemented yet")
+        return pose_costs
+
+    def update_pose_cost_metric(
+        self,
+        metric: PoseCostMetric,
+    ):
+        pose_costs = self.get_pose_costs()
+        if metric.hold_partial_pose:
+            if metric.hold_vec_weight is None:
+                log_error("hold_vec_weight is required")
+            [x.hold_partial_pose(metric.hold_vec_weight) for x in pose_costs]
+        if metric.release_partial_pose:
+            [x.release_partial_pose() for x in pose_costs]
+        if metric.reach_partial_pose:
+            if metric.reach_vec_weight is None:
+                log_error("reach_vec_weight is required")
+            [x.reach_partial_pose(metric.reach_vec_weight) for x in pose_costs]
+        if metric.reach_full_pose:
+            [x.reach_full_pose() for x in pose_costs]
+
+        pose_costs = self.get_pose_costs(include_convergence=False)
+        if metric.remove_offset_waypoint:
+            [x.remove_offset_waypoint() for x in pose_costs]
+
+        if metric.offset_position is not None or metric.offset_rotation is not None:
+            [
+                x.update_offset_waypoint(
+                    offset_position=metric.offset_position,
+                    offset_rotation=metric.offset_rotation,
+                    offset_tstep_fraction=metric.offset_tstep_fraction,
+                )
+                for x in pose_costs
+            ]
+
+
+@get_torch_jit_decorator()
+def cat_sum_reacher(tensor_list: List[torch.Tensor]):
+    cat_tensor = torch.sum(torch.stack(tensor_list, dim=0), dim=0)
+    return cat_tensor
+
+
+@get_torch_jit_decorator()
+def cat_sum_horizon_reacher(tensor_list: List[torch.Tensor]):
+    cat_tensor = torch.sum(torch.stack(tensor_list, dim=0), dim=(0, -1))
+    return cat_tensor

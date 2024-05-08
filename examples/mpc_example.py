@@ -94,10 +94,10 @@ def demo_full_config_mpc():
     while not converged:
         st_time = time.time()
         # current_state.position += 0.1
-        print(current_state.position)
+        # print(current_state.position)
         result = mpc.step(current_state, 1)
 
-        print(mpc.get_visual_rollouts().shape)
+        # print(mpc.get_visual_rollouts().shape)
         # exit()
         torch.cuda.synchronize()
         if tstep > 5:

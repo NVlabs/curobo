@@ -41,7 +41,7 @@ def test_primitive_collision_cost():
     )
     cost = PrimitiveCollisionCost(cost_cfg)
     q_spheres = torch.as_tensor(
-        [[0.1, 0.0, 0.0, 0.2], [10.0, 0.0, 0.0, 0.1]], **vars(tensor_args)
+        [[0.1, 0.0, 0.0, 0.2], [10.0, 0.0, 0.0, 0.1]], **(tensor_args.as_torch_dict())
     ).view(-1, 1, 1, 4)
     c = cost.forward(q_spheres).flatten()
     assert c[0] > 0.0 and c[1] == 0.0
