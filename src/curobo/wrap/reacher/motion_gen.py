@@ -69,6 +69,7 @@ from curobo.types.state import JointState
 from curobo.types.tensor import T_BDOF, T_DOF, T_BValue_float
 from curobo.util.logger import log_error, log_info, log_warn
 from curobo.util.tensor_util import tensor_repeat_seeds
+from curobo.util.plot_util import plot_compare_trajectories
 from curobo.util.trajectory import InterpolateType, get_batch_interpolated_trajectory
 from curobo.util.warp import init_warp
 from curobo.util_file import (
@@ -3505,6 +3506,57 @@ class MotionGen(MotionGenConfig):
                 result.debug_info["trajopt_result"] = traj_result
             if torch.count_nonzero(traj_result.success) == 0:
                 result.status = MotionGenStatus.TRAJOPT_FAIL
+                # print(f"Constraint {torch.sum(traj_result.metrics.constraint, dim=1)}")
+                # v_limits = self.robot_cfg.kinematics.get_joint_limits().velocity
+                # a_limits = self.robot_cfg.kinematics.get_joint_limits().acceleration
+                # j_limits = self.robot_cfg.kinematics.get_joint_limits().jerk
+                # v_soln = traj_result.interpolated_solution.velocity
+                # a_soln = traj_result.interpolated_solution.acceleration
+                # j_soln = traj_result.interpolated_solution.jerk
+                # v_feas = torch.logical_and(v_soln >= v_limits[0], v_soln <= v_limits[1])
+                # a_feas = torch.logical_and(v_soln >= v_limits[0], v_soln <= v_limits[1])
+                # j_feas = torch.logical_and(v_soln >= v_limits[0], v_soln <= v_limits[1])
+                # # Interpolate with linear and plot alongside cubic
+                # smooth_label_int, smooth_cost_int = self.js_trajopt_solver.traj_evaluator.evaluate_interpolated_smootheness(
+                #     traj_result.interpolated_solution,
+                #                         traj_result.optimized_dt,
+                #                         self.js_trajopt_solver.rollout_fn.dynamics_model.cspace_distance_weight,
+                #                         v_limits[1],
+                #                     )
+                # smooth_label, smooth_cost = self.js_trajopt_solver.traj_evaluator.evaluate(
+                #     traj_result.raw_solution,
+                #     self.js_trajopt_solver.rollout_fn.traj_dt,
+                #     self.js_trajopt_solver.rollout_fn.dynamics_model.cspace_distance_weight,
+                #     v_limits[1],
+                # )
+                # print(f"Interpolated trajectory eval {smooth_label_int} vs raw {smooth_label}")
+                # for i, row in enumerate(traj_result.metrics.feasible):
+                #     # Find indices where the element is False
+                #     false_indices = torch.where(row == False)[0]
+                #     # Print the indices
+                #     if len(false_indices) > 5:
+                #         print(f"Batch idx {i}: More than 5 non-feasible states")
+                #     else:
+                #         print(f"Batch idx {i}: Non-feasible indices {false_indices.tolist()}")
+                # out_traj_linear_cuda, _, _ = get_batch_interpolated_trajectory(
+                #     traj_result.raw_solution,
+                #     self.js_trajopt_solver.solver_dt,
+                #     self.interpolation_dt,
+                #     v_limits[1],
+                #     kind=InterpolateType.LINEAR_CUDA,
+                #     max_acc=a_limits[1],
+                #     max_jerk=j_limits[1],
+                # )
+                # out_traj_cubic_cuda, _, _ = get_batch_interpolated_trajectory(
+                #     traj_result.raw_solution,
+                #     self.js_trajopt_solver.solver_dt,
+                #     self.interpolation_dt,
+                #     v_limits[1],
+                #     kind=InterpolateType.CUBIC_CUDA,
+                #     max_acc=a_limits[1],
+                #     max_jerk=j_limits[1],
+                # )
+                # plot_compare_trajectories(out_traj_linear_cuda, out_traj_cubic_cuda, self.interpolation_dt)
             # run finetune
             if plan_config.enable_finetune_trajopt and torch.count_nonzero(traj_result.success) > 0:
                 with profiler.record_function("motion_gen/finetune_trajopt"):
