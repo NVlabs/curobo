@@ -1757,6 +1757,7 @@ class MotionGen(MotionGenConfig):
         n_goalset: int = -1,
         warmup_joint_index: int = 0,
         warmup_joint_delta: float = 0.1,
+        use_link_poses: bool = False,
     ):
         """Warmup planning methods for motion generation.
 
@@ -1774,6 +1775,8 @@ class MotionGen(MotionGenConfig):
                 and the method will internally pad the extra goals with the first goal.
             warmup_joint_index: Index of the joint to perturb for warmup.
             warmup_joint_delta: Delta to perturb the joint for warmup.
+            use_link_poses: Use poses of other links for warmup. This is needed when you will be
+                using link_poses to plan for multiple links in the robot.
         """
         log_info("Warmup")
         if warmup_js_trajopt:
@@ -1817,7 +1820,7 @@ class MotionGen(MotionGenConfig):
                             enable_finetune_trajopt=True,
                             parallel_finetune=parallel_finetune,
                         ),
-                        link_poses=link_poses,
+                        link_poses=link_poses if use_link_poses else None,
                     )
 
                 self.plan_single(
@@ -1829,7 +1832,7 @@ class MotionGen(MotionGenConfig):
                         enable_graph=enable_graph,
                         parallel_finetune=parallel_finetune,
                     ),
-                    link_poses=link_poses,
+                    link_poses=link_poses if use_link_poses else None,
                 )
             else:
                 retract_pose = Pose(
@@ -1846,7 +1849,7 @@ class MotionGen(MotionGenConfig):
                             enable_finetune_trajopt=True,
                             parallel_finetune=parallel_finetune,
                         ),
-                        link_poses=link_poses,
+                        link_poses=link_poses if use_link_poses else None,
                     )
 
                 self.plan_goalset(
@@ -1858,7 +1861,7 @@ class MotionGen(MotionGenConfig):
                         enable_graph=enable_graph,
                         parallel_finetune=parallel_finetune,
                     ),
-                    link_poses=link_poses,
+                    link_poses=link_poses if use_link_poses else None,
                 )
 
         else:
@@ -1884,6 +1887,7 @@ class MotionGen(MotionGenConfig):
                                 enable_graph=False,
                                 enable_graph_attempt=None,
                             ),
+                            link_poses=link_poses if use_link_poses else None,
                         )
                     else:
                         self.plan_batch(
@@ -1895,6 +1899,7 @@ class MotionGen(MotionGenConfig):
                                 enable_graph=enable_graph,
                                 enable_graph_attempt=None if not enable_graph else 20,
                             ),
+                            link_poses=link_poses if use_link_poses else None,
                         )
             else:
                 retract_pose = Pose(
@@ -1914,6 +1919,7 @@ class MotionGen(MotionGenConfig):
                                 enable_finetune_trajopt=True,
                                 enable_graph=False,
                             ),
+                            link_poses=link_poses if use_link_poses else None,
                         )
                     else:
                         self.plan_batch_goalset(
@@ -1925,6 +1931,7 @@ class MotionGen(MotionGenConfig):
                                 enable_graph=enable_graph,
                                 enable_graph_attempt=None if not enable_graph else 20,
                             ),
+                            link_poses=link_poses if use_link_poses else None,
                         )
 
         log_info("Warmup complete")
