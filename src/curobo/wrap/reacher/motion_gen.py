@@ -1430,7 +1430,7 @@ class MotionGen(MotionGenConfig):
         start_state: JointState,
         goal_pose: Pose,
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
-        link_poses: List[Pose] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
     ) -> MotionGenResult:
         """Plan a single motion to reach a goal pose from a start joint state.
 
@@ -1471,7 +1471,7 @@ class MotionGen(MotionGenConfig):
         start_state: JointState,
         goal_pose: Pose,
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
-        link_poses: List[Pose] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
     ) -> MotionGenResult:
         """Plan a single motion to reach a goal from set of poses, from a start joint state.
 
@@ -1510,7 +1510,7 @@ class MotionGen(MotionGenConfig):
         start_state: JointState,
         goal_pose: Pose,
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
-        link_poses: Dict[str, List[Pose]] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
     ) -> MotionGenResult:
         """Plan motions to reach a batch of goal poses from a batch of start joint states.
 
@@ -1544,7 +1544,7 @@ class MotionGen(MotionGenConfig):
         start_state: JointState,
         goal_pose: Pose,
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
-        link_poses: Dict[str, List[Pose]] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
     ) -> MotionGenResult:
         """Plan motions to reach a batch of poses (goalset) from a batch of start joint states.
 
@@ -1579,7 +1579,7 @@ class MotionGen(MotionGenConfig):
         start_state: JointState,
         goal_pose: Pose,
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
-        link_poses: Dict[str, List[Pose]] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
     ) -> MotionGenResult:
         """Plan motions to reach (batch) poses in different collision environments.
 
@@ -1625,7 +1625,7 @@ class MotionGen(MotionGenConfig):
         start_state: JointState,
         goal_pose: Pose,
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
-        link_poses: Dict[str, List[Pose]] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
     ) -> MotionGenResult:
         """Plan motions to reach (batch) goalset poses in different collision environments.
 
@@ -2738,7 +2738,7 @@ class MotionGen(MotionGenConfig):
         start_state: JointState,
         goal_pose: Pose,
         plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
-        link_poses: List[Pose] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
     ):
         """Call many planning attempts for a given reacher solve state.
 

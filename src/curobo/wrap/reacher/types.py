@@ -166,7 +166,7 @@ class ReacherSolveState:
         goal_pose: Pose,
         goal_state: Optional[JointState] = None,
         retract_config: Optional[T_BDOF] = None,
-        link_poses: Optional[List[Pose]] = None,
+        link_poses: Optional[Dict[str, Pose]] = None,
         current_solve_state: Optional[ReacherSolveState] = None,
         current_goal_buffer: Optional[Goal] = None,
         tensor_args: TensorDeviceType = TensorDeviceType(),

@@ -186,7 +186,7 @@ class CudaRobotModelState:
         return self.link_spheres_tensor
 
     @property
-    def link_pose(self) -> Dict[str, Pose]:
+    def link_pose(self) -> Optional[Dict[str, Pose]]:
         """Get link poses as a dictionary of link name to Pose object."""
         link_poses = None
         if self.link_names is not None:
