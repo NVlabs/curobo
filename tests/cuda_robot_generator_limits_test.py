@@ -58,7 +58,6 @@ def test_cuda_robot_generator_limits(unscaled_limits_fixture, vel_scale, acc_sca
     config = CudaRobotGeneratorConfig(**robot_params)
     robot_generator = CudaRobotGenerator(config)
     assert robot_generator.kinematics_config.n_dof == 7
-    print(robot_generator.get_joint_limits.position)
     vel_limits = robot_generator.get_joint_limits.velocity
     acc_limits = robot_generator.get_joint_limits.acceleration
     jerk_limits = robot_generator.get_joint_limits.jerk

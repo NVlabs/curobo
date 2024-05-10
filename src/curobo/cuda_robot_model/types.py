@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 # Standard Library
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
@@ -53,6 +53,11 @@ class JointLimits:
     effort: Optional[torch.Tensor] = None
     tensor_args: TensorDeviceType = TensorDeviceType()
 
+    position_clipped: bool = field(default=False, init=False)
+    velocity_scaled: bool = field(default=False, init=False)
+    acceleration_scaled: bool = field(default=False, init=False)
+    jerk_scaled: bool = field(default=False, init=False)
+
     @staticmethod
     def from_data_dict(data: Dict, tensor_args: TensorDeviceType = TensorDeviceType()):
         p = tensor_args.to_device(data["position"])
@@ -83,6 +88,23 @@ class JointLimits:
         self.acceleration.copy_(new_jl.acceleration)
         self.effort = copy_if_not_none(new_jl.effort, self.effort)
         return self
+
+    def clip_position_Limits(self, position_clip: float):
+        if not self.position_clipped:
+            # Clip the position limits
+            self.position[0] += position_clip
+            self.position[1] -= position_clip
+
+    def apply_scale(self, velocity_scale: Optional[float] = None, acceleration_scale: Optional[float] = None, jerk_scale: Optional[float] = None):
+        if velocity_scale is not None and not self.velocity_scaled:
+            self.velocity = self.velocity * velocity_scale
+            self.velocity_scaled = True
+        if acceleration_scale is not None and not self.acceleration_scaled:
+            self.acceleration = self.acceleration * acceleration_scale
+            self.acceleration_scaled = True
+        if jerk_scale is not None and not self.jerk_scaled:
+            self.jerk = self.jerk * jerk_scale
+            self.jerk_scaled = True
 
 
 @dataclass
@@ -196,16 +218,6 @@ class CSpaceConfig:
             jerk_scale=self.jerk_scale.clone(),
         )
 
-    def scale_joint_limits(self, joint_limits: JointLimits):
-        if self.velocity_scale is not None:
-            joint_limits.velocity = joint_limits.velocity * self.velocity_scale
-        if self.acceleration_scale is not None:
-            joint_limits.acceleration = joint_limits.acceleration * self.acceleration_scale
-        if self.jerk_scale is not None:
-            joint_limits.jerk = joint_limits.jerk * self.jerk_scale
-
-        return joint_limits
-
     @staticmethod
     def load_from_joint_limits(
         joint_position_upper: torch.Tensor,
@@ -315,7 +327,7 @@ class KinematicsTensorConfig:
         if self.cspace is None and self.joint_limits is not None:
             self.load_cspace_cfg_from_kinematics()
         if self.joint_limits is not None and self.cspace is not None:
-            self.joint_limits = self.cspace.scale_joint_limits(self.joint_limits)
+            self.joint_limits.apply_scale(self.cspace.velocity_scale, self.cspace.acceleration_scale, self.cspace.jerk_scale)
         if self.link_spheres is not None and self.reference_link_spheres is None:
             self.reference_link_spheres = self.link_spheres.clone()
 
