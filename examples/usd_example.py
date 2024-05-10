@@ -205,7 +205,7 @@ def save_log_motion_gen(robot_file: str = "franka.yml"):
     ]
 
     # exit()
-    link_poses = state.link_pose
+    link_poses = state.link_poses
     # print(link_poses)
     # del link_poses["tool0"]
     # del link_poses["tool1"]

@@ -56,7 +56,7 @@ def test_write_motion_gen_log(robot_file: str = "franka.yml"):
         JointState.from_position(retract_cfg.view(1, -1))
     )
 
-    link_poses = state.link_pose
+    link_poses = state.link_poses
 
     retract_pose = Pose(state.ee_pos_seq.squeeze(), quaternion=state.ee_quat_seq.squeeze())
     start_state = JointState.from_position(retract_cfg.view(1, -1).clone() + 0.5)

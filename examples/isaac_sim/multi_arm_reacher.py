@@ -175,7 +175,7 @@ def main():
 
     kin_state = motion_gen.kinematics.get_state(motion_gen.get_retract_config().view(1, -1))
 
-    link_retract_pose = kin_state.link_pose
+    link_retract_pose = kin_state.link_poses
     t_pos = np.ravel(kin_state.ee_pose.to_list())
     target = cuboid.VisualCuboid(
         "/World/target",

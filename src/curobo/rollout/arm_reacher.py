@@ -267,7 +267,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                 cost_list.append(goal_cost)
         with profiler.record_function("cost/link_poses"):
             if self._goal_buffer.links_goal_pose is not None and self.cost_cfg.pose_cfg is not None:
-                link_poses = state.link_pose
+                link_poses = state.link_poses
 
                 for k in self._goal_buffer.links_goal_pose.keys():
                     if k != self.kinematics.ee_link:
@@ -359,7 +359,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             pose_error = [out_metrics.pose_error]
             position_error = [out_metrics.position_error]
             quat_error = [out_metrics.rotation_error]
-            link_poses = state.link_pose
+            link_poses = state.link_poses
 
             for k in self._goal_buffer.links_goal_pose.keys():
                 if k != self.kinematics.ee_link:

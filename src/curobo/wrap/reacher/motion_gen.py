@@ -1803,7 +1803,7 @@ class MotionGen(MotionGenConfig):
                 joint_names=self.rollout_fn.joint_names,
             )
             state = self.rollout_fn.compute_kinematics(start_state)
-            link_poses = state.link_pose
+            link_poses = state.link_poses
 
             if n_goalset == -1:
                 retract_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
@@ -1867,7 +1867,7 @@ class MotionGen(MotionGenConfig):
                 joint_names=self.rollout_fn.joint_names,
             ).repeat_seeds(batch)
             state = self.rollout_fn.compute_kinematics(start_state)
-            link_poses = state.link_pose
+            link_poses = state.link_poses
 
             if n_goalset == -1:
                 retract_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)

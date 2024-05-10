@@ -108,7 +108,7 @@ class KinematicModelState(Sequence):
         return Pose(self.ee_pos_seq, self.ee_quat_seq, normalize_rotation=False)
 
     @property
-    def link_pose(self):
+    def link_poses(self):
         if self.link_names is not None:
             link_pos_seq = self.link_pos_seq.contiguous()
             link_quat_seq = self.link_quat_seq.contiguous()

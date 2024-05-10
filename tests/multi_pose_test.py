@@ -53,7 +53,7 @@ def test_multi_pose_franka(b_size: int):
 
     q_sample = ik_solver.sample_configs(b_size)
     kin_state = ik_solver.fk(q_sample)
-    link_poses = kin_state.link_pose
+    link_poses = kin_state.link_poses
     goal = Pose(kin_state.ee_position, kin_state.ee_quaternion)
     result = ik_solver.solve_batch(goal, link_poses=link_poses)
 
@@ -91,7 +91,7 @@ def test_multi_pose_hand(b_size: int):
 
     q_sample = ik_solver.sample_configs(b_size)
     kin_state = ik_solver.fk(q_sample)
-    link_poses = kin_state.link_pose
+    link_poses = kin_state.link_poses
     goal = Pose(kin_state.ee_position, kin_state.ee_quaternion).clone()
     result = ik_solver.solve_batch(goal, link_poses=link_poses)
 
