@@ -969,13 +969,7 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
                 self.cspace.max_acceleration.unsqueeze(0),
             ]
         )
-        # clip joint position:
         # NOTE: change this to be per joint
-        joint_limits["position"][0] += self.cspace.position_limit_clip
-        joint_limits["position"][1] -= self.cspace.position_limit_clip
-        joint_limits["velocity"][0] *= self.cspace.velocity_scale
-        joint_limits["velocity"][1] *= self.cspace.velocity_scale
-
-        self.cspace.velocity_scale = None
-
         self._joint_limits = JointLimits(joint_names=self.joint_names, **joint_limits)
+        self._joint_limits.clip_position_Limits(self.cspace.position_limit_clip)
+        self._joint_limits.apply_scale(velocity_scale=self.cspace.velocity_scale)
