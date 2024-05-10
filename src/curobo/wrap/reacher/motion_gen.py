@@ -3242,7 +3242,10 @@ class MotionGen(MotionGenConfig):
                     ).contiguous()
             if plan_config.enable_finetune_trajopt:
                 og_value = self.trajopt_solver.interpolation_type
-                self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
+                if og_value == InterpolateType.CUBIC_CUDA:
+                    self.trajopt_solver.interpolation_type = InterpolateType.CUBIC_CUDA
+                else:
+                    self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
             with profiler.record_function("motion_gen/trajopt"):
                 log_info("MG: running TO")
                 traj_result = self._solve_trajopt_from_solve_state(
@@ -3481,7 +3484,10 @@ class MotionGen(MotionGenConfig):
                     )
             if plan_config.enable_finetune_trajopt:
                 og_value = self.trajopt_solver.interpolation_type
-                self.js_trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
+                if og_value == InterpolateType.CUBIC_CUDA:
+                    self.js_trajopt_solver.interpolation_type = InterpolateType.CUBIC_CUDA
+                else:
+                    self.js_trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
             with profiler.record_function("motion_gen/trajopt"):
                 log_info("MG: running TO")
                 traj_result = self._solve_trajopt_from_solve_state(
@@ -3767,7 +3773,10 @@ class MotionGen(MotionGenConfig):
                 ).contiguous()
             if plan_config.enable_finetune_trajopt:
                 og_value = self.trajopt_solver.interpolation_type
-                self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
+                if og_value == InterpolateType.CUBIC_CUDA:
+                    self.trajopt_solver.interpolation_type = InterpolateType.CUBIC_CUDA
+                else:
+                    self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
 
             traj_result = self._solve_trajopt_from_solve_state(
                 goal,

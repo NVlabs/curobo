@@ -16,7 +16,7 @@ import torch
 from curobo.types.base import TensorDeviceType
 from curobo.types.robot import JointState
 from curobo.util.trajectory import InterpolateType, get_batch_interpolated_trajectory
-
+from curobo.util.plot_util import plot_compare_trajectories
 
 def test_linear_interpolation():
     tensor_args = TensorDeviceType()
@@ -68,3 +68,64 @@ def test_linear_interpolation():
         ).item()
         < 0.05
     )
+
+
+
+def test_cubic_interpolation():
+    tensor_args = TensorDeviceType()
+
+    b, h, dof = 1, 24, 1
+    raw_dt = tensor_args.to_device(0.2)
+    int_dt = 0.001
+    # initialize raw trajectory:
+    in_traj = JointState.zeros((b, h, dof), tensor_args)
+    in_traj.position = torch.zeros((b, h, dof), device=tensor_args.device)
+    in_traj.position[:, 1, :] = 0.1
+
+    in_traj.position[:, -2, :] = -0.01
+    in_traj.position[:, 10, :] = -0.01
+
+    in_traj.position[:, -1, :] = 0.01
+    # in_traj.position[:, -1, :] = 0.01
+    # in_traj.position[:, 0, :] = -0.01
+    in_traj.velocity =  torch.gradient(in_traj.position, dim=1)[0] / raw_dt # in_traj.position - torch.roll(in_traj.position, -1, dims=1)
+    # in_traj.velocity[:, 0, :] = 0.0
+    # in_traj.velocity[:, -1, :] = 0.0
+
+    max_vel = torch.ones((1, 1, dof), device=tensor_args.device, dtype=tensor_args.dtype)
+    max_acc = torch.ones((1, 1, dof), device=tensor_args.device, dtype=tensor_args.dtype) * 25
+    max_jerk = torch.ones((1, 1, dof), device=tensor_args.device, dtype=tensor_args.dtype) * 500
+
+    # create max_velocity buffer:
+    out_traj_linear_cuda, _, _ = get_batch_interpolated_trajectory(
+        in_traj,
+        raw_dt,
+        int_dt,
+        max_vel,
+        kind=InterpolateType.LINEAR_CUDA,
+        max_acc=max_acc,
+        max_jerk=max_jerk,
+        optimize_dt=True
+    )
+    #
+    out_traj_linear_cuda = out_traj_linear_cuda.clone()
+
+    out_traj_cpu, _, _ = get_batch_interpolated_trajectory(
+        in_traj,
+        raw_dt,
+        int_dt,
+        max_vel,
+        kind=InterpolateType.CUBIC_CUDA,
+        max_acc=max_acc,
+        max_jerk=max_jerk,
+        optimize_dt=True
+    )
+    assert (
+        torch.max(
+            torch.abs(out_traj_linear_cuda.position[:, -5:, :] - out_traj_cpu.position[:, -5:, :])
+        ).item()
+        < 0.05
+    )
+
+    plot_compare_trajectories(out_traj_linear_cuda, out_traj_cpu, int_dt, traj_a_name="Trajectory 1", traj_b_name="Trajectory 2")
+    

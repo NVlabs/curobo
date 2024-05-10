@@ -27,6 +27,7 @@ from curobo.util.logger import log_error, log_info, log_warn
 from curobo.util.sample_lib import bspline
 from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp_interpolation import get_cuda_linear_interpolation
+from curobo.util.warp_cubic_interpolation import get_cuda_cubic_interpolation
 
 
 class InterpolateType(Enum):
@@ -39,6 +40,7 @@ class InterpolateType(Enum):
     #: cuda accelerated linear interpolation using warp-lang
     #: custom kernel :meth: get_cuda_linear_interpolation
     LINEAR_CUDA = "linear_cuda"
+    CUBIC_CUDA = "cubic_cuda"
     #: Uses "Time-optimal trajectory generation for path following with bounded acceleration
     #: and velocity." Robotics: Science and Systems VIII (2012): 1-8, Kunz & Stillman.
     KUNZ_STILMAN_OPTIMAL = "kunz_stilman_optimal"
@@ -186,6 +188,10 @@ def get_batch_interpolated_trajectory(
 
     elif kind == InterpolateType.LINEAR_CUDA:
         out_traj_state = get_cuda_linear_interpolation(
+            raw_traj, traj_steps, out_traj_state, opt_dt, raw_dt
+        )
+    elif kind == InterpolateType.CUBIC_CUDA:
+        out_traj_state = get_cuda_cubic_interpolation(
             raw_traj, traj_steps, out_traj_state, opt_dt, raw_dt
         )
     elif kind == InterpolateType.KUNZ_STILMAN_OPTIMAL:
