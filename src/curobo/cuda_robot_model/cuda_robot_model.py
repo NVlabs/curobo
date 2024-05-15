@@ -12,7 +12,7 @@ from __future__ import annotations
 
 # Standard Library
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 # Third Party
 import torch
@@ -186,7 +186,12 @@ class CudaRobotModelState:
         return self.link_spheres_tensor
 
     @property
-    def link_pose(self) -> Dict[str, Pose]:
+    def link_pose(self) -> Union[None, Dict[str, Pose]]:
+        """Deprecated, use link_poses."""
+        return self.link_poses
+
+    @property
+    def link_poses(self) -> Union[None, Dict[str, Pose]]:
         """Get link poses as a dictionary of link name to Pose object."""
         link_poses = None
         if self.link_names is not None:

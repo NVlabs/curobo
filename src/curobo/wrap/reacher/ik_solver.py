@@ -1560,6 +1560,26 @@ class IKSolver(IKSolverConfig):
         """Get ordered names of all joints used in optimization with IKSolver."""
         return self.rollout_fn.kinematics.joint_names
 
+    def check_valid(self, joint_position: torch.Tensor) -> torch.Tensor:
+        """Check if joint position is valid. Also supports batch of joint positions.
+
+        Args:
+            joint_position: input position tensor of shape (batch, dof).
+
+        Returns:
+            boolean tensor of shape (batch) indicating if the joint position is valid.
+        """
+        if len(joint_position.shape) == 1:
+            joint_position = joint_position.unsqueeze(0)
+        if len(joint_position.shape) > 2:
+            log_error("joint_position should be of shape (batch, dof)")
+        metrics = self.rollout_fn.rollout_constraint(
+            joint_position.unsqueeze(1),
+            use_batch_env=False,
+        )
+        feasible = metrics.feasible.squeeze(1)
+        return feasible
+
 
 @get_torch_jit_decorator()
 def get_success(

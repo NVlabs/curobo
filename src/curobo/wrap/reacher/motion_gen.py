@@ -947,6 +947,10 @@ class MotionGenPlanConfig:
     #: post-process the trajectory.
     time_dilation_factor: Optional[float] = None
 
+    #: Check if the start state is valid before runnning any steps in motion generation. This will
+    #: check for joint limits, self-collision, and collision with the world.
+    check_start_validity: bool = True
+
     def __post_init__(self):
         """Post initialization checks."""
         if not self.enable_opt and not self.enable_graph:
@@ -998,8 +1002,13 @@ class MotionGenStatus(Enum):
     FINETUNE_TRAJOPT_FAIL = "Finetune TrajOpt Fail"
 
     #: Invalid query was given. The start state is either out of joint limits, in collision with
-    #: world, or in self-collision.
+    #: world, or in self-collision. In the future, this will also check for reachability of goal
+    #: pose/ joint target in joint limits.
     INVALID_QUERY = "Invalid Query"
+
+    #: Invalid query was given. The start state is either out of joint limits, in collision with
+    #: world, or in self-collision.
+    INVALID_START = "Invalid Start"
 
     #: Motion generation query was successful.
     SUCCESS = "Success"
@@ -1064,7 +1073,7 @@ class MotionGenResult:
     #: Debug information
     debug_info: Any = None
 
-    #: status of motion generation query. returns [IK Fail, Graph Fail, TrajOpt Fail].
+    #: status of motion generation query.
     status: Optional[Union[MotionGenStatus, str]] = None
 
     #: number of attempts used before returning a solution.
@@ -1663,6 +1672,7 @@ class MotionGen(MotionGenConfig):
             start_state,
             goal_pose,
             plan_config,
+            link_poses=link_poses,
         )
         return result
 
@@ -1884,6 +1894,7 @@ class MotionGen(MotionGenConfig):
                                 enable_graph=False,
                                 enable_graph_attempt=None,
                             ),
+                            link_poses=link_poses,
                         )
                     else:
                         self.plan_batch(
@@ -1895,6 +1906,7 @@ class MotionGen(MotionGenConfig):
                                 enable_graph=enable_graph,
                                 enable_graph_attempt=None if not enable_graph else 20,
                             ),
+                            link_poses=link_poses,
                         )
             else:
                 retract_pose = Pose(
@@ -1914,6 +1926,7 @@ class MotionGen(MotionGenConfig):
                                 enable_finetune_trajopt=True,
                                 enable_graph=False,
                             ),
+                            link_poses=link_poses,
                         )
                     else:
                         self.plan_batch_goalset(
@@ -1925,6 +1938,7 @@ class MotionGen(MotionGenConfig):
                                 enable_graph=enable_graph,
                                 enable_graph_attempt=None if not enable_graph else 20,
                             ),
+                            link_poses=link_poses,
                         )
 
         log_info("Warmup complete")
@@ -1972,6 +1986,17 @@ class MotionGen(MotionGenConfig):
             n_goalset=1,
         )
         force_graph = plan_config.enable_graph
+
+        if plan_config.check_start_validity:
+            # check if start state is collision-free and within limits:
+            valid_query = self.ik_solver.check_valid(start_state.position).item()
+            if not valid_query:
+                result = MotionGenResult(
+                    success=torch.as_tensor([False], device=self.tensor_args.device),
+                    valid_query=valid_query,
+                    status=MotionGenStatus.INVALID_START,
+                )
+                return result
 
         for n in range(plan_config.max_attempts):
             result = self._plan_js_from_solve_state(
@@ -2753,6 +2778,17 @@ class MotionGen(MotionGenConfig):
             MotionGenResult: Result of planning.
         """
         start_time = time.time()
+        valid_query = True
+        if plan_config.check_start_validity:
+            # check if start state is collision-free and within limits:
+            valid_query = self.ik_solver.check_valid(start_state.position).item()
+            if not valid_query:
+                result = MotionGenResult(
+                    success=torch.as_tensor([False], device=self.tensor_args.device),
+                    valid_query=valid_query,
+                    status=MotionGenStatus.INVALID_START,
+                )
+                return result
         if plan_config.pose_cost_metric is not None:
             valid_query = self.update_pose_cost_metric(
                 plan_config.pose_cost_metric, start_state, goal_pose
@@ -3668,6 +3704,8 @@ class MotionGen(MotionGenConfig):
                     # )
                     result.interpolated_plan = self._batch_graph_search_buffer
                     g_dim = g_dim.cpu().squeeze().tolist()
+                    if isinstance(g_dim, int):
+                        g_dim = [g_dim]
                     for x, x_val in enumerate(g_dim):
                         self._batch_path_buffer_last_tstep[x_val] = (
                             graph_result.path_buffer_last_tstep[x]

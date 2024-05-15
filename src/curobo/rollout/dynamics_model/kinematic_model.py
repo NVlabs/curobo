@@ -109,6 +109,11 @@ class KinematicModelState(Sequence):
 
     @property
     def link_pose(self):
+        """Deprecated: Use link_poses instead."""
+        return self.link_poses
+
+    @property
+    def link_poses(self):
         if self.link_names is not None:
             link_pos_seq = self.link_pos_seq.contiguous()
             link_quat_seq = self.link_quat_seq.contiguous()

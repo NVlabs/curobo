@@ -12,9 +12,17 @@ its affiliates is strictly prohibited.
 
 ## Latest Commit
 
+### New Features
+- Added validity of start state check for motion_gen plan calls for single queries.
+
 ### BugFixes & Misc.
 - Fix bug in evaluator to account for dof maximum acceleration and jerk.
 - Add unit test for different acceleration and jerk limits.
+- Add a check in self-collision kernels to avoid computing over inactive threads.
+- Add `link_poses` as an additional property to kinematics to be more descriptive.
+- Add `g_dim` check for `int` in batched planning.
+- Add `link_poses` for motion_gen.warmup() in batch planning mode.
+- Add `link_poses` as input to `batch_goalset`.
 
 ## Version 0.7.2
 

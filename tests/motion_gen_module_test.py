@@ -20,7 +20,12 @@ from curobo.types.math import Pose
 from curobo.types.robot import JointState, RobotConfig
 from curobo.util.trajectory import InterpolateType
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
-from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
+from curobo.wrap.reacher.motion_gen import (
+    MotionGen,
+    MotionGenConfig,
+    MotionGenPlanConfig,
+    MotionGenStatus,
+)
 
 
 @pytest.fixture(scope="module")
@@ -328,3 +333,50 @@ def test_motion_gen_single_js(motion_gen_str, enable_graph, request):
     reached_state = result.optimized_plan[-1]
 
     assert torch.norm(goal_state.position - reached_state.position) < 0.05
+
+
+def test_motion_gen_single_js_invalid_start(motion_gen):
+
+    motion_gen.reset()
+
+    retract_cfg = motion_gen.get_retract_config()
+
+    start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3)
+
+    m_config = MotionGenPlanConfig(max_attempts=2)
+
+    goal_state = start_state.clone()
+    goal_state.position -= 0.3
+    start_state.position[0] += 10.0
+
+    result = motion_gen.plan_single_js(start_state, goal_state, m_config)
+
+    assert torch.count_nonzero(result.success) == 0
+
+    assert result.valid_query == False
+
+    assert result.status == MotionGenStatus.INVALID_START
+
+
+def test_motion_gen_single_invalid(motion_gen):
+    motion_gen.reset()
+
+    retract_cfg = motion_gen.get_retract_config()
+
+    state = motion_gen.compute_kinematics(JointState.from_position(retract_cfg.view(1, -1)))
+
+    goal_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
+
+    start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3)
+    start_state.position[..., 1] = 1.7
+
+    m_config = MotionGenPlanConfig(False, True, max_attempts=1)
+
+    result = motion_gen.plan_single(start_state, goal_pose, m_config)
+
+    # get final solutions:
+    assert torch.count_nonzero(result.success) == 0
+
+    assert result.valid_query == False
+
+    assert result.status == MotionGenStatus.INVALID_START
