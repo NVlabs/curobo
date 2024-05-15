@@ -335,7 +335,16 @@ def test_motion_gen_single_js(motion_gen_str, enable_graph, request):
     assert torch.norm(goal_state.position - reached_state.position) < 0.05
 
 
-def test_motion_gen_single_js_invalid_start(motion_gen):
+@pytest.mark.parametrize(
+    "motion_gen_str,invalid_status",
+    [
+        ("motion_gen", MotionGenStatus.INVALID_START_STATE_JOINT_LIMITS),
+        ("motion_gen", MotionGenStatus.INVALID_START_STATE_SELF_COLLISION),
+        ("motion_gen", MotionGenStatus.INVALID_START_STATE_WORLD_COLLISION),
+    ],
+)
+def test_motion_gen_single_js_invalid_start(motion_gen_str, invalid_status, request):
+    motion_gen = request.getfixturevalue(motion_gen_str)
 
     motion_gen.reset()
 
@@ -347,18 +356,32 @@ def test_motion_gen_single_js_invalid_start(motion_gen):
 
     goal_state = start_state.clone()
     goal_state.position -= 0.3
-    start_state.position[0] += 10.0
-
+    if invalid_status == MotionGenStatus.INVALID_START_STATE_JOINT_LIMITS:
+        start_state.position[0, 0] += 10.0
+    if invalid_status == MotionGenStatus.INVALID_START_STATE_SELF_COLLISION:
+        start_state.position[0, 3] = -3.0
+    if invalid_status == MotionGenStatus.INVALID_START_STATE_WORLD_COLLISION:
+        start_state.position[0, 1] = 1.7
     result = motion_gen.plan_single_js(start_state, goal_state, m_config)
 
     assert torch.count_nonzero(result.success) == 0
 
     assert result.valid_query == False
 
-    assert result.status == MotionGenStatus.INVALID_START
+    assert result.status == invalid_status
 
 
-def test_motion_gen_single_invalid(motion_gen):
+@pytest.mark.parametrize(
+    "motion_gen_str,invalid_status",
+    [
+        ("motion_gen", MotionGenStatus.INVALID_START_STATE_JOINT_LIMITS),
+        ("motion_gen", MotionGenStatus.INVALID_START_STATE_SELF_COLLISION),
+        ("motion_gen", MotionGenStatus.INVALID_START_STATE_WORLD_COLLISION),
+    ],
+)
+def test_motion_gen_single_invalid(motion_gen_str, invalid_status, request):
+    motion_gen = request.getfixturevalue(motion_gen_str)
+
     motion_gen.reset()
 
     retract_cfg = motion_gen.get_retract_config()
@@ -368,7 +391,12 @@ def test_motion_gen_single_invalid(motion_gen):
     goal_pose = Pose(state.ee_pos_seq, quaternion=state.ee_quat_seq)
 
     start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3)
-    start_state.position[..., 1] = 1.7
+    if invalid_status == MotionGenStatus.INVALID_START_STATE_JOINT_LIMITS:
+        start_state.position[0, 0] += 10.0
+    if invalid_status == MotionGenStatus.INVALID_START_STATE_SELF_COLLISION:
+        start_state.position[0, 3] = -3.0
+    if invalid_status == MotionGenStatus.INVALID_START_STATE_WORLD_COLLISION:
+        start_state.position[0, 1] = 1.7
 
     m_config = MotionGenPlanConfig(False, True, max_attempts=1)
 
@@ -379,4 +407,4 @@ def test_motion_gen_single_invalid(motion_gen):
 
     assert result.valid_query == False
 
-    assert result.status == MotionGenStatus.INVALID_START
+    assert result.status == invalid_status

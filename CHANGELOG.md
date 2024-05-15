@@ -13,7 +13,7 @@ its affiliates is strictly prohibited.
 ## Latest Commit
 
 ### New Features
-- Added validity of start state check for motion_gen plan calls for single queries.
+- Add start state checks for world collision, self-collision, and joint limits.
 
 ### BugFixes & Misc.
 - Fix bug in evaluator to account for dof maximum acceleration and jerk.
