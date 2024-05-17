@@ -378,6 +378,18 @@ class JointState(State):
             joint_names=joint_names,
         )
 
+    def contiguous(self):
+        p = v = a = j = None
+        if self.position is not None:
+            p = self.position.contiguous()
+        if self.velocity is not None:
+            v = self.velocity.contiguous()
+        if self.acceleration is not None:
+            a = self.acceleration.contiguous()
+        if self.jerk is not None:
+            j = self.jerk.contiguous()
+        return JointState(p, v, a, self.joint_names, jerk=j)
+
     def detach(self):
         self.position = self.position.detach()
         self.velocity = self.velocity.detach()
