@@ -134,7 +134,7 @@ def demo_motion_gen_simple():
     )
 
     result = motion_gen.plan_single(start_state, goal_pose, MotionGenPlanConfig(max_attempts=1))
-    traj = result.get_interpolated_plan()  # result.optimized_dt has the dt between timesteps
+    traj = result.get_interpolated_plan()  # result.interpolation_dt has the dt between timesteps
     print("Trajectory Generated: ", result.success)
 
 
