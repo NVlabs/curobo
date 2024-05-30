@@ -10,10 +10,19 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
-## Latest Commit
+## Version 0.7.3
 
 ### New Features
 - Add start state checks for world collision, self-collision, and joint limits.
+- Add finetune with dt scaling for `motion_gen.plan_single_js` to get more time optimal
+trajectories in joint space planning.
+- Improve joint space planning convergence, now succeeds in more planning problems with higher
+accuracy.
+
+### Changes in default behavior
+- Some warp kernels are now compiled based on runtime parameters (dof), causing a slowdown in load
+time for motion_gen. To avoid this slowdown, add an environment variable `CUROBO_USE_LRU_CACHE=1`
+which will cache the runtime generated kernels.
 
 ### BugFixes & Misc.
 - Fix bug in evaluator to account for dof maximum acceleration and jerk.
@@ -23,6 +32,17 @@ its affiliates is strictly prohibited.
 - Add `g_dim` check for `int` in batched planning.
 - Add `link_poses` for motion_gen.warmup() in batch planning mode.
 - Add `link_poses` as input to `batch_goalset`.
+- Add finetune js trajopt solver.
+- Pass raw velocity, acceleration, and jerk values to dt computation function to prevent
+interpolation errors from causing out of joint limit failures
+- Add `finetune_js_dt_scale` with a default value > 1.0 as joint space trajectories are
+time optimal in sparse obstacle environments.
+- Add note on deterministic behavior to website. Use lbfgs history < 12 for deterministic
+optimization results.
+- Add warning when adding a mesh with the same name as in existing cache.
+- Remove warmup for batch motion gen reacher isaac sim example.
+- Fix python examples in getting started webpage.
+- Refactor warp mesh query kernels to use a `wp.func` for signed distance queries.
 
 ## Version 0.7.2
 

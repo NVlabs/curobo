@@ -1343,14 +1343,26 @@ class TrajOptSolver(TrajOptSolverConfig):
                 goal=goal,
                 solution=result.action.scale_by_dt(self.solver_dt_tensor, opt_dt.view(-1, 1, 1)),
                 seed=seed_traj,
-                position_error=result.metrics.position_error,
-                rotation_error=result.metrics.rotation_error,
+                position_error=(
+                    result.metrics.position_error[..., -1]
+                    if result.metrics.position_error is not None
+                    else None
+                ),
+                rotation_error=(
+                    result.metrics.rotation_error[..., -1]
+                    if result.metrics.rotation_error is not None
+                    else None
+                ),
                 solve_time=result.solve_time,
                 metrics=result.metrics,  # TODO: index this also
                 interpolated_solution=interpolated_trajs,
                 debug_info={"solver": result.debug, "interpolation_time": interpolation_time},
                 path_buffer_last_tstep=last_tstep,
-                cspace_error=result.metrics.cspace_error,
+                cspace_error=(
+                    result.metrics.cspace_error[..., -1]
+                    if result.metrics.cspace_error is not None
+                    else None
+                ),
                 optimized_dt=opt_dt,
                 raw_solution=result.action,
                 raw_action=result.raw_action,
@@ -1694,6 +1706,7 @@ class TrajOptSolver(TrajOptSolverConfig):
                 (b, self.interpolation_steps, dof), self.tensor_args
             )
             self._interpolated_traj_buffer.joint_names = self.rollout_fn.joint_names
+
         state, last_tstep, opt_dt = get_batch_interpolated_trajectory(
             traj_state,
             self.solver_dt_tensor,

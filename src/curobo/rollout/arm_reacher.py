@@ -174,6 +174,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
         self._n_goalset = 1
 
         if self.cost_cfg.cspace_cfg is not None:
+            self.cost_cfg.cspace_cfg.dof = self.d_action
             # self.cost_cfg.cspace_cfg.update_vec_weight(self.dynamics_model.cspace_distance_weight)
             self.dist_cost = DistCost(self.cost_cfg.cspace_cfg)
         if self.cost_cfg.pose_cfg is not None:
@@ -226,6 +227,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                 if i != self.kinematics.ee_link:
                     self._link_pose_convergence[i] = PoseCost(self.convergence_cfg.link_pose_cfg)
         if self.convergence_cfg.cspace_cfg is not None:
+            self.convergence_cfg.cspace_cfg.dof = self.d_action
             self.cspace_convergence = DistCost(self.convergence_cfg.cspace_cfg)
 
         # check if g_dist is required in any of the cost terms:

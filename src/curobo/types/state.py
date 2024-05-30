@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 # Standard Library
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple, Union
 
 # Third Party
@@ -73,6 +73,7 @@ class JointState(State):
     joint_names: Optional[List[str]] = None
     jerk: Union[List[float], T_DOF, None] = None  # Optional
     tensor_args: TensorDeviceType = TensorDeviceType()
+    aux_data: dict = field(default_factory=lambda: {})
 
     def __post_init__(self):
         if isinstance(self.position, torch.Tensor):

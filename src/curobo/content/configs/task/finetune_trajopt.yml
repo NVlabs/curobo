@@ -49,7 +49,7 @@ cost:
 
 
   cspace_cfg:
-    weight: 10000.0
+    weight: 20000.0
     terminal: True
     run_weight: 0.00 #1
 
@@ -59,7 +59,7 @@ cost:
     run_weight_velocity: 0.0
     run_weight_acceleration: 1.0
     run_weight_jerk: 1.0
-    activation_distance: [0.05,0.05,0.05,0.05] # for position, velocity, acceleration and jerk
+    activation_distance: [0.05,0.001,0.001,0.001] # for position, velocity, acceleration and jerk
     null_space_weight: [0.0]
 
   primitive_collision_cfg:

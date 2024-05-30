@@ -141,10 +141,19 @@ def get_batch_interpolated_trajectory(
     # given the dt required to run trajectory at maximum velocity,
     # we find the number of timesteps required:
     if optimize_dt:
+        traj_vel = raw_traj.velocity
+        traj_acc = raw_traj.acceleration
+        traj_jerk = raw_traj.jerk
+        if "raw_velocity" in raw_traj.aux_data:
+            traj_vel = raw_traj.aux_data["raw_velocity"]
+        if "raw_acceleration" in raw_traj.aux_data:
+            traj_acc = raw_traj.aux_data["raw_acceleration"]
+        if "raw_jerk" in raw_traj.aux_data:
+            traj_jerk = raw_traj.aux_data["raw_jerk"]
         traj_steps, steps_max, opt_dt = calculate_tsteps(
-            raw_traj.velocity,
-            raw_traj.acceleration,
-            raw_traj.jerk,
+            traj_vel,
+            traj_acc,
+            traj_jerk,
             interpolation_dt,
             max_vel,
             max_acc,
@@ -464,7 +473,7 @@ def calculate_dt_fixed(
     raw_dt: torch.Tensor,
     min_dt: float,
     max_dt: float,
-    epsilon: float = 1e-6,
+    epsilon: float = 1e-4,
 ):
     # compute scaled dt:
     max_v_arr = torch.max(torch.abs(vel), dim=-2)[0]  # output is batch, dof
@@ -497,7 +506,7 @@ def calculate_dt(
     max_jerk: torch.Tensor,
     raw_dt: float,
     min_dt: float,
-    epsilon: float = 1e-6,
+    epsilon: float = 1e-4,
 ):
     # compute scaled dt:
     max_v_arr = torch.max(torch.abs(vel), dim=-2)[0]  # output is batch, dof
@@ -529,7 +538,7 @@ def calculate_dt_no_clamp(
     max_vel: torch.Tensor,
     max_acc: torch.Tensor,
     max_jerk: torch.Tensor,
-    epsilon: float = 1e-6,
+    epsilon: float = 1e-4,
 ):
     # compute scaled dt:
     max_v_arr = torch.max(torch.abs(vel), dim=-2)[0]  # output is batch, dof

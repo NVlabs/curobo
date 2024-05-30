@@ -16,6 +16,16 @@ import warp as wp
 wp.set_module_options({"fast_math": False})
 
 
+@wp.func
+def mesh_query_point_fn(
+    idx: wp.uint64,
+    point: wp.vec3,
+    max_distance: float,
+):
+    collide_result = wp.mesh_query_point(idx, point, max_distance)
+    return collide_result
+
+
 @wp.kernel
 def get_swept_closest_pt_batch_env(
     pt: wp.array(dtype=wp.vec4),
@@ -74,9 +84,6 @@ def get_swept_closest_pt_batch_env(
     eta = float(0.0)
     dt = float(0.0)
     k0 = float(0.0)
-    face_index = int(0)
-    face_u = float(0.0)
-    face_v = float(0.0)
     sign = float(0.0)
     dist = float(0.0)
     dist_metric = float(0.0)
@@ -143,11 +150,12 @@ def get_swept_closest_pt_batch_env(
             obj_w_pose = wp.transform(obj_position, obj_quat)
             obj_w_pose_t = wp.transform_inverse(obj_w_pose)
             local_pt = wp.transform_point(obj_w_pose, in_pt)
-
-            if wp.mesh_query_point(
-                mesh[i], local_pt, max_dist_buffer, sign, face_index, face_u, face_v
-            ):
-                cl_pt = wp.mesh_eval_position(mesh[i], face_index, face_u, face_v)
+            collide_result = mesh_query_point_fn(mesh[i], local_pt, max_dist_buffer)
+            if collide_result.result:
+                sign = collide_result.sign
+                cl_pt = wp.mesh_eval_position(
+                    mesh[i], collide_result.face, collide_result.u, collide_result.v
+                )
                 delta = cl_pt - local_pt
                 dis_length = wp.length(delta)
                 dist = (-1.0 * dis_length * sign) + in_rad
@@ -185,10 +193,12 @@ def get_swept_closest_pt_batch_env(
                         1.0 - 0.5 * jump_distance / sphere_0_distance
                     )  # dist could be greater than sphere_0_distance here?
                     sphere_int = k0 * local_pt + ((1.0 - k0) * sphere_temp)
-                    if wp.mesh_query_point(
-                        mesh[i], sphere_int, max_dist_buffer, sign, face_index, face_u, face_v
-                    ):
-                        cl_pt = wp.mesh_eval_position(mesh[i], face_index, face_u, face_v)
+                    collide_result = mesh_query_point_fn(mesh[i], sphere_int, max_dist_buffer)
+                    if collide_result.result:
+                        sign = collide_result.sign
+                        cl_pt = wp.mesh_eval_position(
+                            mesh[i], collide_result.face, collide_result.u, collide_result.v
+                        )
                         delta = cl_pt - sphere_int
                         dis_length = wp.length(delta)
                         dist = (-1.0 * dis_length * sign) + in_rad
@@ -229,11 +239,12 @@ def get_swept_closest_pt_batch_env(
                         1.0 - 0.5 * jump_distance / sphere_2_distance
                     )  # dist could be greater than sphere_0_distance here?
                     sphere_int = k0 * local_pt + (1.0 - k0) * sphere_temp
-
-                    if wp.mesh_query_point(
-                        mesh[i], sphere_int, max_dist_buffer, sign, face_index, face_u, face_v
-                    ):
-                        cl_pt = wp.mesh_eval_position(mesh[i], face_index, face_u, face_v)
+                    collide_result = mesh_query_point_fn(mesh[i], sphere_int, max_dist_buffer)
+                    if collide_result.result:
+                        sign = collide_result.sign
+                        cl_pt = wp.mesh_eval_position(
+                            mesh[i], collide_result.face, collide_result.u, collide_result.v
+                        )
                         delta = cl_pt - sphere_int
                         dis_length = wp.length(delta)
                         dist = (-1.0 * dis_length * sign) + in_rad
@@ -375,9 +386,6 @@ def get_closest_pt_batch_env(
     if b_idx >= batch_size or h_idx >= horizon or sph_idx >= nspheres:
         return
 
-    face_index = int(0)
-    face_u = float(0.0)
-    face_v = float(0.0)
     sign = float(0.0)
     dist = float(0.0)
     grad_vec = wp.vec3(0.0)
@@ -444,11 +452,12 @@ def get_closest_pt_batch_env(
             obj_w_pose = wp.transform(obj_position, obj_quat)
 
             local_pt = wp.transform_point(obj_w_pose, in_pt)
-
-            if wp.mesh_query_point(
-                mesh[i], local_pt, max_dist_buffer, sign, face_index, face_u, face_v
-            ):
-                cl_pt = wp.mesh_eval_position(mesh[i], face_index, face_u, face_v)
+            collide_result = mesh_query_point_fn(mesh[i], local_pt, max_dist_buffer)
+            if collide_result.result:
+                sign = collide_result.sign
+                cl_pt = wp.mesh_eval_position(
+                    mesh[i], collide_result.face, collide_result.u, collide_result.v
+                )
                 delta = cl_pt - local_pt
                 dis_length = wp.length(delta)
                 dist = -1.0 * dis_length * sign

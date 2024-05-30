@@ -68,10 +68,8 @@ def get_stomp_cov(
     cov, scale_tril, scaled_M = get_stomp_cov_jit(
         horizon, d_action, cov_mode, device=tensor_args.device
     )
-    cov = tensor_args.to_device(cov)
-    scale_tril = tensor_args.to_device(scale_tril)
     if RETURN_M:
-        return cov, scale_tril, tensor_args.to_device(scaled_M)
+        return cov, scale_tril, scaled_M
     return cov, scale_tril
 
 
@@ -89,7 +87,7 @@ def get_stomp_cov_jit(
     A = torch.zeros(
         (d_action * horizon, d_action * horizon),
         dtype=torch.float32,
-        device=device,
+        device="cpu",
     )
 
     if cov_mode == "vel":
@@ -129,10 +127,15 @@ def get_stomp_cov_jit(
 
     # also compute the cholesky decomposition:
     # scale_tril = torch.zeros((d_action * horizon, d_action * horizon), **tensor_args)
+
     if (cov == cov.T).all() and (torch.linalg.eigvals(cov).real >= 0).all():
         scale_tril = torch.linalg.cholesky(cov)
     else:
         scale_tril = cov
+
+    cov = cov.to(device=device)
+    scale_tril = scale_tril.to(device=device)
+    scaled_M = scaled_M.to(device=device)
     """
     k = 0
     act_cov_matrix = cov[k * horizon:k * horizon + horizon, k * horizon:k * horizon + horizon]
@@ -140,7 +143,7 @@ def get_stomp_cov_jit(
     print(torch.det(act_cov_matrix))
     local_cholesky = matrix_cholesky(act_cov_matrix)
     for k in range(d_action):
-        
+
         scale_tril[k * horizon:k * horizon + horizon,k * horizon:k * horizon + horizon] = local_cholesky
     """
 

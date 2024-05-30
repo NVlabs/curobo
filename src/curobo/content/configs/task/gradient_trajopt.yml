@@ -48,7 +48,7 @@ cost:
     use_metric: True
 
   cspace_cfg:
-    weight: 10000.0
+    weight: 20000.0
     terminal: True
     run_weight: 0.0
 
@@ -100,7 +100,7 @@ lbfgs:
   use_cuda_update_best_kernel: True
   use_temporal_smooth: False
   sync_cuda_time: True
-  step_scale: 1.0 #1.0
+  step_scale: 1.0
   last_best: 10
   use_coo_sparse: True
   debug_info:

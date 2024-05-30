@@ -40,8 +40,8 @@ def get_world_model(single_object: bool = False):
         world_model = WorldConfig.from_dict(
             {
                 "cuboid": {
-                    "block": {"dims": [0.5, 0.5, 0.5], "pose": [-0.25, 0, 0, 1, 0, 0, 0]},
-                    "block1": {"dims": [0.1, 0.2, 0.5], "pose": [0.25, 0.1, 0, 1, 0, 0, 0]},
+                    "block2": {"dims": [0.5, 0.5, 0.5], "pose": [-0.25, 0, 0, 1, 0, 0, 0]},
+                    "block3": {"dims": [0.1, 0.2, 0.5], "pose": [0.25, 0.1, 0, 1, 0, 0, 0]},
                 }
             }
         )
@@ -62,7 +62,7 @@ def world_collision(request):
                 if not request.param[0]
                 else CollisionCheckerType.MESH
             ),
-            "max_distance": 5.0,
+            "max_distance": 1.0,
             "n_envs": 1,
         },
         world_model,

@@ -58,7 +58,6 @@ class RobotConfig:
         cuda_robot_model_config = CudaRobotModelConfig.from_basic_urdf(
             urdf_path, base_link, ee_link, tensor_args
         )
-        # load other params:
 
         return RobotConfig(
             cuda_robot_model_config,
