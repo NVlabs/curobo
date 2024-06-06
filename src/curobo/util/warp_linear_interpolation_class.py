@@ -21,30 +21,30 @@ from curobo.util.trajectory import calculate_traj_steps
 wp.set_module_options({"fast_math": False})
 
 @wp.kernel
-def cubic_interpolate_trajectory_kernel(
-    raw_position: wp.array(dtype=wp.float32), # input position
-    raw_velocity: wp.array(dtype=wp.float32), # input velocity
-    raw_acceleration: wp.array(dtype=wp.float32), # input acceleration
-    raw_jerk: wp.array(dtype=wp.float32), # input jerk
-    opt_dt: wp.array(dtype=wp.float32), # optimized dt after retiming (different for every traj in batch) -  used for scaling vel/acc/jerk and for calculating delta_t in interpolation
-    traj_tsteps: wp.array(dtype=wp.int32), # number of knots in interpolated (output) trajectory  = (horizon-1) * opt_dt / interpolation_dt + 1 (less than or equal to steps max). Note this is an array!
-    batch_size: wp.int32, # batch size
-    raw_horizon: wp.int32, # number of knots in input trajectory
-    dof: wp.int32, # degrees of freedom
-    out_horizon: wp.int32, # This is the steps_max (ie size of interpolation buffer). If a single trajectory, then this is equal to traj_tsteps. Note this is an integer value
-    out_position: wp.array(dtype=wp.float32), # output position
-    out_velocity: wp.array(dtype=wp.float32), # output velocity
-    out_acceleration: wp.array(dtype=wp.float32), # output acceleration
-    out_jerk: wp.array(dtype=wp.float32), # output jerk
+def linear_interpolate_trajectory_kernel(
+    raw_position: wp.array(dtype=wp.float32),
+    raw_velocity: wp.array(dtype=wp.float32),
+    raw_acceleration: wp.array(dtype=wp.float32),
+    raw_jerk: wp.array(dtype=wp.float32),
+    opt_dt: wp.array(dtype=wp.float32),
+    traj_tsteps: wp.array(dtype=wp.int32),
+    batch_size: wp.int32,
+    raw_horizon: wp.int32,
+    dof: wp.int32,
+    out_horizon: wp.int32,
+    out_position: wp.array(dtype=wp.float32),
+    out_velocity: wp.array(dtype=wp.float32),
+    out_acceleration: wp.array(dtype=wp.float32),
+    out_jerk: wp.array(dtype=wp.float32),
 ):
-    tid = wp.tid() # current thread idx
+    tid = wp.tid()
 
     b_idx = int(0)
     h_idx = int(0)
 
     oh_idx = int(0)
     d_idx = int(0)
-    b_idx = tid / (out_horizon * dof) # batch idx
+    b_idx = tid / (out_horizon * dof)
 
     oh_idx = (tid - (b_idx * (out_horizon * dof))) / dof
     d_idx = tid - (b_idx * out_horizon * dof) - (oh_idx * dof)
@@ -52,33 +52,32 @@ def cubic_interpolate_trajectory_kernel(
         return
 
     nh_idx = int(0)
-    out_idx = int(0)
-    curr_idx = int(0)
-    prev_idx = int(0)
+    weight = float(0)
+    n_weight = float(0)
     max_tstep = int(0)
     int_steps = float(0)
     op_dt = float(0)
-    op_dt = opt_dt[b_idx] 
+    op_dt = opt_dt[b_idx]
     max_tstep = traj_tsteps[b_idx]
     int_steps = float((float(max_tstep) / float(raw_horizon - 1)))
+
     # print(oh_idx)
     h_idx = int(wp.ceil(float(oh_idx) / int_steps))
 
-
-    out_idx = b_idx * out_horizon * dof + oh_idx * dof + d_idx
-    curr_idx = b_idx * raw_horizon * dof + h_idx * dof + d_idx
     if oh_idx >= (max_tstep) or h_idx >= raw_horizon:  # - int(int_steps):
         # write last tstep data:
         h_idx = raw_horizon - 1
-        out_position[out_idx] = raw_position[curr_idx]
-        out_velocity[out_idx] = (
-            raw_velocity[curr_idx]
+        out_position[b_idx * out_horizon * dof + oh_idx * dof + d_idx] = raw_position[
+            b_idx * raw_horizon * dof + h_idx * dof + d_idx
+        ]
+        out_velocity[b_idx * out_horizon * dof + oh_idx * dof + d_idx] = (
+            raw_velocity[b_idx * raw_horizon * dof + h_idx * dof + d_idx]
         )
-        out_acceleration[out_idx] = (
-            raw_acceleration[curr_idx]
+        out_acceleration[b_idx * out_horizon * dof + oh_idx * dof + d_idx] = (
+            raw_acceleration[b_idx * raw_horizon * dof + h_idx * dof + d_idx] 
         )
-        out_jerk[out_idx] = (
-            raw_jerk[curr_idx]
+        out_jerk[b_idx * out_horizon * dof + oh_idx * dof + d_idx] = (
+            raw_jerk[b_idx * raw_horizon * dof + h_idx * dof + d_idx]
         )
         return
     # we find the current h_idx and interpolate backwards:
@@ -90,49 +89,37 @@ def cubic_interpolate_trajectory_kernel(
     if h_idx == 0:
         h_idx = 1
     nh_idx = h_idx - 1
+    weight = (float(oh_idx) / int_steps) - float(nh_idx)
 
-    prev_idx = b_idx * raw_horizon * dof + nh_idx * dof + d_idx
+    n_weight = 1.0 - weight
 
-    c0 = float(0)
-    c1 = float(0)
-    c2 = float(0)
-    c3 = float(0)
-    # c0 = (dydx0 + dydx1 - 2 * (y1 - y0) / dx) / dx**2
-    c0 = (raw_velocity[prev_idx] + raw_velocity[curr_idx] - 2.0 * (raw_position[curr_idx] - raw_position[prev_idx]) / op_dt) / op_dt**2.0
-    # c1 = (3 * (y1 - y0) / dx - 2 * dydx0 - dydx1) / dx
-    c1 = (3.0 * (raw_position[curr_idx] - raw_position[prev_idx]) / op_dt - 2.0 * raw_velocity[prev_idx] - raw_velocity[curr_idx]) / op_dt
-    # c2 = dydx0
-    c2 = raw_velocity[prev_idx]
-    # c3 = y0
-    c3 = raw_position[prev_idx]
-
-    dt = float(0)
-    dt = ((float(oh_idx) / int_steps) - float(nh_idx)) * op_dt
-
-    # do cubic interpolation of position, velocity, acceleration and jerk:
-    # out_position = ((c0 * dt + c1) * dt + c2) * dt + c3
-    out_position[out_idx] = (
-        ((c0 * dt + c1) * dt + c2) * dt + c3
+    # do linear interpolation of position, velocity, acceleration and jerk:
+    out_position[b_idx * out_horizon * dof + oh_idx * dof + d_idx] = (
+        weight * raw_position[b_idx * raw_horizon * dof + h_idx * dof + d_idx]
+        + n_weight * raw_position[b_idx * raw_horizon * dof + nh_idx * dof + d_idx]
     )
-    # out_velocity = (3 * c0 * dt + 2 * c1) * dt + c2
-    out_velocity[out_idx] = (
-        (3.0 * c0 * dt + 2.0 * c1) * dt + c2
+    out_velocity[b_idx * out_horizon * dof + oh_idx * dof + d_idx] = (
+        weight * raw_velocity[b_idx * raw_horizon * dof + h_idx * dof + d_idx]
+        + n_weight * raw_velocity[b_idx * raw_horizon * dof + nh_idx * dof + d_idx]
     )
-    # out_acceleration = 6 * c0 * dt + 2 * c1
-    out_acceleration[out_idx] = (
+    out_acceleration[b_idx * out_horizon * dof + oh_idx * dof + d_idx] = (
         (
-            6.0 * c0 * dt + 2.0 * c1
+            weight * raw_acceleration[b_idx * raw_horizon * dof + h_idx * dof + d_idx]
+            + n_weight * raw_acceleration[b_idx * raw_horizon * dof + nh_idx * dof + d_idx]
         )
+
     )
-    # out_jerk = 6 * c0
-    out_jerk[out_idx] = (
+    out_jerk[b_idx * out_horizon * dof + oh_idx * dof + d_idx] = (
         (
-            6.0 * c0
+            weight * raw_jerk[b_idx * raw_horizon * dof + h_idx * dof + d_idx]
+            + n_weight * raw_jerk[b_idx * raw_horizon * dof + nh_idx * dof + d_idx]
         )
+
     )
 
 
-class CubicInterpolation(torch.autograd.Function):
+
+class LinearInterpolation(torch.autograd.Function):
     @staticmethod
     def forward(ctx,
                 raw_pos: torch.Tensor,
@@ -179,7 +166,7 @@ class CubicInterpolation(torch.autograd.Function):
 
         assert ctx.traj_tsteps.dtype == wp.int32, "Incorrect type"
         wp.launch(
-            kernel=cubic_interpolate_trajectory_kernel,
+            kernel=linear_interpolate_trajectory_kernel,
             dim=batch * steps_max * dof, # number of threads
             inputs=[
                 ctx.raw_pos,
@@ -221,7 +208,7 @@ class CubicInterpolation(torch.autograd.Function):
         assert ctx.traj_tsteps.dtype == wp.int32, "Incorrect type"
 
         wp.launch(
-            kernel=cubic_interpolate_trajectory_kernel,
+            kernel=linear_interpolate_trajectory_kernel,
             dim=ctx.batch * ctx.steps_max * ctx.dof,
             inputs=[
                 ctx.raw_pos,
