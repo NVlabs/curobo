@@ -50,18 +50,20 @@ def plot_compare_trajectories(traj_a, traj_b, int_dt, traj_a_name="Trajectory 1"
     plt.show()
 
 
-def plot_compare_positions(traj_a, traj_b, int_dt, traj_a_name="Trajectory 1", traj_b_name="Trajectory 2", save_dir=None):
+def plot_compare_positions(traj_a, traj_b, traj_a_name="Trajectory 1", traj_b_name="Trajectory 2", save_dir=None):
 
-    position1_np = traj_a.detach().cpu().numpy()[0,:,0]
 
-    position2_np = traj_b.detach().cpu().numpy()[0,:,0]
 
     # Plotting
     fig, axs = plt.subplots()
 
     # Plot positions
-    axs.plot(position1_np, label=f'{traj_a_name} Position')
-    axs.plot(position2_np, label=f'{traj_b_name} Position')
+    if traj_a is not None:
+        position1_np = traj_a.clone().detach().cpu().numpy()[0,:,0]
+        axs.plot(position1_np, label=f'{traj_a_name} Position')
+    if traj_b is not None:
+        position2_np = traj_b.clone().detach().cpu().numpy()[0,:,0]
+        axs.plot(position2_np, label=f'{traj_b_name} Position')
     axs.set_xlabel('Time Steps')
     axs.set_ylabel('Position')
     axs.set_title('Comparison of Positions')
@@ -71,5 +73,6 @@ def plot_compare_positions(traj_a, traj_b, int_dt, traj_a_name="Trajectory 1", t
     plt.tight_layout()
     if save_dir:
         plt.savefig(save_dir)
+        plt.close(fig)
     else:
         plt.show()
