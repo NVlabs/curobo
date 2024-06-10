@@ -3567,6 +3567,10 @@ class MotionGen(MotionGenConfig):
                     seed_traj = traj_result.raw_action.clone()  # solution.position.clone()
                     seed_traj = seed_traj.contiguous()
                     og_solve_time = traj_result.solve_time
+                    if traj_result.optimized_dt.dim() == 0:
+                        # If optimized_dt is a scalar, broadcast it to the shape of success mask
+                        traj_result.optimized_dt = traj_result.optimized_dt * torch.ones_like(traj_result.success, dtype=traj_result.optimized_dt.dtype)
+
                     opt_dt = traj_result.optimized_dt[traj_result.success]
 
                     finetune_time = 0
