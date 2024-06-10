@@ -52,6 +52,7 @@ class RobotWorldConfig:
     bound_cost: BoundCost
     pose_cost: PoseCost
     self_collision_cost: Optional[SelfCollisionCost] = None
+    self_collision_constraint: Optional[SelfCollisionCost] = None
     collision_cost: Optional[PrimitiveCollisionCost] = None
     collision_constraint: Optional[PrimitiveCollisionCost] = None
     world_model: Optional[WorldCollision] = None
@@ -75,7 +76,7 @@ class RobotWorldConfig:
         pose_weight: List[float] = [1, 1, 1, 1],
     ):
         init_warp(tensor_args=tensor_args)
-        world_collision_cost = self_collision_cost = world_collision_constraint = None
+        world_collision_cost = self_collision_cost = self_collision_constraint = world_collision_constraint = None
         if isinstance(robot_config, str):
             robot_config = load_yaml(join_path(get_robot_configs_path(), robot_config))["robot_cfg"]
         if isinstance(robot_config, Dict):
@@ -130,7 +131,16 @@ class RobotWorldConfig:
             distance_threshold=self_collision_activation_distance,
         )
 
+        self_collision_constraint_config = SelfCollisionCostConfig(
+            tensor_args.to_device([1.0]),
+            tensor_args,
+            return_loss=True,
+            self_collision_kin_config=kinematics.get_self_collision_config(),
+            distance_threshold=self_collision_activation_distance,
+        )
         self_collision_cost = SelfCollisionCost(self_collision_config)
+        self_collision_constraint = SelfCollisionCost(self_collision_constraint_config)
+
         bound_config = BoundCostConfig(
             tensor_args.to_device([1.0]),
             tensor_args,
@@ -173,6 +183,7 @@ class RobotWorldConfig:
             bound_cost,
             pose_cost,
             self_collision_cost,
+            self_collision_constraint,
             world_collision_cost,
             world_collision_constraint,
             world_collision_checker,
