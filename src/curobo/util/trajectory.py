@@ -142,24 +142,24 @@ def get_batch_interpolated_trajectory(
     b, horizon, dof = raw_traj.position.shape  # horizon
     # given the dt required to run trajectory at maximum velocity,
     # we find the number of timesteps required:
-    # if optimize_dt:
-    traj_steps, steps_max, opt_dt = calculate_tsteps(
-        raw_traj.velocity,
-        raw_traj.acceleration,
-        raw_traj.jerk,
-        interpolation_dt,
-        max_vel,
-        max_acc,
-        max_jerk,
-        raw_dt,
-        min_dt,
-        max_dt,
-        horizon,
-        optimize_dt,
-    )
-    # else:
-    #     traj_steps, steps_max = calculate_traj_steps(raw_dt, interpolation_dt, horizon)
-    #     opt_dt = raw_dt
+    if optimize_dt:
+        traj_steps, steps_max, opt_dt = calculate_tsteps(
+            raw_traj.velocity,
+            raw_traj.acceleration,
+            raw_traj.jerk,
+            interpolation_dt,
+            max_vel,
+            max_acc,
+            max_jerk,
+            raw_dt,
+            min_dt,
+            max_dt,
+            horizon,
+            optimize_dt,
+        )
+    else:
+        traj_steps, steps_max = calculate_traj_steps(raw_dt, interpolation_dt, horizon)
+        opt_dt = raw_dt
     # traj_steps contains the tsteps for each trajectory
     if steps_max <= 0:
         log_error("Steps max is less than 0")
