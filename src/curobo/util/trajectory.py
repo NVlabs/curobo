@@ -160,6 +160,11 @@ def get_batch_interpolated_trajectory(
     else:
         traj_steps, steps_max = calculate_traj_steps(raw_dt, interpolation_dt, horizon)
         opt_dt = raw_dt
+
+        # Change shape from []  to [b]
+        traj_steps = traj_steps.repeat(b)
+        opt_dt = opt_dt.repeat(b)
+
     # traj_steps contains the tsteps for each trajectory
     if steps_max <= 0:
         log_error("Steps max is less than 0")
