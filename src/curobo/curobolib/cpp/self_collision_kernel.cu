@@ -162,7 +162,7 @@ namespace Curobo
       //////////////////////////////////////////////////////
       // Compute distances and store the maximum per thread
       // in registers (max_d).
-      // Each thread computes upto ndpt distances.
+      // Each thread computes up to ndpt distances.
       // two warps per row
       //////////////////////////////////////////////////////
       // int nspheres_2 = nspheres * nspheres;
@@ -174,8 +174,6 @@ namespace Curobo
       if (j < nspheres)
       {
         sph2 = __rs_shared[j]; // we need not load sph2 in every iteration.
-
-#pragma unroll 16
 
         for (int k = 0; k < ndpt; k++, i++) // increment i also here
         {
@@ -230,6 +228,8 @@ namespace Curobo
         if (threadIdx.x < blockDim.x)
         {
           // dist_t max_d = dist_sh[threadIdx.x];
+#pragma unroll 4
+
           for (int offset = 16; offset > 0; offset /= 2)
           {
             uint64_t nd     = __shfl_down_sync(mask, *(uint64_t *)&max_d, offset);
