@@ -38,7 +38,7 @@ class DistType(Enum):
 class DistCostConfig(CostConfig):
     dist_type: DistType = DistType.L2
     use_null_space: bool = False
-    use_l2_kernel: bool = True
+    use_l2_kernel: bool = False
 
     def __post_init__(self):
         return super().__post_init__()
