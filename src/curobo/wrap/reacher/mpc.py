@@ -61,6 +61,7 @@ from curobo.util_file import (
     get_world_configs_path,
     join_path,
     load_yaml,
+    merge_dict_a_into_b,
 )
 from curobo.wrap.reacher.types import ReacherSolveState, ReacherSolveType
 from curobo.wrap.wrap_base import WrapResult
@@ -107,6 +108,8 @@ class MpcSolverConfig:
         step_dt: Optional[float] = None,
         use_lbfgs: bool = False,
         use_mppi: bool = True,
+        particle_file: str = "particle_mpc.yml",
+        override_particle_file: str = None,
     ):
         """Create an MPC solver configuration from robot and world configuration.
 
@@ -151,6 +154,9 @@ class MpcSolverConfig:
                 time for a single step.
             use_lbfgs: Use L-BFGS solver for MPC. Highly experimental.
             use_mppi: Use MPPI solver for MPC.
+            particle_file: Particle based MPC config file.
+            override_particle_file: Optional config file for overriding the parameters in the
+                particle based MPC config file.
 
         Returns:
             MpcSolverConfig: Configuration for the MPC solver.
@@ -159,8 +165,9 @@ class MpcSolverConfig:
         if use_cuda_graph_full_step:
             log_error("use_cuda_graph_full_step currently is not supported")
 
-        task_file = "particle_mpc.yml"
-        config_data = load_yaml(join_path(get_task_configs_path(), task_file))
+        config_data = load_yaml(join_path(get_task_configs_path(), particle_file))
+        if override_particle_file is not None:
+            merge_dict_a_into_b(load_yaml(override_particle_file), config_data)
         config_data["mppi"]["n_problems"] = 1
         if step_dt is not None:
             config_data["model"]["dt_traj_params"]["base_dt"] = step_dt

@@ -19,7 +19,11 @@ Use [Discussions](https://github.com/NVlabs/curobo/discussions) for questions on
 Use [Issues](https://github.com/NVlabs/curobo/issues) if you find a bug.
 
 
-For business inquiries, please visit our website and submit the form: [NVIDIA Research Licensing](https://www.nvidia.com/en-us/research/inquiries/)
+cuRobo's collision-free motion planner is available for commercial applications as a
+MoveIt plugin: [Isaac ROS cuMotion](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion)
+
+For business inquiries of this python library, please visit our website and submit the form: [NVIDIA Research Licensing](https://www.nvidia.com/en-us/research/inquiries/)
+
 
 ## Overview
 
@@ -44,9 +48,9 @@ If you found this work useful, please cite the below report,
 
 ```
 @misc{curobo_report23,
-      title={cuRobo: Parallelized Collision-Free Minimum-Jerk Robot Motion Generation}, 
-      author={Balakumar Sundaralingam and Siva Kumar Sastry Hari and Adam Fishman and Caelan Garrett 
-              and Karl Van Wyk and Valts Blukis and Alexander Millane and Helen Oleynikova and Ankur Handa 
+      title={cuRobo: Parallelized Collision-Free Minimum-Jerk Robot Motion Generation},
+      author={Balakumar Sundaralingam and Siva Kumar Sastry Hari and Adam Fishman and Caelan Garrett
+              and Karl Van Wyk and Valts Blukis and Alexander Millane and Helen Oleynikova and Ankur Handa
               and Fabio Ramos and Nathan Ratliff and Dieter Fox},
       year={2023},
       eprint={2310.17274},

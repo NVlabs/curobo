@@ -466,6 +466,8 @@ class PoseCost(CostBase, PoseCostConfig):
         batch_pose_idx: torch.Tensor,
         mode: PoseErrorType = PoseErrorType.BATCH_GOAL,
     ):
+        if len(query_pose.position.shape) == 2:
+            log_error("Query pose should be [batch, horizon, -1]")
         ee_goal_pos = goal_pose.position
         ee_goal_quat = goal_pose.quaternion
         self.cost_type = mode
@@ -476,9 +478,9 @@ class PoseCost(CostBase, PoseCostConfig):
         num_goals = 1
 
         distance = PoseError.apply(
-            query_pose.position.unsqueeze(1),
+            query_pose.position,
             ee_goal_pos,
-            query_pose.quaternion.unsqueeze(1),
+            query_pose.quaternion,
             ee_goal_quat,
             self.vec_weight,
             self.weight,

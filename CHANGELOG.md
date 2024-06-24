@@ -10,6 +10,14 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
+## Latest Commit
+
+### BugFixes & Misc.
+- Add support for older warp versions (<1.0.0) as it's not possible to run older isaac sim with
+newer warp versions.
+- Add override option to mpc dataclass.
+- Fix bug in ``PoseCost.forward_pose()`` which caused ``torch_layers_example.py`` to fail.
+
 ## Version 0.7.3
 
 ### New Features

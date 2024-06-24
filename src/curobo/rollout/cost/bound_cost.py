@@ -1550,7 +1550,10 @@ def make_bound_pos_smooth_kernel(dof_template: int):
                 out_grad_a[b_addrs + i] = g_a[i]
                 out_grad_j[b_addrs + i] = g_j[i]
 
-    return wp.Kernel(forward_bound_smooth_loop_warp)
+    module = wp.get_module(forward_bound_smooth_loop_warp.__module__)
+    key = "forward_bound_smooth_loop_warp_" + str(dof_template)
+
+    return wp.Kernel(forward_bound_smooth_loop_warp, key=key, module=module)
 
 
 @get_cache_fn_decorator()
@@ -1647,4 +1650,6 @@ def make_bound_pos_kernel(dof_template: int):
             for i in range(dof_template):
                 out_grad_p[b_addrs + i] = g_p[i]
 
-    return wp.Kernel(forward_bound_pos_loop_warp)
+    module = wp.get_module(forward_bound_pos_loop_warp.__module__)
+    key = "forward_bound_pos_loop_warp_" + str(dof_template)
+    return wp.Kernel(forward_bound_pos_loop_warp, key=key, module=module)

@@ -224,7 +224,9 @@ def make_l2_kernel(dof_template: int):
             for i in range(dof_template):
                 out_grad_p[b_addrs + i] = g_p[i]
 
-    return wp.Kernel(forward_l2_loop_warp)
+    module = wp.get_module(forward_l2_loop_warp.__module__)
+    key = "forward_l2_loop" + str(dof_template)
+    return wp.Kernel(forward_l2_loop_warp, key=key, module=module)
 
 
 # create a bound cost tensor:

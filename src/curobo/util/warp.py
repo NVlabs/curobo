@@ -9,11 +9,14 @@
 # its affiliates is strictly prohibited.
 #
 
+
 # Third Party
 import warp as wp
+from packaging import version
 
 # CuRobo
 from curobo.types.base import TensorDeviceType
+from curobo.util.logger import log_info
 
 
 def init_warp(quiet=True, tensor_args: TensorDeviceType = TensorDeviceType()):
@@ -25,4 +28,20 @@ def init_warp(quiet=True, tensor_args: TensorDeviceType = TensorDeviceType()):
     wp.init()
 
     # wp.force_load(wp.device_from_torch(tensor_args.device))
+    return True
+
+
+def warp_support_sdf_struct(wp_module=None):
+    if wp_module is None:
+        wp_module = wp
+    wp_version = wp_module.config.version
+
+    if version.parse(wp_version) < version.parse("1.0.0"):
+        log_info(
+            "Warp version is "
+            + wp_version
+            + " < 1.0.0, using older sdf kernels."
+            + "No issues expected."
+        )
+        return False
     return True
