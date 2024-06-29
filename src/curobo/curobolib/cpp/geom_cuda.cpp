@@ -32,8 +32,6 @@ std::vector<torch::Tensor>self_collision_distance(
   const int           ndpt         = 8, // Does this need to match template?
   const bool          debug        = false);
 
-// CUDA forward declarations
-
 std::vector<torch::Tensor>swept_sphere_obb_clpt(
   const torch::Tensor sphere_position, // batch_size, 3
   torch::Tensor       distance,        // batch_size, 1
@@ -83,6 +81,7 @@ sphere_obb_clpt(const torch::Tensor sphere_position, // batch_size, 4
                 const bool          use_batch_env,
                 const bool          sum_collisions,
                 const bool          compute_esdf);
+
 std::vector<torch::Tensor>
 sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
                 torch::Tensor distance,
@@ -126,6 +125,7 @@ swept_sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
                 const bool compute_distance, 
                 const bool use_batch_env,
                 const bool sum_collisions);
+
 std::vector<torch::Tensor>pose_distance(
   torch::Tensor       out_distance,
   torch::Tensor       out_position_distance,
