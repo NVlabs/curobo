@@ -17,6 +17,9 @@ its affiliates is strictly prohibited.
 newer warp versions.
 - Add override option to mpc dataclass.
 - Fix bug in ``PoseCost.forward_pose()`` which caused ``torch_layers_example.py`` to fail.
+- Add warp constants to make module hash depend on robot dof, for modules that generate runtime
+warp kernels. This fixes issues using cuRobo in isaac sim.
+- Add ``plan_config.timeout`` check to ``plan_single_js()``.
 
 ## Version 0.7.3
 

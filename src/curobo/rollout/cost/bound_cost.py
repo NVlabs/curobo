@@ -23,7 +23,7 @@ from curobo.types.robot import JointState
 from curobo.types.tensor import T_DOF
 from curobo.util.logger import log_error
 from curobo.util.torch_utils import get_cache_fn_decorator, get_torch_jit_decorator
-from curobo.util.warp import init_warp
+from curobo.util.warp import init_warp, warp_support_kernel_key
 
 # Local Folder
 from .cost_base import CostBase, CostConfig
@@ -106,8 +106,15 @@ class BoundCost(CostBase, BoundCostConfig):
         )
         self._out_gv_buffer = self._out_ga_buffer = self._out_gj_buffer = empty_buffer
         if self.use_l2_kernel:
+            if not warp_support_kernel_key():
+                # define a compile-time constant so that warp hash is different for different dof
+                # this is required in older warp versions < 1.2.1 as warp hash didn't consider the
+                # name of kernels. Newer warp versions have fixed this issue.
+                WARP_CUROBO_BOUNDCOST_DOF_GLOBAL_CONSTANT = wp.constant(self.dof)
+
             if self.cost_type == BoundCostType.POSITION:
                 self._l2_cost = make_bound_pos_kernel(self.dof)
+
             if self.cost_type == BoundCostType.BOUNDS_SMOOTH:
                 self._l2_cost = make_bound_pos_smooth_kernel(self.dof)
 
@@ -1552,8 +1559,8 @@ def make_bound_pos_smooth_kernel(dof_template: int):
 
     module = wp.get_module(forward_bound_smooth_loop_warp.__module__)
     key = "forward_bound_smooth_loop_warp_" + str(dof_template)
-
-    return wp.Kernel(forward_bound_smooth_loop_warp, key=key, module=module)
+    new_kernel = wp.Kernel(forward_bound_smooth_loop_warp, key=key, module=module)
+    return new_kernel
 
 
 @get_cache_fn_decorator()
@@ -1650,6 +1657,7 @@ def make_bound_pos_kernel(dof_template: int):
             for i in range(dof_template):
                 out_grad_p[b_addrs + i] = g_p[i]
 
-    module = wp.get_module(forward_bound_pos_loop_warp.__module__)
-    key = "forward_bound_pos_loop_warp_" + str(dof_template)
-    return wp.Kernel(forward_bound_pos_loop_warp, key=key, module=module)
+    wp_module = wp.get_module(forward_bound_pos_loop_warp.__module__)
+    key = "bound_pos_loop_warp_" + str(dof_template)
+    new_kernel = wp.Kernel(forward_bound_pos_loop_warp, key=key, module=wp_module)
+    return new_kernel

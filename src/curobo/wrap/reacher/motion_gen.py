@@ -123,7 +123,6 @@ class MotionGenConfig:
 
     #: instance of trajectory optimization solver for final fine tuning for joint space targets.
     finetune_js_trajopt_solver: TrajOptSolver
-
     #: instance of trajectory optimization solver for final fine tuning.
     finetune_trajopt_solver: TrajOptSolver
 
@@ -2031,6 +2030,8 @@ class MotionGen(MotionGenConfig):
                 attribute to see if the query was successful.
         """
 
+        start_time = time.time()
+
         time_dict = {
             "solve_time": 0,
             "ik_time": 0,
@@ -2082,6 +2083,8 @@ class MotionGen(MotionGenConfig):
             if result.success.item():
                 break
             if not result.valid_query:
+                break
+            if time.time() - start_time > plan_config.timeout:
                 break
 
         result.graph_time = time_dict["graph_time"]

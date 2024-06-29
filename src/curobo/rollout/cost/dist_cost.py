@@ -20,7 +20,7 @@ import warp as wp
 # CuRobo
 from curobo.util.logger import log_error
 from curobo.util.torch_utils import get_cache_fn_decorator, get_torch_jit_decorator
-from curobo.util.warp import init_warp
+from curobo.util.warp import init_warp, warp_support_kernel_key
 
 # Local Folder
 from .cost_base import CostBase, CostConfig
@@ -226,7 +226,8 @@ def make_l2_kernel(dof_template: int):
 
     module = wp.get_module(forward_l2_loop_warp.__module__)
     key = "forward_l2_loop" + str(dof_template)
-    return wp.Kernel(forward_l2_loop_warp, key=key, module=module)
+    new_kernel = wp.Kernel(forward_l2_loop_warp, key=key, module=module)
+    return new_kernel
 
 
 # create a bound cost tensor:
@@ -342,6 +343,12 @@ class DistCost(CostBase, DistCostConfig):
         self._init_post_config()
         init_warp()
         if self.use_l2_kernel:
+            if not warp_support_kernel_key():
+                # define a compile-time constant so that warp hash is different for different dof
+                # this is required in older warp versions < 1.2.1 as warp hash didn't consider the
+                # name of kernels. Newer warp versions have fixed this issue.
+                WARP_CUROBO_DISTCOST_DOF_GLOBAL_CONSTANT = wp.constant(self.dof)
+
             self._l2_dof_kernel = make_l2_kernel(self.dof)
 
     def _init_post_config(self):

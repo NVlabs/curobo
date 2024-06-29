@@ -155,6 +155,8 @@ def get_files_from_dir(dir_path, extension: List[str], contains: str):
 
 
 def file_exists(path):
+    if path is None:
+        return False
     isExist = os.path.exists(path)
     return isExist
 

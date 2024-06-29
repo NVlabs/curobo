@@ -45,3 +45,18 @@ def warp_support_sdf_struct(wp_module=None):
         )
         return False
     return True
+
+
+def warp_support_kernel_key(wp_module=None):
+    if wp_module is None:
+        wp_module = wp
+    wp_version = wp_module.config.version
+
+    if version.parse(wp_version) < version.parse("1.2.1"):
+        log_info(
+            "Warp version is "
+            + wp_version
+            + " < 1.2.1, using, creating global constant to trigger kernel generation."
+        )
+        return False
+    return True
