@@ -62,10 +62,10 @@ convergence:
     weight: 1.0
     terminal: True
     run_weight: 0.0
-    use_l2_kernel: True
+    use_l2_kernel: False
   null_space_cfg:
     weight: 0.001
     terminal: True
     run_weight: 1.0
-    use_l2_kernel: True
+    use_l2_kernel: False
 
