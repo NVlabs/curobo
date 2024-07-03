@@ -29,6 +29,7 @@ extra_cuda_args = {
         "--fmad=true",
         "--prec-div=false",
         "--prec-sqrt=false",
+        "--allow-unsupported-compiler",
     ]
 }
 # create a list of modules to be compiled:
