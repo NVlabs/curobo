@@ -131,7 +131,8 @@ namespace Curobo
       int i         = ndpt * (warp_idx / nwpr); // starting row number for this warp
       int j         = (warp_idx % nwpr) * 32;   // starting column number for this warp
 
-      dist_t max_d = { .d = 0.0, .i = 0, .j = 0 };
+      // dist_t max_d = { .d = 0.0, .i = 0, .j = 0 };
+      dist_t max_d = {0.0, 0, 0};      
       __shared__ dist_t max_darr[32];
 
       // Optimization: About 1/3 of the warps will have no work.
@@ -354,7 +355,8 @@ namespace Curobo
       // in registers (max_d).
       // Each thread computes upto ndpt distances.
       //////////////////////////////////////////////////////
-      dist_t  max_d[NBPB] = {{ .d = 0.0, .i = 0, .j = 0 } };
+      // dist_t  max_d[NBPB] = {{ .d = 0.0, .i = 0, .j = 0 } };
+      dist_t  max_d[NBPB] = {{0.0,0,0 }};
       int16_t indices[ndpt * 2];
 
       for (uint8_t i = 0; i < ndpt * 2; i++)

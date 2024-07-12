@@ -416,6 +416,19 @@ def create_stage(
     return stage
 
 
+def join_usd_path(root: str, sub_root: str):
+    if root == "":
+        return sub_root
+    if sub_root == "":
+        return root
+    if root[-1] == "/":
+        root = root[:-1]
+    if sub_root[0] == "/":
+        sub_root = sub_root[1:]
+    newpath = root + "/" + sub_root
+    return newpath
+
+
 class UsdHelper:
     def __init__(self, use_float=True) -> None:
         self.stage = None
@@ -446,8 +459,12 @@ class UsdHelper:
             self.stage.SetTimeCodesPerSecond((1.0 / self.dt))
             # print(1.0 / self)
 
+
     def add_subroot(self, root="/world", sub_root="/obstacles", pose: Optional[Pose] = None):
-        xform = self.stage.DefinePrim(join_path(root, sub_root), "Xform")
+        # print(f"add_subroot root:{root} sub_root:{sub_root}")
+        # joinp = join_usd_path(root, sub_root)
+        # print(f"add_subroot joinp:{joinp}")
+        xform = self.stage.DefinePrim(join_usd_path(root, sub_root), "Xform")
         if pose is not None:
             set_prim_transform(xform, pose.tolist(), use_float=self._use_float)
 
@@ -535,7 +552,7 @@ class UsdHelper:
         # iterate through every obstacle type and create prims:
 
         self.add_subroot(base_frame, obstacles_frame, base_t_obstacle_pose)
-        full_path = join_path(base_frame, obstacles_frame)
+        full_path = join_usd_path(base_frame, obstacles_frame)
         prim_path = [
             self.get_prim_from_obstacle(o, full_path, timestep=timestep) for o in obstacles.objects
         ]
@@ -563,7 +580,7 @@ class UsdHelper:
         timestep=None,
         enable_physics: bool = False,
     ):
-        root_path = join_path(base_frame, obstacle.name)
+        root_path = join_usd_path(base_frame, obstacle.name)
         obj_geom = UsdGeom.Cube.Define(self.stage, root_path)
         obj_prim = self.stage.GetPrimAtPath(root_path)
 
@@ -584,7 +601,7 @@ class UsdHelper:
         timestep=None,
         enable_physics: bool = False,
     ):
-        root_path = join_path(base_frame, obstacle.name)
+        root_path = join_usd_path(base_frame, obstacle.name)
         obj_geom = UsdGeom.Cylinder.Define(self.stage, root_path)
         obj_prim = self.stage.GetPrimAtPath(root_path)
 
@@ -607,7 +624,7 @@ class UsdHelper:
         timestep=None,
         enable_physics: bool = False,
     ):
-        root_path = join_path(base_frame, obstacle.name)
+        root_path = join_usd_path(base_frame, obstacle.name)
         obj_geom = UsdGeom.Sphere.Define(self.stage, root_path)
         obj_prim = self.stage.GetPrimAtPath(root_path)
         if obstacle.pose is None:
@@ -629,7 +646,7 @@ class UsdHelper:
         timestep=None,
         enable_physics: bool = False,
     ):
-        root_path = join_path(base_frame, obstacle.name)
+        root_path = join_usd_path(base_frame, obstacle.name)
         obj_geom = UsdGeom.Mesh.Define(self.stage, root_path)
         obj_prim = self.stage.GetPrimAtPath(root_path)
         # obstacle.update_material() # This does not get the correct materials
@@ -709,7 +726,7 @@ class UsdHelper:
             current_obs = obstacles[t]
             for j in range(len(current_obs)):
                 obs = current_obs[j]
-                obs_name = join_path(join_path(base_frame, obstacles_frame), obs.name)
+                obs_name = join_usd_path(join_usd_path(base_frame, obstacles_frame), obs.name)
                 if obs_name not in prim_paths:
                     log_warn("Obstacle not found")
                     continue
@@ -778,9 +795,9 @@ class UsdHelper:
         obj_prim: Usd.Prim,
         material: Material = Material(),
     ):
-        mat_path = join_path(object_path, material_name)
+        mat_path = join_usd_path(object_path, material_name)
         material_usd = UsdShade.Material.Define(self.stage, mat_path)
-        pbrShader = UsdShade.Shader.Define(self.stage, join_path(mat_path, "PbrShader"))
+        pbrShader = UsdShade.Shader.Define(self.stage, join_usd_path(mat_path, "PbrShader"))
         pbrShader.CreateIdAttr("UsdPreviewSurface")
         pbrShader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(material.roughness)
         pbrShader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(material.metallic)
@@ -851,7 +868,7 @@ class UsdHelper:
             animation_poses.position[:, i, :] = new_pose.position
             animation_poses.quaternion[:, i, :] = new_pose.quaternion
 
-        robot_base_frame = join_path(base_frame, robot_base_frame)
+        robot_base_frame = join_usd_path(base_frame, robot_base_frame)
 
         usd_helper.create_animation(
             robot_mesh_model, animation_poses, base_frame, robot_frame=robot_base_frame
@@ -957,7 +974,7 @@ class UsdHelper:
         if robot_asset_prim_path is None:
             robot_asset_prim_path = kin_model.kinematics_parser.robot_prim_root
 
-        robot_base_frame = join_path(base_frame, robot_base_frame)
+        robot_base_frame = join_usd_path(base_frame, robot_base_frame)
 
         robot_usd_path = kin_model.generator_config.usd_path
 
