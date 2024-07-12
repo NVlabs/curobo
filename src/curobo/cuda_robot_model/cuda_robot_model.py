@@ -412,7 +412,7 @@ class CudaRobotModel(CudaRobotModelConfig):
         return mesh
 
     def get_link_transform(self, link_name: str) -> Pose:
-        mat = self._kinematics_config.fixed_transforms[self._name_to_idx_map[link_name]]
+        mat = self.kinematics_config.fixed_transforms[self.kinematics_config.link_name_to_idx_map[link_name]]
         pose = Pose(position=mat[:3, 3], rotation=mat[:3, :3])
         return pose
 
