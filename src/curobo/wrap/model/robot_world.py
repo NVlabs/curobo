@@ -40,6 +40,8 @@ from curobo.util.torch_utils import (
     get_torch_jit_decorator,
     is_torch_compile_available,
 )
+from torch.jit import ignore
+
 from curobo.util.warp import init_warp
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
 
@@ -203,6 +205,11 @@ class RobotWorld(RobotWorldConfig):
             log_error("q should be of shape [b, dof]")
         state = self.kinematics.get_state(q)
         return state
+
+    @ignore
+    def get_link_spheres_tensor(self, q: torch.Tensor) -> torch.Tensor:
+        state = self.kinematics.get_state(q)
+        return state.link_spheres_tensor
 
     def update_world(self, world_config: WorldConfig):
         self.world_model.load_collision_model(world_config)
