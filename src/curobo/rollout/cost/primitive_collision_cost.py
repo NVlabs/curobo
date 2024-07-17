@@ -23,7 +23,7 @@ from curobo.util.logger import log_info
 from curobo.util.torch_utils import get_torch_jit_decorator
 
 
-@dataclass
+@dataclass(eq=False)
 class PrimitiveCollisionCostConfig(CostConfig):
     """Create Collision Cost Configuration."""
 

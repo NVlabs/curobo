@@ -37,7 +37,7 @@ class BoundCostType(Enum):
     BOUNDS_SMOOTH = 2
 
 
-@dataclass
+@dataclass(eq=False)
 class BoundCostConfig(CostConfig):
     joint_limits: Optional[JointLimits] = None
     smooth_weight: Optional[List[float]] = None
