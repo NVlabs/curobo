@@ -21,11 +21,12 @@ from curobo.wrap.reacher.motion_gen import (
     MotionGen,
     MotionGenConfig,
     MotionGenPlanConfig,
+    MotionGenStatus,
     PoseCostMetric,
 )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def motion_gen(request):
     tensor_args = TensorDeviceType()
     world_file = "collision_table.yml"
@@ -108,7 +109,7 @@ def test_reach_only_position(motion_gen):
     )
 
     result = motion_gen.plan_single(start_state, goal_pose, m_config.clone())
-
+    assert result.status != MotionGenStatus.INVALID_PARTIAL_POSE_COST_METRIC
     assert torch.count_nonzero(result.success) == 1
 
     reached_state = result.optimized_plan[-1]

@@ -11,7 +11,7 @@
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BASE_DIST=ubuntu20.04
 ARG CUDA_VERSION=11.4.2
-ARG ISAAC_SIM_VERSION=2022.2.1
+ARG ISAAC_SIM_VERSION=4.0.0
 
 
 FROM nvcr.io/nvidia/isaac-sim:${ISAAC_SIM_VERSION} AS isaac-sim
@@ -20,7 +20,7 @@ FROM nvcr.io/nvidia/cudagl:${CUDA_VERSION}-devel-${BASE_DIST}
 
 
 # this does not work for 2022.2.1
-#$FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-${BASE_DIST} 
+#$FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-cudnn8-devel-${BASE_DIST}
 
 LABEL maintainer "User Name"
 
@@ -102,7 +102,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN wget -q --show-progress \
     --progress=bar:force:noscroll \
     https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.gz \
-    -O /tmp/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.gz \ 
+    -O /tmp/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.gz \
     && echo "Installing Vulkan SDK ${VULKAN_SDK_VERSION}" \
     && mkdir -p /opt/vulkan \
     && tar -xf /tmp/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.gz -C /opt/vulkan \
@@ -118,7 +118,7 @@ RUN wget -q --show-progress \
     && rm /tmp/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.gz && rm -rf /opt/vulkan
 
 
-# Setup the required capabilities for the container runtime    
+# Setup the required capabilities for the container runtime
 ENV NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=all
 
 # Open ports for live streaming
@@ -157,16 +157,15 @@ ENV TORCH_CUDA_ARCH_LIST="7.0+PTX"
 # create an alias for omniverse python
 ENV omni_python='/isaac-sim/python.sh'
 
-RUN echo "alias omni_python='/isaac-sim/python.sh'" >> /.bashrc
+RUN echo "alias omni_python='/isaac-sim/python.sh'" >> ~/.bashrc
 
 
 # Add cache date to avoid using cached layers older than this
 ARG CACHE_DATE=2024-04-11
 
-RUN $omni_python -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
 # if you want to use a different version of curobo, create folder as docker/pkgs and put your
-# version of curobo there. Then uncomment below line and comment the next line that clones from 
+# version of curobo there. Then uncomment below line and comment the next line that clones from
 # github
 
 # COPY pkgs /pkgs

@@ -9,6 +9,12 @@
 # its affiliates is strictly prohibited.
 #
 
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
+
 # Third Party
 import torch
 
@@ -64,9 +70,17 @@ parser = argparse.ArgumentParser()
 
 
 parser.add_argument("--robot", type=str, default="franka.yml", help="robot configuration to load")
+
 parser.add_argument(
     "--waypoints", action="store_true", help="When True, sets robot in static mode", default=False
 )
+parser.add_argument(
+    "--show-window",
+    action="store_true",
+    help="When True, shows camera image in a CV window",
+    default=False,
+)
+
 parser.add_argument(
     "--use-debug-draw",
     action="store_true",
@@ -330,7 +344,7 @@ if __name__ == "__main__":
         if cmd_step_idx == 0:
             draw_rollout_points(mpc.get_visual_rollouts(), clear=not args.use_debug_draw)
 
-        if step_index < 2:
+        if step_index <= 2:
             my_world.reset()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
@@ -374,7 +388,7 @@ if __name__ == "__main__":
                 if not args.use_debug_draw:
                     voxel_viewer.clear()
 
-        if True:
+        if args.show_window:
             depth_image = data["raw_depth"]
             color_image = data["raw_rgb"]
             depth_colormap = cv2.applyColorMap(
@@ -384,7 +398,6 @@ if __name__ == "__main__":
             depth_colormap = cv2.flip(depth_colormap, 1)
 
             images = np.hstack((color_image, depth_colormap))
-
             cv2.namedWindow("NVBLOX Example", cv2.WINDOW_NORMAL)
             cv2.imshow("NVBLOX Example", images)
             key = cv2.waitKey(1)

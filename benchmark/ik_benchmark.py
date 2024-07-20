@@ -109,7 +109,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_path",
         type=str,
-        default=".",
+        default=None,
         help="path to save file",
     )
     parser.add_argument(
@@ -132,9 +132,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    b_list = [1, 10, 100, 500, 2000][:]
+    b_list = [1, 10, 100, 2000][-1:]
 
-    robot_list = get_motion_gen_robot_list() + get_multi_arm_robot_list()[:2]
+    robot_list = get_motion_gen_robot_list()
     world_file = "collision_test.yml"
 
     print("running...")
@@ -187,7 +187,13 @@ if __name__ == "__main__":
             data["Orientation-Error-Collision-Free-IK"].append(q_err_c)
 
             data["Collision-Free-IK-time(ms)"].append(dt_cu_ik_cfree * 1000.0)
-    write_yaml(data, join_path(args.save_path, args.file_name + ".yml"))
+
+    if args.save_path is not None:
+        file_path = join_path(args.save_path, args.file_name)
+    else:
+        file_path = args.file_name
+
+    write_yaml(data, file_path + ".yml")
 
     try:
         # Third Party
@@ -195,7 +201,7 @@ if __name__ == "__main__":
 
         df = pd.DataFrame(data)
         print("Reported errors are 98th percentile")
-        df.to_csv(join_path(args.save_path, args.file_name + ".csv"))
+        df.to_csv(file_path + ".csv")
         try:
             # Third Party
             from tabulate import tabulate

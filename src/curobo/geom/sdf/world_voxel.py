@@ -257,6 +257,10 @@ class WorldVoxelCollision(WorldMeshCollision):
         else:
             return super().enable_obstacle(name, enable, env_idx)
 
+    def get_obstacle_names(self, env_idx: int = 0):
+        base_obstacles = super().get_obstacle_names(env_idx)
+        return self._env_voxel_names[env_idx] + base_obstacles
+
     def enable_voxel(
         self,
         enable: bool = True,

@@ -10,6 +10,12 @@
 #
 
 
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
+
 # Third Party
 import torch
 
@@ -238,6 +244,7 @@ def main():
         max_attempts=max_attempts,
         enable_finetune_trajopt=True,
         parallel_finetune=True,
+        time_dilation_factor=0.5,
     )
 
     usd_help.load_stage(my_world.stage)
@@ -407,7 +414,7 @@ def main():
                 cmd_idx = 0
 
             else:
-                carb.log_warn("Plan did not converge to a solution.  No action is being taken.")
+                carb.log_warn("Plan did not converge to a solution: " + str(result.status))
             target_pose = cube_position
             target_orientation = cube_orientation
         past_pose = cube_position

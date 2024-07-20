@@ -9,6 +9,12 @@
 # its affiliates is strictly prohibited.
 #
 
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
+
 # Third Party
 import torch
 
@@ -156,7 +162,6 @@ if __name__ == "__main__":
         tensor_args,
         collision_checker_type=CollisionCheckerType.MESH,
         collision_cache={"obb": n_obstacle_cuboids, "mesh": n_obstacle_mesh},
-        velocity_scale=0.75,
         interpolation_dt=0.02,
         ee_link_name="right_gripper",
     )
@@ -180,7 +185,11 @@ if __name__ == "__main__":
     cmd_plan = None
     articulation_controller = robot.get_articulation_controller()
     plan_config = MotionGenPlanConfig(
-        enable_graph=False, enable_graph_attempt=4, max_attempts=2, enable_finetune_trajopt=True
+        enable_graph=False,
+        enable_graph_attempt=4,
+        max_attempts=2,
+        enable_finetune_trajopt=True,
+        time_dilation_factor=0.5,
     )
 
     plan_idx = 0

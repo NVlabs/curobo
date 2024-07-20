@@ -124,15 +124,16 @@ RUN pip3 install trimesh \
   numpy-quaternion \
   networkx \
   pyyaml \
-  rospkg \ 
+  rospkg \
   rosdep \
   empy
 
 # Add cache date to avoid using cached layers older than this
-ARG CACHE_DATE=2024-04-11
+ARG CACHE_DATE=2024-07-19
+
 
 # install warp:
-# 
+#
 RUN pip3 install warp-lang
 
 # install curobo:
@@ -165,7 +166,7 @@ RUN cd /pkgs && git clone https://github.com/nvlabs/nvblox_torch.git && \
     sh install.sh $(python3 -c 'import torch.utils; print(torch.utils.cmake_prefix_path)') && \
     python3 -m pip install -e .
 
-  
+
 RUN python3 -m pip install "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git"
 
 # upgrade typing extensions:

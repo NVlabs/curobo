@@ -14,12 +14,9 @@ import pytest
 import torch
 
 # CuRobo
-from curobo.geom.types import WorldConfig
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
-from curobo.types.robot import JointState, RobotConfig
-from curobo.util.trajectory import InterpolateType
-from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
+from curobo.types.robot import JointState
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
 
@@ -50,6 +47,24 @@ def motion_gen_ur5e():
         world_file,
         tensor_args,
         interpolation_steps=10000,
+        interpolation_dt=0.05,
+    )
+    motion_gen_instance = MotionGen(motion_gen_config)
+    motion_gen_instance.warmup(warmup_js_trajopt=False, enable_graph=False)
+
+    return motion_gen_instance
+
+
+@pytest.fixture(scope="module")
+def motion_gen_ur5e_small_interpolation():
+    tensor_args = TensorDeviceType()
+    world_file = "collision_table.yml"
+    robot_file = "ur5e.yml"
+    motion_gen_config = MotionGenConfig.load_from_robot_config(
+        robot_file,
+        world_file,
+        tensor_args,
+        interpolation_steps=10,
         interpolation_dt=0.05,
     )
     motion_gen_instance = MotionGen(motion_gen_config)
@@ -164,6 +179,7 @@ def test_pose_sequence_speed_ur5e_scale(velocity_scale, acceleration_scale):
         ("motion_gen_ur5e", 0.15),
         ("motion_gen_ur5e", 0.1),
         ("motion_gen_ur5e", 0.001),
+        ("motion_gen_ur5e_small_interpolation", 0.01),
     ],
 )
 def test_pose_sequence_speed_ur5e_time_dilation(motion_gen_str, time_dilation_factor, request):
@@ -201,6 +217,7 @@ def test_pose_sequence_speed_ur5e_time_dilation(motion_gen_str, time_dilation_fa
         )
         if result.success.item():
             plan = result.get_interpolated_plan()
+            augmented_js = motion_gen.get_full_js(plan)
             trajectory = trajectory.stack(plan.clone())
             motion_time += result.motion_time
         else:

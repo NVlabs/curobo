@@ -8,6 +8,8 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+"""Geometry types are defined in this module. See :ref:`world_collision` for more information."""
+
 from __future__ import annotations
 
 # Standard Library
@@ -31,6 +33,8 @@ from curobo.util_file import get_assets_path, join_path
 
 @dataclass
 class Material:
+    """Material properties of an obstacle, useful for rendering."""
+
     metallic: float = 0.0
     roughness: float = 0.4
 
@@ -45,21 +49,23 @@ class Obstacle:
     #: Pose of obstacle as a list with format [x y z qw qx qy qz]
     pose: Optional[List[float]] = None
 
-    #: NOTE: implement scaling for all obstacle types.
+    #: Scale obsctacle. This is only implemented for :class:`Mesh` and :class:`PointCloud`
+    #: obstacles.
     scale: Optional[List[float]] = None
 
     #: Color of obstacle to use in visualization.
     color: Optional[List[float]] = None
 
-    #: texture to apply to obstacle in visualization.
+    #: Texture name for the obstacle.
     texture_id: Optional[str] = None
 
-    #: texture to apply to obstacle in visualization.
+    #: Texture to apply to obstacle in visualization.
     texture: Optional[str] = None
 
-    #: material properties to apply in visualization.
+    #: Material properties to apply in visualization.
     material: Material = field(default_factory=Material)
 
+    #: Device and floating point precision to use for tensors.
     tensor_args: TensorDeviceType = field(default_factory=TensorDeviceType)
 
     def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
@@ -387,7 +393,13 @@ class Mesh(Obstacle):
             if isinstance(m, trimesh.Scene):
                 m = m.dump(concatenate=True)
             if process_color and isinstance(m.visual, trimesh.visual.texture.TextureVisuals):
-                m.visual = m.visual.to_color()
+                try:
+                    m.visual = m.visual.to_color()
+                except Exception as e:
+                    log_warn("Could not convert texture to color: " + str(e))
+            if self.scale is not None:
+                m.vertices = np.ravel(self.scale) * m.vertices
+                # self.scale = None
         else:
             m = trimesh.Trimesh(
                 self.vertices,
@@ -396,9 +408,7 @@ class Mesh(Obstacle):
                 vertex_normals=self.vertex_normals,
                 face_colors=self.face_colors,
             )
-        if self.scale is not None:
-            m.vertices = np.ravel(self.scale) * m.vertices
-            self.scale = None
+
         return m
 
     def update_material(self):

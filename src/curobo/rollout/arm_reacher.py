@@ -178,6 +178,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             # self.cost_cfg.cspace_cfg.update_vec_weight(self.dynamics_model.cspace_distance_weight)
             self.dist_cost = DistCost(self.cost_cfg.cspace_cfg)
         if self.cost_cfg.pose_cfg is not None:
+            self.cost_cfg.pose_cfg.waypoint_horizon = self.horizon
             self.goal_cost = PoseCost(self.cost_cfg.pose_cfg)
             if self.cost_cfg.link_pose_cfg is None:
                 log_info(
@@ -265,7 +266,6 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                     goal_cost = self.goal_cost.forward(
                         ee_pos_batch, ee_quat_batch, self._goal_buffer
                     )
-                # print(self._compute_g_dist, goal_cost.view(-1))
                 cost_list.append(goal_cost)
         with profiler.record_function("cost/link_poses"):
             if self._goal_buffer.links_goal_pose is not None and self.cost_cfg.pose_cfg is not None:
@@ -338,7 +338,6 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             out_metrics = ArmReacherMetrics()
         if not isinstance(out_metrics, ArmReacherMetrics):
             out_metrics = ArmReacherMetrics(**vars(out_metrics))
-        # print(self._goal_buffer.batch_retract_state_idx)
         out_metrics = super(ArmReacher, self).convergence_fn(state, out_metrics)
 
         # compute error with pose?
@@ -448,7 +447,7 @@ class ArmReacher(ArmBase, ArmReacherConfig):
         self,
         metric: PoseCostMetric,
     ):
-        pose_costs = self.get_pose_costs()
+        pose_costs = self.get_pose_costs(include_link_pose=metric.include_link_pose)
         if metric.hold_partial_pose:
             if metric.hold_vec_weight is None:
                 log_error("hold_vec_weight is required")

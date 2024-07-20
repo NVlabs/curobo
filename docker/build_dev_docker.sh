@@ -35,4 +35,4 @@ fi
 echo $input_arg
 echo $USER_ID
 
-docker build --build-arg USERNAME=$USER --build-arg USER_ID=${USER_ID} --build-arg IMAGE_TAG=$input_arg -f $user_dockerfile --tag curobo_docker:user_$input_arg . 
+docker build --build-arg USERNAME=$USER --build-arg USER_ID=${USER_ID} --build-arg IMAGE_TAG=$input_arg -f $user_dockerfile --tag curobo_docker:user_$input_arg .

@@ -75,6 +75,9 @@ class MpcSolverConfig:
     #: MPC Solver.
     solver: WrapMpc
 
+    #: Rollout function for auxiliary rollouts.
+    rollout_fn: ArmReacher
+
     #: World Collision Checker.
     world_coll_checker: Optional[WorldCollision] = None
 
@@ -91,13 +94,13 @@ class MpcSolverConfig:
         base_cfg: Optional[dict] = None,
         tensor_args: TensorDeviceType = TensorDeviceType(),
         compute_metrics: bool = True,
-        use_cuda_graph: Optional[bool] = None,
+        use_cuda_graph: bool = True,
         particle_opt_iters: Optional[int] = None,
         self_collision_check: bool = True,
         collision_checker_type: Optional[CollisionCheckerType] = CollisionCheckerType.MESH,
         use_es: Optional[bool] = None,
         es_learning_rate: Optional[float] = 0.01,
-        use_cuda_graph_metrics: bool = False,
+        use_cuda_graph_metrics: bool = True,
         store_rollouts: bool = True,
         use_cuda_graph_full_step: bool = False,
         sync_cuda_time: bool = True,
@@ -226,9 +229,32 @@ class MpcSolverConfig:
             world_coll_checker=world_coll_checker,
             tensor_args=tensor_args,
         )
+        safety_cfg = ArmReacherConfig.from_dict(
+            robot_cfg,
+            config_data["model"],
+            config_data["cost"],
+            base_cfg["constraint"],
+            base_cfg["convergence"],
+            base_cfg["world_collision_checker_cfg"],
+            world_model,
+            world_coll_checker=world_coll_checker,
+            tensor_args=tensor_args,
+        )
+        aux_cfg = ArmReacherConfig.from_dict(
+            robot_cfg,
+            config_data["model"],
+            config_data["cost"],
+            base_cfg["constraint"],
+            base_cfg["convergence"],
+            base_cfg["world_collision_checker_cfg"],
+            world_model,
+            world_coll_checker=world_coll_checker,
+            tensor_args=tensor_args,
+        )
 
         arm_rollout_mppi = ArmReacher(cfg)
-        arm_rollout_safety = ArmReacher(cfg)
+        arm_rollout_safety = ArmReacher(safety_cfg)
+        arm_rollout_aux = ArmReacher(aux_cfg)
         config_data["mppi"]["store_rollouts"] = store_rollouts
         if use_cuda_graph is not None:
             config_data["mppi"]["use_cuda_graph"] = use_cuda_graph
@@ -285,6 +311,7 @@ class MpcSolverConfig:
             tensor_args=tensor_args,
             use_cuda_graph_full_step=use_cuda_graph_full_step,
             world_coll_checker=world_coll_checker,
+            rollout_fn=arm_rollout_aux,
         )
 
 
@@ -529,6 +556,7 @@ class MpcSolver(MpcSolverConfig):
                 is disabled.
         """
         self.solver.safety_rollout.enable_cspace_cost(enable)
+        self.rollout_fn.enable_cspace_cost(enable)
         for opt in self.solver.optimizers:
             opt.rollout_fn.enable_cspace_cost(enable)
 
@@ -539,6 +567,7 @@ class MpcSolver(MpcSolverConfig):
             enable: Enable or disable reaching pose cost. When False, pose cost is disabled.
         """
         self.solver.safety_rollout.enable_pose_cost(enable)
+        self.rollout_fn.enable_pose_cost(enable)
         for opt in self.solver.optimizers:
             opt.rollout_fn.enable_pose_cost(enable)
 
@@ -588,17 +617,12 @@ class MpcSolver(MpcSolverConfig):
     @property
     def kinematics(self) -> CudaRobotModel:
         """Get kinematics instance of the robot."""
-        return self.solver.safety_rollout.dynamics_model.robot_model
+        return self.rollout_fn.dynamics_model.robot_model
 
     @property
     def world_collision(self) -> WorldCollision:
         """Get the world collision checker."""
         return self.world_coll_checker
-
-    @property
-    def rollout_fn(self) -> ArmReacher:
-        """Get the rollout function."""
-        return self.solver.safety_rollout
 
     def _step_once(
         self,

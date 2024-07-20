@@ -222,6 +222,7 @@ def compute_smoothness(
     abs_jerk = torch.abs(jerk) * scale_dt**3
     # calculate max mean jerk:
     # mean_jerk_val = torch.max(torch.mean(abs_jerk, dim=-1), dim=-1)[0]
+    # max_jerk_val = torch.max(torch.max(abs_jerk, dim=-1)[0], dim=-1)[0]
     max_jerk_val = torch.max(abs_jerk, dim=-2)[0]  # batch x dof
     acc_label = torch.logical_and(max_acc_val <= max_acc, max_jerk_val <= max_jerk)
     acc_label = torch.all(acc_label, dim=-1)

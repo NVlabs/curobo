@@ -46,9 +46,7 @@ class WrapMpc(WrapBase):
         metrics = None
 
         start_time = time.time()
-        # print("i:",goal.current_state.position)
         filtered_state = self.safety_rollout.filter_robot_state(goal.current_state)
-        # print("f:", filtered_state.position)
         goal.current_state.copy_(filtered_state)
 
         self.update_params(goal)

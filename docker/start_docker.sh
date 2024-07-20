@@ -56,6 +56,7 @@ elif [ "$input_arg" == "aarch64" ]; then
 
 elif [[ "$input_arg" == *isaac_sim* ]] ; then
 
+
     docker run --name container_$input_arg --entrypoint bash -it --gpus all -e "ACCEPT_EULA=Y" --rm --network=host \
         --privileged \
         -e "PRIVACY_CONSENT=Y" \

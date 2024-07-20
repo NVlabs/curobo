@@ -8,6 +8,8 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+"""Common structures used for Kinematics are defined in this module."""
+
 from __future__ import annotations
 
 # Standard Library
@@ -28,33 +30,87 @@ from curobo.util.tensor_util import clone_if_not_none, copy_if_not_none
 
 
 class JointType(Enum):
+    """Type of Joint. Arbitrary axis of change is not supported."""
+
+    #: Fixed joint.
     FIXED = -1
+
+    #: Prismatic joint along x-axis.
     X_PRISM = 0
+
+    #: Prismatic joint along y-axis.
     Y_PRISM = 1
+
+    #: Prismatic joint along z-axis.
     Z_PRISM = 2
+
+    #: Revolute joint along x-axis.
     X_ROT = 3
+
+    #: Revolute joint along y-axis.
     Y_ROT = 4
+
+    #: Revolute joint along z-axis.
     Z_ROT = 5
+
+    #: Prismatic joint along negative x-axis.
     X_PRISM_NEG = 6
+
+    #: Prismatic joint along negative y-axis.
     Y_PRISM_NEG = 7
+
+    #: Prismatic joint along negative z-axis.
     Z_PRISM_NEG = 8
+
+    #: Revolute joint along negative x-axis.
     X_ROT_NEG = 9
+
+    #: Revolute joint along negative y-axis.
     Y_ROT_NEG = 10
+
+    #: Revolute joint along negative z-axis.
     Z_ROT_NEG = 11
 
 
 @dataclass
 class JointLimits:
+    """Joint limits for a robot."""
+
+    #: Names of the joints. All tensors are indexed by joint names.
     joint_names: List[str]
+
+    #: Position limits for each joint. Shape [n_joints, 2] with columns having [min, max] values.
     position: torch.Tensor
+
+    #: Velocity limits for each joint. Shape [n_joints, 2] with columns having [min, max] values.
     velocity: torch.Tensor
+
+    #: Acceleration limits for each joint. Shape [n_joints, 2] with columns having [min, max]
+    #: values.
     acceleration: torch.Tensor
+
+    #: Jerk limits for each joint. Shape [n_joints, 2] with columns having [min, max] values.
     jerk: torch.Tensor
+
+    #: Effort limits for each joint. This is not used.
     effort: Optional[torch.Tensor] = None
+
+    #: Device and floating point precision for tensors.
     tensor_args: TensorDeviceType = TensorDeviceType()
 
     @staticmethod
-    def from_data_dict(data: Dict, tensor_args: TensorDeviceType = TensorDeviceType()):
+    def from_data_dict(
+        data: Dict, tensor_args: TensorDeviceType = TensorDeviceType()
+    ) -> JointLimits:
+        """Create JointLimits from a dictionary.
+
+        Args:
+            data: Dictionary containing joint limits. E.g., {"position": [0, 1], ...}.
+            tensor_args: Device and floating point precision for tensors.
+
+        Returns:
+            JointLimits: Joint limits instance.
+        """
         p = tensor_args.to_device(data["position"])
         v = tensor_args.to_device(data["velocity"])
         a = tensor_args.to_device(data["acceleration"])
@@ -66,6 +122,7 @@ class JointLimits:
         return JointLimits(data["joint_names"], p, v, a, j, e)
 
     def clone(self) -> JointLimits:
+        """Clone joint limits."""
         return JointLimits(
             self.joint_names.copy(),
             self.position.clone(),
@@ -76,7 +133,15 @@ class JointLimits:
             self.tensor_args,
         )
 
-    def copy_(self, new_jl: JointLimits):
+    def copy_(self, new_jl: JointLimits) -> JointLimits:
+        """Copy joint limits from another instance. This maintains reference and copies the data.
+
+        Args:
+            new_jl: JointLimits instance to copy from.
+
+        Returns:
+            JointLimits: Data copied joint limits.
+        """
         self.joint_names = new_jl.joint_names.copy()
         self.position.copy_(new_jl.position)
         self.velocity.copy_(new_jl.velocity)
@@ -87,19 +152,53 @@ class JointLimits:
 
 @dataclass
 class CSpaceConfig:
+    """Configuration space parameters of the robot."""
+
+    #: Names of the joints.
     joint_names: List[str]
+
+    #: Retract configuration for the robot. This is the configuration used to bias graph search
+    #: and also regularize inverse kinematics. This configuration is also used to initialize
+    #: the robot during warmup phase of an optimizer. Set this to a collision-free configuration
+    #: for good performance. When this configuration is in collision, it's not used to bias
+    #: graph search.
     retract_config: Optional[T_DOF] = None
+
+    #: Weight for each joint in configuration space. Used to measure distance between nodes in
+    #: graph search-based planning.
     cspace_distance_weight: Optional[T_DOF] = None
+
+    #: Weight for each joint, used in regularization cost term for inverse kinematics.
     null_space_weight: Optional[T_DOF] = None
+
+    #: Device and floating point precision for tensors.
     tensor_args: TensorDeviceType = TensorDeviceType()
+
+    #: Maximum acceleration for each joint. Accepts a scalar or a list of values for each joint.
     max_acceleration: Union[float, List[float]] = 10.0
+
+    #: Maximum jerk for each joint. Accepts a scalar or a list of values for each joint.
     max_jerk: Union[float, List[float]] = 500.0
+
+    #: Velocity scale for each joint. Accepts a scalar or a list of values for each joint.
+    #: This is used to scale the velocity limits for each joint.
     velocity_scale: Union[float, List[float]] = 1.0
+
+    #: Acceleration scale for each joint. Accepts a scalar or a list of values for each joint.
+    #: This is used to scale the acceleration limits for each joint.
     acceleration_scale: Union[float, List[float]] = 1.0
+
+    #: Jerk scale for each joint. Accepts a scalar or a list of values for each joint.
+    #: This is used to scale the jerk limits for each joint.
     jerk_scale: Union[float, List[float]] = 1.0
+
+    #: Position limit clip value. This is used to clip the position limits for each joint.
+    #: Accepts a scalar or a list of values for each joint. This is useful to truncate limits
+    #: to account for any safety margins imposed by real robot controllers.
     position_limit_clip: Union[float, List[float]] = 0.0
 
     def __post_init__(self):
+        """Post initialization checks and data transfer to device tensors."""
         if self.retract_config is not None:
             self.retract_config = self.tensor_args.to_device(self.retract_config)
         if self.cspace_distance_weight is not None:
@@ -139,6 +238,8 @@ class CSpaceConfig:
             self.acceleration_scale = self.tensor_args.to_device(self.acceleration_scale)
         if isinstance(self.jerk_scale, List):
             self.jerk_scale = self.tensor_args.to_device(self.jerk_scale)
+        if isinstance(self.position_limit_clip, List):
+            self.position_limit_clip = self.tensor_args.to_device(self.position_limit_clip)
         # check shapes:
         if self.retract_config is not None:
             dof = self.retract_config.shape
@@ -148,6 +249,12 @@ class CSpaceConfig:
                 log_error("null_space_weight shape does not match retract_config")
 
     def inplace_reindex(self, joint_names: List[str]):
+        """Change order of joints in configuration space tensors to match given order of names.
+
+        Args:
+            joint_names: New order of joint names.
+
+        """
         new_index = [self.joint_names.index(j) for j in joint_names]
         if self.retract_config is not None:
             self.retract_config = self.retract_config[new_index].clone()
@@ -163,7 +270,18 @@ class CSpaceConfig:
         joint_names = [self.joint_names[n] for n in new_index]
         self.joint_names = joint_names
 
-    def copy_(self, new_config: CSpaceConfig):
+    def copy_(self, new_config: CSpaceConfig) -> CSpaceConfig:
+        """Copy parameters from another instance.
+
+        This maintains reference and copies the data. Assumes that the new instance has the same
+        number of joints as the current instance and also same shape of tensors.
+
+        Args:
+            new_config: New parameters to copy into current instance.
+
+        Returns:
+            CSpaceConfig: Same instance of cspace configuration which has updated parameters.
+        """
         self.joint_names = new_config.joint_names.copy()
         self.retract_config = copy_if_not_none(new_config.retract_config, self.retract_config)
         self.null_space_weight = copy_if_not_none(
@@ -183,6 +301,8 @@ class CSpaceConfig:
         return self
 
     def clone(self) -> CSpaceConfig:
+        """Clone configuration space parameters."""
+
         return CSpaceConfig(
             joint_names=self.joint_names.copy(),
             retract_config=clone_if_not_none(self.retract_config),
@@ -194,9 +314,22 @@ class CSpaceConfig:
             velocity_scale=self.velocity_scale.clone(),
             acceleration_scale=self.acceleration_scale.clone(),
             jerk_scale=self.jerk_scale.clone(),
+            position_limit_clip=(
+                self.position_limit_clip.clone()
+                if isinstance(self.position_limit_clip, torch.Tensor)
+                else self.position_limit_clip
+            ),
         )
 
-    def scale_joint_limits(self, joint_limits: JointLimits):
+    def scale_joint_limits(self, joint_limits: JointLimits) -> JointLimits:
+        """Scale joint limits by the given scale factors.
+
+        Args:
+            joint_limits: Joint limits to scale.
+
+        Returns:
+            JointLimits: Scaled joint limits.
+        """
         if self.velocity_scale is not None:
             joint_limits.velocity = joint_limits.velocity * self.velocity_scale
         if self.acceleration_scale is not None:
@@ -212,7 +345,20 @@ class CSpaceConfig:
         joint_position_lower: torch.Tensor,
         joint_names: List[str],
         tensor_args: TensorDeviceType = TensorDeviceType(),
-    ):
+    ) -> CSpaceConfig:
+        """Load CSpace configuration from joint limits.
+
+        Args:
+            joint_position_upper: Upper position limits for each joint.
+            joint_position_lower: Lower position limits for each joint.
+            joint_names: Names of the joints. This should match the order of joints in the upper
+                and lower limits.
+            tensor_args: Device and floating point precision for tensors.
+
+        Returns:
+            CSpaceConfig: CSpace configuration with retract configuration set to the middle of the
+                joint limits and all weights set to 1.
+        """
         retract_config = ((joint_position_upper + joint_position_lower) / 2).flatten()
         n_dof = retract_config.shape[-1]
         null_space_weight = torch.ones(n_dof, **(tensor_args.as_torch_dict()))
@@ -238,25 +384,26 @@ class KinematicsTensorConfig:
     #: Static Homogenous Transform from parent link to child link for all links [n_links,4,4].
     fixed_transforms: torch.Tensor
 
-    #: index of fixed_transform given link index [n_links].
+    #: Index of fixed_transform given link index [n_links].
     link_map: torch.Tensor
 
-    #: joint index given link index [n_links].
+    #: Joint index given link index [n_links].
     joint_map: torch.Tensor
 
-    #: type of joint given link index [n_links].
+    #: Type of joint given link index [n_links].
     joint_map_type: torch.Tensor
 
+    #: Joint offset to store scalars for mimic joints and negative axis joints.
     joint_offset_map: torch.Tensor
 
-    #: index of link to write out pose [n_store_links].
+    #: Index of link to write out pose [n_store_links].
     store_link_map: torch.Tensor
 
     #: Mapping between each link to every other link, this is used to check
     #: if a link is part of a serial chain formed by another link [n_links, n_links].
     link_chain_map: torch.Tensor
 
-    #: Name of links whose pose will be stored [n_store_links].
+    #: Name of links to compute pose during kinematics computation [n_store_links].
     link_names: List[str]
 
     #: Joint limits
@@ -274,31 +421,32 @@ class KinematicsTensorConfig:
     #: Name of all actuated joints.
     joint_names: Optional[List[str]] = None
 
-    #:
+    #: Name of joints to lock to a fixed value along with the locked value
     lock_jointstate: Optional[JointState] = None
 
-    #:
+    #: Joints that mimic other joints. This will be populated by :class:~`CudaRobotGenerator`
+    #  when parsing the kinematics of the robot.
     mimic_joints: Optional[dict] = None
 
-    #:
+    #: Sphere representation of the robot's geometry. This is used for collision detection.
     link_spheres: Optional[torch.Tensor] = None
 
-    #:
+    #: Mapping of link index to sphere index. This is used to get spheres for a link.
     link_sphere_idx_map: Optional[torch.Tensor] = None
 
-    #:
+    #: Mapping of link name to link index. This is used to get link index from link name.
     link_name_to_idx_map: Optional[Dict[str, int]] = None
 
-    #: total number of spheres that represent the robot's geometry.
+    #: Total number of spheres that represent the robot's geometry.
     total_spheres: int = 0
 
     #: Additional debug parameters.
     debug: Optional[Any] = None
 
-    #: index of end-effector in stored link poses.
+    #: Index of end-effector in stored link poses.
     ee_idx: int = 0
 
-    #: Cspace configuration
+    #: Cspace parameters for the robot.
     cspace: Optional[CSpaceConfig] = None
 
     #: Name of base link. This is the root link from which all kinematic parameters were computed.
@@ -312,6 +460,7 @@ class KinematicsTensorConfig:
     reference_link_spheres: Optional[torch.Tensor] = None
 
     def __post_init__(self):
+        """Post initialization checks and data transfer to device tensors."""
         if self.cspace is None and self.joint_limits is not None:
             self.load_cspace_cfg_from_kinematics()
         if self.joint_limits is not None and self.cspace is not None:
@@ -320,6 +469,18 @@ class KinematicsTensorConfig:
             self.reference_link_spheres = self.link_spheres.clone()
 
     def copy_(self, new_config: KinematicsTensorConfig) -> KinematicsTensorConfig:
+        """Copy parameters from another instance into current instance.
+
+        This maintains reference and copies the data. Assumes that the new instance has the same
+        number of joints as the current instance and also same shape of tensors.
+
+        Args:
+            new_config: New parameters to copy into current instance.
+
+        Returns:
+            KinematicsTensorConfig: Same instance of kinematics configuration which has updated
+                parameters.
+        """
         self.fixed_transforms.copy_(new_config.fixed_transforms)
         self.link_map.copy_(new_config.link_map)
         self.joint_map.copy_(new_config.joint_map)
@@ -350,10 +511,17 @@ class KinematicsTensorConfig:
         self.link_names = new_config.link_names
         self.mesh_link_names = new_config.mesh_link_names
         self.total_spheres = new_config.total_spheres
+        if self.lock_jointstate is not None and new_config.lock_jointstate is not None:
+            self.lock_jointstate.copy_(new_config.lock_jointstate)
+        self.mimic_joints = new_config.mimic_joints
 
         return self
 
     def load_cspace_cfg_from_kinematics(self):
+        """Load CSpace configuration from joint limits.
+
+        This sets the retract configuration to the middle of the joint limits and all weights to 1.
+        """
         retract_config = (
             (self.joint_limits.position[1] + self.joint_limits.position[0]) / 2
         ).flatten()
@@ -371,22 +539,27 @@ class KinematicsTensorConfig:
         )
 
     def get_sphere_index_from_link_name(self, link_name: str) -> torch.Tensor:
+        """Get indices of spheres for a link.
+
+        Args:
+            link_name: Name of the link.
+
+        Returns:
+            torch.Tensor: Indices of spheres for the link.
+        """
         link_idx = self.link_name_to_idx_map[link_name]
-        # get sphere index for this link:
         link_spheres_idx = torch.nonzero(self.link_sphere_idx_map == link_idx).view(-1)
         return link_spheres_idx
 
     def update_link_spheres(
         self, link_name: str, sphere_position_radius: torch.Tensor, start_sph_idx: int = 0
     ):
-        """Update sphere parameters
-
-        NOTE: This currently does not update self collision distances.
+        """Update sphere parameters of a specific link given by name.
 
         Args:
-            link_name: _description_
-            sphere_position_radius: _description_
-            start_sph_idx: _description_. Defaults to 0.
+            link_name: Name of the link.
+            sphere_position_radius: Tensor of shape [n_spheres, 4] with columns [x, y, z, r].
+            start_sph_idx: If providing a subset of spheres, this is the starting index.
         """
         # get sphere indices from link name:
         link_sphere_index = self.get_sphere_index_from_link_name(link_name)[
@@ -398,14 +571,31 @@ class KinematicsTensorConfig:
     def get_link_spheres(
         self,
         link_name: str,
-    ):
+    ) -> torch.Tensor:
+        """Get spheres of a link.
+
+        Args:
+            link_name: Name of link.
+
+        Returns:
+            torch.Tensor: Spheres of the link with shape [n_spheres, 4] with columns [x, y, z, r].
+        """
         link_sphere_index = self.get_sphere_index_from_link_name(link_name)
         return self.link_spheres[link_sphere_index, :]
 
     def get_reference_link_spheres(
         self,
         link_name: str,
-    ):
+    ) -> torch.Tensor:
+        """Get link spheres from the original robot configuration data before any modifications.
+
+        Args:
+            link_name: Name of link.
+
+        Returns:
+            torch.Tensor: Spheres of the link with shape [n_spheres, 4] with columns [x, y, z, r].
+        """
+
         link_sphere_index = self.get_sphere_index_from_link_name(link_name)
         return self.reference_link_spheres[link_sphere_index, :]
 
@@ -415,47 +605,45 @@ class KinematicsTensorConfig:
         sphere_tensor: Optional[torch.Tensor] = None,
         link_name: str = "attached_object",
     ) -> bool:
-        """_summary_
+        """Attach object approximated by spheres to a link of the robot.
+
+        This function updates the sphere parameters of the link to represent the attached object.
 
         Args:
-            sphere_radius: _description_. Defaults to None.
-            sphere_tensor: _description_. Defaults to None.
-            link_name: _description_. Defaults to "attached_object".
-
-        Raises:
-            ValueError: _description_
-            ValueError: _description_
+            sphere_radius: Radius to change for existing spheres. If changing position of spheres
+                as well, then set this to None.
+            sphere_tensor: New sphere tensor to replace existing spheres. Shape [n_spheres, 4] with
+                columns [x, y, z, r]. If changing only radius, set this to None and use
+                sphere_radius.
+            link_name: Name of the link to attach object to. Defaults to "attached_object".
 
         Returns:
-            _description_
+            bool: True if successful.
         """
         if link_name not in self.link_name_to_idx_map.keys():
-            raise ValueError(link_name + " not found in spheres")
+            log_error(link_name + " not found in spheres")
         curr_spheres = self.get_link_spheres(link_name)
 
         if sphere_radius is not None:
             curr_spheres[:, 3] = sphere_radius
         if sphere_tensor is not None:
             if sphere_tensor.shape != curr_spheres.shape and sphere_tensor.shape[0] != 1:
-                raise ValueError("sphere_tensor shape does not match current spheres")
+                log_error("sphere_tensor shape does not match current spheres")
             curr_spheres[:, :] = sphere_tensor
         self.update_link_spheres(link_name, curr_spheres)
         return True
 
     def detach_object(self, link_name: str = "attached_object") -> bool:
-        """Detach object from robot end-effector
+        """Detach object spheres from a link by setting all spheres to zero with negative radius.
 
         Args:
-            link_name: _description_. Defaults to "attached_object".
-
-        Raises:
-            ValueError: _description_
+            link_name: Name of the link to detach object from.
 
         Returns:
-            _description_
+            bool: True if successful.
         """
         if link_name not in self.link_name_to_idx_map.keys():
-            raise ValueError(link_name + " not found in spheres")
+            log_error(link_name + " not found in spheres")
         curr_spheres = self.get_link_spheres(link_name)
         curr_spheres[:, 3] = -100.0
         curr_spheres[:, :3] = 0.0
@@ -472,15 +660,25 @@ class KinematicsTensorConfig:
         return self.get_link_spheres(link_name).shape[0]
 
     def disable_link_spheres(self, link_name: str):
+        """Disable spheres of a link by setting all spheres to zero with negative radius.
+
+        Args:
+            link_name: Name of the link to disable spheres.
+        """
         if link_name not in self.link_name_to_idx_map.keys():
-            raise ValueError(link_name + " not found in spheres")
+            log_error(link_name + " not found in spheres")
         curr_spheres = self.get_link_spheres(link_name)
         curr_spheres[:, 3] = -100.0
         self.update_link_spheres(link_name, curr_spheres)
 
     def enable_link_spheres(self, link_name: str):
+        """Enable spheres of a link by resetting to values from initial robot configuration data.
+
+        Args:
+            link_name: Name of the link to enable spheres.
+        """
         if link_name not in self.link_name_to_idx_map.keys():
-            raise ValueError(link_name + " not found in spheres")
+            log_error(link_name + " not found in spheres")
         curr_spheres = self.get_reference_link_spheres(link_name)
         self.update_link_spheres(link_name, curr_spheres)
 
@@ -489,10 +687,29 @@ class KinematicsTensorConfig:
 class SelfCollisionKinematicsConfig:
     """Dataclass that stores self collision attributes to pass to cuda kernel."""
 
+    #: Offset radii for each sphere. This is used to inflate the spheres for self collision
+    #: detection.
     offset: Optional[torch.Tensor] = None
-    distance_threshold: Optional[torch.Tensor] = None
+
+    #: Sphere index to use for a given thread.
     thread_location: Optional[torch.Tensor] = None
+
+    #: Maximum number of threads to launch for computing self collision between spheres.
     thread_max: Optional[int] = None
-    collision_matrix: Optional[torch.Tensor] = None
+
+    #: Distance threshold for self collision detection. This is currently not used.
+    distance_threshold: Optional[torch.Tensor] = None
+
+    #: Two kernel implementations are available. Set this to True to use the experimental kernel
+    #: which is faster. Set this to False to use the collision matrix based kernel which is slower.
     experimental_kernel: bool = True
+
+    #: Collision matrix containing information about which pair of spheres need to be checked for
+    #: collision. This is only used when experimental_kernel is set to False.
+    collision_matrix: Optional[torch.Tensor] = None
+
+    #: Number of collision checks to perform per thread. Each thread loads a sphere and is allowed
+    #: to check upto checks_per_thread other spheres for collision. Note that all checks have to
+    #: be performed within 1024 threads as shared memory is used. So,
+    # checks_per_thread * n_spheres <= 1024.
     checks_per_thread: int = 32

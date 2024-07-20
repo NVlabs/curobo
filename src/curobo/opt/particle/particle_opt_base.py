@@ -204,26 +204,26 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
         n_iters = n_iters if n_iters is not None else self.n_iters
 
         # create cuda graph:
-        if self.use_cuda_graph and self.cu_opt_init:
+
+        if self.use_cuda_graph:
+            if not self.cu_opt_init:
+                self._initialize_cuda_graph(init_act.clone(), shift_steps=shift_steps)
             curr_action_seq = self._call_cuda_opt_iters(init_act)
         else:
             curr_action_seq = self._run_opt_iters(
                 init_act, n_iters=n_iters, shift_steps=shift_steps
             )
-        if self.use_cuda_graph:
-            if not self.cu_opt_init:
-                self._initialize_cuda_graph(init_act, shift_steps=shift_steps)
 
         self.num_steps += 1
         if self.calculate_value:
             trajectories = self.generate_rollouts(init_act)
             value = self._calc_val(trajectories)
             self.info["value"] = value
-        # print(self.act_seq)
         return curr_action_seq
 
     def _initialize_cuda_graph(self, init_act: T_HDOF_float, shift_steps=0):
         log_info("ParticleOptBase: Creating Cuda Graph")
+        self.reset()
         self._cu_act_in = init_act.detach().clone()
 
         # create a new stream:
@@ -239,6 +239,8 @@ class ParticleOptBase(Optimizer, ParticleOptConfig):
 
         with torch.cuda.graph(self.cu_opt_graph, stream=s):
             self._cu_act_seq = self._run_opt_iters(self._cu_act_in, shift_steps=shift_steps)
+        torch.cuda.current_stream(device=self.tensor_args.device).wait_stream(s)
+
         self.cu_opt_init = True
 
     def _call_cuda_opt_iters(self, init_act: T_HDOF_float):

@@ -51,7 +51,7 @@ from curobo.types.robot import JointState, RobotConfig
 from curobo.types.tensor import T_BDOF, T_DOF, T_BValue_bool, T_BValue_float
 from curobo.util.logger import log_error, log_warn
 from curobo.util.sample_lib import HaltonGenerator
-from curobo.util.torch_utils import get_torch_jit_decorator
+from curobo.util.torch_utils import get_torch_jit_decorator, is_cuda_graph_reset_available
 from curobo.util_file import (
     get_robot_configs_path,
     get_task_configs_path,
@@ -312,11 +312,34 @@ class IKSolverConfig:
             world_coll_checker=world_coll_checker,
             tensor_args=tensor_args,
         )
+        safety_cfg = ArmReacherConfig.from_dict(
+            robot_cfg,
+            config_data["model"],
+            config_data["cost"],
+            base_config_data["constraint"],
+            base_config_data["convergence"],
+            base_config_data["world_collision_checker_cfg"],
+            world_model,
+            world_coll_checker=world_coll_checker,
+            tensor_args=tensor_args,
+        )
+
+        aux_cfg = ArmReacherConfig.from_dict(
+            robot_cfg,
+            config_data["model"],
+            config_data["cost"],
+            base_config_data["constraint"],
+            base_config_data["convergence"],
+            base_config_data["world_collision_checker_cfg"],
+            world_model,
+            world_coll_checker=world_coll_checker,
+            tensor_args=tensor_args,
+        )
 
         arm_rollout_mppi = ArmReacher(cfg)
         arm_rollout_grad = ArmReacher(grad_cfg)
-        arm_rollout_safety = ArmReacher(grad_cfg)
-        aux_rollout = ArmReacher(grad_cfg)
+        arm_rollout_safety = ArmReacher(safety_cfg)
+        aux_rollout = ArmReacher(aux_cfg)
 
         config_dict = ParallelMPPIConfig.create_data_dict(
             config_data["mppi"], arm_rollout_mppi, tensor_args
@@ -356,7 +379,7 @@ class IKSolverConfig:
             safety_rollout=arm_rollout_safety,
             optimizers=opts,
             compute_metrics=True,
-            use_cuda_graph_metrics=grad_config_data["lbfgs"]["use_cuda_graph"],
+            use_cuda_graph_metrics=use_cuda_graph,
             sync_cuda_time=sync_cuda_time,
         )
         ik = WrapBase(cfg)
@@ -583,8 +606,14 @@ class IKSolver(IKSolverConfig):
         if update_reference:
             self.reset_shape()
             if self.use_cuda_graph and self._col is not None:
-                log_error("changing goal type, breaking previous cuda graph.")
-                self.reset_cuda_graph()
+                if is_cuda_graph_reset_available():
+                    log_warn("changing goal type, breaking previous cuda graph.")
+                    self.reset_cuda_graph()
+                else:
+                    log_error(
+                        "changing goal type, cuda graph reset not available, "
+                        + "consider updating to cuda >= 12.0"
+                    )
 
             self.solver.update_nproblems(self._solve_state.get_ik_batch_size())
             self._goal_buffer.current_state = self.init_state.repeat_seeds(goal_pose.batch)

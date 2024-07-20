@@ -18,6 +18,7 @@ from curobo.geom.types import WorldConfig
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.robot import JointState, RobotConfig
+from curobo.util.torch_utils import is_cuda_graph_reset_available
 from curobo.util.trajectory import InterpolateType
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
 from curobo.wrap.reacher.motion_gen import (
@@ -44,6 +45,21 @@ def motion_gen():
 
 
 @pytest.fixture(scope="module")
+def motion_gen_cg():
+    tensor_args = TensorDeviceType()
+    world_file = "collision_table.yml"
+    robot_file = "franka.yml"
+    motion_gen_config = MotionGenConfig.load_from_robot_config(
+        robot_file,
+        world_file,
+        tensor_args,
+        use_cuda_graph=True,
+    )
+    motion_gen_instance = MotionGen(motion_gen_config)
+    return motion_gen_instance
+
+
+@pytest.fixture(scope="module")
 def motion_gen_batch_env():
     tensor_args = TensorDeviceType()
     world_files = ["collision_table.yml", "collision_test.yml"]
@@ -63,13 +79,53 @@ def motion_gen_batch_env():
     return motion_gen_instance
 
 
+@pytest.fixture(scope="module")
+def motion_gen_batch_env_cg():
+    tensor_args = TensorDeviceType()
+    world_files = ["collision_table.yml", "collision_test.yml"]
+    world_cfg = [
+        WorldConfig.from_dict(load_yaml(join_path(get_world_configs_path(), world_file)))
+        for world_file in world_files
+    ]
+    robot_file = "franka.yml"
+    motion_gen_config = MotionGenConfig.load_from_robot_config(
+        robot_file,
+        world_cfg,
+        tensor_args,
+        use_cuda_graph=True,
+    )
+    motion_gen_instance = MotionGen(motion_gen_config)
+
+    return motion_gen_instance
+
+
 @pytest.mark.parametrize(
     "motion_gen_str,interpolation",
     [
         ("motion_gen", InterpolateType.LINEAR),
         ("motion_gen", InterpolateType.CUBIC),
-        # ("motion_gen", InterpolateType.KUNZ_STILMAN_OPTIMAL),
         ("motion_gen", InterpolateType.LINEAR_CUDA),
+        pytest.param(
+            "motion_gen_cg",
+            InterpolateType.LINEAR,
+            marks=pytest.mark.skipif(
+                not is_cuda_graph_reset_available(), reason="CUDAGraph.reset() not available"
+            ),
+        ),
+        pytest.param(
+            "motion_gen_cg",
+            InterpolateType.CUBIC,
+            marks=pytest.mark.skipif(
+                not is_cuda_graph_reset_available(), reason="CUDAGraph.reset() not available"
+            ),
+        ),
+        pytest.param(
+            "motion_gen_cg",
+            InterpolateType.LINEAR_CUDA,
+            marks=pytest.mark.skipif(
+                not is_cuda_graph_reset_available(), reason="CUDAGraph.reset() not available"
+            ),
+        ),
     ],
 )
 def test_motion_gen_single(motion_gen_str, interpolation, request):
@@ -95,7 +151,21 @@ def test_motion_gen_single(motion_gen_str, interpolation, request):
     assert torch.norm(goal_pose.position - reached_state.ee_pos_seq) < 0.005
 
 
-def test_motion_gen_goalset(motion_gen):
+@pytest.mark.parametrize(
+    "motion_gen_str",
+    [
+        ("motion_gen"),
+        pytest.param(
+            "motion_gen_cg",
+            marks=pytest.mark.skipif(
+                not is_cuda_graph_reset_available(), reason="CUDAGraph.reset() not available"
+            ),
+        ),
+    ],
+)
+def test_motion_gen_goalset(motion_gen_str, request):
+    motion_gen = request.getfixturevalue(motion_gen_str)
+
     motion_gen.reset()
 
     retract_cfg = motion_gen.get_retract_config()
@@ -203,8 +273,28 @@ def test_motion_gen_batch(motion_gen):
     [
         ("motion_gen", InterpolateType.LINEAR),
         ("motion_gen", InterpolateType.CUBIC),
-        # ("motion_gen", InterpolateType.KUNZ_STILMAN_OPTIMAL),
         ("motion_gen", InterpolateType.LINEAR_CUDA),
+        pytest.param(
+            "motion_gen_cg",
+            InterpolateType.LINEAR,
+            marks=pytest.mark.skipif(
+                not is_cuda_graph_reset_available(), reason="CUDAGraph.reset() not available"
+            ),
+        ),
+        pytest.param(
+            "motion_gen_cg",
+            InterpolateType.CUBIC,
+            marks=pytest.mark.skipif(
+                not is_cuda_graph_reset_available(), reason="CUDAGraph.reset() not available"
+            ),
+        ),
+        pytest.param(
+            "motion_gen_cg",
+            InterpolateType.LINEAR_CUDA,
+            marks=pytest.mark.skipif(
+                not is_cuda_graph_reset_available(), reason="CUDAGraph.reset() not available"
+            ),
+        ),
     ],
 )
 def test_motion_gen_batch_graph(motion_gen_str: str, interpolation: InterpolateType, request):

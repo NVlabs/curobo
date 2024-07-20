@@ -493,6 +493,18 @@ class WorldCollision(WorldCollisionConfig):
         )
         return mesh
 
+    def get_obstacle_names(self, env_idx: int = 0):
+        return []
+
+    def check_obstacle_exists(self, name: str, env_idx: int = 0) -> bool:
+
+        obstacle_names = self.get_obstacle_names(env_idx)
+
+        if name in obstacle_names:
+            return True
+
+        return False
+
 
 class WorldPrimitiveCollision(WorldCollision):
     """World Oriented Bounding Box representation object
@@ -526,6 +538,10 @@ class WorldPrimitiveCollision(WorldCollision):
         self._load_collision_model_in_cache(
             world_config, env_idx, fix_cache_reference=fix_cache_reference
         )
+
+    def get_obstacle_names(self, env_idx: int = 0):
+        base_obstacles = super().get_obstacle_names(env_idx)
+        return self._env_obbs_names[env_idx] + base_obstacles
 
     def load_batch_collision_model(self, world_config_list: List[WorldConfig]):
         """Load a batch of collision environments from a list of world configs.

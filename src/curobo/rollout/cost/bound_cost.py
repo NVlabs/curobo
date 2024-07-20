@@ -21,9 +21,9 @@ import warp as wp
 from curobo.cuda_robot_model.types import JointLimits
 from curobo.types.robot import JointState
 from curobo.types.tensor import T_DOF
-from curobo.util.logger import log_error
+from curobo.util.logger import log_error, log_warn
 from curobo.util.torch_utils import get_cache_fn_decorator, get_torch_jit_decorator
-from curobo.util.warp import init_warp, warp_support_kernel_key
+from curobo.util.warp import init_warp, is_runtime_warp_kernel_enabled, warp_support_kernel_key
 
 # Local Folder
 from .cost_base import CostBase, CostConfig
@@ -106,6 +106,9 @@ class BoundCost(CostBase, BoundCostConfig):
         )
         self._out_gv_buffer = self._out_ga_buffer = self._out_gj_buffer = empty_buffer
         if self.use_l2_kernel:
+            if not is_runtime_warp_kernel_enabled():
+                log_warn("Runtime warp kernel generation is disabled.")
+                self.use_l2_kernel = False
             if not warp_support_kernel_key():
                 # define a compile-time constant so that warp hash is different for different dof
                 # this is required in older warp versions < 1.2.1 as warp hash didn't consider the
@@ -857,7 +860,7 @@ class WarpBoundPosL2Function(torch.autograd.Function):
         return p_g, None, None, None, None, None, None, None, None, None, None, None
 
 
-@wp.kernel
+@wp.kernel(enable_backward=False)
 def forward_bound_pos_warp(
     pos: wp.array(dtype=wp.float32),
     retract_config: wp.array(dtype=wp.float32),
@@ -945,7 +948,7 @@ def forward_bound_pos_warp(
         out_grad_p[b_addrs] = g_p
 
 
-@wp.kernel
+@wp.kernel(enable_backward=False)
 def forward_bound_warp(
     pos: wp.array(dtype=wp.float32),
     vel: wp.array(dtype=wp.float32),
@@ -1112,7 +1115,7 @@ def forward_bound_warp(
         out_grad_j[b_addrs] = g_j
 
 
-@wp.kernel
+@wp.kernel(enable_backward=False)
 def forward_bound_smooth_warp(
     pos: wp.array(dtype=wp.float32),
     vel: wp.array(dtype=wp.float32),
@@ -1559,7 +1562,11 @@ def make_bound_pos_smooth_kernel(dof_template: int):
 
     module = wp.get_module(forward_bound_smooth_loop_warp.__module__)
     key = "forward_bound_smooth_loop_warp_" + str(dof_template)
-    new_kernel = wp.Kernel(forward_bound_smooth_loop_warp, key=key, module=module)
+    if key in module.kernels:
+        new_kernel = module.kernels[key]
+    else:
+        new_kernel = wp.Kernel(forward_bound_smooth_loop_warp, key=key, module=module)
+
     return new_kernel
 
 
@@ -1657,7 +1664,10 @@ def make_bound_pos_kernel(dof_template: int):
             for i in range(dof_template):
                 out_grad_p[b_addrs + i] = g_p[i]
 
-    wp_module = wp.get_module(forward_bound_pos_loop_warp.__module__)
+    module = wp.get_module(forward_bound_pos_loop_warp.__module__)
     key = "bound_pos_loop_warp_" + str(dof_template)
-    new_kernel = wp.Kernel(forward_bound_pos_loop_warp, key=key, module=wp_module)
+    if key in module.kernels:
+        new_kernel = module.kernels[key]
+    else:
+        new_kernel = wp.Kernel(forward_bound_pos_loop_warp, key=key, module=module)
     return new_kernel

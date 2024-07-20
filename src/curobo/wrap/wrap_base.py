@@ -23,7 +23,7 @@ from curobo.opt.opt_base import Optimizer
 from curobo.opt.particle.particle_opt_base import ParticleOptBase
 from curobo.rollout.rollout_base import Goal, RolloutBase, RolloutMetrics
 from curobo.types.robot import State
-from curobo.util.logger import log_info
+from curobo.util.logger import log_info, log_warn
 
 
 @dataclass
@@ -33,6 +33,13 @@ class WrapConfig:
     compute_metrics: bool
     use_cuda_graph_metrics: bool
     sync_cuda_time: bool
+
+    def __post_init__(self):
+        if self.use_cuda_graph_metrics:
+            log_info(
+                "Using cuda graph for metrics is experimental. If you encounter CUDA errors,\
+                     please disable it."
+            )
 
 
 @dataclass
@@ -62,7 +69,6 @@ class WrapBase(WrapConfig):
 
     def get_metrics(self, state: State, use_cuda_graph: bool = False) -> RolloutMetrics:
         if use_cuda_graph:
-            log_info("Using cuda graph")
             return self.safety_rollout.get_metrics_cuda_graph(state)
         return self.safety_rollout.get_metrics(state)
 
@@ -135,7 +141,7 @@ class WrapBase(WrapConfig):
         metrics = None
 
         filtered_state = self.safety_rollout.filter_robot_state(goal.current_state)
-        goal.current_state = filtered_state
+        goal.current_state.copy_(filtered_state)
         self.update_params(goal)
         if seed is None:
             seed = self.get_init_act()

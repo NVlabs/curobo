@@ -104,7 +104,7 @@ class SelfCollisionDistance(torch.autograd.Function):
             robot_spheres,  # .view(-1, 4),
             sphere_offset,
             weight,
-            coll_matrix,
+            coll_matrix.view(-1),
             thread_locations,
             max_thread,
             b * h,

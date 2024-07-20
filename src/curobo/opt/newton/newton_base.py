@@ -530,6 +530,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
 
     def _create_opt_iters_graph(self, q, grad_q, shift_steps):
         # create a new stream:
+        self.reset()
         self._cu_opt_q_in = q.detach().clone()
         self._cu_opt_gq_in = grad_q.detach().clone()
         s = torch.cuda.Stream(device=self.tensor_args.device)
@@ -541,12 +542,13 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
                     self._cu_opt_q_in, self._cu_opt_gq_in, shift_steps
                 )
         torch.cuda.current_stream(device=self.tensor_args.device).wait_stream(s)
-
+        self.reset()
         self.cu_opt_graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.cu_opt_graph, stream=s):
             self._cu_opt_q, self._cu_opt_cost, self._cu_q, self._cu_gq = self._opt_iters(
                 self._cu_opt_q_in, self._cu_opt_gq_in, shift_steps
             )
+        torch.cuda.current_stream(device=self.tensor_args.device).wait_stream(s)
 
 
 @get_torch_jit_decorator()

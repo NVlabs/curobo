@@ -12,11 +12,14 @@
 import os
 import shutil
 import sys
-from typing import Dict, List
+from typing import Dict, List, Union
 
 # Third Party
 import yaml
 from yaml import Loader
+
+# CuRobo
+from curobo.util.logger import log_warn
 
 
 # get paths
@@ -55,8 +58,10 @@ def get_weights_path():
 
 
 def join_path(path1, path2):
+    if path1[-1] == os.sep:
+        log_warn("path1 has trailing slash, removing it")
     if isinstance(path2, str):
-        return os.path.join(path1, path2)
+        return os.path.join(os.sep, path1 + os.sep, path2)
     else:
         return path2
 
@@ -200,3 +205,17 @@ def merge_dict_a_into_b(a, b):
             merge_dict_a_into_b(v, b[k])
         else:
             b[k] = v
+
+
+def is_platform_windows():
+    return sys.platform == "win32"
+
+
+def is_platform_linux():
+    return sys.platform == "linux"
+
+
+def is_file_xrdf(file_path: str) -> bool:
+    if file_path.endswith(".xrdf") or file_path.endswith(".XRDF"):
+        return True
+    return False

@@ -17,6 +17,9 @@
 # References:
 # * https://setuptools.pypa.io/en/latest/setuptools.html#setup-cfg-only-projects
 
+# Standard Library
+import sys
+
 # Third Party
 import setuptools
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
@@ -31,6 +34,10 @@ extra_cuda_args = {
         "--prec-sqrt=false",
     ]
 }
+
+if sys.platform == "win32":
+    extra_cuda_args["nvcc"].append("--allow-unsupported-compiler")
+
 # create a list of modules to be compiled:
 ext_modules = [
     CUDAExtension(

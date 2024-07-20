@@ -327,6 +327,10 @@ class WorldMeshCollision(WorldPrimitiveCollision):
             log_error("Obstacle not found in world model: " + name)
         self.world_model.objects
 
+    def get_obstacle_names(self, env_idx: int = 0):
+        base_obstacles = super().get_obstacle_names(env_idx)
+        return self._env_mesh_names[env_idx] + base_obstacles
+
     def enable_mesh(
         self,
         enable: bool = True,

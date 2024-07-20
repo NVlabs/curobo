@@ -1,0 +1,100 @@
+format: xrdf
+format_version: 1.0
+
+modifiers:
+  - set_base_frame: "base_link"
+
+default_joint_positions:
+  shoulder_pan_joint: 0.0
+  shoulder_lift_joint: -2.2
+  elbow_joint: 1.9
+  wrist_1_joint: -1.383
+  wrist_2_joint: -1.57
+  wrist_3_joint: 0.0
+
+cspace:
+  joint_names:
+    - "shoulder_pan_joint"
+    - "shoulder_lift_joint"
+    - "elbow_joint"
+    - "wrist_1_joint"
+    - "wrist_2_joint"
+    - "wrist_3_joint"
+  acceleration_limits: [12.0, 12.0, 12.0, 12.0, 12.0, 12.0]
+  jerk_limits: [500.0, 500.0, 500.0, 500.0, 500.0, 500.0]
+
+tool_frames: ["tool0"]
+
+collision:
+  geometry: "ur10e_collision_spheres"
+  buffer_distance:
+    shoulder_link: 0.01
+    upper_arm_link: 0.01
+    forearm_link: 0.01
+    wrist_1_link: 0.01
+    wrist_2_link: 0.01
+    wrist_3_link: 0.01
+    tool0: 0.01
+
+self_collision:
+  geometry: "ur10e_collision_spheres"
+  buffer_distance:
+    shoulder_link: 0.07
+    tool0: 0.05
+  ignore:
+    upper_arm_link: ["forearm_link", "shoulder_link"]
+    forearm_link: ["wrist_1_link"]
+    wrist_1_link: ["wrist_2_link","wrist_3_link"]
+    wrist_2_link: ["wrist_3_link", "tool0"]
+    wrist_3_link: ["tool0"]
+
+geometry:
+  ur10e_collision_spheres:
+    spheres:
+      shoulder_link:
+        - center: [0, 0, 0]
+          radius: 0.05
+      upper_arm_link:
+        - center: [-0, -0, 0.18]
+          radius: 0.09
+        - center: [-0.102167, 0,  0.18]
+          radius: 0.05
+        - center: [-0.204333, 0, 0.18]
+          radius: 0.05
+        - center: [-0.3065, 0, 0.18]
+          radius: 0.05
+        - center: [-0.408667, 0, 0.18]
+          radius: 0.05
+        - center: [-0.510833, 0, 0.18]
+          radius: 0.05
+        - center: [-0.613, 0,0.18]
+          radius: 0.07
+      forearm_link:
+        - center: [-0, 0, 0.03]
+          radius: 0.05
+        - center: [-0.0951667, 0, 0.03]
+          radius: 0.05
+        - center: [-0.190333, 0, 0.03]
+          radius: 0.05
+        - center: [-0.2855, 0, 0.03]
+          radius: 0.05
+        - center: [-0.380667, 0,0.03]
+          radius: 0.05
+        - center: [-0.475833, 0,0.03]
+          radius: 0.05
+        - center: [-0.571, -1.19904e-17, 0.03]
+          radius: 0.05
+      wrist_1_link:
+        - center: [0, 0, 0]
+          radius: 0.05
+      wrist_2_link:
+        - center: [0, 0, 0]
+          radius: 0.05
+      wrist_3_link:
+        - center: [0, 0, 0]
+          radius: 0.05
+        - center: [0, 0, 0.06]
+          radius: 0.07
+      tool0:
+        - center: [0, 0, 0.12]
+          radius: -0.01

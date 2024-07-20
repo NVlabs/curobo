@@ -18,14 +18,18 @@ from curobo.cuda_robot_model.cuda_robot_generator import CudaRobotGeneratorConfi
 from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel, CudaRobotModelConfig
 from curobo.cuda_robot_model.types import CSpaceConfig
 from curobo.geom.transform import matrix_to_quaternion, quaternion_to_matrix
+from curobo.geom.types import Cuboid
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import quat_multiply
+from curobo.types.state import JointState
 from curobo.util_file import get_robot_configs_path, join_path, load_yaml
 
 
 @pytest.fixture(scope="module")
 def cfg():
-    cfg = CudaRobotModelConfig.from_robot_yaml_file("franka.yml", "panda_hand")
+    robot_data = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))
+    robot_data["robot_cfg"]["kinematics"]["extra_collision_spheres"] = {"attached_object": 100}
+    cfg = CudaRobotModelConfig.from_robot_yaml_file(robot_data, "panda_hand")
     return cfg
 
 
@@ -121,11 +125,11 @@ def test_franka_attach_object_kinematics(cfg):
     attached_spheres = state.link_spheres_tensor[:, sph_idx, :]
     # check if all values are equal to position and quaternion
 
-    assert torch.norm(attached_spheres[:, :, 0] - 0.0829) < 0.1
+    assert torch.norm(attached_spheres[:, :, 0] - attached_spheres[0, 0, 0]) < 0.1
     assert torch.norm(attached_spheres[:, :, 1]) < 0.0001
 
     # attach an object:
-    new_object = torch.zeros((4, 4), **(tensor_args.as_torch_dict()))
+    new_object = torch.zeros((100, 4), **(tensor_args.as_torch_dict()))
     new_object[:2, 3] = 0.01
     new_object[:2, 1] = 0.1
     # print(attached_spheres[:, sph_idx,:].shape)
@@ -141,6 +145,42 @@ def test_franka_attach_object_kinematics(cfg):
     attached_spheres = state.link_spheres_tensor[:, sph_idx, :]
 
     assert torch.norm(attached_spheres[:, :, 0] - 0.061) < 0.01
+    assert torch.norm(attached_spheres[:, :, 1]) < 0.0001
+    robot_model.kinematics_config.detach_object()
+
+
+def test_franka_attach_external_object_kinematics(cfg):
+    tensor_args = TensorDeviceType()
+
+    robot_model = CudaRobotModel(cfg)
+    q_test = torch.as_tensor(
+        [0.0, -1.2, 0.0, -2.0, 0.0, 1.0, 0.0], **(tensor_args.as_torch_dict())
+    ).view(1, -1)
+    sph_idx = robot_model.kinematics_config.get_sphere_index_from_link_name("attached_object")
+    state = robot_model.get_state(q_test.clone())
+
+    attached_spheres = state.link_spheres_tensor[:, sph_idx, :]
+    # check if all values are equal to position and quaternion
+    sphere = attached_spheres[0, 0, 0].item()
+    assert torch.norm(attached_spheres[:, :, 0] - sphere) < 0.01
+
+    external_object = Cuboid(
+        name="external_object", dims=[0.1, 0.1, 0.1], pose=[0, 0, 0, 1, 0, 0, 0]
+    )
+    robot_model.attach_external_objects_to_robot(
+        JointState.from_position(q_test.clone()), [external_object]
+    )
+
+    state = robot_model.get_state(q_test.clone())
+    attached_spheres = state.link_spheres_tensor[:, sph_idx, :]
+
+    assert torch.norm(attached_spheres[:, :, 0] - sphere) > 0.1
+
+    robot_model.kinematics_config.detach_object()
+    state = robot_model.get_state(q_test.clone())
+    attached_spheres = state.link_spheres_tensor[:, sph_idx, :]
+
+    assert torch.norm(attached_spheres[:, :, 0] - sphere) < 0.01
     assert torch.norm(attached_spheres[:, :, 1]) < 0.0001
     robot_model.kinematics_config.detach_object()
 

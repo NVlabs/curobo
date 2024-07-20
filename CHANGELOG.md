@@ -10,16 +10,58 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
-## Latest Commit
+## Version 0.7.4
+
+### Changes in Default Behavior
+
+- Cuda graph capture of optimization iterations resets solver before recording.
+- ``join_path(a, b)`` now requires ``a`` to not have a trailing slash to make the file compatible with Windows.
+- Drop examples support for Isaac Sim < 4.0.0.
+- asset_root_path can be either empty string or None.
+- Order of variables in ``SelfCollisionKinematicsConfig`` has changed. Unused variables
+moved to bottom.
+- Remove requirement of warmup for using ``offset_waypoint`` in ``PoseCost``.
+
+### New Features
+
+- Interpolated metrics calculation now recreates cuda graph if interpolation steps exceed existing buffer size.
+- Add experimental ``CUDAGraph.reset`` usage as ``cuda>=12.0`` is not crashing when an existing captured CUDAGraph is freed and recaptured with new memory pointers. Try this experimental feature by
+setting an environment variable ``export CUROBO_TORCH_CUDA_GRAPH_RESET=1``. This feature will allow for changing the problem type in ``motion_gen`` and ``ik_solver`` without requiring recreation of the class.
+- Add partial support for Windows.
+- Add Isaac Sim 4.0.0 docker support.
+- Examples now work with Isaac Sim 4.0.0.
+- Add XRDF support.
+- Add curobo.types.file_path.ContentPath to store paths for files representing robot and world. This
+improves development on top of cuRobo with custom robots living external of cuRobo library.
+- Add attach external objects to robot link API to CudaRobotModel.
+- Add MotionGenStatus.DT_EXCEPTION to report failures due to trajectory exceeding user specified
+maximum trajectory dt.
+- Add reading of end-effector mesh if available when rendering trajectory with ``UsdHelper``, also
+supports goalset rendering.
+- Kinematics module (`curobo.cuda_robot_model`) has complete API documentation.
 
 ### BugFixes & Misc.
-- Add support for older warp versions (<1.0.0) as it's not possible to run older isaac sim with
-newer warp versions.
+
+- Minor documentation fixes to install instructions.
+- Add support for older warp versions (<1.0.0) as it's not possible to run older isaac sim with newer warp versions.
 - Add override option to mpc dataclass.
 - Fix bug in ``PoseCost.forward_pose()`` which caused ``torch_layers_example.py`` to fail.
 - Add warp constants to make module hash depend on robot dof, for modules that generate runtime
 warp kernels. This fixes issues using cuRobo in isaac sim.
 - Add ``plan_config.timeout`` check to ``plan_single_js()``.
+- Recreation of interpolation buffer now copies the joint names from raw trajectory.
+- Fix bug in running captured cuda graph on deleted memory pointers
+when getting metrics on interpolated trajectory
+- Change order of operations in cuda graph capture of particle opt to get correct results
+during graph capture phase.
+- Franka Panda now works in Isaac Sim 4.0.0. The fix was to add inertial parameters to all links in
+the urdf.
+- Create new instances of rollouts in wrap classes to ensure cuda graph rollouts are not
+accidentally used in other pipelines.
+- Add cuda graph check for ``get_metrics``.
+- Remove aligned address assumption for float arrays inside kernel (local memory).
+- Add check for existing warp kernel in a module before creating a new one to avoid corruption of
+existing cuda graphs.
 
 ## Version 0.7.3
 

@@ -9,6 +9,12 @@
 # its affiliates is strictly prohibited.
 #
 
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
+
 
 # Third Party
 import torch
@@ -138,14 +144,11 @@ def main():
         tensor_args,
         collision_checker_type=CollisionCheckerType.MESH,
         use_cuda_graph=True,
-        num_trajopt_seeds=12,
-        num_graph_seeds=12,
         interpolation_dt=0.03,
         collision_cache={"obb": n_obstacle_cuboids, "mesh": n_obstacle_mesh},
         collision_activation_distance=0.025,
-        acceleration_scale=1.0,
         fixed_iters_trajopt=True,
-        trajopt_tsteps=40,
+        maximum_trajectory_dt=0.5,
     )
     motion_gen = MotionGen(motion_gen_config)
     print("warming up...")
@@ -157,6 +160,7 @@ def main():
         enable_graph=False,
         enable_graph_attempt=4,
         max_attempts=10,
+        time_dilation_factor=0.5,
     )
 
     usd_help.load_stage(my_world.stage)
@@ -329,7 +333,7 @@ def main():
                 cmd_idx = 0
 
             else:
-                carb.log_warn("Plan did not converge to a solution.  No action is being taken.")
+                carb.log_warn("Plan did not converge to a solution: " + str(result.status))
             target_pose = cube_position
         past_pose = cube_position
         if cmd_plan is not None:

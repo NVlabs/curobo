@@ -35,7 +35,7 @@ def test_self_collision_experimental(batch_size, horizon):
     tensor_args = TensorDeviceType()
 
     robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"]
-    robot_cfg["kinematics"]["debug"] = {"self_collision_experimental": True}
+    robot_cfg["kinematics"]["debug"] = {"self_collision_experimental": False}
     robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
     kinematics = CudaRobotModel(robot_cfg.kinematics)
     self_collision_data = kinematics.get_self_collision_config()
@@ -44,6 +44,7 @@ def test_self_collision_experimental(batch_size, horizon):
         tensor_args=tensor_args
     )
     cost_fn = SelfCollisionCost(self_collision_config)
+    cost_fn.self_collision_kin_config.experimental_kernel = True
 
     b = batch_size
     h = horizon
@@ -74,6 +75,8 @@ def test_self_collision_franka():
     tensor_args = TensorDeviceType()
 
     robot_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
+    robot_cfg["kinematics"]["debug"] = {"self_collision_experimental": False}
+
     robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
     robot_cfg.kinematics.self_collision_config.experimental_kernel = True
     kinematics = CudaRobotModel(robot_cfg.kinematics)
@@ -83,6 +86,7 @@ def test_self_collision_franka():
         tensor_args=tensor_args
     )
     cost_fn = SelfCollisionCost(self_collision_config)
+    cost_fn.self_collision_kin_config.experimental_kernel = True
 
     b = 10
     h = 1

@@ -9,6 +9,8 @@
 # its affiliates is strictly prohibited.
 #
 
+# Standard Library
+import os
 
 # Third Party
 import warp as wp
@@ -60,3 +62,10 @@ def warp_support_kernel_key(wp_module=None):
         )
         return False
     return True
+
+
+def is_runtime_warp_kernel_enabled() -> bool:
+    env_variable = os.environ.get("CUROBO_WARP_RUNTIME_KERNEL_DISABLE")
+    if env_variable is None:
+        return True
+    return bool(int(env_variable))

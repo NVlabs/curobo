@@ -150,6 +150,7 @@ class Optimizer(OptimizerConfig):
         self._rollout_list = None
         self.debug = []
         self.debug_cost = []
+        self.cu_opt_graph = None
 
     def optimize(self, opt_tensor: torch.Tensor, shift_steps=0, n_iters=None) -> torch.Tensor:
         """Find a solution through optimization given the initial values for variables.
@@ -223,6 +224,8 @@ class Optimizer(OptimizerConfig):
         else:
             log_info("Cuda Graph was not enabled")
         self._batch_goal = None
+        if self.cu_opt_graph is not None:
+            self.cu_opt_graph.reset()
         self.rollout_fn.reset_cuda_graph()
 
     def reset_shape(self):

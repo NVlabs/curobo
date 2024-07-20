@@ -11,10 +11,11 @@
 #
 
 
-# script running (ubuntu):
-#
-
-############################################################
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
 
 
 # Third Party
@@ -241,7 +242,7 @@ def main():
 
         step_index = my_world.current_time_step_index
 
-        if step_index == 0:
+        if step_index <= 2:
             my_world.reset()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)

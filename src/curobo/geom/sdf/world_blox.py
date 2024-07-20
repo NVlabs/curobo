@@ -511,3 +511,7 @@ class WorldBloxCollision(WorldVoxelCollision):
     def decay_layer(self, layer_name: str):
         index = self._blox_names.index(layer_name)
         self._blox_mapper.decay_occupancy(mapper_id=index)
+
+    def get_obstacle_names(self, env_idx: int = 0):
+        base_obstacles = super().get_obstacle_names(env_idx)
+        return self._blox_names + base_obstacles

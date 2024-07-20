@@ -60,7 +60,15 @@ robot_cfg:
     }
     urdf_path: robot/kinova/kinova_gen3_7dof.urdf
     asset_root_path: robot/kinova
-    
+    mesh_link_names:
+      - base_link
+      - shoulder_link
+      - half_arm_1_link
+      - half_arm_2_link
+      - forearm_link
+      - spherical_wrist_1_link
+      - spherical_wrist_2_link
+      - bracelet_link
     cspace:
       joint_names: ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6', 'joint_7']
       cspace_distance_weight:
@@ -71,7 +79,7 @@ robot_cfg:
       - 1.0
       - 1.0
       - 1.0
-    
+
       null_space_weight:
       - 1.0
       - 1.0

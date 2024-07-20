@@ -8,6 +8,15 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+"""
+An experimental kinematics parser that reads the robot from a USD file or stage.
+
+Basic loading of simple robots should work but more complex robots may not be supported. E.g.,
+mimic joints cannot be parsed correctly. Use the URDF parser (:class:`~UrdfKinematicsParser`)
+for more complex robots.
+"""
+
+
 # Standard Library
 from typing import Dict, List, Optional, Tuple
 
@@ -33,8 +42,10 @@ except ImportError:
 
 class UsdKinematicsParser(KinematicsParser):
     """An experimental kinematics parser from USD.
-    NOTE: A more complete solution will be available in a future release. Current implementation
-    does not account for link geometry transformations after a joints.
+
+    Current implementation does not account for link geometry transformations after a joints.
+    Also, cannot read mimic joints.
+
     """
 
     def __init__(
@@ -46,7 +57,17 @@ class UsdKinematicsParser(KinematicsParser):
         tensor_args: TensorDeviceType = TensorDeviceType(),
         extra_links: Optional[Dict[str, LinkParams]] = None,
     ) -> None:
-        # load usd file:
+        """Initialize instance with USD file path.
+
+        Args:
+            usd_path: path to usd reference. This will opened as a Usd Stage.
+            flip_joints: list of joint names to flip axis. This is required as current
+                implementation does not read transformations from joint to link correctly.
+            flip_joint_limits: list of joint names to flip joint limits.
+            usd_robot_root: Root prim of the robot in the Usd Stage.
+            tensor_args: Device and floating point precision for tensors.
+            extra_links: Additional links to add to the robot kinematics structure.
+        """
 
         # create a usd stage
         self._flip_joints = flip_joints
@@ -59,9 +80,11 @@ class UsdKinematicsParser(KinematicsParser):
 
     @property
     def robot_prim_root(self):
+        """Root prim of the robot in the Usd Stage."""
         return self._usd_robot_root
 
     def build_link_parent(self):
+        """Build a dictionary containing parent link for each link in the robot."""
         self._parent_map = {}
         all_joints = [
             x
@@ -77,16 +100,16 @@ class UsdKinematicsParser(KinematicsParser):
     def get_link_parameters(self, link_name: str, base: bool = False) -> LinkParams:
         """Get Link parameters from usd stage.
 
-        NOTE: USD kinematics "X" axis joints map to "Z" in URDF. Specifically,
+        USD kinematics "X" axis joints map to "Z" in URDF. Specifically,
         uniform token physics:axis = "X" value only matches "Z" in URDF. This is because of usd
         files assuming Y axis as up while urdf files assume Z axis as up.
 
         Args:
             link_name (str): Name of link.
-            base (bool, optional): flag to specify base link. Defaults to False.
+            base (bool, optional): Is this the base link of the robot?
 
         Returns:
-            LinkParams: obtained link parameters.
+            LinkParams: Obtained link parameters.
         """
         link_params = self._get_from_extra_links(link_name)
         if link_params is not None:
@@ -157,7 +180,15 @@ class UsdKinematicsParser(KinematicsParser):
         )
         return link_params
 
-    def _get_joint_transform(self, prim: Usd.Prim):
+    def _get_joint_transform(self, prim: Usd.Prim) -> Pose:
+        """Get pose of link from joint prim.
+
+        Args:
+            prim: joint prim in the usd stage.
+
+        Returns:
+            Pose: pose of the link from joint origin.
+        """
         j_prim = UsdPhysics.Joint(prim)
         position = np.ravel(j_prim.GetLocalPos0Attr().Get())
         quatf = j_prim.GetLocalRot0Attr().Get()
@@ -188,10 +219,16 @@ class UsdKinematicsParser(KinematicsParser):
 def get_links_for_joint(prim: Usd.Prim) -> Tuple[Optional[Usd.Prim], Optional[Usd.Prim]]:
     """Get all link prims from the given joint prim.
 
-    Note:
-        This assumes that the `body0_rel_targets` and `body1_rel_targets` are configured such
-        that the parent link is specified in `body0_rel_targets` and the child links is specified
-        in `body1_rel_targets`.
+
+    This assumes that the `body0_rel_targets` and `body1_rel_targets` are configured such
+    that the parent link is specified in `body0_rel_targets` and the child links is specified
+    in `body1_rel_targets`.
+
+    Args:
+        prim: joint prim in the usd stage.
+
+    Returns:
+        Tuple[Optional[Usd.Prim], Optional[Usd.Prim]]: parent link prim and child link prim.
     """
     stage = prim.GetStage()
     joint_api = UsdPhysics.Joint(prim)
