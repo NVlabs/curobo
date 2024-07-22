@@ -19,7 +19,7 @@ import torch
 from curobo.types.base import TensorDeviceType
 
 
-@dataclass
+@dataclass(eq=False)
 class CostConfig:
     weight: Union[torch.Tensor, float, List[float]]
     tensor_args: TensorDeviceType = None

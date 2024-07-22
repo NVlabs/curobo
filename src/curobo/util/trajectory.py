@@ -27,6 +27,7 @@ from curobo.util.logger import log_error, log_info, log_warn
 from curobo.util.sample_lib import bspline
 from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp_interpolation import get_cuda_linear_interpolation
+from curobo.util.warp_cubic_interpolation import get_cuda_cubic_interpolation
 
 
 class InterpolateType(Enum):
@@ -39,6 +40,7 @@ class InterpolateType(Enum):
     #: cuda accelerated linear interpolation using warp-lang
     #: custom kernel :meth: get_cuda_linear_interpolation
     LINEAR_CUDA = "linear_cuda"
+    CUBIC_CUDA = "cubic_cuda"
     #: Uses "Time-optimal trajectory generation for path following with bounded acceleration
     #: and velocity." Robotics: Science and Systems VIII (2012): 1-8, Kunz & Stillman.
     KUNZ_STILMAN_OPTIMAL = "kunz_stilman_optimal"
@@ -158,6 +160,11 @@ def get_batch_interpolated_trajectory(
     else:
         traj_steps, steps_max = calculate_traj_steps(raw_dt, interpolation_dt, horizon)
         opt_dt = raw_dt
+
+        # Change shape from []  to [b]
+        traj_steps = traj_steps.repeat(b)
+        opt_dt = opt_dt.repeat(b)
+
     # traj_steps contains the tsteps for each trajectory
     if steps_max <= 0:
         log_error("Steps max is less than 0")
@@ -186,6 +193,10 @@ def get_batch_interpolated_trajectory(
 
     elif kind == InterpolateType.LINEAR_CUDA:
         out_traj_state = get_cuda_linear_interpolation(
+            raw_traj, traj_steps, out_traj_state, opt_dt, raw_dt
+        )
+    elif kind == InterpolateType.CUBIC_CUDA:
+        out_traj_state = get_cuda_cubic_interpolation(
             raw_traj, traj_steps, out_traj_state, opt_dt, raw_dt
         )
     elif kind == InterpolateType.KUNZ_STILMAN_OPTIMAL:
@@ -329,17 +340,18 @@ def get_interpolated_trajectory(
     max_deviation: float = 0.05,
     tensor_args: TensorDeviceType = TensorDeviceType(),
 ) -> JointState:
-    try:
-        # Third Party
-        from trajectory_smoothing import TrajectorySmoother
+    if kind == InterpolateType.KUNZ_STILMAN_OPTIMAL:
+        try:
+            # Third Party
+            from trajectory_smoothing import TrajectorySmoother
 
-    except:
-        log_info(
-            "trajectory_smoothing package not found, InterpolateType.KUNZ_STILMAN_OPTIMAL"
-            + " is disabled. to enable, try installing curobo with"
-            + " pip install .[smooth]"
-        )
-        kind = InterpolateType.LINEAR
+        except:
+            log_info(
+                "trajectory_smoothing package not found, InterpolateType.KUNZ_STILMAN_OPTIMAL"
+                + " is disabled. to enable, try installing curobo with"
+                + " pip install .[smooth]"
+            )
+            kind = InterpolateType.LINEAR
     dof = trajectory[0].shape[-1]
     last_tsteps = []
     opt_dt = []

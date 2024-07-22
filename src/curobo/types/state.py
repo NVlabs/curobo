@@ -193,6 +193,13 @@ class JointState(State):
         state_tensor = torch.cat((self.position, velocity, acceleration, jerk), dim=-1)
         return state_tensor
 
+    @property
+    def augmented_state(self):
+        velocity = self.velocity
+        if velocity is None:
+            velocity = self.position * 0.0
+        return torch.cat((self.position, velocity), dim=-1)
+
     @staticmethod
     def from_state_tensor(state_tensor, joint_names=None, dof=7):
         return JointState(
@@ -370,6 +377,18 @@ class JointState(State):
             jerk=torch.zeros(size, device=tensor_args.device, dtype=tensor_args.dtype),
             joint_names=joint_names,
         )
+
+    def contiguous(self):
+        p = v = a = j = None
+        if self.position is not None:
+            p = self.position.contiguous()
+        if self.velocity is not None:
+            v = self.velocity.contiguous()
+        if self.acceleration is not None:
+            a = self.acceleration.contiguous()
+        if self.jerk is not None:
+            j = self.jerk.contiguous()
+        return JointState(p, v, a, self.joint_names, jerk=j)
 
     def detach(self):
         self.position = self.position.detach()

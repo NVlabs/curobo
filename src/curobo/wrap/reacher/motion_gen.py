@@ -69,6 +69,7 @@ from curobo.types.state import JointState
 from curobo.types.tensor import T_BDOF, T_DOF, T_BValue_float
 from curobo.util.logger import log_error, log_info, log_warn
 from curobo.util.tensor_util import tensor_repeat_seeds
+from curobo.util.plot_util import plot_compare_trajectories
 from curobo.util.trajectory import InterpolateType, get_batch_interpolated_trajectory
 from curobo.util.warp import init_warp
 from curobo.util_file import (
@@ -142,6 +143,9 @@ class MotionGenConfig:
     #: number of iterations to run trajectory optimization when seeded from a graph plan.
     graph_trajopt_iters: Optional[int] = None
 
+    #: number of iterations to run finetuning trajectory optimization.
+    finetune_js_trajopt_iters: Optional[int] = None
+
     #: store debugging information in MotionGenResult
     store_debug_in_result: bool = False
 
@@ -172,6 +176,7 @@ class MotionGenConfig:
         num_batch_ik_seeds: int = 32,
         num_batch_trajopt_seeds: int = 1,
         num_trajopt_noisy_seeds: int = 1,
+        num_js_trajopt_seeds: int = 4,
         position_threshold: float = 0.005,
         rotation_threshold: float = 0.05,
         cspace_threshold: float = 0.05,
@@ -225,6 +230,7 @@ class MotionGenConfig:
         trim_steps: Optional[List[int]] = None,
         store_debug_in_result: bool = False,
         finetune_trajopt_iters: Optional[int] = None,
+        finetune_js_trajopt_iters: Optional[int] = None,
         smooth_weight: List[float] = None,
         finetune_smooth_weight: Optional[List[float]] = None,
         state_finite_difference_mode: Optional[str] = None,
@@ -262,6 +268,8 @@ class MotionGenConfig:
             num_trajopt_seeds: Number of seeds to use for trajectory optimization per problem
                 query. Default of 4 is found to be a good number for most cases. Increasing this
                 will increase memory usage.
+            num_js_trajopt_seeds: Number of seeds to use for joint-space trajectory optimization per problem
+                query.
             num_batch_ik_seeds: Number of seeds to use for inverse kinematics during batched
                 planning. Default of 32 is found to be a good number for most cases.
             num_batch_trajopt_seeds: Number of seeds to use for trajectory optimization during
@@ -760,6 +768,7 @@ class MotionGenConfig:
             minimize_jerk=minimize_jerk,
             filter_robot_command=filter_robot_command,
             optimize_dt=optimize_dt,
+            num_seeds=num_js_trajopt_seeds,
         )
         js_trajopt_solver = TrajOptSolver(js_trajopt_cfg)
 
@@ -830,6 +839,7 @@ class MotionGenConfig:
             tensor_args=tensor_args,
             partial_ik_iters=partial_ik_iters,
             graph_trajopt_iters=graph_trajopt_iters,
+            finetune_js_trajopt_iters=finetune_js_trajopt_iters,
             store_debug_in_result=store_debug_in_result,
             interpolation_dt=interpolation_dt,
             finetune_dt_scale=finetune_dt_scale,
@@ -3233,7 +3243,10 @@ class MotionGen(MotionGenConfig):
                     ).contiguous()
             if plan_config.enable_finetune_trajopt:
                 og_value = self.trajopt_solver.interpolation_type
-                self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
+                if og_value == InterpolateType.CUBIC_CUDA:
+                    self.trajopt_solver.interpolation_type = InterpolateType.CUBIC_CUDA
+                else:
+                    self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
             with profiler.record_function("motion_gen/trajopt"):
                 log_info("MG: running TO")
                 traj_result = self._solve_trajopt_from_solve_state(
@@ -3472,7 +3485,10 @@ class MotionGen(MotionGenConfig):
                     )
             if plan_config.enable_finetune_trajopt:
                 og_value = self.trajopt_solver.interpolation_type
-                self.js_trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
+                if og_value == InterpolateType.CUBIC_CUDA:
+                    self.js_trajopt_solver.interpolation_type = InterpolateType.CUBIC_CUDA
+                else:
+                    self.js_trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
             with profiler.record_function("motion_gen/trajopt"):
                 log_info("MG: running TO")
                 traj_result = self._solve_trajopt_from_solve_state(
@@ -3490,30 +3506,99 @@ class MotionGen(MotionGenConfig):
                 result.debug_info["trajopt_result"] = traj_result
             if torch.count_nonzero(traj_result.success) == 0:
                 result.status = MotionGenStatus.TRAJOPT_FAIL
+                # print(f"Constraint {torch.sum(traj_result.metrics.constraint, dim=1)}")
+                # v_limits = self.robot_cfg.kinematics.get_joint_limits().velocity
+                # a_limits = self.robot_cfg.kinematics.get_joint_limits().acceleration
+                # j_limits = self.robot_cfg.kinematics.get_joint_limits().jerk
+                # v_soln = traj_result.interpolated_solution.velocity
+                # a_soln = traj_result.interpolated_solution.acceleration
+                # j_soln = traj_result.interpolated_solution.jerk
+                # v_feas = torch.logical_and(v_soln >= v_limits[0], v_soln <= v_limits[1])
+                # a_feas = torch.logical_and(v_soln >= v_limits[0], v_soln <= v_limits[1])
+                # j_feas = torch.logical_and(v_soln >= v_limits[0], v_soln <= v_limits[1])
+                # # Interpolate with linear and plot alongside cubic
+                # smooth_label_int, smooth_cost_int = self.js_trajopt_solver.traj_evaluator.evaluate_interpolated_smootheness(
+                #     traj_result.interpolated_solution,
+                #                         traj_result.optimized_dt,
+                #                         self.js_trajopt_solver.rollout_fn.dynamics_model.cspace_distance_weight,
+                #                         v_limits[1],
+                #                     )
+                # smooth_label, smooth_cost = self.js_trajopt_solver.traj_evaluator.evaluate(
+                #     traj_result.raw_solution,
+                #     self.js_trajopt_solver.rollout_fn.traj_dt,
+                #     self.js_trajopt_solver.rollout_fn.dynamics_model.cspace_distance_weight,
+                #     v_limits[1],
+                # )
+                # print(f"Interpolated trajectory eval {smooth_label_int} vs raw {smooth_label}")
+                # for i, row in enumerate(traj_result.metrics.feasible):
+                #     # Find indices where the element is False
+                #     false_indices = torch.where(row == False)[0]
+                #     # Print the indices
+                #     if len(false_indices) > 5:
+                #         print(f"Batch idx {i}: More than 5 non-feasible states")
+                #     else:
+                #         print(f"Batch idx {i}: Non-feasible indices {false_indices.tolist()}")
+                # out_traj_linear_cuda, _, _ = get_batch_interpolated_trajectory(
+                #     traj_result.raw_solution,
+                #     self.js_trajopt_solver.solver_dt,
+                #     self.interpolation_dt,
+                #     v_limits[1],
+                #     kind=InterpolateType.LINEAR_CUDA,
+                #     max_acc=a_limits[1],
+                #     max_jerk=j_limits[1],
+                # )
+                # out_traj_cubic_cuda, _, _ = get_batch_interpolated_trajectory(
+                #     traj_result.raw_solution,
+                #     self.js_trajopt_solver.solver_dt,
+                #     self.interpolation_dt,
+                #     v_limits[1],
+                #     kind=InterpolateType.CUBIC_CUDA,
+                #     max_acc=a_limits[1],
+                #     max_jerk=j_limits[1],
+                # )
+                # plot_compare_trajectories(out_traj_linear_cuda, out_traj_cubic_cuda, self.interpolation_dt)
             # run finetune
             if plan_config.enable_finetune_trajopt and torch.count_nonzero(traj_result.success) > 0:
                 with profiler.record_function("motion_gen/finetune_trajopt"):
+                    if self.finetune_js_trajopt_iters is None:
+                        finetune_js_trajopt_iters = trajopt_newton_iters + 4
+                    else:
+                        finetune_js_trajopt_iters = self.finetune_js_trajopt_iters
                     seed_traj = traj_result.raw_action.clone()  # solution.position.clone()
                     seed_traj = seed_traj.contiguous()
                     og_solve_time = traj_result.solve_time
+                    if traj_result.optimized_dt.dim() == 0:
+                        # If optimized_dt is a scalar, broadcast it to the shape of success mask
+                        traj_result.optimized_dt = traj_result.optimized_dt * torch.ones_like(traj_result.success, dtype=traj_result.optimized_dt.dtype)
 
-                    scaled_dt = torch.clamp(
-                        torch.max(traj_result.optimized_dt[traj_result.success]),
-                        self.trajopt_solver.minimum_trajectory_dt,
-                    )
-                    og_dt = self.js_trajopt_solver.solver_dt.clone()
-                    self.js_trajopt_solver.update_solver_dt(scaled_dt.item())
-                    traj_result = self._solve_trajopt_from_solve_state(
-                        goal,
-                        solve_state,
-                        seed_traj,
-                        trajopt_instance=self.js_trajopt_solver,
-                        num_seeds_override=solve_state.num_trajopt_seeds,
-                        newton_iters=trajopt_newton_iters + 4,
-                    )
-                    self.js_trajopt_solver.update_solver_dt(og_dt)
+                    opt_dt = traj_result.optimized_dt[traj_result.success]
 
-                result.finetune_time = traj_result.solve_time
+                    finetune_time = 0
+                    for k in range(plan_config.finetune_attempts):
+                        scaled_dt = torch.clamp(
+                            torch.max(opt_dt) * self.finetune_dt_scale * (plan_config.finetune_dt_decay ** (k)),
+                            self.trajopt_solver.minimum_trajectory_dt,
+                        )
+                        log_info(f"Finetune attempt {k} with scaled_dt {scaled_dt}")
+
+
+                        og_dt = self.js_trajopt_solver.solver_dt.clone()
+                        self.js_trajopt_solver.update_solver_dt(scaled_dt.item())
+                        traj_result = self._solve_trajopt_from_solve_state(
+                            goal,
+                            solve_state,
+                            seed_traj,
+                            trajopt_instance=self.js_trajopt_solver,
+                            num_seeds_override=solve_state.num_trajopt_seeds,
+                            newton_iters=finetune_js_trajopt_iters,
+                        )
+                        self.js_trajopt_solver.update_solver_dt(og_dt)
+                        finetune_time += traj_result.solve_time
+                        if torch.count_nonzero(traj_result.success) > 0:
+                            break
+                        seed_traj = traj_result.optimized_seeds.detach().clone()
+
+                result.finetune_time = finetune_time
 
                 traj_result.solve_time = og_solve_time
                 if self.store_debug_in_result:
@@ -3744,7 +3829,10 @@ class MotionGen(MotionGenConfig):
                 ).contiguous()
             if plan_config.enable_finetune_trajopt:
                 og_value = self.trajopt_solver.interpolation_type
-                self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
+                if og_value == InterpolateType.CUBIC_CUDA:
+                    self.trajopt_solver.interpolation_type = InterpolateType.CUBIC_CUDA
+                else:
+                    self.trajopt_solver.interpolation_type = InterpolateType.LINEAR_CUDA
 
             traj_result = self._solve_trajopt_from_solve_state(
                 goal,

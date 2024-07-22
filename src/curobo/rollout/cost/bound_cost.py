@@ -37,7 +37,7 @@ class BoundCostType(Enum):
     BOUNDS_SMOOTH = 2
 
 
-@dataclass
+@dataclass(eq=False)
 class BoundCostConfig(CostConfig):
     joint_limits: Optional[JointLimits] = None
     smooth_weight: Optional[List[float]] = None
@@ -298,12 +298,15 @@ def forward_all_bound_cost(
     p,
     v,
     a,
+    j,
     p_lower_bounds,
     p_upper_bounds,
     v_lower_bounds,
     v_upper_bounds,
     a_lower_bounds,
     a_upper_bounds,
+    j_lower_bounds,
+    j_upper_bounds,
     weight,
 ):
     # c = torch.sum(
@@ -325,7 +328,9 @@ def forward_all_bound_cost(
             + torch.nn.functional.relu(v - v_upper_bounds)
             + torch.nn.functional.relu(a_lower_bounds - a)
             + torch.nn.functional.relu(a - a_upper_bounds)
-        ),
+            + torch.nn.functional.relu(j_lower_bounds - j)
+            + torch.nn.functional.relu(j - j_upper_bounds)
+            ),
         dim=-1,
     )
 
@@ -661,7 +666,7 @@ def forward_bound_pos_warp(
 
     w = wp.float32(0.0)
     c_p = wp.float32(0.0)
-    g_p = wp.float32(0.0)
+    g_p = wp.float32(0.0) # gradient for position
     c_total = wp.float32(0.0)
 
     # we launch batch * horizon * dof kernels
@@ -670,12 +675,13 @@ def forward_bound_pos_warp(
     d_id = tid - (b_id * horizon * dof + h_id * dof)
     if b_id >= batch_size or h_id >= horizon or d_id >= dof:
         return
-
-    # read weights:
+    # read activation distance (a ratio):
     eta_p = activation_distance[0]
+    # read weights:
     w = weight[0]
 
     n_w = wp.float32(0.0)
+    # read null space weight:
     n_w = null_weight[0]
     target_p = wp.float32(0.0)
     target_id = wp.int32(0.0)
@@ -684,11 +690,14 @@ def forward_bound_pos_warp(
         target_id = retract_idx[b_id]
         target_id = target_id * dof + d_id
         target_p = retract_config[target_id]
+    # read lower and upper bounds:
     p_l = p_b[d_id]
     p_u = p_b[dof + d_id]
 
+    # compute activation distance as ratio of limits range:
     p_range = p_u - p_l
     eta_p = eta_p * (p_range)
+    # shrink lower and upper limits by activation distance:
     p_l += eta_p
     p_u -= eta_p
     if p_range < 1.0:
@@ -697,17 +706,16 @@ def forward_bound_pos_warp(
     # compute cost:
     b_addrs = b_id * horizon * dof + h_id * dof + d_id
 
-    # read buffers:
-
+    # read current position:
     c_p = pos[b_addrs]
 
+    # compute null space cost and its gradient:
     if n_w > 0.0:
         error = c_p - target_p
         c_total = n_w * error * error
         g_p = 2.0 * n_w * error
 
     # bound cost:
-
     delta = 0.0
     if c_p < p_l:
         delta = c_p - p_l
@@ -756,17 +764,24 @@ def forward_bound_warp(
     d_id = wp.int32(0)
     b_addrs = int(0)
 
-    w = wp.float32(0.0)
+    c_p = wp.float32(0.0)
     c_v = wp.float32(0.0)
     c_a = wp.float32(0.0)
-    c_p = wp.float32(0.0)
+    c_j = wp.float32(0.0)
+
     g_p = wp.float32(0.0)
     g_v = wp.float32(0.0)
     g_a = wp.float32(0.0)
-    b_wv = float(0.0)
-    b_wa = float(0.0)
-    b_wj = float(0.0)
+    g_j = wp.float32(0.0)
+
+    b_wp = wp.float32(0.0)
+    b_wv = wp.float32(0.0)
+    b_wa = wp.float32(0.0)
+    b_wj = wp.float32(0.0)
+
     c_total = wp.float32(0.0)
+
+    delta = float(0.0)
 
     # we launch batch * horizon * dof kernels
     b_id = tid / (horizon * dof)
@@ -785,7 +800,7 @@ def forward_bound_warp(
         target_p = retract_config[target_id]
 
     # read weights:
-    w = weight[0]
+    b_wp = weight[0]
     b_wv = weight[1]
     b_wa = weight[2]
     b_wj = weight[3]
@@ -794,17 +809,16 @@ def forward_bound_warp(
     b_addrs = b_id * horizon * dof + h_id * dof + d_id
 
     # read buffers:
+    c_p = pos[b_addrs]
     c_v = vel[b_addrs]
     c_a = acc[b_addrs]
-    c_p = pos[b_addrs]
+    c_j = jerk[b_addrs]
 
     # if w_j > 0.0:
     eta_p = activation_distance[0]
     eta_v = activation_distance[1]
     eta_a = activation_distance[2]
     eta_j = activation_distance[3]
-
-    c_j = jerk[b_addrs]
 
     p_l = p_b[d_id]
     p_u = p_b[dof + d_id]
@@ -834,7 +848,17 @@ def forward_bound_warp(
     j_l += eta_j
     j_u -= eta_j
 
-    delta = float(0.0)
+    # TODO: Is this necessary?
+    # TODO: Why is sometimes (1/range) used while others (1 / range**2)
+    if p_range < 1.0:
+        b_wp = (1.0 / p_range) * b_wp
+    if v_range < 1.0:
+        b_wv = b_wv * (1.0 / v_range)
+    if a_range < 1.0:
+        b_wa = b_wa * (1.0 / a_range)
+    if j_range < 1.0:
+        b_wj = b_wj * (1.0 / j_range)
+
     if n_w > 0.0:
         error = c_p - target_p
         c_total = n_w * error * error
@@ -848,8 +872,8 @@ def forward_bound_warp(
     elif c_p > p_u:
         delta = c_p - p_u
 
-    c_total += w * delta * delta
-    g_p += 2.0 * w * delta
+    c_total += b_wp * delta * delta
+    g_p += 2.0 * b_wp * delta
 
     # bound cost:
     delta = 0.0
