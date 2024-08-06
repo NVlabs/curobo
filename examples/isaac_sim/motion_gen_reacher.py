@@ -209,6 +209,7 @@ def main():
     trim_steps = None
     max_attempts = 4
     interpolation_dt = 0.05
+    enable_finetune_trajopt = True
     if args.reactive:
         trajopt_tsteps = 40
         trajopt_dt = 0.04
@@ -216,6 +217,7 @@ def main():
         max_attempts = 1
         trim_steps = [1, None]
         interpolation_dt = trajopt_dt
+        enable_finetune_trajopt = False
     motion_gen_config = MotionGenConfig.load_from_robot_config(
         robot_cfg,
         world_cfg,
@@ -231,8 +233,9 @@ def main():
         trim_steps=trim_steps,
     )
     motion_gen = MotionGen(motion_gen_config)
-    print("warming up...")
-    motion_gen.warmup(enable_graph=True, warmup_js_trajopt=False, parallel_finetune=True)
+    if not args.reactive:
+        print("warming up...")
+        motion_gen.warmup(enable_graph=True, warmup_js_trajopt=False)
 
     print("Curobo is Ready")
 
@@ -242,9 +245,8 @@ def main():
         enable_graph=False,
         enable_graph_attempt=2,
         max_attempts=max_attempts,
-        enable_finetune_trajopt=True,
-        parallel_finetune=True,
-        time_dilation_factor=0.5,
+        enable_finetune_trajopt=enable_finetune_trajopt,
+        time_dilation_factor=0.5 if not args.reactive else 1.0,
     )
 
     usd_help.load_stage(my_world.stage)

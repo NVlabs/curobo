@@ -9,6 +9,7 @@
 # its affiliates is strictly prohibited.
 #
 
+
 try:
     # Third Party
     import isaacsim
@@ -16,6 +17,7 @@ except ImportError:
     pass
 
 # Third Party
+import cv2
 import torch
 
 a = torch.zeros(4, device="cuda:0")
@@ -31,7 +33,6 @@ simulation_app = SimulationApp(
     }
 )
 # Third Party
-import cv2
 import numpy as np
 import torch
 from matplotlib import cm

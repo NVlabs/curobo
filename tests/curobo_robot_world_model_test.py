@@ -135,6 +135,7 @@ def test_cu_robot_batch_world_collision():
     assert d_world.shape[0] == b
     assert torch.sum(d_world) == 0.0
 
+
 def test_cu_robot_get_link_transform():
     model = load_robot_world()
     world_T_panda_hand = model.kinematics.get_link_transform("panda_hand")

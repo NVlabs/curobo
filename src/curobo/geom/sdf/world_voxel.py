@@ -8,6 +8,8 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+"""World represented by euclidean signed distance grids."""
+
 # Standard Library
 import math
 from typing import Any, Dict, List, Optional
@@ -29,6 +31,7 @@ class WorldVoxelCollision(WorldMeshCollision):
     """Voxel grid representation of World, with each voxel containing Euclidean Signed Distance."""
 
     def __init__(self, config: WorldCollisionConfig):
+        """Initialize with a world collision configuration."""
         self._env_n_voxels = None
         self._voxel_tensor_list = None
         self._env_voxel_names = None
@@ -36,6 +39,7 @@ class WorldVoxelCollision(WorldMeshCollision):
         super().__init__(config)
 
     def _init_cache(self):
+        """Initialize the cache for the world."""
         if (
             self.cache is not None
             and "voxel" in self.cache
@@ -45,6 +49,14 @@ class WorldVoxelCollision(WorldMeshCollision):
         return super()._init_cache()
 
     def _create_voxel_cache(self, voxel_cache: Dict[str, Any]):
+        """Create a cache for voxel grid representation of the world.
+
+        Args:
+            voxel_cache: Parameters for the voxel grid representation. The dictionary should
+                contain the following keys: layers, dims, voxel_size, feature_dtype. Current
+                implementation assumes that all voxel grids have the same number of voxels. Though
+                different layers can have different resolutions, this is not yet thoroughly tested.
+        """
         n_layers = voxel_cache["layers"]
         dims = voxel_cache["dims"]
         voxel_size = voxel_cache["voxel_size"]
@@ -93,24 +105,35 @@ class WorldVoxelCollision(WorldMeshCollision):
     def load_collision_model(
         self, world_model: WorldConfig, env_idx=0, fix_cache_reference: bool = False
     ):
+        """Load collision representation from world obstacles.
+
+        Args:
+            world_model: Obstacles in world to load.
+            env_idx: Environment index to load obstacles into.
+            fix_cache_reference: If True, throws error if number of obstacles is greater than
+                cache. If False, creates a larger cache. Note that when using collision checker
+                inside a recorded cuda graph, recreating the cache will break the graph as the
+                reference pointer to the cache will change.
+        """
         self._load_voxel_collision_model_in_cache(
             world_model, env_idx, fix_cache_reference=fix_cache_reference
         )
-        return super().load_collision_model(
+        super().load_collision_model(
             world_model, env_idx=env_idx, fix_cache_reference=fix_cache_reference
         )
 
     def _load_voxel_collision_model_in_cache(
         self, world_config: WorldConfig, env_idx: int = 0, fix_cache_reference: bool = False
     ):
-        """TODO:
-
-        _extended_summary_
+        """Load voxel grid representation of the world into the cache.
 
         Args:
-            world_config: _description_
-            env_idx: _description_
-            fix_cache_reference: _description_
+            world_config: Obstacles in world to load.
+            env_idx: Environment index to load obstacles into.
+            fix_cache_reference: If True, throws error if number of obstacles is greater than
+                cache. If False, creates a larger cache. Note that when using collision checker
+                inside a recorded cuda graph, recreating the cache will break the graph as the
+                reference pointer to the cache will change.
         """
         voxel_objs = world_config.voxel
         max_obs = len(voxel_objs)
@@ -153,7 +176,17 @@ class WorldVoxelCollision(WorldMeshCollision):
 
     def _batch_tensor_voxel(
         self, pose: List[List[float]], dims: List[float], voxel_size: List[float]
-    ):
+    ) -> List[torch.Tensor]:
+        """Create a list of tensors that represent the voxel parameters.
+
+        Args:
+            pose: Pose of voxel grids.
+            dims: Dimensions of voxel grids.
+            voxel_size: Resolution of voxel grids.
+
+        Returns:
+            List of tensors representing the voxel parameters.
+        """
         w_T_b = Pose.from_batch_list(pose, tensor_args=self.tensor_args)
         b_T_w = w_T_b.inverse()
         dims_t = torch.as_tensor(
@@ -170,13 +203,8 @@ class WorldVoxelCollision(WorldMeshCollision):
     def load_batch_collision_model(self, world_config_list: List[WorldConfig]):
         """Load voxel grid for batched environments
 
-        _extended_summary_
-
         Args:
-            world_config_list: _description_
-
-        Returns:
-            _description_
+            world_config_list: List of world obstacles for each environment.
         """
         log_error("Not Implemented")
         # First find largest number of cuboid:
@@ -244,7 +272,7 @@ class WorldVoxelCollision(WorldMeshCollision):
         )
         self.collision_types["voxel"] = True
 
-        return super().load_batch_collision_model(world_config_list)
+        super().load_batch_collision_model(world_config_list)
 
     def enable_obstacle(
         self,
@@ -252,12 +280,27 @@ class WorldVoxelCollision(WorldMeshCollision):
         enable: bool = True,
         env_idx: int = 0,
     ):
+        """Enable/Disable object in collision checking functions.
+
+        Args:
+            name: Name of the obstacle to enable.
+            enable: True to enable, False to disable.
+            env_idx: Index of the environment to enable the obstacle in.
+        """
         if self._env_voxel_names is not None and name in self._env_voxel_names[env_idx]:
             self.enable_voxel(enable, name, None, env_idx)
         else:
             return super().enable_obstacle(name, enable, env_idx)
 
-    def get_obstacle_names(self, env_idx: int = 0):
+    def get_obstacle_names(self, env_idx: int = 0) -> List[str]:
+        """Get names of all obstacles in the environment.
+
+        Args:
+            env_idx: Environment index to get obstacles from.
+
+        Returns:
+            List of obstacle names.
+        """
         base_obstacles = super().get_obstacle_names(env_idx)
         return self._env_voxel_names[env_idx] + base_obstacles
 
@@ -268,12 +311,13 @@ class WorldVoxelCollision(WorldMeshCollision):
         env_obj_idx: Optional[torch.Tensor] = None,
         env_idx: int = 0,
     ):
-        """Update obstacle dimensions
+        """Enable/Disable voxel grid in collision checking functions.
 
         Args:
-            obj_dims (torch.Tensor): [dim.x,dim.y, dim.z], give as [b,3]
-            obj_idx (torch.Tensor or int):
-
+            enable: True to enable, False to disable.
+            name: Name of voxel grid to enable.
+            env_obj_idx: Index of voxel grid. If name is provided, this is ignored.
+            env_idx: Environment index to enable the voxel grid in.
         """
         if env_obj_idx is not None:
             self._voxel_tensor_list[2][env_obj_idx] = int(enable)  # enable == 1
@@ -288,13 +332,31 @@ class WorldVoxelCollision(WorldMeshCollision):
         name: str,
         w_obj_pose: Pose,
         env_idx: int = 0,
+        update_cpu_reference: bool = False,
     ):
+        """Update pose of obstacle.
+
+        Args:
+            name: Name of the obstacle.
+            w_obj_pose: Pose of obstacle in world frame.
+            env_idx: Environment index to update obstacle in.
+            update_cpu_reference: If True, updates the CPU reference with the new pose. This is
+                useful for debugging and visualization. Only supported for env_idx=0.
+        """
         if self._env_voxel_names is not None and name in self._env_voxel_names[env_idx]:
             self.update_voxel_pose(name=name, w_obj_pose=w_obj_pose, env_idx=env_idx)
+            if update_cpu_reference:
+                self.update_obstacle_pose_in_world_model(name, w_obj_pose, env_idx)
         else:
-            log_error("obstacle not found in OBB world model: " + name)
+            super().update_obstacle_pose(name, w_obj_pose, env_idx, update_cpu_reference)
 
     def update_voxel_data(self, new_voxel: VoxelGrid, env_idx: int = 0):
+        """Update parameters of a voxel grid. This can also updates signed distance values.
+
+        Args:
+            new_voxel: New parameters.
+            env_idx: Environment index to update voxel grid in.
+        """
         obs_idx = self.get_voxel_idx(new_voxel.name, env_idx)
         self._voxel_tensor_list[3][env_idx, obs_idx, :, :] = new_voxel.feature_tensor.view(
             new_voxel.feature_tensor.shape[0], -1
@@ -315,12 +377,15 @@ class WorldVoxelCollision(WorldMeshCollision):
         env_obj_idx: Optional[torch.Tensor] = None,
         env_idx: int = 0,
     ):
-        """Update pose of a specific objects.
-        This also updates the signed distance grid to account for the updated object pose.
+        """Update signed distance values in a voxel grid.
+
         Args:
-        obj_w_pose: Pose
-        obj_idx:
+            features: New signed distance values.
+            name: Name of voxel grid obstacle.
+            env_obj_idx: Index of voxel grid. If name is provided, this is ignored.
+            env_idx: Environment index to update voxel grid in.
         """
+
         if env_obj_idx is not None:
             self._voxel_tensor_list[3][env_obj_idx, :] = features.to(
                 dtype=self._voxel_tensor_list[3].dtype
@@ -339,11 +404,14 @@ class WorldVoxelCollision(WorldMeshCollision):
         env_obj_idx: Optional[torch.Tensor] = None,
         env_idx: int = 0,
     ):
-        """Update pose of a specific objects.
-        This also updates the signed distance grid to account for the updated object pose.
+        """Update pose of voxel grid.
+
         Args:
-        obj_w_pose: Pose
-        obj_idx:
+            w_obj_pose: Pose of voxel grid in world frame.
+            obj_w_pose: Inverse pose of voxel grid. If provided, w_obj_pose is ignored.
+            name: Name of the voxel grid.
+            env_obj_idx: Index of voxel grid. If name is provided, this is ignored.
+            env_idx: Environment index to update voxel grid in.
         """
         obj_w_pose = self._get_obstacle_poses(w_obj_pose, obj_w_pose)
         if env_obj_idx is not None:
@@ -357,6 +425,15 @@ class WorldVoxelCollision(WorldMeshCollision):
         name: str,
         env_idx: int = 0,
     ) -> int:
+        """Get index of voxel grid in the environment.
+
+        Args:
+            name: Name of the voxel grid.
+            env_idx: Environment index to get voxel grid from.
+
+        Returns:
+            Index of voxel grid.
+        """
         if name not in self._env_voxel_names[env_idx]:
             log_error("Obstacle with name: " + name + " not found in current world", exc_info=True)
         return self._env_voxel_names[env_idx].index(name)
@@ -365,7 +442,16 @@ class WorldVoxelCollision(WorldMeshCollision):
         self,
         name: str,
         env_idx: int = 0,
-    ):
+    ) -> VoxelGrid:
+        """Get voxel grid from world obstacles.
+
+        Args:
+            name: Name of voxel grid.
+            env_idx: Environment index to get voxel grid from.
+
+        Returns:
+            Voxel grid object.
+        """
         obs_idx = self.get_voxel_idx(name, env_idx)
         voxel_params = np.round(
             self._voxel_tensor_list[0][env_idx, obs_idx, :].cpu().numpy().astype(np.float64), 6
@@ -394,7 +480,31 @@ class WorldVoxelCollision(WorldMeshCollision):
         return_loss=False,
         sum_collisions: bool = True,
         compute_esdf: bool = False,
-    ):
+    ) -> torch.Tensor:
+        """Compute the signed distance between query spheres and world obstacles.
+
+        This distance can be used as a collision cost for optimization.
+
+        Args:
+            query_sphere: Input tensor with query spheres [batch, horizon, number of spheres, 4].
+                With [x, y, z, radius] as the last column for each sphere.
+            collision_query_buffer: Buffer to store collision query results.
+            weight: Weight of the collision cost.
+            activation_distance: Distance outside the object to start computing the cost.
+            env_query_idx: Environment index for each batch of query spheres.
+            return_loss: If the returned tensor will be scaled or changed before calling backward,
+                set this to True. If the returned tensor will be used directly through addition,
+                set this to False.
+            sum_collisions: Sum the collision cost across all obstacles. This variable is currently
+                not passed to the underlying CUDA kernel as setting this to False caused poor
+                performance.
+            compute_esdf: Compute Euclidean signed distance instead of collision cost. When True,
+                the returned tensor will be the signed distance with positive values inside an
+                obstacle and negative values outside obstacles.
+
+        Returns:
+            Signed distance between query spheres and world obstacles.
+        """
         if "voxel" not in self.collision_types or not self.collision_types["voxel"]:
             return super().get_sphere_distance(
                 query_sphere,
@@ -469,7 +579,21 @@ class WorldVoxelCollision(WorldMeshCollision):
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss=False,
         **kwargs,
-    ):
+    ) -> torch.Tensor:
+        """Compute binary collision between query spheres and world obstacles.
+
+        Args:
+            query_sphere: Input tensor with query spheres [batch, horizon, number of spheres, 4].
+                With [x, y, z, radius] as the last column for each sphere.
+            collision_query_buffer: Collision query buffer to store the results.
+            weight: Weight to scale the collision cost.
+            activation_distance: Distance outside the object to start computing the cost.
+            env_query_idx: Environment index for each batch of query spheres.
+            return_loss: True is not supported for binary classification. Set to False.
+
+        Returns:
+            Tensor with binary collision results.
+        """
         if "voxel" not in self.collision_types or not self.collision_types["voxel"]:
             return super().get_sphere_collision(
                 query_sphere,
@@ -481,7 +605,7 @@ class WorldVoxelCollision(WorldMeshCollision):
             )
 
         if return_loss:
-            raise ValueError("cannot return loss for classification, use get_sphere_distance")
+            log_error("cannot return loss for classification, use get_sphere_distance")
         b, h, n, _ = query_sphere.shape
         use_batch_env = True
         env_query_idx_voxel = env_query_idx
@@ -541,11 +665,34 @@ class WorldVoxelCollision(WorldMeshCollision):
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss=False,
         sum_collisions: bool = True,
-    ):
-        """
-        Computes the signed distance via analytic function
+    ) -> torch.Tensor:
+        """Compute the signed distance between trajectory of spheres and world obstacles.
+
         Args:
-        tensor_sphere: b, n, 4
+            query_sphere: Input tensor with query spheres [batch, horizon, number of spheres, 4].
+                With [x, y, z, radius] as the last column for each sphere.
+            collision_query_buffer: Collision query buffer to store the results.
+            weight: Collision cost weight.
+            activation_distance: Distance outside the object to start computing the cost. A smooth
+                scaling is applied to the cost starting from this distance. See
+                :ref:`research_page` for more details.
+            speed_dt: Length of time (seconds) to use when calculating the speed of the sphere
+                using finite difference.
+            sweep_steps: Number of steps to sweep the sphere along the trajectory. More steps will
+                allow for catching small obstacles, taking more time to compute.
+            enable_speed_metric: True will scale the collision cost by the speed of the sphere.
+                This has the effect of slowing down the robot when near obstacles. This also has
+                shown to improve convergence from poor initialization.
+            env_query_idx: Environment index for each batch of query spheres.
+            return_loss: If the returned tensor will be scaled or changed before calling backward,
+                set this to True. If the returned tensor will be used directly through addition,
+                set this to False.
+            sum_collisions: Sum the collision cost across all obstacles. This variable is currently
+                not passed to the underlying CUDA kernel as setting this to False caused poor
+                performance.
+
+        Returns:
+            Collision cost between trajectory of spheres and world obstacles.
         """
         if "voxel" not in self.collision_types or not self.collision_types["voxel"]:
             return super().get_swept_sphere_distance(
@@ -625,11 +772,29 @@ class WorldVoxelCollision(WorldMeshCollision):
         enable_speed_metric=False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss=False,
-    ):
-        """
-        Computes the signed distance via analytic function
+    ) -> torch.Tensor:
+        """Get binary collision between trajectory of spheres and world obstacles.
+
         Args:
-        tensor_sphere: b, n, 4
+            query_sphere: Input tensor with query spheres [batch, horizon, number of spheres, 4].
+                With [x, y, z, radius] as the last column for each sphere.
+            collision_query_buffer: Collision query buffer to store the results.
+            weight: Collision cost weight.
+            activation_distance: Distance outside the object to start computing the cost. A smooth
+                scaling is applied to the cost starting from this distance. See
+                :ref:`research_page` for more details.
+            speed_dt: Length of time (seconds) to use when calculating the speed of the sphere
+                using finite difference. This is not used.
+            sweep_steps: Number of steps to sweep the sphere along the trajectory. More steps will
+                allow for catching small obstacles, taking more time to compute.
+            enable_speed_metric: True will scale the collision cost by the speed of the sphere.
+                This has the effect of slowing down the robot when near obstacles. This also has
+                shown to improve convergence from poor initialization. This is not used.
+            env_query_idx: Environment index for each batch of query spheres.
+            return_loss: This is not supported for binary classification. Set to False.
+
+        Returns:
+            Collision value between trajectory of spheres and world obstacles.
         """
         if "voxel" not in self.collision_types or not self.collision_types["voxel"]:
             return super().get_swept_sphere_collision(
@@ -644,7 +809,7 @@ class WorldVoxelCollision(WorldMeshCollision):
                 return_loss=return_loss,
             )
         if return_loss:
-            raise ValueError("cannot return loss for classify, use get_swept_sphere_distance")
+            log_error("cannot return loss for classify, use get_swept_sphere_distance")
         b, h, n, _ = query_sphere.shape
 
         use_batch_env = True
@@ -698,6 +863,7 @@ class WorldVoxelCollision(WorldMeshCollision):
         return d_val
 
     def clear_cache(self):
+        """Clear obstacles in world cache."""
         if self._voxel_tensor_list is not None:
             self._voxel_tensor_list[2][:] = 0
             if self._voxel_tensor_list[3].dtype in [torch.float32, torch.float16, torch.bfloat16]:
@@ -710,5 +876,14 @@ class WorldVoxelCollision(WorldMeshCollision):
             self._env_n_voxels[:] = 0
         super().clear_cache()
 
-    def get_voxel_grid_shape(self, env_idx: int = 0, obs_idx: int = 0):
+    def get_voxel_grid_shape(self, env_idx: int = 0, obs_idx: int = 0) -> torch.Size:
+        """Get dimensions of the voxel grid.
+
+        Args:
+            env_idx: Environment index.
+            obs_idx: Obstacle index.
+
+        Returns:
+            Shape of the voxel grid.
+        """
         return self._voxel_tensor_list[3][env_idx, obs_idx].shape

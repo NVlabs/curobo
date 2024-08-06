@@ -1792,7 +1792,7 @@ class MotionGen(MotionGenConfig):
             world: New world configuration for collision checking.
         """
         self.world_coll_checker.load_collision_model(world, fix_cache_reference=self.use_cuda_graph)
-        self.graph_planner.reset_graph()
+        self.graph_planner.reset_buffer()
 
     def clear_world_cache(self):
         """Remove all collision objects from collision cache."""
@@ -2214,7 +2214,6 @@ class MotionGen(MotionGenConfig):
             for rollout in rollouts
             if isinstance(rollout, ArmReacher)
         ]
-        torch.cuda.synchronize(device=self.tensor_args.device)
         return True
 
     def get_all_rollout_instances(self) -> List[RolloutBase]:
@@ -3471,21 +3470,22 @@ class MotionGen(MotionGenConfig):
                     opt_dt = traj_result.optimized_dt
 
                     if plan_config.parallel_finetune:
-                        opt_dt = torch.min(opt_dt[traj_result.success])
                         seed_override = solve_state.num_trajopt_seeds * self.noisy_trajopt_seeds
+                        if self.optimize_dt:
+                            opt_dt = torch.min(opt_dt[traj_result.success])
 
                     finetune_time = 0
                     newton_iters = None
 
                     for k in range(plan_config.finetune_attempts):
-
-                        scaled_dt = torch.clamp(
-                            opt_dt
-                            * plan_config.finetune_dt_scale
-                            * (plan_config.finetune_dt_decay ** (k)),
-                            self.trajopt_solver.minimum_trajectory_dt,
-                        )
                         if self.optimize_dt:
+
+                            scaled_dt = torch.clamp(
+                                opt_dt
+                                * plan_config.finetune_dt_scale
+                                * (plan_config.finetune_dt_decay ** (k)),
+                                self.trajopt_solver.minimum_trajectory_dt,
+                            )
                             self.finetune_trajopt_solver.update_solver_dt(scaled_dt.item())
 
                         traj_result = self._solve_trajopt_from_solve_state(

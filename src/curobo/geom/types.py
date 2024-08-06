@@ -15,12 +15,13 @@ from __future__ import annotations
 # Standard Library
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 # Third Party
 import numpy as np
 import torch
 import trimesh
+import trimesh.scene
 
 # CuRobo
 from curobo.geom.sphere_fit import SphereFitType, fit_spheres_to_mesh
@@ -83,6 +84,12 @@ class Obstacle:
         raise NotImplementedError
 
     def save_as_mesh(self, file_path: str, transform_with_pose: bool = False):
+        """Save obstacle as a mesh file.
+
+        Args:
+            file_path: Path to save mesh file.
+            transform_with_pose: Transform obstacle with pose before saving.
+        """
         mesh_scene = self.get_trimesh_mesh()
         if transform_with_pose:
             mesh_scene.apply_transform(self.get_transform_matrix())
@@ -246,10 +253,19 @@ class Cuboid(Obstacle):
     dims: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
 
     def __post_init__(self):
+        """Post initialization checks if pose was set."""
         if self.pose is None:
             log_error("Cuboid Obstacle requires Pose")
 
-    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
+        """Create a trimesh instance from the obstacle representation.
+        Args:
+            process: Flag is not used.
+            process_color: Flag is not used.
+
+        Returns:
+            trimesh.Trimesh: Instance of obstacle as a trimesh.
+        """
         m = trimesh.creation.box(extents=self.dims)
         if self.color is not None:
             color_visual = trimesh.visual.color.ColorVisuals(
@@ -261,11 +277,27 @@ class Cuboid(Obstacle):
 
 @dataclass
 class Capsule(Obstacle):
+    """Represent obstacle as a capsule."""
+
+    #: Radius of capsule in meters.
     radius: float = 0.0
+
+    #: Base of capsule in meters [x, y, z].
     base: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+
+    #: Tip of capsule in meters [x, y, z].
     tip: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
 
-    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
+        """Create a trimesh instance from the obstacle representation.
+
+        Args:
+            process: Flag is not used.
+            process_color: Flag is not used.
+
+        Returns:
+            trimesh.Trimesh: Instance of obstacle as a trimesh.
+        """
         height = self.tip[2] - self.base[2]
         if (
             height < 0
@@ -288,10 +320,24 @@ class Capsule(Obstacle):
 
 @dataclass
 class Cylinder(Obstacle):
+    """Obstacle represented as a cylinder."""
+
+    #: Radius of cylinder in meters.
     radius: float = 0.0
+
+    #: Height of cylinder in meters.
     height: float = 0.0
 
-    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
+        """Create a trimesh instance from the obstacle representation.
+
+        Args:
+            process: Flag is not used.
+            process_color: Flag is not used.
+
+        Returns:
+            trimesh.Trimesh: Instance of obstacle as a trimesh.
+        """
         m = trimesh.creation.cylinder(radius=self.radius, height=self.height)
         if self.color is not None:
             color_visual = trimesh.visual.color.ColorVisuals(
@@ -303,19 +349,32 @@ class Cylinder(Obstacle):
 
 @dataclass
 class Sphere(Obstacle):
+    """Obstacle represented as a sphere."""
+
+    #: Radius of sphere in meters.
     radius: float = 0.0
 
-    #: position is deprecated, use pose instead
+    #: Position is deprecated, use pose instead
     position: Optional[List[float]] = None
 
     def __post_init__(self):
+        """Post initialization checks if position was set, logs warning to use pose instead."""
         if self.position is not None:
             self.pose = self.position + [1, 0, 0, 0]
             log_warn("Sphere.position is deprecated, use Sphere.pose instead")
         if self.pose is not None:
             self.position = self.pose[:3]
 
-    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
+        """Create a trimesh instance from the obstacle representation.
+
+        Args:
+            process: Flag is not used.
+            process_color: Flag is not used.
+
+        Returns:
+            trimesh.Trimesh: Instance of obstacle as a trimesh.
+        """
         m = trimesh.creation.icosphere(radius=self.radius)
         if self.color is not None:
             color_visual = trimesh.visual.color.ColorVisuals(
@@ -366,18 +425,35 @@ class Sphere(Obstacle):
 
 @dataclass
 class Mesh(Obstacle):
+    """Obstacle represented as mesh."""
+
+    #: Path to mesh file.
     file_path: Optional[str] = None
-    file_string: Optional[str] = (
-        None  # storing full mesh as a string, loading from this is not implemented yet.
-    )
-    urdf_path: Optional[str] = None  # useful for visualization in isaac gym.
+
+    #: Full mesh as a string, loading from this is not implemented yet.
+    file_string: Optional[str] = None
+
+    #: Path to urdf file, does not support loading from this yet.
+    urdf_path: Optional[str] = None
+
+    #: Vertices of mesh.
     vertices: Optional[List[List[float]]] = None
+
+    #: Faces of mesh.
     faces: Optional[List[int]] = None
+
+    #: Vertex colors of mesh.
     vertex_colors: Optional[List[List[float]]] = None
+
+    #: Vertex normals of mesh.
     vertex_normals: Optional[List[List[float]]] = None
+
+    #: Face colors of mesh.
     face_colors: Optional[List[List[float]]] = None
 
     def __post_init__(self):
+        """Post initialization adds absolute path to file_path and scales vertices."""
+
         if self.file_path is not None:
             self.file_path = join_path(get_assets_path(), self.file_path)
         if self.urdf_path is not None:
@@ -386,7 +462,17 @@ class Mesh(Obstacle):
             self.vertices = np.ravel(self.scale) * self.vertices
             self.scale = None
 
-    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
+        """Create a trimesh instance from the obstacle representation.
+
+        Args:
+            process: process flag passed to :class:`trimesh.load`.
+            process_color: if True, load mesh visual from texture.
+
+        Returns:
+            trimesh.Trimesh: Instance of obstacle as a trimesh.
+        """
+
         # load mesh from filepath or verts and faces:
         if self.file_path is not None:
             m = trimesh.load(self.file_path, process=process, force="mesh")
@@ -412,6 +498,8 @@ class Mesh(Obstacle):
         return m
 
     def update_material(self):
+        """Load material into vertex_colors and face_colors."""
+
         if (
             self.color is None
             and self.vertex_colors is None
@@ -431,7 +519,15 @@ class Mesh(Obstacle):
                 else:
                     self.vertex_colors = [m.visual.vertex_colors for x in range(len(m.vertices))]
 
-    def get_mesh_data(self, process: bool = True):
+    def get_mesh_data(self, process: bool = True) -> Tuple[List[List[float]], List[int]]:
+        """Get vertices and faces of mesh.
+
+        Args:
+            process: process flag passed to :class:`trimesh.load`.
+
+        Returns:
+            Tuple[List[List[float]], List[int]]: vertices and faces of mesh.
+        """
         verts = faces = None
         if self.file_path is not None:
             m = self.get_trimesh_mesh(process=process)
@@ -453,6 +549,19 @@ class Mesh(Obstacle):
         pose: List[float] = [0, 0, 0, 1, 0, 0, 0],
         filter_close_points: float = 0.0,
     ):
+        """Create a mesh from a pointcloud using marching cubes.
+
+        Args:
+            pointcloud: Input pointcloud of shape [n_pts, 3].
+            pitch: Pitch of marching cubes.
+            name: Name to asiign to created mesh.
+            pose: Pose to assign to created mesh.
+            filter_close_points: filter points that are closer than this threshold. Threshold
+                is in meters and should be positive.
+
+        Returns:
+            Mesh: Mesh created from pointcloud.
+        """
         if filter_close_points > 0.0:
             # remove points that are closer than given threshold
             dist = np.linalg.norm(pointcloud, axis=-1)
@@ -465,16 +574,31 @@ class Mesh(Obstacle):
 
 @dataclass
 class BloxMap(Obstacle):
+    """Obstacle represented as a nvblox ESDF layer."""
+
+    #: Path to nvblox map file.
     map_path: Optional[str] = None
+
+    #: Scale of the map.
     scale: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
+
+    #: Voxel size of the map.
     voxel_size: float = 0.02
-    #: integrator type to use in nvblox. Options: ["tsdf", "occupancy"]
+
+    #: Integrator type to use in nvblox. Options: ["tsdf", "occupancy"]
     integrator_type: str = "tsdf"
+
+    #: File path to mesh file if available, useful for rendering.
     mesh_file_path: Optional[str] = None
+
+    #: Instance of nvblox mapper. Useful for passing a pre-initialized mapper.
     mapper_instance: Any = None
+
+    #: Mesh representation of the map. Useful for rendering. Not used in collision checking.
     mesh: Optional[Mesh] = None
 
     def __post_init__(self):
+        """Post initialization adds absolute path to map_path, mesh_file_path, and loads mesh."""
         if self.map_path is not None:
             self.map_path = join_path(get_assets_path(), self.map_path)
         if self.mesh_file_path is not None:
@@ -482,9 +606,20 @@ class BloxMap(Obstacle):
                 name=self.name + "_mesh", file_path=self.mesh_file_path, pose=self.pose
             )
 
-    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
+    def get_trimesh_mesh(
+        self, process: bool = True, process_color: bool = True
+    ) -> Union[trimesh.Trimesh, None]:
+        """Get trimesh mesh representation of the map. Only available if mesh_file_path is set.
+
+        Args:
+            process: Process flag passed to :class:`trimesh.load`.
+            process_color: Load mesh visual from texture.
+
+        Returns:
+            Union[trimesh.Trimesh, None]: Trimesh mesh representation of the map.
+        """
         if self.mesh is not None:
-            return self.mesh.get_trimesh_mesh(process)
+            return self.mesh.get_trimesh_mesh(process, process_color=process_color)
         else:
             log_warn("no mesh found for obstacle: " + self.name)
             return None
@@ -492,15 +627,31 @@ class BloxMap(Obstacle):
 
 @dataclass
 class PointCloud(Obstacle):
+    """Obstacle represented as a pointcloud."""
+
+    #: Points of pointcloud.
     points: Union[torch.Tensor, np.ndarray, List[List[float]]] = None
+
+    #: Features of pointcloud.
     points_features: Union[torch.Tensor, np.ndarray, List[List[float]], None] = None
 
     def __post_init__(self):
+        """Post initialization scales points if scale is set."""
         if self.scale is not None and self.points is not None:
             self.points = np.ravel(self.scale) * self.points
             self.scale = None
 
-    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True):
+    def get_trimesh_mesh(self, process: bool = True, process_color: bool = True) -> trimesh.Trimesh:
+        """Create a trimesh instance from the obstacle representation.
+
+        Args:
+            process: Not used.
+            process_color: Not used.
+
+        Returns:
+            trimesh.Trimesh: Instance of obstacle as a trimesh.
+        """
+
         points = self.points
         if isinstance(points, torch.Tensor):
             points = points.view(-1, 3).cpu().numpy()
@@ -510,7 +661,15 @@ class PointCloud(Obstacle):
         mesh = Mesh.from_pointcloud(points, pose=self.pose)
         return mesh.get_trimesh_mesh()
 
-    def get_mesh_data(self, process: bool = True):
+    def get_mesh_data(self, process: bool = True) -> Tuple[List[List[float]], List[int]]:
+        """Get mesh data from pointcloud.
+
+        Args:
+            process: process flag passed to :class:`trimesh.load`.
+
+        Returns:
+            verts, faces: vertices and faces of mesh.
+        """
         verts = faces = None
         m = self.get_trimesh_mesh(process=process)
         verts = m.vertices.view(np.ndarray)
@@ -519,75 +678,50 @@ class PointCloud(Obstacle):
 
     @staticmethod
     def from_camera_observation(
-        camera_obs: CameraObservation, name: str = "pc_obstacle", pose: Optional[List[float]] = None
-    ):
-        return PointCloud(name=name, pose=pose, points=camera_obs.get_pointcloud())
-
-    def get_bounding_spheres(
-        self,
-        n_spheres: int = 1,
-        surface_sphere_radius: float = 0.002,
-        fit_type: SphereFitType = SphereFitType.VOXEL_VOLUME_SAMPLE_SURFACE,
-        voxelize_method: str = "ray",
-        pre_transform_pose: Optional[Pose] = None,
-        tensor_args: TensorDeviceType = TensorDeviceType(),
-    ) -> List[Sphere]:
-        """Compute n spheres that fits in the volume of the object.
+        camera_obs: CameraObservation,
+        name: str = "pc_obstacle",
+        pose: Optional[List[float]] = None,
+    ) -> PointCloud:
+        """Create a pointcloud from a camera observation.
 
         Args:
-            n: number of spheres
+            camera_obs: Input camera observation.
+            name: Name to assign to created pointcloud.
+            pose: Pose to assign to created pointcloud.
+
         Returns:
-            spheres
+            PointCloud: Pointcloud created from camera observation.
         """
-        # sample points in pointcloud:
-
-        # mesh = self.get_trimesh_mesh()
-        # pts, n_radius = fit_spheres_to_mesh(
-        #     mesh, n_spheres, surface_sphere_radius, fit_type, voxelize_method=voxelize_method
-        # )
-
-        obj_pose = Pose.from_list(self.pose, tensor_args)
-        # transform object:
-
-        # transform points:
-        if pre_transform_pose is not None:
-            obj_pose = pre_transform_pose.multiply(obj_pose)  # convert object pose to another frame
-
-        if pts is None or len(pts) == 0:
-            log_warn("spheres could not be fit!, adding one sphere at origin")
-            pts = np.zeros((1, 3))
-            pts[0, :] = mesh.centroid
-            n_radius = [0.02]
-            obj_pose = Pose.from_list([0, 0, 0, 1, 0, 0, 0], tensor_args)
-
-        points_cuda = tensor_args.to_device(pts)
-        pts = obj_pose.transform_points(points_cuda).cpu().view(-1, 3).numpy()
-
-        new_spheres = [
-            Sphere(
-                name="sph_" + str(i),
-                pose=[pts[i, 0], pts[i, 1], pts[i, 2], 1, 0, 0, 0],
-                radius=n_radius[i],
-            )
-            for i in range(pts.shape[0])
-        ]
-
-        return new_spheres
+        return PointCloud(name=name, pose=pose, points=camera_obs.get_pointcloud())
 
 
 @dataclass
 class VoxelGrid(Obstacle):
+    """VoxelGrid representation of an obstacle. Requires voxel to contain ESDF."""
+
+    #: Dimensions of voxel grid in meters [x_length, y_length, z_length].
     dims: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+
+    #: Voxel size in meters.
     voxel_size: float = 0.02  # meters
+
+    #: Feature tensor of voxel grid, typically ESDF.
     feature_tensor: Optional[torch.Tensor] = None
+
+    #: XYZR tensor of voxel grid.
     xyzr_tensor: Optional[torch.Tensor] = None
+
+    #: Data type of feature tensor.
     feature_dtype: torch.dtype = torch.float32
 
     def __post_init__(self):
+        """Post initialization checks."""
         if self.feature_tensor is not None:
             self.feature_dtype = self.feature_tensor.dtype
 
-    def get_grid_shape(self):
+    def get_grid_shape(self) -> Tuple[List[int], List[float], List[float]]:
+        """Get shape of voxel grid."""
+
         bounds = self.dims
         low = [-bounds[0] / 2, -bounds[1] / 2, -bounds[2] / 2]
         high = [bounds[0] / 2, bounds[1] / 2, bounds[2] / 2]
@@ -599,7 +733,17 @@ class VoxelGrid(Obstacle):
 
     def create_xyzr_tensor(
         self, transform_to_origin: bool = False, tensor_args: TensorDeviceType = TensorDeviceType()
-    ):
+    ) -> torch.Tensor:
+        """Create XYZR tensor of voxel grid.
+
+        Args:
+            transform_to_origin: Transform points to origin.
+            tensor_args: Device and floating point precision to use for tensors.
+
+        Returns:
+            xyzr_tensor: XYZR tensor of voxel grid with r referring to voxel size.
+        """
+
         trange, low, high = self.get_grid_shape()
 
         x = torch.linspace(low[0], high[0], trange[0], device=tensor_args.device)
@@ -618,7 +762,15 @@ class VoxelGrid(Obstacle):
 
         return xyzr
 
-    def get_occupied_voxels(self, feature_threshold: Optional[float] = None):
+    def get_occupied_voxels(self, feature_threshold: Optional[float] = None) -> torch.Tensor:
+        """Get occupied voxels from voxel grid.
+
+        Args:
+            feature_threshold: esdf value threshold to consider as occupied.
+
+        Returns:
+            occupied voxels as a tensor of shape [occupied_voxels].
+        """
         if feature_threshold is None:
             feature_threshold = -0.5 * self.voxel_size
         if self.xyzr_tensor is None or self.feature_tensor is None:
@@ -628,12 +780,15 @@ class VoxelGrid(Obstacle):
         occupied = xyzr[self.feature_tensor > feature_threshold]
         return occupied
 
-    def clone(self):
+    def clone(self) -> VoxelGrid:
+        """Clone data of voxel grid."""
         return VoxelGrid(
             name=self.name,
             pose=self.pose.copy(),
             dims=self.dims.copy(),
-            feature_tensor=self.feature_tensor.clone() if self.feature_tensor is not None else None,
+            feature_tensor=(
+                self.feature_tensor.clone() if self.feature_tensor is not None else None
+            ),
             xyzr_tensor=self.xyzr_tensor.clone() if self.xyzr_tensor is not None else None,
             feature_dtype=self.feature_dtype,
             voxel_size=self.voxel_size,
@@ -662,12 +817,14 @@ class WorldConfig(Sequence):
     #: BloxMap obstacle.
     blox: Optional[List[BloxMap]] = None
 
+    #: List of ESDF voxel grid obstacles.
     voxel: Optional[List[VoxelGrid]] = None
 
     #: List of all obstacles in world.
     objects: Optional[List[Obstacle]] = None
 
     def __post_init__(self):
+        """Post initialization checks, also creates a list of all obstacles."""
         # create objects list:
         if self.sphere is None:
             self.sphere = []
@@ -694,13 +851,16 @@ class WorldConfig(Sequence):
                 + self.voxel
             )
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get number of obstacles."""
         return len(self.objects)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Obstacle:
+        """Get obstacle at index."""
         return self.objects[idx]
 
-    def clone(self):
+    def clone(self) -> WorldConfig:
+        """Clone world configuration."""
         return WorldConfig(
             cuboid=self.cuboid.copy() if self.cuboid is not None else None,
             sphere=self.sphere.copy() if self.sphere is not None else None,
@@ -713,6 +873,14 @@ class WorldConfig(Sequence):
 
     @staticmethod
     def from_dict(data_dict: Dict[str, Any]) -> WorldConfig:
+        """Load world configuration from dictionary.
+
+        Args:
+            data_dict: World configuration dictionary.
+
+        Returns:
+            Instance of WorldConfig.
+        """
         cuboid = None
         sphere = None
         capsule = None
@@ -748,7 +916,8 @@ class WorldConfig(Sequence):
 
     # load world config as obbs: convert all types to obbs
     @staticmethod
-    def create_obb_world(current_world: WorldConfig):
+    def create_obb_world(current_world: WorldConfig) -> WorldConfig:
+        """Approximate all obstcales to oriented bounding boxes."""
         sphere_obb = []
         capsule_obb = []
         cylinder_obb = []
@@ -778,7 +947,16 @@ class WorldConfig(Sequence):
         )
 
     @staticmethod
-    def create_mesh_world(current_world: WorldConfig, process: bool = False):
+    def create_mesh_world(current_world: WorldConfig, process: bool = False) -> WorldConfig:
+        """Convert all obstacles to meshes. Does not convert :class:`VoxelGrid`, :class:`BloxMap`.
+
+        Args:
+            current_world: Current world configuration.
+            process: process flag passed to :class:`trimesh.load`.
+
+        Returns:
+            WorldConfig: World configuration with all obstacles converted to meshes.
+        """
         sphere_obb = []
         capsule_obb = []
         cuboid_obb = []
@@ -812,7 +990,19 @@ class WorldConfig(Sequence):
         )
 
     @staticmethod
-    def create_collision_support_world(current_world: WorldConfig, process: bool = True):
+    def create_collision_support_world(
+        current_world: WorldConfig, process: bool = True
+    ) -> WorldConfig:
+        """Converts all obstacles to only supported collision types.
+
+        Args:
+            current_world: Current world configuration.
+            process: process flag passed to :class:`trimesh.load`.
+
+        Returns:
+            WorldConfig: World configuration with all obstacles converted to supported collision
+                types.
+        """
         sphere_obb = []
         capsule_obb = []
         cuboid_obb = []
@@ -841,7 +1031,18 @@ class WorldConfig(Sequence):
         )
 
     @staticmethod
-    def get_scene_graph(current_world: WorldConfig, process_color: bool = True):
+    def get_scene_graph(
+        current_world: WorldConfig, process_color: bool = True
+    ) -> trimesh.scene.scene.Scene:
+        """Get trimesh scene graph of world.
+
+        Args:
+            current_world: Current world configuration.
+            process_color: Load color of meshes.
+
+        Returns:
+            trimesh.scene.scene.Scene: Scene graph of world.
+        """
         m_world = WorldConfig.create_mesh_world(current_world)
         mesh_scene = trimesh.scene.scene.Scene(base_frame="world_origin")
         mesh_list = m_world
@@ -858,7 +1059,17 @@ class WorldConfig(Sequence):
     @staticmethod
     def create_merged_mesh_world(
         current_world: WorldConfig, process: bool = True, process_color: bool = True
-    ):
+    ) -> WorldConfig:
+        """Merge all obstacles in the world to a single mesh.
+
+        Args:
+            current_world: Current world configuration.
+            process: process flag passed to :class:`trimesh.load`.
+            process_color: Load color of meshes.
+
+        Returns:
+            WorldConfig: World configuration with a single merged mesh as obstacle.
+        """
         mesh_scene = WorldConfig.get_scene_graph(current_world, process_color=process_color)
         mesh_scene = mesh_scene.dump(concatenate=True)
         new_mesh = Mesh(
@@ -869,21 +1080,31 @@ class WorldConfig(Sequence):
         )
         return WorldConfig(mesh=[new_mesh])
 
-    def get_obb_world(self):
+    def get_obb_world(self) -> WorldConfig:
+        """Get world with all obstacles as oriented bounding boxes."""
         return WorldConfig.create_obb_world(self)
 
-    def get_mesh_world(self, merge_meshes: bool = False, process: bool = False):
+    def get_mesh_world(self, merge_meshes: bool = False, process: bool = False) -> WorldConfig:
+        """Get world with all obstacles as meshes."""
         if merge_meshes:
             return WorldConfig.create_merged_mesh_world(self, process=process)
         else:
             return WorldConfig.create_mesh_world(self, process=process)
 
-    def get_collision_check_world(self, mesh_process: bool = False):
+    def get_collision_check_world(self, mesh_process: bool = False) -> WorldConfig:
+        """Get world with all obstacles converted to supported collision types."""
         return WorldConfig.create_collision_support_world(self, process=mesh_process)
 
     def save_world_as_mesh(
         self, file_path: str, save_as_scene_graph=False, process_color: bool = True
     ):
+        """Save world as a mesh file.
+
+        Args:
+            file_path: Path to save mesh file.
+            save_as_scene_graph: Save as scene graph.
+            process_color: Load color of meshes.
+        """
         mesh_scene = WorldConfig.get_scene_graph(self, process_color=process_color)
         if save_as_scene_graph:
             mesh_scene = mesh_scene.dump(concatenate=True)
@@ -891,15 +1112,16 @@ class WorldConfig(Sequence):
         mesh_scene.export(file_path)
 
     def get_cache_dict(self) -> Dict[str, int]:
-        """Computes the number of obstacles in each type
-
-        Returns:
-            _description_
-        """
+        """Computes the number of obstacles in each type."""
         cache = {"obb": len(self.cuboid), "mesh": len(self.mesh)}
         return cache
 
     def add_obstacle(self, obstacle: Obstacle):
+        """Add obstacle to world.
+
+        Args:
+            obstacle: Obstacle to add to world.
+        """
         if isinstance(obstacle, Mesh):
             self.mesh.append(obstacle)
         elif isinstance(obstacle, Cuboid):
@@ -920,12 +1142,9 @@ class WorldConfig(Sequence):
         """Randomize color of objects within the given range
 
         Args:
-            r: _description_. Defaults to [0,1].
-            g: _description_. Defaults to [0,1].
-            b: _description_. Defaults to [0,1].
-
-        Returns:
-            _description_
+            r: range of red color.
+            g: range of green color.
+            b: range of blue color.
         """
         n = len(self.objects)
         r_l = np.random.uniform(r[0], r[1], n)
@@ -935,32 +1154,72 @@ class WorldConfig(Sequence):
             i_val.color = [r_l[i], g_l[i], b_l[i], 1.0]
 
     def add_color(self, rgba=[0.0, 0.0, 0.0, 1.0]):
+        """Update color of obstacles.
+
+        Args:
+            rgba: red, green, blue, alpha values.
+        """
         for i, i_val in enumerate(self.objects):
             i_val.color = rgba
 
     def add_material(self, material=Material()):
+        """Add material to all obstacles.
+
+        Args:
+            material: material to add to obstacles.
+        """
         for i, i_val in enumerate(self.objects):
             i_val.material = material
 
     def get_obstacle(self, name: str) -> Union[None, Obstacle]:
+        """Get obstacle by name.
+
+        Args:
+            name: Name of obstacle.
+
+        Returns:
+            Obstacle with given name. If not found, returns None.
+        """
         for i in self.objects:
             if i.name == name:
                 return i
         return None
 
     def remove_obstacle(self, name: str):
+        """Remove obstacle by name.
+
+        Args:
+            name: Name of obstacle to remove.
+        """
         for i in range(len(self.objects)):
             if self.objects[i].name == name:
                 del self.objects[i]
                 return
 
-    def remove_absolute_paths(self) -> WorldConfig:
+    def remove_absolute_paths(self):
+        """Remove absolute paths from file paths in obstacles. May not work on Windows."""
         for obj in self.objects:
             if obj.name.startswith("/"):
                 obj.name = obj.name[1:]
 
 
-def tensor_sphere(pt, radius, tensor=None, tensor_args=TensorDeviceType()):
+def tensor_sphere(
+    pt: Union[List[float], np.array, torch.Tensor],
+    radius: float,
+    tensor: Optional[torch.Tensor] = None,
+    tensor_args: TensorDeviceType = TensorDeviceType(),
+) -> torch.Tensor:
+    """Tensor representation of a sphere.
+
+    Args:
+        pt: Input point.
+        radius: Radius of sphere.
+        tensor: Tensor to update. If None, creates a new tensor.
+        tensor_args: Device and floating point precision to use for tensors.
+
+    Returns:
+        tensor: Tensor representation of sphere.
+    """
     if tensor is None:
         tensor = torch.empty(4, device=tensor_args.device, dtype=tensor_args.dtype)
     tensor[:3] = torch.as_tensor(pt, device=tensor_args.device, dtype=tensor_args.dtype)
@@ -968,7 +1227,26 @@ def tensor_sphere(pt, radius, tensor=None, tensor_args=TensorDeviceType()):
     return tensor
 
 
-def tensor_capsule(base, tip, radius, tensor=None, tensor_args=TensorDeviceType()):
+def tensor_capsule(
+    base: Union[List[float], torch.Tensor, np.array],
+    tip: Union[List[float], torch.Tensor, np.array],
+    radius: float,
+    tensor: Optional[torch.Tensor] = None,
+    tensor_args: TensorDeviceType = TensorDeviceType(),
+) -> torch.Tensor:
+    """Tensor representation of a capsule.
+
+    Args:
+        base: Base of capsule.
+        tip: Tip of capsule.
+        radius: radius of capsule.
+        tensor: Tensor to update. If None, creates a new tensor.
+        tensor_args: Device and floating point precision to use for tensors.
+
+    Returns:
+        torch.Tensor: Tensor representation of capsule.
+    """
+
     if tensor is None:
         tensor = torch.empty(7, device=tensor_args.device, dtype=tensor_args.dtype)
     tensor[:3] = torch.as_tensor(base, device=tensor_args.device, dtype=tensor_args.dtype)
@@ -977,16 +1255,19 @@ def tensor_capsule(base, tip, radius, tensor=None, tensor_args=TensorDeviceType(
     return tensor
 
 
-def tensor_cube(pose, dims, tensor_args=TensorDeviceType()):
-    """
+def tensor_cube(
+    pose: List[float], dims: List[float], tensor_args: TensorDeviceType = TensorDeviceType()
+) -> List[torch.Tensor, torch.Tensor]:
+    """Tensor representation of a cube.
 
     Args:
-        pose (_type_): x,y,z, qw,qx,qy,qz
-        dims (_type_): _description_
-        tensor_args (_type_, optional): _description_. Defaults to TensorDeviceType().
+        pose: x,y,z, qw, qx, qy, qz.
+        dims: length, width, height in meters. Frame is at the center of the cube.
+        tensor_args: Device and floating point precision to use for tensors.
 
     Returns:
-        _type_: _description_
+        List[torch.Tensor, torch.Tensor]: Tensor representation of cube, first tensor is
+            dimensions and second tensor is inverse of pose.
     """
     w_T_b = Pose.from_list(pose, tensor_args=tensor_args)
     b_T_w = w_T_b.inverse()
@@ -997,16 +1278,20 @@ def tensor_cube(pose, dims, tensor_args=TensorDeviceType()):
     return cube
 
 
-def batch_tensor_cube(pose, dims, tensor_args=TensorDeviceType()):
-    """
-
+def batch_tensor_cube(
+    pose: List[List[float]],
+    dims: List[List[float]],
+    tensor_args: TensorDeviceType = TensorDeviceType(),
+) -> List[torch.Tensor]:
+    """Tensor representation of a batch of cubes
     Args:
-        pose (_type_): x,y,z, qw,qx,qy,qz
-        dims (_type_): _description_
-        tensor_args (_type_, optional): _description_. Defaults to TensorDeviceType().
+        pose : Poses of the cubes in x,y,z, qw,qx,qy,qz.
+        dims : Dimensions of the cubes. Frame is at the center of the cube.
+        tensor_args: Device and floating point precision to use for tensors.
 
     Returns:
-        _type_: _description_
+        List[torch.Tensor]: Tensor representation of cubes, first tensor is dimensions and
+            second tensor is inverse of poses.
     """
     w_T_b = Pose.from_batch_list(pose, tensor_args=tensor_args)
     b_T_w = w_T_b.inverse()

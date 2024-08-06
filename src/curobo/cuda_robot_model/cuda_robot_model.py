@@ -505,6 +505,49 @@ class CudaRobotModel(CudaRobotModelConfig):
 
         return self.get_state(js.position, link_name, calculate_jacobian)
 
+    def compute_kinematics_from_joint_state(
+        self, js: JointState, link_name: Optional[str] = None, calculate_jacobian: bool = False
+    ) -> CudaRobotModelState:
+        """Compute forward kinematics of the robot.
+
+        Args:
+            js: Joint state of robot.
+            link_name: Name of link to return pose of. If None, returns end-effector pose.
+            calculate_jacobian: Calculate jacobian of the robot. Not supported.
+
+
+        Returns:
+            CudaRobotModelState: Kinematic state of the robot.
+
+        """
+        if js.joint_names is not None:
+            if js.joint_names != self.kinematics_config.joint_names:
+                log_error("Joint names do not match, reoder joints before forward kinematics")
+
+        return self.get_state(js.position, link_name, calculate_jacobian)
+
+    def compute_kinematics_from_joint_position(
+        self,
+        joint_position: torch.Tensor,
+        link_name: Optional[str] = None,
+        calculate_jacobian: bool = False,
+    ) -> CudaRobotModelState:
+        """Compute forward kinematics of the robot.
+
+        Args:
+            joint_position: Joint position of robot. Assumed to only contain active joints in the
+                order specified in :attr:`CudaRobotModel.joint_names`.
+            link_name: Name of link to return pose of. If None, returns end-effector pose.
+            calculate_jacobian: Calculate jacobian of the robot. Not supported.
+
+
+        Returns:
+            CudaRobotModelState: Kinematic state of the robot.
+
+        """
+
+        return self.get_state(joint_position, link_name, calculate_jacobian)
+
     def get_robot_link_meshes(self) -> List[Mesh]:
         """Get meshes of all links of the robot.
 
@@ -578,12 +621,12 @@ class CudaRobotModel(CudaRobotModelConfig):
     def get_link_poses(self, q: torch.Tensor, link_names: List[str]) -> Pose:
         """Get Pose of links at given joint configuration q using forward kinematics.
 
-        Note that only the links specified in :var:`~link_names` are returned.
+        Note that only the links specified in :class:`~CudaRobotModelConfig.link_names` are returned.
 
         Args:
             q: Joint configuration of the robot, shape should be [batch_size, dof].
             link_names: Names of links to get pose of. This should be a subset of
-                :var:`~link_names`.
+                :class:`~CudaRobotModelConfig.link_names`.
 
         Returns:
             Pose: Poses of links at given joint configuration.
@@ -838,6 +881,19 @@ class CudaRobotModel(CudaRobotModelConfig):
         self.kinematics_config.attach_object(sphere_tensor=sphere_tensor, link_name=link_name)
 
         return True
+
+    def get_active_js(self, full_js: JointState):
+        """Get joint state of active joints of the robot.
+
+        Args:
+            full_js: Joint state of all joints.
+
+        Returns:
+            JointState: Joint state of active joints.
+        """
+        active_jnames = self.joint_names
+        out_js = full_js.get_ordered_joint_state(active_jnames)
+        return out_js
 
     @property
     def ee_link(self) -> str:

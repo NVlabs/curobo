@@ -23,7 +23,7 @@ except ImportError:
     from torch.utils.cpp_extension import load
 
     # CuRobo
-    from curobo.curobolib.util_file import add_cpp_path
+    from curobo.util_file import add_cpp_path
 
     log_warn("tensor_step_cu not found, jit compiling...")
     tensor_step_cu = load(

@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+"""Warp-lang based world collision functions are implemented as torch autograd functions."""
 
 # Third Party
 import torch
@@ -28,6 +29,8 @@ else:
 
 
 class SdfMeshWarpPy(torch.autograd.Function):
+    """Pytorch autograd function for computing signed distance between spheres and meshes."""
+
     @staticmethod
     def forward(
         ctx,
@@ -109,6 +112,8 @@ class SdfMeshWarpPy(torch.autograd.Function):
 
 
 class SweptSdfMeshWarpPy(torch.autograd.Function):
+    """Compute signed distance between trajectory of spheres and meshes."""
+
     @staticmethod
     def forward(
         ctx,

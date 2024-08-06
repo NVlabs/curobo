@@ -143,6 +143,13 @@ def get_batch_interpolated_trajectory(
     # given the dt required to run trajectory at maximum velocity,
     # we find the number of timesteps required:
     if optimize_dt:
+        if max_vel is None:
+            log_error("Max velocity not provided")
+        if max_acc is None:
+            log_error("Max acceleration not provided")
+        if max_jerk is None:
+            log_error("Max jerk not provided")
+    if max_vel is not None and max_acc is not None and max_jerk is not None:
         traj_vel = raw_traj.velocity
         traj_acc = raw_traj.acceleration
         traj_jerk = raw_traj.jerk
@@ -168,7 +175,8 @@ def get_batch_interpolated_trajectory(
         )
     else:
         traj_steps, steps_max = calculate_traj_steps(raw_dt, interpolation_dt, horizon)
-        opt_dt = raw_dt
+        opt_dt = torch.zeros(b, device=tensor_args.device)
+        opt_dt[:] = raw_dt
     # traj_steps contains the tsteps for each trajectory
     if steps_max <= 0:
         log_error("Steps max is less than 0")

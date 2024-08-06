@@ -408,7 +408,9 @@ class DistCost(CostBase, DistCostConfig):
         if self.terminal and self.run_weight is not None:
             if self._run_weight_vec is None or self._run_weight_vec.shape[1] != cost.shape[1]:
                 self._run_weight_vec = torch.ones(
-                    (1, cost.shape[1]), device=self.tensor_args.device, dtype=self.tensor_args.dtype
+                    (1, cost.shape[1]),
+                    device=self.tensor_args.device,
+                    dtype=self.tensor_args.dtype,
                 )
                 self._run_weight_vec[:, :-1] *= self.run_weight
         if RETURN_GOAL_DIST:
@@ -430,7 +432,9 @@ class DistCost(CostBase, DistCostConfig):
         if self.terminal and self.run_weight is not None:
             if self._run_weight_vec is None or self._run_weight_vec.shape[1] != cost.shape[1]:
                 self._run_weight_vec = torch.ones(
-                    (1, cost.shape[1]), device=self.tensor_args.device, dtype=self.tensor_args.dtype
+                    (1, cost.shape[1]),
+                    device=self.tensor_args.device,
+                    dtype=self.tensor_args.dtype,
                 )
                 self._run_weight_vec[:, :-1] *= self.run_weight
             cost = self._run_weight_vec * dist

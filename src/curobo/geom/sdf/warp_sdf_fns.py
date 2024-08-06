@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+"""CUDA kernels implemented in warp-lang for computing signed distance to meshes."""
 # Third Party
 import warp as wp
 
@@ -18,6 +19,7 @@ def mesh_query_point_fn(
     point: wp.vec3,
     max_distance: float,
 ):
+    """Query point on mesh."""
     collide_result = wp.mesh_query_point(idx, point, max_distance)
     return collide_result
 
@@ -46,6 +48,7 @@ def get_swept_closest_pt_batch_env(
     env_query_idx: wp.array(dtype=wp.int32),
     use_batch_env: wp.uint8,
 ):
+    """Compute signed distance between a trajectory of a sphere and world meshes."""
     # we launch nspheres kernels
     # compute gradient here and return
     # distance is negative outside and positive inside
@@ -364,6 +367,7 @@ def get_closest_pt_batch_env(
     use_batch_env: wp.uint8,
     compute_esdf: wp.uint8,
 ):
+    """Compute signed distance between a sphere and world meshes."""
     # we launch nspheres kernels
     # compute gradient here and return
     # distance is negative outside and positive inside

@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+"""Computer Vision functions, including projection between depth and pointclouds."""
 
 # Third Party
 import torch
@@ -17,15 +18,18 @@ from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 @get_torch_jit_decorator()
-def project_depth_to_pointcloud(depth_image: torch.Tensor, intrinsics_matrix: torch.Tensor):
-    """Projects numpy depth image to point cloud.
+def project_depth_to_pointcloud(
+    depth_image: torch.Tensor,
+    intrinsics_matrix: torch.Tensor,
+) -> torch.Tensor:
+    """Projects depth image to point cloud.
 
     Args:
-      np_depth_image: numpy array float, shape (h, w).
-        intrinsics array: numpy array float, 3x3 intrinsics matrix.
+      depth_image: torch tensor of shape (b, h, w).
+        intrinsics array: torch tensor for intrinsics matrix of shape (b, 3, 3).
 
     Returns:
-      array of float (h, w, 3)
+      torch tensor of shape (b, h, w, 3)
     """
     fx = intrinsics_matrix[0, 0]
     fy = intrinsics_matrix[1, 1]
@@ -48,16 +52,21 @@ def project_depth_to_pointcloud(depth_image: torch.Tensor, intrinsics_matrix: to
 
 @get_torch_jit_decorator()
 def get_projection_rays(
-    height: int, width: int, intrinsics_matrix: torch.Tensor, depth_to_meter: float = 0.001
-):
-    """Projects numpy depth image to point cloud.
+    height: int,
+    width: int,
+    intrinsics_matrix: torch.Tensor,
+    depth_to_meter: float = 0.001,
+) -> torch.Tensor:
+    """Get projection rays for a image size and batch of intrinsics matrices.
 
     Args:
-      np_depth_image: numpy array float, shape (h, w).
-        intrinsics array: numpy array float, 3x3 intrinsics matrix.
+        height: Height of the images.
+        width: Width of the images.
+        intrinsics_matrix: Batch of intrinsics matrices of shape (b, 3, 3).
+        depth_to_meter: Scaling factor to convert depth to meters.
 
     Returns:
-      array of float (h, w, 3)
+        torch.Tensor: Projection rays of shape (b, height * width, 3).
     """
     fx = intrinsics_matrix[:, 0:1, 0:1]
     fy = intrinsics_matrix[:, 1:2, 1:2]
@@ -92,15 +101,15 @@ def get_projection_rays(
 def project_pointcloud_to_depth(
     pointcloud: torch.Tensor,
     output_image: torch.Tensor,
-):
-    """Projects pointcloud to depth image
+) -> torch.Tensor:
+    """Projects pointcloud to depth image based on indices.
 
     Args:
-      np_depth_image: numpy array float, shape (h, w).
-        intrinsics array: numpy array float, 3x3 intrinsics matrix.
+        pointcloud: PointCloud of shape (b, h, w, 3).
+        output_image: Image of shape (b, h, w).
 
     Returns:
-      array of float (h, w)
+        torch.Tensor: Depth image of shape (b, h, w).
     """
     width, height = output_image.shape
 
@@ -112,10 +121,26 @@ def project_pointcloud_to_depth(
 
 @get_torch_jit_decorator()
 def project_depth_using_rays(
-    depth_image: torch.Tensor, rays: torch.Tensor, filter_origin: bool = False
-):
+    depth_image: torch.Tensor,
+    rays: torch.Tensor,
+    filter_origin: bool = False,
+    depth_threshold: float = 0.01,
+) -> torch.Tensor:
+    """Project depth image to pointcloud using projection rays.
+
+    Projection rays can be calculated using :func:`~curobo.geom.cv.get_projection_rays` function.
+
+    Args:
+        depth_image: Dpepth image of shape (b, h, w).
+        rays: Projection rays of shape (b, h * w, 3).
+        filter_origin: Remove points with depth less than depth_threshold.
+        depth_threshold: Threshold to filter points.
+
+    Returns:
+        Pointcloud of shape (b, h * w, 3).
+    """
     if filter_origin:
-        depth_image = torch.where(depth_image < 0.01, 0, depth_image)
+        depth_image = torch.where(depth_image < depth_threshold, 0, depth_image)
 
     depth_image = depth_image.view(depth_image.shape[0], -1, 1).contiguous()
     points = depth_image * rays

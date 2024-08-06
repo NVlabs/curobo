@@ -26,7 +26,10 @@ def init_warp(quiet=True, tensor_args: TensorDeviceType = TensorDeviceType()):
     # wp.config.print_launches = True
     # wp.config.verbose = True
     # wp.config.mode = "debug"
+    # wp.config.verify_cuda = True
     # wp.config.enable_backward = True
+    # wp.config.verify_autograd_array_access = True
+    # wp.config.cache_kernels = False
     wp.init()
 
     # wp.force_load(wp.device_from_torch(tensor_args.device))

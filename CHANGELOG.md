@@ -10,6 +10,18 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
+## Latest Commit
+
+### New Features
+- Add pose cost metric to MPC to allow for partial pose reaching.
+- Update obstacle poses in cpu reference with an optional flag.
+
+### BugFixes & Misc.
+- Fixed optimize_dt not being correctly set when motion gen is called in reactive mode.
+- Add documentation for geom module.
+- Add descriptive api for computing kinematics.
+- Fix cv2 import order in isaac sim realsense examples.
+
 ## Version 0.7.4
 
 ### Changes in Default Behavior
