@@ -125,7 +125,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
 
     def _shift(self, shift_steps=1):
         # TODO: shift best q?:
-        self.best_cost[:] = 500000.0
+        self.best_cost[:] = 5000000.0
         self.best_iteration[:] = 0
         self.current_iteration[:] = 0
         return True
@@ -159,8 +159,9 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
         with profiler.record_function("newton/reset"):
             self.i = -1
             self._opt_finished = False
-            self.best_cost[:] = 500000.0
+            self.best_cost[:] = 5000000.0
             self.best_iteration[:] = 0
+            self.current_iteration[:] = 0
 
         super().reset()
 
@@ -448,6 +449,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
                 self.cost_delta_threshold,
                 self.cost_relative_threshold,
             )
+            # print(self.best_cost[0], self.best_q[0])
         else:
             cost = cost.detach()
             q = q.detach()
@@ -528,6 +530,7 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
 
     def _create_opt_iters_graph(self, q, grad_q, shift_steps):
         # create a new stream:
+        self.reset()
         self._cu_opt_q_in = q.detach().clone()
         self._cu_opt_gq_in = grad_q.detach().clone()
         s = torch.cuda.Stream(device=self.tensor_args.device)
@@ -539,12 +542,13 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
                     self._cu_opt_q_in, self._cu_opt_gq_in, shift_steps
                 )
         torch.cuda.current_stream(device=self.tensor_args.device).wait_stream(s)
-
+        self.reset()
         self.cu_opt_graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.cu_opt_graph, stream=s):
             self._cu_opt_q, self._cu_opt_cost, self._cu_q, self._cu_gq = self._opt_iters(
                 self._cu_opt_q_in, self._cu_opt_gq_in, shift_steps
             )
+        torch.cuda.current_stream(device=self.tensor_args.device).wait_stream(s)
 
 
 @get_torch_jit_decorator()

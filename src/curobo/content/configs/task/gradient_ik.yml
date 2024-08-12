@@ -29,32 +29,35 @@ cost:
   pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     weight: [2000,10000,20,40]
-    vec_convergence: [0.0, 0.00] 
+    vec_convergence: [0.0, 0.00]
     terminal: False
     use_metric: True
     run_weight: 1.0
   link_pose_cfg:
     vec_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     weight: [2000,10000,20,40]
-    vec_convergence: [0.00, 0.000] 
+    vec_convergence: [0.00, 0.000]
     terminal: False
     use_metric: True
     run_weight: 1.0
 
-    
   cspace_cfg:
     weight: 0.000
+
   bound_cfg:
-    weight: 500.0
-    activation_distance: [0.1]
-    null_space_weight: [1.0]
+    weight: 5000.0
+    activation_distance: [0.001]
+    null_space_weight: [0.001]
+    use_l2_kernel: True
+
   primitive_collision_cfg:
     weight: 5000.0
     use_sweep: False
     classify: False
     activation_distance: 0.01
+
   self_collision_cfg:
-    weight: 500.0
+    weight: 5000.0
     classify: False
 
 
@@ -81,10 +84,10 @@ lbfgs:
   use_cuda_line_search_kernel: True
   use_cuda_update_best_kernel: True
   sync_cuda_time: True
-  step_scale: 1.0 
+  step_scale: 1.0
   use_coo_sparse: True
   last_best: 10
   debug_info:
     visual_traj       : null #'ee_pos_seq'
-  
+
 

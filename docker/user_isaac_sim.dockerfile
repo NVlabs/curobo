@@ -10,11 +10,13 @@
 ##
 
 # Check architecture and load:
-ARG IMAGE_TAG 
+ARG IMAGE_TAG
 FROM curobo_docker:${IMAGE_TAG}
 # Set variables
 ARG USERNAME
 ARG USER_ID
+ARG CACHE_DATE=2024-07-19
+
 
 # Set environment variables
 
@@ -44,7 +46,7 @@ RUN chown -R $USERNAME:users /isaac-sim/exts/omni.isaac.synthetic_recorder/
 RUN chown -R $USERNAME:users /isaac-sim/kit/exts/omni.gpu_foundation
 RUN mkdir -p /home/$USERNAME/.cache && cp -r /root/.cache/* /home/$USERNAME/.cache && chown -R $USERNAME:users /home/$USERNAME/.cache
 RUN mkdir -p /isaac-sim/kit/data/documents/Kit && mkdir -p /isaac-sim/kit/data/documents/Kit/apps/Isaac-Sim/scripts/ &&chown -R $USERNAME:users /isaac-sim/kit/data/documents/Kit /isaac-sim/kit/data/documents/Kit/apps/Isaac-Sim/scripts/
-RUN mkdir -p /home/$USERNAME/.local 
+RUN mkdir -p /home/$USERNAME/.local
 
 
 RUN echo "alias omni_python='/isaac-sim/python.sh'" >> /home/$USERNAME/.bashrc

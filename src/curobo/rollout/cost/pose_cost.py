@@ -46,6 +46,7 @@ class PoseCostConfig(CostConfig):
     use_projected_distance: bool = True
     offset_waypoint: List[float] = None
     offset_tstep_fraction: float = -1.0
+    waypoint_horizon: int = 0
 
     def __post_init__(self):
         if self.run_vec_weight is not None:
@@ -84,6 +85,7 @@ class PoseCostMetric:
     offset_rotation: Optional[torch.Tensor] = None
     offset_tstep_fraction: float = -1.0
     remove_offset_waypoint: bool = False
+    include_link_pose: bool = False
 
     def clone(self):
 
@@ -152,7 +154,6 @@ class PoseCost(CostBase, PoseCostConfig):
         self.pos_weight = self.vec_weight[3:6]
         self._vec_convergence = self.tensor_args.to_device(self.vec_convergence)
         self._batch_size = 0
-        self._horizon = 0
 
     def update_metric(self, metric: PoseCostMetric):
         if metric.hold_partial_pose:
@@ -202,28 +203,34 @@ class PoseCost(CostBase, PoseCostConfig):
         if offset_rotation is not None:
             self.offset_waypoint[:3].copy_(offset_rotation)
         self.offset_tstep_fraction[:] = offset_tstep_fraction
-        if self._horizon <= 0:
+        if self.waypoint_horizon <= 0:
             log_error(
-                "Updating offset waypoint is only possible after initializing motion gen"
-                + " run motion_gen.warmup() before adding offset_waypoint"
+                "Updating offset waypoint requires PoseCostConfig.waypoint_horizon to be set."
             )
-        self.update_run_weight(run_tstep_fraction=offset_tstep_fraction)
+        self.update_run_weight(
+            run_tstep_fraction=offset_tstep_fraction, horizon=self.waypoint_horizon
+        )
 
     def remove_offset_waypoint(self):
         self.offset_tstep_fraction[:] = -1.0
-        self.update_run_weight()
+        self.update_run_weight(horizon=self.waypoint_horizon)
 
     def update_run_weight(
-        self, run_tstep_fraction: float = 0.0, run_weight: Optional[float] = None
+        self,
+        run_tstep_fraction: float = 0.0,
+        run_weight: Optional[float] = None,
+        horizon: Optional[int] = None,
     ):
-        if self._horizon == 1:
+        if horizon is None:
+            horizon = self._horizon
+        if horizon <= 1:
             return
 
         if run_weight is None:
             run_weight = self.run_weight
 
-        active_steps = math.floor(self._horizon * run_tstep_fraction)
-        self.initialize_run_weight_vec(self._horizon)
+        active_steps = math.floor(horizon * run_tstep_fraction)
+        self.initialize_run_weight_vec(horizon)
         self._run_weight_vec[:, :active_steps] = 0
         self._run_weight_vec[:, active_steps:-1] = run_weight
 
@@ -267,6 +274,7 @@ class PoseCost(CostBase, PoseCostConfig):
 
             self._batch_size = batch_size
             self._horizon = horizon
+            self.waypoint_horizon = horizon
 
     def initialize_run_weight_vec(self, horizon: Optional[int] = None):
         if horizon is None:
@@ -466,6 +474,8 @@ class PoseCost(CostBase, PoseCostConfig):
         batch_pose_idx: torch.Tensor,
         mode: PoseErrorType = PoseErrorType.BATCH_GOAL,
     ):
+        if len(query_pose.position.shape) == 2:
+            log_error("Query pose should be [batch, horizon, -1]")
         ee_goal_pos = goal_pose.position
         ee_goal_quat = goal_pose.quaternion
         self.cost_type = mode
@@ -476,9 +486,9 @@ class PoseCost(CostBase, PoseCostConfig):
         num_goals = 1
 
         distance = PoseError.apply(
-            query_pose.position.unsqueeze(1),
+            query_pose.position,
             ee_goal_pos,
-            query_pose.quaternion.unsqueeze(1),
+            query_pose.quaternion,
             ee_goal_quat,
             self.vec_weight,
             self.weight,

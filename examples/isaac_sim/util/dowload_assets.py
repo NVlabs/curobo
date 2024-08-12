@@ -12,6 +12,13 @@
 # This script downloads robot usd assets from isaac sim for using in CuRobo.
 
 
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
+
+
 # Third Party
 import torch
 

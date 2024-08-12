@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 # Standard Library
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple, Union
 
 # Third Party
@@ -73,6 +73,7 @@ class JointState(State):
     joint_names: Optional[List[str]] = None
     jerk: Union[List[float], T_DOF, None] = None  # Optional
     tensor_args: TensorDeviceType = TensorDeviceType()
+    aux_data: dict = field(default_factory=lambda: {})
 
     def __post_init__(self):
         if isinstance(self.position, torch.Tensor):
@@ -81,7 +82,7 @@ class JointState(State):
     @staticmethod
     def from_numpy(
         joint_names: List[str],
-        position: np.ndarry,
+        position: np.ndarray,
         velocity: Optional[np.ndarray] = None,
         acceleration: Optional[np.ndarray] = None,
         jerk: Optional[np.ndarray] = None,
@@ -91,6 +92,8 @@ class JointState(State):
         vel = acc = je = None
         if velocity is not None:
             vel = tensor_args.to_device(velocity)
+        else:
+            vel = pos * 0.0
         if acceleration is not None:
             acc = tensor_args.to_device(acceleration)
         else:

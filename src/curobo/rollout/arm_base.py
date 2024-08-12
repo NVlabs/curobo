@@ -261,7 +261,7 @@ class ArmBase(RolloutBase, ArmBaseConfig):
                 log_warn(
                     "null space cost is deprecated, use null_space_weight in bound cost instead"
                 )
-
+            self.cost_cfg.bound_cfg.dof = self.n_dofs
             self.bound_cost = BoundCost(self.cost_cfg.bound_cfg)
 
         if self.cost_cfg.manipulability_cfg is not None:
@@ -315,10 +315,12 @@ class ArmBase(RolloutBase, ArmBaseConfig):
         self.cost_cfg.bound_cfg.state_finite_difference_mode = (
             self.dynamics_model.state_finite_difference_mode
         )
-
+        self.cost_cfg.bound_cfg.dof = self.n_dofs
+        self.constraint_cfg.bound_cfg.dof = self.n_dofs
         self.bound_constraint = BoundCost(self.constraint_cfg.bound_cfg)
 
         if self.convergence_cfg.null_space_cfg is not None:
+            self.convergence_cfg.null_space_cfg.dof = self.n_dofs
             self.null_convergence = DistCost(self.convergence_cfg.null_space_cfg)
 
         # set start state:
@@ -384,6 +386,7 @@ class ArmBase(RolloutBase, ArmBaseConfig):
         # setup constraint terms:
 
         constraint = self.bound_constraint.forward(state.state_seq)
+
         constraint_list = [constraint]
         if (
             self.constraint_cfg.primitive_collision_cfg is not None
@@ -407,7 +410,9 @@ class ArmBase(RolloutBase, ArmBaseConfig):
             self_constraint = self.robot_self_collision_constraint.forward(state.robot_spheres)
             constraint_list.append(self_constraint)
         constraint = cat_sum(constraint_list)
+
         feasible = constraint == 0.0
+
         if out_metrics is None:
             out_metrics = RolloutMetrics()
         out_metrics.feasible = feasible
@@ -416,7 +421,7 @@ class ArmBase(RolloutBase, ArmBaseConfig):
 
     def get_metrics(self, state: Union[JointState, KinematicModelState]):
         """Compute metrics given state
-            #TODO: Currently does not compute velocity and acceleration costs.
+
         Args:
             state (Union[JointState, URDFModelState]): _description_
 
@@ -424,6 +429,8 @@ class ArmBase(RolloutBase, ArmBaseConfig):
             _type_: _description_
 
         """
+        if self.cuda_graph_instance:
+            log_error("Cuda graph is using this instance, please break the graph before using this")
         if isinstance(state, JointState):
             state = self._get_augmented_state(state)
         out_metrics = self.constraint_fn(state)
@@ -457,6 +464,9 @@ class ArmBase(RolloutBase, ArmBaseConfig):
             with torch.cuda.graph(self.cu_metrics_graph, stream=s):
                 self._cu_out_metrics = self.get_metrics(self._cu_metrics_state_in)
             self._metrics_cuda_graph_init = True
+            self._cuda_graph_valid = True
+        if not self.cuda_graph_instance:
+            log_error("cuda graph is invalid")
         if self._cu_metrics_state_in.position.shape != state.position.shape:
             log_error("cuda graph changed")
         self._cu_metrics_state_in.copy_(state)
@@ -536,6 +546,8 @@ class ArmBase(RolloutBase, ArmBaseConfig):
     def rollout_constraint(
         self, act_seq: torch.Tensor, use_batch_env: bool = True
     ) -> RolloutMetrics:
+        if self.cuda_graph_instance:
+            log_error("Cuda graph is using this instance, please break the graph before using this")
         state = self.dynamics_model.forward(self.start_state, act_seq)
         metrics = self.constraint_fn(state, use_batch_env=use_batch_env)
         return metrics
@@ -561,6 +573,9 @@ class ArmBase(RolloutBase, ArmBaseConfig):
                     state, use_batch_env=use_batch_env
                 )
             self._rollout_constraint_cuda_graph_init = True
+            self._cuda_graph_valid = True
+        if not self.cuda_graph_instance:
+            log_error("cuda graph is invalid")
         self._cu_rollout_constraint_act_in.copy_(act_seq)
         self.cu_rollout_constraint_graph.replay()
         out_metrics = self._cu_rollout_constraint_out_metrics
@@ -575,6 +590,7 @@ class ArmBase(RolloutBase, ArmBaseConfig):
         ----------
         action_seq: torch.Tensor [num_particles, horizon, d_act]
         """
+
         # print(act_seq.shape, self._goal_buffer.batch_current_state_idx)
         if self.start_state is None:
             raise ValueError("start_state is not set in rollout")
@@ -582,6 +598,7 @@ class ArmBase(RolloutBase, ArmBaseConfig):
             state = self.dynamics_model.forward(
                 self.start_state, act_seq, self._goal_buffer.batch_current_state_idx
             )
+
         with profiler.record_function("cost/all"):
             cost_seq = self.cost_fn(state, act_seq)
 
@@ -595,12 +612,8 @@ class ArmBase(RolloutBase, ArmBaseConfig):
 
         """
         with profiler.record_function("arm_base/update_params"):
-            self._goal_buffer.copy_(
-                goal, update_idx_buffers=self._goal_idx_update
-            )  # TODO: convert this to a reference to avoid extra copy
-            # self._goal_buffer.copy_(goal, update_idx_buffers=True) # TODO: convert this to a reference to avoid extra copy
+            self._goal_buffer.copy_(goal, update_idx_buffers=self._goal_idx_update)
 
-            # TODO: move start state also inside Goal instance
             if goal.current_state is not None:
                 if self.start_state is None:
                     self.start_state = goal.current_state.clone()

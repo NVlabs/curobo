@@ -68,7 +68,6 @@ class SelfCollisionCost(CostBase, SelfCollisionCostConfig):
             self.self_collision_kin_config.thread_location,
             self.self_collision_kin_config.thread_max,
             self.self_collision_kin_config.checks_per_thread,
-            # False,
             self.self_collision_kin_config.experimental_kernel,
             self.return_loss,
         )

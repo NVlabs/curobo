@@ -11,10 +11,11 @@
 #
 
 
-# script running (ubuntu):
-#
-
-############################################################
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
 
 
 # Third Party

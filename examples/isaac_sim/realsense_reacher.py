@@ -9,7 +9,15 @@
 # its affiliates is strictly prohibited.
 #
 
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
+
+
 # Third Party
+import cv2
 import torch
 
 a = torch.zeros(4, device="cuda:0")
@@ -25,7 +33,6 @@ simulation_app = SimulationApp(
 )
 
 # Third Party
-import cv2
 import numpy as np
 import torch
 from matplotlib import cm
@@ -60,6 +67,12 @@ from curobo.util.usd_helper import UsdHelper
 
 parser = argparse.ArgumentParser()
 
+parser.add_argument(
+    "--show-window",
+    action="store_true",
+    help="When True, shows camera image in a CV window",
+    default=False,
+)
 
 parser.add_argument("--robot", type=str, default="franka.yml", help="robot configuration to load")
 parser.add_argument(
@@ -316,7 +329,7 @@ if __name__ == "__main__":
                     voxel_viewer.clear()
             # draw_points(voxels)
 
-        if True:
+        if args.show_window:
             depth_image = data["raw_depth"]
             color_image = data["raw_rgb"]
             depth_colormap = cv2.applyColorMap(

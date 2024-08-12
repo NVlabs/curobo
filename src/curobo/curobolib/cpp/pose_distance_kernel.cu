@@ -434,15 +434,25 @@ namespace Curobo
                                                                                 // is ? horizon, not
                                                                                 // in this mode
       float d_vec_weight[6] = { 0.0 };
-      *(float3 *)&d_vec_weight[0] = *(float3 *)&vec_weight[0];
-      *(float3 *)&d_vec_weight[3] = *(float3 *)&vec_weight[3];
+      #pragma unroll 6
+      for (int k = 0; k < 6; k++)
+      {
+        d_vec_weight[k] = vec_weight[k];
+      }
+      //*(float3 *)&d_vec_weight[0] = *(float3 *)&vec_weight[0]; // TODO
+      //*(float3 *)&d_vec_weight[3] = *(float3 *)&vec_weight[3];
       float3 offset_rotation = *(float3 *)&offset_waypoint[0];
       float3 offset_position = *(float3 *)&offset_waypoint[3];
 
       if ((h_idx < horizon - 1) && (h_idx != horizon - offset_tstep))
       {
-        *(float3 *)&d_vec_weight[0] *= *(float3 *)&run_vec_weight[0];
-        *(float3 *)&d_vec_weight[3] *= *(float3 *)&run_vec_weight[3];
+        #pragma unroll 6
+        for (int k = 0; k < 6; k++)
+        {
+          d_vec_weight[k] *= run_vec_weight[k];
+        }
+        //*(float3 *)&d_vec_weight[0] *= *(float3 *)&run_vec_weight[0];
+        //*(float3 *)&d_vec_weight[3] *= *(float3 *)&run_vec_weight[3];
       }
 
       if (!write_distance)
@@ -450,8 +460,8 @@ namespace Curobo
         position_weight *= run_weight[h_idx];
         rotation_weight *= run_weight[h_idx];
         float sum_weight = 0;
-    #pragma unroll 6
 
+        #pragma unroll 6
         for (int i = 0; i < 6; i++)
         {
           sum_weight += d_vec_weight[i];
@@ -480,7 +490,9 @@ namespace Curobo
       float  best_distance_vec[6]   = { 0.0 };
       float  d_vec_convergence[2];
 
-      *(float2 *)&d_vec_convergence[0] = *(float2 *)&vec_convergence[0];
+      //*(float2 *)&d_vec_convergence[0] = *(float2 *)&vec_convergence[0]; // TODO
+      d_vec_convergence[0] = vec_convergence[0];
+      d_vec_convergence[1] = vec_convergence[1];
 
       int best_idx = -1;
 

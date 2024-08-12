@@ -82,7 +82,7 @@ namespace Curobo
 
             if (write_grad)
             {
-              dist_vec = (sph1 - sph2) / distance;
+              dist_vec = normalize(sph1 - sph2);// / distance;
             }
           }
         }
@@ -131,7 +131,7 @@ namespace Curobo
       int i         = ndpt * (warp_idx / nwpr); // starting row number for this warp
       int j         = (warp_idx % nwpr) * 32;   // starting column number for this warp
 
-      dist_t max_d = { .d = 0.0, .i = 0, .j = 0 };
+      dist_t max_d = {0.0, 0.0, 0.0 };// .d, .i, .j
       __shared__ dist_t max_darr[32];
 
       // Optimization: About 1/3 of the warps will have no work.
@@ -162,7 +162,7 @@ namespace Curobo
       //////////////////////////////////////////////////////
       // Compute distances and store the maximum per thread
       // in registers (max_d).
-      // Each thread computes upto ndpt distances.
+      // Each thread computes up to ndpt distances.
       // two warps per row
       //////////////////////////////////////////////////////
       // int nspheres_2 = nspheres * nspheres;
@@ -174,8 +174,6 @@ namespace Curobo
       if (j < nspheres)
       {
         sph2 = __rs_shared[j]; // we need not load sph2 in every iteration.
-
-#pragma unroll 16
 
         for (int k = 0; k < ndpt; k++, i++) // increment i also here
         {
@@ -230,12 +228,14 @@ namespace Curobo
         if (threadIdx.x < blockDim.x)
         {
           // dist_t max_d = dist_sh[threadIdx.x];
+#pragma unroll 4
+
           for (int offset = 16; offset > 0; offset /= 2)
           {
             uint64_t nd     = __shfl_down_sync(mask, *(uint64_t *)&max_d, offset);
             dist_t   d_temp = *(dist_t *)&nd;
 
-            if (d_temp.d > max_d.d)
+            if (((threadIdx.x + offset) < blockDim.x)  && d_temp.d > max_d.d)
             {
               max_d = d_temp;
             }
@@ -285,11 +285,12 @@ namespace Curobo
 
           if (write_grad)
           {
+            // NOTE: spheres can be read from rs_shared
             float3 sph1 =
               *(float3 *)&robot_spheres[4 * (batch_idx * nspheres + max_d.i)];
             float3 sph2 =
               *(float3 *)&robot_spheres[4 * (batch_idx * nspheres + max_d.j)];
-            float3 dist_vec = (sph1 - sph2) / max_d.d;
+            float3 dist_vec = normalize(sph1 - sph2);
             *(float3 *)&out_vec[batch_idx * nspheres * 4 + max_d.i * 4] =
               weight[0] * -1 * dist_vec;
             *(float3 *)&out_vec[batch_idx * nspheres * 4 + max_d.j * 4] =
@@ -353,7 +354,7 @@ namespace Curobo
       // in registers (max_d).
       // Each thread computes upto ndpt distances.
       //////////////////////////////////////////////////////
-      dist_t  max_d[NBPB] = {{ .d = 0.0, .i = 0, .j = 0 } };
+      dist_t  max_d[NBPB] = {{ 0.0, 0.0, 0.0}};
       int16_t indices[ndpt * 2];
 
       for (uint8_t i = 0; i < ndpt * 2; i++)
@@ -434,7 +435,7 @@ namespace Curobo
               uint64_t nd     = __shfl_down_sync(mask, *(uint64_t *)&max_d[l], offset);
               dist_t   d_temp = *(dist_t *)&nd;
 
-              if (d_temp.d > max_d[l].d)
+              if (((threadIdx.x + offset) < blockDim.x)  && d_temp.d > max_d[l].d)
               {
                 max_d[l] = d_temp;
               }
@@ -493,13 +494,15 @@ namespace Curobo
 
             if (write_grad)
             {
+              // NOTE: spheres can also be read from rs_shared
               float3 sph1 =
                 *(float3 *)&robot_spheres[4 *
                                           ((batch_idx + l) * nspheres + max_d.i)];
               float3 sph2 =
                 *(float3 *)&robot_spheres[4 *
                                           ((batch_idx + l) * nspheres + max_d.j)];
-              float3 dist_vec = (sph1 - sph2) / max_d.d;
+              float3 dist_vec = normalize(sph1 - sph2);// / max_d.d;
+
               *(float3 *)&out_vec[(batch_idx + l) * nspheres * 4 + max_d.i * 4] =
                 weight[0] * -1 * dist_vec;
               *(float3 *)&out_vec[(batch_idx + l) * nspheres * 4 + max_d.j * 4] =
@@ -707,9 +710,7 @@ std::vector<torch::Tensor>self_collision_distance(
     threadsPerBlock = warpsPerBlock * 32;
     blocksPerGrid   = batch_size;
 
-    // printf("Blocks: %d, threads/block:%d, ndpt=%d, nwpr=%d\n", blocksPerGrid,
-    // threadsPerBlock, ndpt, nwpr);
-
+    assert(collision_matrix.size(0) == nspheres * nspheres);
     int smemSize = nspheres * sizeof(float4);
 
 

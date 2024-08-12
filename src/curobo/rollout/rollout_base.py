@@ -176,7 +176,6 @@ class Goal(Sequence):
 
     def repeat_seeds(self, num_seeds: int):
         # across seeds, the data is the same, so could we just expand batch_idx
-        # TODO:
         goal_pose = goal_state = current_state = links_goal_pose = retract_state = None
         batch_enable_idx = batch_pose_idx = batch_world_idx = batch_current_state_idx = None
         batch_retract_state_idx = batch_goal_state_idx = None
@@ -424,6 +423,7 @@ class RolloutBase:
     def __init__(self, config: Optional[RolloutConfig] = None):
         self.start_state = None
         self.batch_size = 1
+        self._cuda_graph_valid = False
         self._metrics_cuda_graph_init = False
         self.cu_metrics_graph = None
         self._rollout_constraint_cuda_graph_init = False
@@ -552,6 +552,7 @@ class RolloutBase:
         pass
 
     def reset_cuda_graph(self):
+        self._cuda_graph_valid = False
         self._metrics_cuda_graph_init = False
         if self.cu_metrics_graph is not None:
             self.cu_metrics_graph.reset()
@@ -563,6 +564,10 @@ class RolloutBase:
 
     def reset_shape(self):
         pass
+
+    @property
+    def cuda_graph_instance(self):
+        return self._cuda_graph_valid
 
     @abstractmethod
     def get_action_from_state(self, state: State):
@@ -580,6 +585,9 @@ class RolloutBase:
 
     def get_full_dof_from_solution(self, q_js: JointState) -> JointState:
         return q_js
+
+    def break_cuda_graph(self):
+        self._cuda_graph_valid = False
 
 
 @get_torch_jit_decorator()

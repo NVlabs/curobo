@@ -112,13 +112,17 @@ class CameraObservation:
 
         return self
 
-    def get_pointcloud(self):
+    def get_pointcloud(self, project_to_pose: bool = False):
         if self.projection_rays is None:
             self.update_projection_rays()
         depth_image = self.depth_image
         if len(self.depth_image.shape) == 2:
             depth_image = self.depth_image.unsqueeze(0)
         point_cloud = project_depth_using_rays(depth_image, self.projection_rays)
+
+        if project_to_pose and self.pose is not None:
+            point_cloud = self.pose.batch_transform(point_cloud)
+
         return point_cloud
 
     def get_image_from_pointcloud(self, pointcloud, output_image: Optional[torch.Tensor] = None):

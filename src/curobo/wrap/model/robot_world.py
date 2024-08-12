@@ -18,8 +18,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 
 # CuRobo
-from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
-from curobo.cuda_robot_model.types import CudaRobotModelState
+from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel, CudaRobotModelState
 from curobo.geom.sdf.utils import create_collision_checker
 from curobo.geom.sdf.world import CollisionCheckerType, WorldCollision, WorldCollisionConfig
 from curobo.geom.types import WorldConfig
@@ -36,11 +35,7 @@ from curobo.types.robot import RobotConfig
 from curobo.types.state import JointState
 from curobo.util.logger import log_error
 from curobo.util.sample_lib import HaltonGenerator
-from curobo.util.torch_utils import (
-    get_torch_compile_options,
-    get_torch_jit_decorator,
-    is_torch_compile_available,
-)
+from curobo.util.torch_utils import get_torch_jit_decorator
 from curobo.util.warp import init_warp
 from curobo.util_file import get_robot_configs_path, get_world_configs_path, join_path, load_yaml
 
@@ -344,9 +339,11 @@ class RobotWorld(RobotWorldConfig):
         d_mask = mask(d_self, d_world, d_bound)
         return d_mask
 
-    def pose_distance(self, x_des: Pose, x_current: Pose):
+    def pose_distance(self, x_des: Pose, x_current: Pose, resize: bool = False):
+        unsqueeze = False
         if len(x_current.position.shape) == 2:
             x_current = x_current.unsqueeze(1)
+            unsqueeze = True
         # calculate pose loss:
         if (
             self._batch_pose_idx is None
@@ -356,6 +353,8 @@ class RobotWorld(RobotWorldConfig):
                 0, x_current.position.shape[0], 1, device=self.tensor_args.device, dtype=torch.int32
             )
         distance = self.pose_cost.forward_pose(x_des, x_current, self._batch_pose_idx)
+        if unsqueeze and resize:
+            distance = distance.squeeze(1)
         return distance
 
     def get_point_robot_distance(self, points: torch.Tensor, q: torch.Tensor):

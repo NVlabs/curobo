@@ -11,10 +11,10 @@
 
 
 world_collision_checker_cfg:
-  cache: null #{"cube": 41, "capsule": 0, "sphere": 0}
-  checker_type: "PRIMITIVE" # ["PRIMITIVE", "BLOX", "MESH"]
+  cache: null
+  checker_type: "PRIMITIVE"
   max_distance: 0.1
- 
+
 
 cost:
   pose_cfg:
@@ -27,8 +27,8 @@ cost:
     weight: [0.0, 0.0]
     vec_convergence: [0.0, 0.00] # orientation, position
     terminal: False
-    
- 
+
+
   bound_cfg:
     weight: 000.0
     activation_distance: [0.0,0.0,0.0,0.0]
@@ -58,14 +58,14 @@ convergence:
     weight: [0.1, 10.0]
     vec_convergence: [0.0, 0.0] # orientation, position
     terminal: False
-    
   cspace_cfg:
     weight: 1.0
     terminal: True
     run_weight: 0.0
+    use_l2_kernel: True
   null_space_cfg:
-    weight: 1.0
+    weight: 0.001
     terminal: True
     run_weight: 1.0
-    
- 
+    use_l2_kernel: True
+

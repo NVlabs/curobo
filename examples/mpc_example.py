@@ -55,12 +55,6 @@ def demo_full_config_mpc():
     mpc_config = MpcSolverConfig.load_from_robot_config(
         robot_cfg,
         world_file,
-        use_cuda_graph=True,
-        use_cuda_graph_metrics=True,
-        use_cuda_graph_full_step=False,
-        use_lbfgs=False,
-        use_es=False,
-        use_mppi=True,
         store_rollouts=True,
         step_dt=0.03,
     )

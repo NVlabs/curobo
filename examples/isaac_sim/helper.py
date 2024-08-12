@@ -31,7 +31,7 @@ try:
     from omni.isaac.urdf import _urdf  # isaacsim 2022.2
 except ImportError:
     # Third Party
-    from omni.importer.urdf import _urdf  # isaac sim 2023.1
+    from omni.importer.urdf import _urdf  # isaac sim 2023.1 or above
 
     ISAAC_SIM_23 = True
 # Standard Library
@@ -68,22 +68,23 @@ def add_robot_to_scene(
     robot_name: str = "robot",
     position: np.array = np.array([0, 0, 0]),
 ):
-    urdf_interface = _urdf.acquire_urdf_interface()
 
+    urdf_interface = _urdf.acquire_urdf_interface()
+    # Set the settings in the import config
     import_config = _urdf.ImportConfig()
     import_config.merge_fixed_joints = False
     import_config.convex_decomp = False
-    import_config.import_inertia_tensor = True
     import_config.fix_base = True
-    import_config.make_default_prim = False
+    import_config.make_default_prim = True
     import_config.self_collision = False
     import_config.create_physics_scene = True
     import_config.import_inertia_tensor = False
-    import_config.default_drive_strength = 20000
-    import_config.default_position_drive_damping = 500
+    import_config.default_drive_strength = 1047.19751
+    import_config.default_position_drive_damping = 52.35988
     import_config.default_drive_type = _urdf.UrdfJointTargetType.JOINT_DRIVE_POSITION
     import_config.distance_scale = 1
     import_config.density = 0.0
+
     asset_path = get_assets_path()
     if (
         "external_asset_path" in robot_config["kinematics"]
@@ -115,18 +116,7 @@ def add_robot_to_scene(
     linkp = stage.GetPrimAtPath(robot_path)
     set_prim_transform(linkp, [position[0], position[1], position[2], 1, 0, 0, 0])
 
-    if False and ISAAC_SIM_23:  # this doesn't work in isaac sim 2023.1.1
-        robot_p.set_solver_velocity_iteration_count(0)
-        robot_p.set_solver_position_iteration_count(44)
-
-        my_world._physics_context.set_solver_type("PGS")
-
-    if ISAAC_SIM_23:  # fix to load robot correctly in isaac sim 2023.1.1
-        linkp = stage.GetPrimAtPath(robot_path + "/" + base_link_name)
-        mass = UsdPhysics.MassAPI(linkp)
-        mass.GetMassAttr().Set(0)
     robot = my_world.scene.add(robot_p)
-    # robot_path = robot.prim_path
     return robot, robot_path
 
 

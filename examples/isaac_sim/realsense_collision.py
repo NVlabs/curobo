@@ -9,6 +9,13 @@
 # its affiliates is strictly prohibited.
 #
 
+
+try:
+    # Third Party
+    import isaacsim
+except ImportError:
+    pass
+
 # Third Party
 import torch
 
@@ -38,10 +45,23 @@ from curobo.util_file import get_world_configs_path, join_path, load_yaml
 from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
 
 simulation_app.update()
+# Standard Library
+import argparse
+
 # Third Party
 from omni.isaac.core import World
 from omni.isaac.core.materials import OmniPBR
 from omni.isaac.core.objects import cuboid, sphere
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--show-window",
+    action="store_true",
+    help="When True, shows camera image in a CV window",
+    default=False,
+)
+args = parser.parse_args()
 
 
 def draw_points(voxels):
@@ -216,20 +236,21 @@ if __name__ == "__main__":
         bounding = Cuboid("t", dims=[1, 1, 1], pose=[0, 0, 0, 1, 0, 0, 0])
         voxels = model.world_model.get_voxels_in_bounding_box(bounding, 0.025)
         # print(data_camera.depth_image)
-        depth_image = data["raw_depth"]
-        color_image = data["raw_rgb"]
-        depth_colormap = cv2.applyColorMap(
-            cv2.convertScaleAbs(depth_image, alpha=100), cv2.COLORMAP_VIRIDIS
-        )
-        images = np.hstack((color_image, depth_colormap))
+        if args.show_window:
+            depth_image = data["raw_depth"]
+            color_image = data["raw_rgb"]
+            depth_colormap = cv2.applyColorMap(
+                cv2.convertScaleAbs(depth_image, alpha=100), cv2.COLORMAP_VIRIDIS
+            )
+            images = np.hstack((color_image, depth_colormap))
 
-        cv2.namedWindow("Align Example", cv2.WINDOW_NORMAL)
-        cv2.imshow("Align Example", images)
-        key = cv2.waitKey(1)
-        # Press esc or 'q' to close the image window
-        if key & 0xFF == ord("q") or key == 27:
-            cv2.destroyAllWindows()
-            break
+            cv2.namedWindow("Align Example", cv2.WINDOW_NORMAL)
+            cv2.imshow("Align Example", images)
+            key = cv2.waitKey(1)
+            # Press esc or 'q' to close the image window
+            if key & 0xFF == ord("q") or key == 27:
+                cv2.destroyAllWindows()
+                break
 
         draw_points(voxels)
         d, d_vec = model.get_collision_vector(x_sph)

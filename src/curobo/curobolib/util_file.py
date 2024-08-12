@@ -8,27 +8,9 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-
+"""Deprecated, use functions from :mod:`curobo.util_file` instead."""
 # Standard Library
 import os
 
-
-def get_cpp_path():
-    path = os.path.dirname(__file__)
-    return os.path.join(path, "cpp")
-
-
-def join_path(path1, path2):
-    if isinstance(path2, str):
-        return os.path.join(path1, path2)
-    else:
-        return path2
-
-
-def add_cpp_path(sources):
-    cpp_path = get_cpp_path()
-    new_list = []
-    for s in sources:
-        s = join_path(cpp_path, s)
-        new_list.append(s)
-    return new_list
+# CuRobo
+from curobo.util_file import add_cpp_path, get_cpp_path, join_path

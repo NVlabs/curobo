@@ -10,6 +10,8 @@
 #
 # Standard Library
 import os
+from functools import lru_cache
+from typing import Optional
 
 # Third Party
 import torch
@@ -37,6 +39,17 @@ def is_cuda_graph_available():
         log_warn("Disabling CUDA Graph as pytorch < 1.10")
         return False
     return True
+
+
+def is_cuda_graph_reset_available():
+    reset_cuda_graph = os.environ.get("CUROBO_TORCH_CUDA_GRAPH_RESET")
+    if reset_cuda_graph is not None:
+        if bool(int(reset_cuda_graph)):
+            if version.parse(torch.version.cuda) >= version.parse("12.0"):
+                return True
+        if not bool(int(reset_cuda_graph)):
+            return False
+    return False
 
 
 def is_torch_compile_available():
@@ -144,6 +157,21 @@ def get_torch_jit_decorator(
         return torch.compile(options=get_torch_compile_options(), dynamic=dynamic)
     elif not only_valid_for_compile:
         return torch.jit.script
+    else:
+        return empty_decorator
+
+
+def is_lru_cache_avaiable():
+    use_lru_cache = os.environ.get("CUROBO_USE_LRU_CACHE")
+    if use_lru_cache is not None:
+        return bool(int(use_lru_cache))
+    log_info("Environment variable for CUROBO_USE_LRU_CACHE is not set, Enabling as default.")
+    return False
+
+
+def get_cache_fn_decorator(maxsize: Optional[int] = None):
+    if is_lru_cache_avaiable():
+        return lru_cache(maxsize=maxsize)
     else:
         return empty_decorator
 

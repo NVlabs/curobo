@@ -295,6 +295,8 @@ class GraphPlanBase(GraphConfig):
     @profiler.record_function("geometric_planner/mask_samples")
     def _mask_samples(self, x_samples):
         d = []
+        if self.safety_rollout_fn.cuda_graph_instance:
+            log_error("Cuda graph is using this rollout instance.")
         if self.max_buffer < x_samples.shape[0]:
             # c_samples = x_samples[:, 0:1] * 0.0
             for i in range(math.ceil(x_samples.shape[0] / self.max_buffer)):

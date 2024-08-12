@@ -9,9 +9,10 @@
 # its affiliates is strictly prohibited.
 #
 
-""" 
-This module contains :meth:`IKSolver` to solve inverse kinematics, along with 
-:meth:`IKSolverConfig` to configure the solver, and :meth:`IKResult` to store the result.
+"""
+This module contains :meth:`IKSolver` to solve inverse kinematics, along with
+:meth:`IKSolverConfig` to configure the solver, and :meth:`IKResult` to store the result. A minimal
+example to solve IK is available at :ref:`python_ik_example`.
 
 .. raw:: html
 
@@ -19,6 +20,7 @@ This module contains :meth:`IKSolver` to solve inverse kinematics, along with
     <video autoplay="True" loop="True" muted="True" preload="auto" width="100%"><source src="../videos/ik_obs_clip.mp4" type="video/mp4"></video>
     </p>
 This demo is available in :ref:`isaac_ik_reachability`.
+
 
 """
 from __future__ import annotations
@@ -49,7 +51,7 @@ from curobo.types.robot import JointState, RobotConfig
 from curobo.types.tensor import T_BDOF, T_DOF, T_BValue_bool, T_BValue_float
 from curobo.util.logger import log_error, log_warn
 from curobo.util.sample_lib import HaltonGenerator
-from curobo.util.torch_utils import get_torch_jit_decorator
+from curobo.util.torch_utils import get_torch_jit_decorator, is_cuda_graph_reset_available
 from curobo.util_file import (
     get_robot_configs_path,
     get_task_configs_path,
@@ -190,9 +192,9 @@ class IKSolverConfig:
             grad_iters: Number of iterations for gradient optimization.
             use_particle_opt: Flag to enable particle optimization.
             collision_checker_type: Type of collision checker to use for collision checking.
-            sync_cuda_time: Flag to enable synchronization of cuda device with host before
-                measuring compute time. If you set this to False, then measured time will not
-                include completion of any launched CUDA kernels.
+            sync_cuda_time: Flag to enable synchronization of cuda device with host using
+                :py:func:`torch.cuda.synchronize` before measuring compute time. If you set this to
+                False, then measured time will not include completion of any launched CUDA kernels.
             use_gradient_descent: Flag to enable gradient descent optimization instead of LBFGS.
             collision_cache: Number of objects to cache for collision checking.
             n_collision_envs: Number of collision environments to use for IK. This is useful when
@@ -310,11 +312,34 @@ class IKSolverConfig:
             world_coll_checker=world_coll_checker,
             tensor_args=tensor_args,
         )
+        safety_cfg = ArmReacherConfig.from_dict(
+            robot_cfg,
+            config_data["model"],
+            config_data["cost"],
+            base_config_data["constraint"],
+            base_config_data["convergence"],
+            base_config_data["world_collision_checker_cfg"],
+            world_model,
+            world_coll_checker=world_coll_checker,
+            tensor_args=tensor_args,
+        )
+
+        aux_cfg = ArmReacherConfig.from_dict(
+            robot_cfg,
+            config_data["model"],
+            config_data["cost"],
+            base_config_data["constraint"],
+            base_config_data["convergence"],
+            base_config_data["world_collision_checker_cfg"],
+            world_model,
+            world_coll_checker=world_coll_checker,
+            tensor_args=tensor_args,
+        )
 
         arm_rollout_mppi = ArmReacher(cfg)
         arm_rollout_grad = ArmReacher(grad_cfg)
-        arm_rollout_safety = ArmReacher(grad_cfg)
-        aux_rollout = ArmReacher(grad_cfg)
+        arm_rollout_safety = ArmReacher(safety_cfg)
+        aux_rollout = ArmReacher(aux_cfg)
 
         config_dict = ParallelMPPIConfig.create_data_dict(
             config_data["mppi"], arm_rollout_mppi, tensor_args
@@ -354,7 +379,7 @@ class IKSolverConfig:
             safety_rollout=arm_rollout_safety,
             optimizers=opts,
             compute_metrics=True,
-            use_cuda_graph_metrics=grad_config_data["lbfgs"]["use_cuda_graph"],
+            use_cuda_graph_metrics=use_cuda_graph,
             sync_cuda_time=sync_cuda_time,
         )
         ik = WrapBase(cfg)
@@ -581,8 +606,14 @@ class IKSolver(IKSolverConfig):
         if update_reference:
             self.reset_shape()
             if self.use_cuda_graph and self._col is not None:
-                log_error("changing goal type, breaking previous cuda graph.")
-                self.reset_cuda_graph()
+                if is_cuda_graph_reset_available():
+                    log_warn("changing goal type, breaking previous cuda graph.")
+                    self.reset_cuda_graph()
+                else:
+                    log_error(
+                        "changing goal type, cuda graph reset not available, "
+                        + "consider updating to cuda >= 12.0"
+                    )
 
             self.solver.update_nproblems(self._solve_state.get_ik_batch_size())
             self._goal_buffer.current_state = self.init_state.repeat_seeds(goal_pose.batch)
@@ -1065,7 +1096,6 @@ class IKSolver(IKSolverConfig):
             IKResult object with solutions to the IK problems.
         """
         success = self._get_success(result.metrics, num_seeds=num_seeds)
-
         if result.metrics.null_space_error is not None:
             result.metrics.pose_error += result.metrics.null_space_error
         if result.metrics.cspace_error is not None:
@@ -1524,10 +1554,60 @@ class IKSolver(IKSolverConfig):
             if isinstance(rollout, ArmReacher)
         ]
 
+    def get_full_js(self, active_js: JointState) -> JointState:
+        """Get full joint state from controlled joint state, appending locked joints.
+
+        Args:
+            active_js: Controlled joint state
+
+        Returns:
+            JointState: Full joint state.
+        """
+        return self.rollout_fn.get_full_dof_from_solution(active_js)
+
+    def get_active_js(
+        self,
+        in_js: JointState,
+    ):
+        """Get controlled joint state from input joint state.
+
+        This is used to get the joint state for only joints that are optimization variables. This
+        also re-orders the joints to match the order of optimization variables.
+
+        Args:
+            in_js: Input joint state.
+
+        Returns:
+            JointState: Active joint state.
+        """
+        opt_jnames = self.rollout_fn.joint_names
+        opt_js = in_js.get_ordered_joint_state(opt_jnames)
+        return opt_js
+
     @property
     def joint_names(self) -> List[str]:
         """Get ordered names of all joints used in optimization with IKSolver."""
         return self.rollout_fn.kinematics.joint_names
+
+    def check_valid(self, joint_position: torch.Tensor) -> torch.Tensor:
+        """Check if joint position is valid. Also supports batch of joint positions.
+
+        Args:
+            joint_position: input position tensor of shape (batch, dof).
+
+        Returns:
+            boolean tensor of shape (batch) indicating if the joint position is valid.
+        """
+        if len(joint_position.shape) == 1:
+            joint_position = joint_position.unsqueeze(0)
+        if len(joint_position.shape) > 2:
+            log_error("joint_position should be of shape (batch, dof)")
+        metrics = self.rollout_fn.rollout_constraint(
+            joint_position.unsqueeze(1),
+            use_batch_env=False,
+        )
+        feasible = metrics.feasible.squeeze(1)
+        return feasible
 
 
 @get_torch_jit_decorator()

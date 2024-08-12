@@ -185,7 +185,7 @@ def load_curobo(
         finetune_trajopt_iters=200,
     )
     mg = MotionGen(motion_gen_config)
-    mg.warmup(enable_graph=True, warmup_js_trajopt=False, parallel_finetune=True)
+    mg.warmup(enable_graph=True, warmup_js_trajopt=False)
     # create a ground truth collision checker:
     world_model = WorldConfig.from_dict(
         {
@@ -305,6 +305,7 @@ def benchmark_mb(
                     voxel_size=0.005,
                     dtype=torch.float32,
                 )
+                # esdf.feature_tensor[esdf.feature_tensor < -1.0] = -1000.0
                 world_voxel_collision = mg.world_coll_checker
                 world_voxel_collision.update_voxel_data(esdf)
 
@@ -578,6 +579,7 @@ def benchmark_mb(
             print(g_m.attempts)
         g_m = CuroboGroupMetrics.from_list(all_groups)
         try:
+            # Third Party
             from tabulate import tabulate
 
             headers = ["Metric", "Value"]
@@ -611,6 +613,7 @@ def benchmark_mb(
     g_m = CuroboGroupMetrics.from_list(all_files)
     print("######## FULL SET ############")
     try:
+        # Third Party
         from tabulate import tabulate
 
         headers = ["Metric", "Value"]

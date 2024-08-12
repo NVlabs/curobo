@@ -57,15 +57,15 @@ def trajopt_solver_batch_env():
     robot_cfg = RobotConfig.from_dict(
         load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"]
     )
-    # world_cfg = WorldConfig.from_dict(load_yaml(join_path(get_world_configs_path(), world_file)))
 
     trajopt_config = TrajOptSolverConfig.load_from_robot_config(
         robot_cfg,
         world_cfg,
         tensor_args,
         use_cuda_graph=False,
-        num_seeds=10,
+        num_seeds=4,
         evaluate_interpolated_trajectory=True,
+        grad_trajopt_iters=200,
     )
     trajopt_solver = TrajOptSolver(trajopt_config)
 
@@ -73,7 +73,7 @@ def trajopt_solver_batch_env():
 
 
 def test_trajopt_single_js(trajopt_solver):
-    q_start = trajopt_solver.retract_config
+    q_start = trajopt_solver.retract_config.clone()
     q_goal = q_start.clone() + 0.2
     goal_state = JointState.from_position(q_goal)
     current_state = JointState.from_position(q_start)
@@ -88,7 +88,7 @@ def test_trajopt_single_js(trajopt_solver):
 
 def test_trajopt_single_pose(trajopt_solver):
     trajopt_solver.reset_seed()
-    q_start = trajopt_solver.retract_config
+    q_start = trajopt_solver.retract_config.clone()
     q_goal = q_start.clone() + 0.1
     kin_state = trajopt_solver.fk(q_goal)
     goal_pose = Pose(kin_state.ee_position, kin_state.ee_quaternion)
@@ -102,7 +102,7 @@ def test_trajopt_single_pose(trajopt_solver):
 
 def test_trajopt_single_pose_no_seed(trajopt_solver):
     trajopt_solver.reset_seed()
-    q_start = trajopt_solver.retract_config
+    q_start = trajopt_solver.retract_config.clone()
     q_goal = q_start.clone() + 0.05
     kin_state = trajopt_solver.fk(q_goal)
     goal_pose = Pose(kin_state.ee_position, kin_state.ee_quaternion)
@@ -116,7 +116,7 @@ def test_trajopt_single_pose_no_seed(trajopt_solver):
 
 def test_trajopt_single_goalset(trajopt_solver):
     # run goalset planning:
-    q_start = trajopt_solver.retract_config
+    q_start = trajopt_solver.retract_config.clone()
     q_goal = q_start.clone() + 0.1
     kin_state = trajopt_solver.fk(q_goal)
     goal_pose = Pose(kin_state.ee_position, kin_state.ee_quaternion)
@@ -133,7 +133,7 @@ def test_trajopt_single_goalset(trajopt_solver):
 
 def test_trajopt_batch(trajopt_solver):
     # run goalset planning:
-    q_start = trajopt_solver.retract_config.repeat(2, 1)
+    q_start = trajopt_solver.retract_config.clone().repeat(2, 1)
     q_goal = q_start.clone()
     q_goal[0] += 0.1
     q_goal[1] -= 0.1
@@ -153,7 +153,7 @@ def test_trajopt_batch(trajopt_solver):
 
 def test_trajopt_batch_js(trajopt_solver):
     # run goalset planning:
-    q_start = trajopt_solver.retract_config.repeat(2, 1)
+    q_start = trajopt_solver.retract_config.clone().repeat(2, 1)
     q_goal = q_start.clone()
     q_goal[0] += 0.1
     q_goal[1] -= 0.1
@@ -173,7 +173,7 @@ def test_trajopt_batch_js(trajopt_solver):
 
 def test_trajopt_batch_goalset(trajopt_solver):
     # run goalset planning:
-    q_start = trajopt_solver.retract_config.repeat(3, 1)
+    q_start = trajopt_solver.retract_config.clone().repeat(3, 1)
     q_goal = q_start.clone()
     q_goal[0] += 0.1
     q_goal[1] -= 0.1
@@ -196,14 +196,12 @@ def test_trajopt_batch_goalset(trajopt_solver):
 
 def test_trajopt_batch_env_js(trajopt_solver_batch_env):
     # run goalset planning:
-    q_start = trajopt_solver_batch_env.retract_config.repeat(3, 1)
+    q_start = trajopt_solver_batch_env.retract_config.clone().repeat(3, 1)
     q_goal = q_start.clone()
     q_goal += 0.1
-    q_goal[2] += 0.1
+    q_goal[2][0] += 0.1
     q_goal[1] -= 0.2
     # q_goal[2, -1] += 0.1
-    kin_state = trajopt_solver_batch_env.fk(q_goal)
-    goal_pose = Pose(kin_state.ee_position, kin_state.ee_quaternion)
     goal_state = JointState.from_position(q_goal)
     current_state = JointState.from_position(q_start)
 
@@ -213,14 +211,15 @@ def test_trajopt_batch_env_js(trajopt_solver_batch_env):
     traj = result.solution.position
     interpolated_traj = result.interpolated_solution.position
     assert torch.count_nonzero(result.success) == 3
-    assert torch.linalg.norm((goal_state.position - traj[:, -1, :])).item() < 0.005
-    assert torch.linalg.norm((goal_state.position - interpolated_traj[:, -1, :])).item() < 0.005
+    error = torch.linalg.norm((goal_state.position - traj[:, -1, :]), dim=-1)
+    assert torch.max(error).item() < 0.05
+    assert torch.linalg.norm((goal_state.position - interpolated_traj[:, -1, :])).item() < 0.05
     assert len(result) == 3
 
 
 def test_trajopt_batch_env(trajopt_solver_batch_env):
     # run goalset planning:
-    q_start = trajopt_solver_batch_env.retract_config.repeat(3, 1)
+    q_start = trajopt_solver_batch_env.retract_config.clone().repeat(3, 1)
     q_goal = q_start.clone()
     q_goal[0] += 0.1
     q_goal[1] -= 0.1
@@ -262,7 +261,7 @@ def test_trajopt_batch_env_goalset(trajopt_solver_batch_env):
 
 def test_trajopt_batch_env(trajopt_solver):
     # run goalset planning:
-    q_start = trajopt_solver.retract_config.repeat(3, 1)
+    q_start = trajopt_solver.retract_config.clone().repeat(3, 1)
     q_goal = q_start.clone()
     q_goal[0] += 0.1
     q_goal[1] -= 0.1

@@ -8,14 +8,14 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
+"""Module contains deprecated code for computing Signed Distance Field and it's gradient."""
 # Third Party
 import torch
-
-# from curobo.util.torch_utils import get_torch_jit_decorator
 
 
 # @get_torch_jit_decorator()
 def lookup_distance(pt, dist_matrix_flat, num_voxels):
+    """Lookup distance from distance matrix."""
     # flatten:
     ind_pt = (
         (pt[..., 0]) * (num_voxels[1] * num_voxels[2]) + pt[..., 1] * num_voxels[2] + pt[..., 2]
@@ -26,6 +26,7 @@ def lookup_distance(pt, dist_matrix_flat, num_voxels):
 
 # @get_torch_jit_decorator()
 def compute_sdf_gradient(pt, dist_matrix_flat, num_voxels, dist):
+    """Compute gradient of SDF."""
     grad_l = []
     for i in range(3):  # x,y,z
         pt_n = pt.clone()
@@ -50,6 +51,8 @@ def compute_sdf_gradient(pt, dist_matrix_flat, num_voxels, dist):
 
 
 class SDFGrid(torch.autograd.Function):
+    """Sdf grid torch function."""
+
     @staticmethod
     def forward(ctx, pt, dist_matrix_flat, num_voxels):
         # input = x_id,y_id,z_id

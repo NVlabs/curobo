@@ -522,27 +522,20 @@ class TensorStepPositionCliqueKernel(TensorStepBase):
                     self._u_grad,
                 )
             if self._filter_velocity:
+                out_state_seq.aux_data["raw_velocity"] = out_state_seq.velocity
                 out_state_seq.velocity = self.filter_signal(out_state_seq.velocity)
 
             if self._filter_acceleration:
+                out_state_seq.aux_data["raw_acceleration"] = out_state_seq.acceleration
                 out_state_seq.acceleration = self.filter_signal(out_state_seq.acceleration)
 
             if self._filter_jerk:
+                out_state_seq.aux_data["raw_jerk"] = out_state_seq.jerk
                 out_state_seq.jerk = self.filter_signal(out_state_seq.jerk)
         return out_state_seq
 
     def filter_signal(self, signal: torch.Tensor):
         return filter_signal_jit(signal, self._sma_kernel)
-        b, h, dof = signal.shape
-        new_signal = (
-            self._sma(
-                signal.transpose(-1, -2).reshape(b * dof, 1, h), self._sma_kernel, padding="same"
-            )
-            .view(b, dof, h)
-            .transpose(-1, -2)
-            .contiguous()
-        )
-        return new_signal
 
 
 @get_torch_jit_decorator(force_jit=True)

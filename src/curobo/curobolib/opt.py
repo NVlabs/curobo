@@ -24,7 +24,7 @@ except ImportError:
     from torch.utils.cpp_extension import load
 
     # CuRobo
-    from curobo.curobolib.util_file import add_cpp_path
+    from curobo.util_file import add_cpp_path
 
     lbfgs_step_cu = load(
         name="lbfgs_step_cu",

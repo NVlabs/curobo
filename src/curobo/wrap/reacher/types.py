@@ -182,7 +182,7 @@ class ReacherSolveState:
             link_poses: Dictionary of link poses to reach. This is only required for multi-link
                 pose reaching, where the goal is to reach multiple poses with different links. To
                 use this,
-                :var:`curobo.cuda_robot_model.cuda_robot_model.CudaRobotModelConfig.link_names`
+                :attr:`curobo.cuda_robot_model.cuda_robot_model.CudaRobotModelConfig.link_names`
                 should have the link names to reach.
             current_solve_state: Current reacher solve state.
             current_goal_buffer: Current goal buffer.

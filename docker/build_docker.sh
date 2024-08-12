@@ -32,16 +32,11 @@ if [ -z "$input_arg" ]; then
     fi
 fi
 
-if [ "$input_arg" == "isaac_sim_2022.2.1" ]; then
-    echo "Building Isaac Sim docker"
-    dockerfile="isaac_sim.dockerfile"
-    image_tag="isaac_sim_2022.2.1"
-    isaac_sim_version="2022.2.1"
-elif [ "$input_arg" == "isaac_sim_2023.1.0" ]; then
+if [ "$input_arg" == "isaac_sim_4.0.0" ]; then
     echo "Building Isaac Sim headless docker"
     dockerfile="isaac_sim.dockerfile"
-    image_tag="isaac_sim_2023.1.0"
-    isaac_sim_version="2023.1.0"
+    image_tag="isaac_sim_4.0.0"
+    isaac_sim_version="4.0.0"
 elif [ "$input_arg" == "x86" ]; then
     echo "Building for X86 Architecture"
     dockerfile="x86.dockerfile"
@@ -63,11 +58,11 @@ fi
 #        "nvidia": {
 #            "path": "/usr/bin/nvidia-container-runtime",
 #            "runtimeArgs": []
-#         } 
+#         }
 #    },
 #    "default-runtime": "nvidia" # ADD this line (the above lines will already exist in your json file)
 # }
-# 
+#
 echo "${dockerfile}"
 
-docker build --build-arg ISAAC_SIM_VERSION=${isaac_sim_version} -t curobo_docker:${image_tag} -f ${dockerfile} . 
+docker build --build-arg ISAAC_SIM_VERSION=${isaac_sim_version} -t curobo_docker:${image_tag} -f ${dockerfile} .

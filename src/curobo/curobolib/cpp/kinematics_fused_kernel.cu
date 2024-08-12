@@ -67,6 +67,20 @@ namespace Curobo
       q[0] = length * q[0];
     }
 
+
+    __device__ __forceinline__ void normalize_quaternion(float4 &q)
+    {
+      // get length:
+      float inv_length = 1.0 / length(q);
+
+      if (q.w < 0.0)
+      {
+        inv_length = -1.0 * inv_length;
+      }
+      q = inv_length * q;
+
+    }
+
     /**
      * @brief get quaternion from transformation matrix
      *
@@ -129,8 +143,9 @@ namespace Curobo
      * @param t # rotation matrix 3x3
      * @param q quaternion in wxyz format
      */
-    __device__ __forceinline__ void rot_to_quat(float *t, float *q)
+    __device__ __forceinline__ void rot_to_quat(float *t, float4 &q)
     {
+      // q.x = w, q.y = x, q.z = y,  q.w = z,
       float n;
       float n_sqrt;
 
@@ -140,19 +155,19 @@ namespace Curobo
         {
           n      = 1 + t[0] - t[4] - t[8];
           n_sqrt = 0.5 * rsqrtf(n);
-          q[1]   = n * n_sqrt;
-          q[2]   = (t[1] + t[3]) * n_sqrt;
-          q[3]   = (t[6] + t[2]) * n_sqrt;
-          q[0]   = -1 * (t[5] - t[7]) * n_sqrt; // * -1 ; // this is the wrong one?
+          q.x   = n * n_sqrt;
+          q.y   = (t[1] + t[3]) * n_sqrt;
+          q.z   = (t[6] + t[2]) * n_sqrt;
+          q.w   = -1 * (t[5] - t[7]) * n_sqrt; // * -1 ; // this is the wrong one?
         }
         else
         {
           n      = 1 - t[0] + t[4] - t[8];
           n_sqrt = 0.5 * rsqrtf(n);
-          q[1]   = (t[1] + t[3]) * n_sqrt;
-          q[2]   = n * n_sqrt;
-          q[3]   = (t[5] + t[7]) * n_sqrt;
-          q[0]   = -1 * (t[6] - t[2]) * n_sqrt;
+          q.x   = (t[1] + t[3]) * n_sqrt;
+          q.y   = n * n_sqrt;
+          q.z   = (t[5] + t[7]) * n_sqrt;
+          q.w   = -1 * (t[6] - t[2]) * n_sqrt;
         }
       }
       else
@@ -161,19 +176,19 @@ namespace Curobo
         {
           n      = 1 - t[0] - t[4] + t[8];
           n_sqrt = 0.5 * rsqrtf(n);
-          q[1]   = (t[6] + t[2]) * n_sqrt;
-          q[2]   = (t[5] + t[7]) * n_sqrt;
-          q[3]   = n * n_sqrt;
-          q[0]   = -1 * (t[1] - t[3]) * n_sqrt;
+          q.x   = (t[6] + t[2]) * n_sqrt;
+          q.y   = (t[5] + t[7]) * n_sqrt;
+          q.z   = n * n_sqrt;
+          q.w   = -1 * (t[1] - t[3]) * n_sqrt;
         }
         else
         {
           n      = 1 + t[0] + t[4] + t[8];
           n_sqrt = 0.5 * rsqrtf(n);
-          q[1]   = (t[5] - t[7]) * n_sqrt;
-          q[2]   = (t[6] - t[2]) * n_sqrt;
-          q[3]   = (t[1] - t[3]) * n_sqrt;
-          q[0]   = -1 * n * n_sqrt;
+          q.x   = (t[5] - t[7]) * n_sqrt;
+          q.y   = (t[6] - t[2]) * n_sqrt;
+          q.z   = (t[1] - t[3]) * n_sqrt;
+          q.w   = -1 * n * n_sqrt;
         }
       }
       normalize_quaternion(q);
@@ -242,6 +257,23 @@ namespace Curobo
           tm.x * sphere_pos.x + tm.y * sphere_pos.y + tm.z * sphere_pos.z + tm.w;
       }
       C[3] = sphere_pos.w;
+    }
+
+    template<typename scalar_t>
+    __device__ __forceinline__ void
+    transform_sphere_float4(const float *transform_mat, const scalar_t *sphere, float4 &C)
+    {
+      float4 sphere_pos = *(float4 *)&sphere[0];
+      int    st_idx     = 0;
+
+      C.x = transform_mat[0] * sphere_pos.x + transform_mat[1] * sphere_pos.y +
+            transform_mat[2] * sphere_pos.z + transform_mat[3];
+      C.y = transform_mat[4] * sphere_pos.x + transform_mat[5] * sphere_pos.y +
+            transform_mat[6] * sphere_pos.z + transform_mat[7];
+      C.z = transform_mat[8] * sphere_pos.x + transform_mat[9] * sphere_pos.y +
+            transform_mat[10] * sphere_pos.z + transform_mat[11];
+      C.w = sphere_pos.w;
+
     }
 
     template<typename scalar_t>
@@ -440,7 +472,7 @@ namespace Curobo
       e_pos.z = cumul_mat[4 + 4 + 3];
 
       // compute position gradient:
-      j_pos = *(float3 *)&l_pos[0] - e_pos;            // - e_pos;
+      j_pos = make_float3(l_pos[0], l_pos[1], l_pos[2]) - e_pos;            // - e_pos;
       float3 scale_grad = axis_sign * loc_grad;
       scale_cross_sum(vec, j_pos, scale_grad, grad_q); // cross product
     }
@@ -688,7 +720,7 @@ namespace Curobo
         for (int i = 0; i < M; i++)
         {
           cumul_mat[outAddrStart + (i * M) + col_idx] =
-            dot(*(float4 *)&cumul_mat[inAddrStart + (i * M)], *(float4 *)JM);
+            dot(*(float4 *)&cumul_mat[inAddrStart + (i * M)], make_float4(JM[0], JM[1], JM[2], JM[3]));
         }
 
         if (use_global_cumul)
@@ -723,13 +755,21 @@ namespace Curobo
 
         // read cumul idx:
         read_cumul_idx = linkSphereMap[sph_idx];
-        float spheres_mem[4];
+        float4 spheres_mem = make_float4(0.0, 0.0, 0.0, 0.0);
         const int16_t sphAddrs = sph_idx * 4;
 
-        transform_sphere(&cumul_mat[matAddrBase + read_cumul_idx * 16],
-                         &robot_spheres[sphAddrs], &spheres_mem[0]);
-        *(float4 *)&b_robot_spheres[batchAddrs + sphAddrs] =
-          *(float4 *)&spheres_mem[0];
+        transform_sphere_float4(&cumul_mat[matAddrBase + (read_cumul_idx * 16)],
+                         &robot_spheres[sphAddrs], spheres_mem);
+
+        //b_robot_spheres[batchAddrs + sphAddrs] = spheres_mem[0];
+        //b_robot_spheres[batchAddrs + sphAddrs + 1] = spheres_mem[1];
+        //b_robot_spheres[batchAddrs + sphAddrs + 2] = spheres_mem[2];
+        //b_robot_spheres[batchAddrs + sphAddrs + 3] = spheres_mem[3];
+
+        //float4 test_sphere =  *(float4 *)&spheres_mem[0];// make_float4(spheres_mem[0],spheres_mem[1],spheres_mem[2],spheres_mem[3]);
+
+        *(float4 *)&b_robot_spheres[batchAddrs + sphAddrs] = spheres_mem;
+
       }
 
       // write position and rotation, we convert rotation matrix to a quaternion and
@@ -857,7 +897,7 @@ namespace Curobo
           // fetch one row of cumul_mat, multiply with a column, which is in JM
           cumul_mat[outAddrStart + elem_idx] =
             dot(*(float4 *)&cumul_mat[inAddrStart + ((elem_idx / 4) * M)],
-                *(float4 *)JM);
+                make_float4(JM[0], JM[1], JM[2], JM[3]));
         }
       }
 
@@ -906,7 +946,7 @@ namespace Curobo
 
         // read cumul idx:
         read_cumul_idx = linkSphereMap[sph_idx];
-        float spheres_mem[4];
+        float spheres_mem[4] = {0.0,0.0,0.0,0.0};
         transform_sphere(&cumul_mat[matAddrBase + read_cumul_idx * 16],
                          &robotSpheres[sphAddrs], &spheres_mem[0]);
 
@@ -925,7 +965,7 @@ namespace Curobo
 
           int j_type = jointMapType[j];
 
-          
+
           if (j_type == Z_ROT)
           {
             float result = 0.0;
@@ -1137,19 +1177,26 @@ namespace Curobo
       {
         return;
       }
-      float q[4] = { 0.0 }; // initialize array
-
+      //float q[4] = { 0.0 }; // initialize array
+      float4 q = make_float4(0,0,0,0);
       float rot[9];
 
       // read rot
-      *(float3 *)&rot[0] = *(float3 *)&in_rot_mat[batch_idx * 9];
-      *(float3 *)&rot[3] = *(float3 *)&in_rot_mat[batch_idx * 9 + 3];
-      *(float3 *)&rot[6] = *(float3 *)&in_rot_mat[batch_idx * 9 + 6];
+      #pragma unroll 9
+      for (int k = 0; k<9; k++)
+      {
+        rot[k] = in_rot_mat[batch_idx * 9 + k];
+      }
 
-      rot_to_quat(&rot[0], &q[0]);
+      // *(float3 *)&rot[0] = *(float3 *)&in_rot_mat[batch_idx * 9];
+      // *(float3 *)&rot[3] = *(float3 *)&in_rot_mat[batch_idx * 9 + 3];
+      // *(float3 *)&rot[6] = *(float3 *)&in_rot_mat[batch_idx * 9 + 6];
+
+      rot_to_quat(&rot[0], q);
 
       // write quaternion:
-      *(float4 *)&out_quat[batch_idx * 4] = *(float4 *)&q[0];
+
+      *(float4 *)&out_quat[batch_idx * 4] = q;
     }
   } // namespace Kinematics
 }   // namespace Curobo
@@ -1161,8 +1208,8 @@ std::vector<torch::Tensor>kin_fused_forward(
   const torch::Tensor robot_spheres, const torch::Tensor link_map,
   const torch::Tensor joint_map, const torch::Tensor joint_map_type,
   const torch::Tensor store_link_map, const torch::Tensor link_sphere_map,
-  const torch::Tensor joint_offset_map, 
-  const int batch_size, 
+  const torch::Tensor joint_offset_map,
+  const int batch_size,
   const int n_joints,const int n_spheres,
   const bool use_global_cumul = false)
 {
@@ -1179,9 +1226,8 @@ std::vector<torch::Tensor>kin_fused_forward(
   CHECK_INPUT(joint_map_type);
   CHECK_INPUT(store_link_map);
   CHECK_INPUT(link_sphere_map);
-  //CHECK_INPUT(link_chain_map);
   CHECK_INPUT(joint_offset_map);
-  
+
   const int n_links       = link_map.size(0);
   const int store_n_links = link_pos.size(1);
   assert(joint_map.dtype() == torch::kInt16);
@@ -1232,7 +1278,7 @@ std::vector<torch::Tensor>kin_fused_forward(
         joint_map_type.data_ptr<int8_t>(),
         joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
         store_link_map.data_ptr<int16_t>(),
-        link_sphere_map.data_ptr<int16_t>(), 
+        link_sphere_map.data_ptr<int16_t>(),
         joint_offset_map.data_ptr<float>(),
         batch_size, n_spheres,
         n_links, n_joints, store_n_links);
@@ -1253,7 +1299,7 @@ std::vector<torch::Tensor>kin_fused_forward(
         joint_map_type.data_ptr<int8_t>(),
         joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
         store_link_map.data_ptr<int16_t>(),
-        link_sphere_map.data_ptr<int16_t>(), 
+        link_sphere_map.data_ptr<int16_t>(),
         joint_offset_map.data_ptr<float>(),
         batch_size, n_spheres,
         n_links, n_joints, store_n_links);
@@ -1285,7 +1331,7 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
   using namespace Curobo::Kinematics;
   CHECK_INPUT_GUARD(joint_vec);
   CHECK_INPUT(grad_out);
-  CHECK_INPUT(grad_nlinks_pos);  
+  CHECK_INPUT(grad_nlinks_pos);
   CHECK_INPUT(grad_nlinks_quat);
   CHECK_INPUT(global_cumul_mat);
   CHECK_INPUT(fixed_transform);
@@ -1297,10 +1343,10 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
   CHECK_INPUT(link_sphere_map);
   CHECK_INPUT(link_chain_map);
   CHECK_INPUT(joint_offset_map);
-  
+
   const int n_links       = link_map.size(0);
   const int store_n_links = store_link_map.size(0);
-  
+
   // assert(n_links < 128);
   assert(n_joints < 128); // for larger num. of joints, change kernel3's
                           // MAX_JOINTS template value.
@@ -1362,7 +1408,7 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
           joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
           store_link_map.data_ptr<int16_t>(),
           link_sphere_map.data_ptr<int16_t>(),
-          link_chain_map.data_ptr<int16_t>(), 
+          link_chain_map.data_ptr<int16_t>(),
           joint_offset_map.data_ptr<float>(),
           batch_size, n_spheres,
           n_links, n_joints, store_n_links);
@@ -1386,7 +1432,7 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
           joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
           store_link_map.data_ptr<int16_t>(),
           link_sphere_map.data_ptr<int16_t>(),
-          link_chain_map.data_ptr<int16_t>(), 
+          link_chain_map.data_ptr<int16_t>(),
           joint_offset_map.data_ptr<float>(),
           batch_size, n_spheres,
           n_links, n_joints, store_n_links);
@@ -1410,7 +1456,7 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
           joint_map.data_ptr<int16_t>(), link_map.data_ptr<int16_t>(),
           store_link_map.data_ptr<int16_t>(),
           link_sphere_map.data_ptr<int16_t>(),
-          link_chain_map.data_ptr<int16_t>(), 
+          link_chain_map.data_ptr<int16_t>(),
           joint_offset_map.data_ptr<float>(),
           batch_size, n_spheres,
           n_links, n_joints, store_n_links);
@@ -1435,11 +1481,11 @@ std::vector<torch::Tensor>kin_fused_backward_16t(
         fixed_transform.data_ptr<float>(),
         robot_spheres.data_ptr<float>(),
         joint_map_type.data_ptr<int8_t>(),
-        joint_map.data_ptr<int16_t>(), 
+        joint_map.data_ptr<int16_t>(),
         link_map.data_ptr<int16_t>(),
         store_link_map.data_ptr<int16_t>(),
         link_sphere_map.data_ptr<int16_t>(),
-        link_chain_map.data_ptr<int16_t>(), 
+        link_chain_map.data_ptr<int16_t>(),
         joint_offset_map.data_ptr<float>(),
         batch_size, n_spheres,
         n_links, n_joints, store_n_links);
