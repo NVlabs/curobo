@@ -14,7 +14,7 @@ from __future__ import annotations
 
 # Standard Library
 from abc import abstractmethod, abstractproperty
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
 # Third Party
@@ -91,7 +91,7 @@ class Goal(Sequence):
 
     name: str = "goal"
     goal_state: Optional[State] = None
-    goal_pose: Pose = Pose()
+    goal_pose: Pose = field(default_factory=Pose)
     links_goal_pose: Optional[Dict[str, Pose]] = None
     current_state: Optional[State] = None
     retract_state: Optional[T_DOF] = None
