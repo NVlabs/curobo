@@ -63,6 +63,9 @@ def set_prim_translate(prim, translation):
 def set_prim_transform(
     prim, pose: List[float], scale: List[float] = [1, 1, 1], use_float: bool = False
 ):
+    if not prim.GetAttribute("xformOp:translate").IsValid():
+        UsdGeom.Xformable(prim).AddTranslateOp(UsdGeom.XformOp.PrecisionFloat)
+
     if prim.GetAttribute("xformOp:orient").IsValid():
         if isinstance(prim.GetAttribute("xformOp:orient").Get(), Gf.Quatf):
             use_float = True
@@ -70,8 +73,6 @@ def set_prim_transform(
         UsdGeom.Xformable(prim).AddOrientOp(UsdGeom.XformOp.PrecisionFloat)
         use_float = True
 
-    if not prim.GetAttribute("xformOp:translate").IsValid():
-        UsdGeom.Xformable(prim).AddTranslateOp(UsdGeom.XformOp.PrecisionFloat)
     if not prim.GetAttribute("xformOp:scale").IsValid():
         UsdGeom.Xformable(prim).AddScaleOp(UsdGeom.XformOp.PrecisionFloat)
     quat = pose[3:]
