@@ -41,7 +41,9 @@ namespace Curobo
       scalar_t *out_distance,        // batch x 1
       scalar_t *out_vec,             // batch x nspheres x 4
       const scalar_t *robot_spheres, // batch x nspheres x 4
-      const scalar_t *collision_threshold, const int batch_size,
+      const scalar_t *offsets,
+      const uint8_t *coll_matrix,
+      const int batch_size,
       const int nspheres, const scalar_t *weight, const bool write_grad = false)
     {
       const int batch_idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -52,37 +54,35 @@ namespace Curobo
       }
       float  r_diff, distance;
       float  max_penetration = 0;
-      float3 sph1, sph2, dist_vec;
+      float4 sph1, sph2;
       int    sph1_idx = -1;
       int    sph2_idx = -1;
 
       // iterate over spheres:
       for (int i = 0; i < nspheres; i++)
       {
-        sph1 = *(float3 *)&robot_spheres[batch_idx * nspheres * 4 + i * 4];
+        sph1 = *(float4 *)&robot_spheres[batch_idx * nspheres * 4 + i * 4];
+        sph1.w += offsets[i];
 
         for (int j = i + 1; j < nspheres; j++)
         {
-          r_diff = collision_threshold[i * nspheres + j];
-
-          if (isinf(r_diff))
+          if(coll_matrix[i * nspheres + j] == 1)
           {
-            continue;
-          }
-          sph2 = *(float3 *)&robot_spheres[batch_idx * nspheres * 4 + j * 4];
+            sph2 = *(float4 *)&robot_spheres[batch_idx * nspheres * 4 + j * 4];
+            sph2.w += offsets[j];
 
-          // compute sphere distance:
-          distance = relu(r_diff - length(sph1 - sph2));
+            // compute sphere distance:
+            r_diff = sph1.w + sph2.w;
+            float d      = sqrt((sph1.x - sph2.x) * (sph1.x - sph2.x) +
+                                  (sph1.y - sph2.y) * (sph1.y - sph2.y) +
+                                  (sph1.z - sph2.z) * (sph1.z - sph2.z));
+            distance = (r_diff - d);
 
-          if (distance > max_penetration)
-          {
-            max_penetration = distance;
-            sph1_idx        = i;
-            sph2_idx        = j;
-
-            if (write_grad)
+            if (distance > max_penetration)
             {
-              dist_vec = normalize(sph1 - sph2);// / distance;
+              max_penetration = distance;
+              sph1_idx        = i;
+              sph2_idx        = j;
             }
           }
         }
@@ -95,6 +95,11 @@ namespace Curobo
 
         if (write_grad)
         {
+          float3 sph1_g =
+              *(float3 *)&robot_spheres[4 * (batch_idx * nspheres + sph1_idx)];
+          float3 sph2_g =
+              *(float3 *)&robot_spheres[4 * (batch_idx * nspheres + sph2_idx)];
+            float3 dist_vec = normalize(sph1_g - sph2_g);
           *(float3 *)&out_vec[batch_idx * nspheres * 4 + sph1_idx * 4] =
             weight[0] * -1 * dist_vec;
           *(float3 *)&out_vec[batch_idx * nspheres * 4 + sph2_idx * 4] =
@@ -131,7 +136,7 @@ namespace Curobo
       int i         = ndpt * (warp_idx / nwpr); // starting row number for this warp
       int j         = (warp_idx % nwpr) * 32;   // starting column number for this warp
 
-      dist_t max_d = {0.0, 0.0, 0.0 };// .d, .i, .j
+      dist_t max_d = { 0.0, 0, 0 };// .d, .i, .j
       __shared__ dist_t max_darr[32];
 
       // Optimization: About 1/3 of the warps will have no work.
@@ -354,7 +359,7 @@ namespace Curobo
       // in registers (max_d).
       // Each thread computes upto ndpt distances.
       //////////////////////////////////////////////////////
-      dist_t  max_d[NBPB] = {{ 0.0, 0.0, 0.0}};
+      dist_t  max_d[NBPB] = {{ 0.0, 0, 0}};
       int16_t indices[ndpt * 2];
 
       for (uint8_t i = 0; i < ndpt * 2; i++)
@@ -698,7 +703,7 @@ std::vector<torch::Tensor>self_collision_distance(
     }
     else
     {
-      assert(false); // only ndpt of 32 or 64 is currently supported.
+      assert(false);
     }
   }
 
@@ -713,6 +718,8 @@ std::vector<torch::Tensor>self_collision_distance(
     assert(collision_matrix.size(0) == nspheres * nspheres);
     int smemSize = nspheres * sizeof(float4);
 
+    if (nspheres < 1024 && threadsPerBlock < 1024)
+    {
 
     AT_DISPATCH_FLOATING_TYPES(
       robot_spheres.scalar_type(), "self_collision_distance", ([&] {
@@ -726,6 +733,30 @@ std::vector<torch::Tensor>self_collision_distance(
         ndpt_n, nwpr, weight.data_ptr<scalar_t>(),
         sparse_index.data_ptr<uint8_t>(), compute_grad);
     }));
+    }
+    else
+    {
+      threadsPerBlock = batch_size;
+      if (threadsPerBlock > 128)
+      {
+        threadsPerBlock = 128;
+      }
+      blocksPerGrid = (batch_size + threadsPerBlock - 1) / threadsPerBlock;
+
+      AT_DISPATCH_FLOATING_TYPES(
+      robot_spheres.scalar_type(), "self_collision_distance", ([&] {
+      self_collision_distance_kernel<scalar_t>
+        << < blocksPerGrid, threadsPerBlock, smemSize, stream >> > (
+        out_distance.data_ptr<scalar_t>(),
+        out_vec.data_ptr<scalar_t>(),
+        robot_spheres.data_ptr<scalar_t>(),
+        collision_offset.data_ptr<scalar_t>(),
+        collision_matrix.data_ptr<uint8_t>(),
+        batch_size, nspheres,
+        weight.data_ptr<scalar_t>(),
+        compute_grad);
+    }));
+    }
   }
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 

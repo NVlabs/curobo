@@ -507,37 +507,25 @@ def angular_distance_phi3(goal_quat, current_quat):
 class OrientationError(Function):
     @staticmethod
     def geodesic_distance(goal_quat, current_quat, quat_res):
-        conjugate_quat = current_quat.clone()
-        conjugate_quat[..., 1:] *= -1.0
-        quat_res = quat_multiply(goal_quat, conjugate_quat, quat_res)
-
-        quat_res = -1.0 * quat_res * torch.sign(quat_res[..., 0]).unsqueeze(-1)
-        quat_res[..., 0] = 0.0
-        # quat_res = conjugate_quat * 0.0
-        return quat_res
+        quat_grad, rot_error = geodesic_distance(goal_quat, current_quat, quat_res)
+        return quat_grad, rot_error
 
     @staticmethod
     def forward(ctx, goal_quat, current_quat, quat_res):
-        quat_res = OrientationError.geodesic_distance(goal_quat, current_quat, quat_res)
-        rot_error = torch.norm(quat_res, dim=-1, keepdim=True)
-        ctx.save_for_backward(quat_res, rot_error)
+        quat_grad, rot_error = OrientationError.geodesic_distance(goal_quat, current_quat, quat_res)
+        ctx.save_for_backward(quat_grad)
         return rot_error
 
     @staticmethod
     def backward(ctx, grad_out):
-        grad_mul = None
-        if ctx.needs_input_grad[1]:
-            (quat_error, r_err) = ctx.saved_tensors
-            scale = 1 / r_err
-            scale = torch.nan_to_num(scale, 0, 0, 0)
+        grad_mul = grad_mul1 = None
+        (quat_grad,) = ctx.saved_tensors
 
-            grad_mul = grad_out * scale * quat_error
-            # print(grad_out.shape)
-            # if grad_out.shape[0] == 6:
-            #    #print(grad_out.view(-1))
-            #    #print(grad_mul.view(-1)[-6:])
-            #    #exit()
-        return None, grad_mul, None
+        if ctx.needs_input_grad[1]:
+            grad_mul = grad_out * quat_grad
+        if ctx.needs_input_grad[0]:
+            grad_mul1 = -1.0 * grad_out * quat_grad
+        return grad_mul1, grad_mul, None
 
 
 @get_torch_jit_decorator()
@@ -549,3 +537,19 @@ def normalize_quaternion(in_quaternion: torch.Tensor) -> torch.Tensor:
     # normalize quaternion
     in_q = k2 * in_quaternion
     return in_q
+
+
+@get_torch_jit_decorator()
+def geodesic_distance(goal_quat, current_quat, quat_res):
+    conjugate_quat = current_quat.detach().clone()
+    conjugate_quat[..., 1:] *= -1.0
+    quat_res = quat_multiply(goal_quat, conjugate_quat, quat_res)
+    sign = torch.sign(quat_res[..., 0])
+    sign = torch.where(sign == 0, 1.0, sign)
+    quat_res = -1.0 * quat_res * sign.unsqueeze(-1)
+    quat_res[..., 0] = 0.0
+    rot_error = torch.norm(quat_res, dim=-1, keepdim=True)
+    scale = 1.0 / rot_error
+    scale = torch.nan_to_num(scale, 0.0, 0.0, 0.0)
+    quat_res = quat_res * scale
+    return quat_res, rot_error

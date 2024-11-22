@@ -633,6 +633,7 @@ class WorldCollision(WorldCollisionConfig):
         self,
         cuboid: Cuboid = Cuboid(name="test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[1, 1, 1]),
         voxel_size: float = 0.02,
+        run_marching_cubes: bool = True,
     ) -> Mesh:
         """Get a mesh representation of the world obstacles based on occupancy in a bounding box.
 
@@ -642,19 +643,31 @@ class WorldCollision(WorldCollisionConfig):
         Args:
             cuboid: Bounding box to get the mesh representation.
             voxel_size: Size of the voxels in meters.
+            run_marching_cubes: Runs marching cubes over occupied voxels to generate a mesh. If
+                set to False, then all occupied voxels are merged into a mesh and returned.
 
         Returns:
             Mesh representation of the world obstacles in the bounding box.
         """
         voxels = self.get_voxels_in_bounding_box(cuboid, voxel_size)
-        # voxels = voxels.cpu().numpy()
-        # cuboids = [Cuboid(name="c_"+str(x), pose=[voxels[x,0],voxels[x,1],voxels[x,2], 1,0,0,0],
-        # dims=[voxel_size, voxel_size, voxel_size]) for x in range(voxels.shape[0])]
-        # mesh = WorldConfig(cuboid=cuboids).get_mesh_world(True).mesh[0]
-        mesh = Mesh.from_pointcloud(
-            voxels[:, :3].detach().cpu().numpy(),
-            pitch=voxel_size * 1.1,
-        )
+        voxels = voxels.cpu().numpy()
+
+        if run_marching_cubes:
+            mesh = Mesh.from_pointcloud(
+                voxels[:, :3].detach().cpu().numpy(),
+                pitch=voxel_size * 1.1,
+            )
+        else:
+            cuboids = [
+                Cuboid(
+                    name="c_" + str(x),
+                    pose=[voxels[x, 0], voxels[x, 1], voxels[x, 2], 1, 0, 0, 0],
+                    dims=[voxel_size, voxel_size, voxel_size],
+                )
+                for x in range(voxels.shape[0])
+            ]
+            mesh = WorldConfig(cuboid=cuboids).get_mesh_world(True).mesh[0]
+
         return mesh
 
     def get_obstacle_names(self, env_idx: int = 0) -> List[str]:

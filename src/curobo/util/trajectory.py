@@ -99,7 +99,7 @@ def get_linear_traj(
     return trajectory
 
 
-def get_smooth_trajectory(raw_traj, degree=5):
+def get_smooth_trajectory(raw_traj: torch.Tensor, degree: int = 5):
     cpu_traj = raw_traj.cpu()
 
     smooth_traj = torch.zeros_like(cpu_traj)
@@ -108,11 +108,10 @@ def get_smooth_trajectory(raw_traj, degree=5):
     return smooth_traj.to(dtype=raw_traj.dtype, device=raw_traj.device)
 
 
-def get_spline_interpolated_trajectory(raw_traj, des_horizon, degree=5):
+def get_spline_interpolated_trajectory(raw_traj: torch.Tensor, des_horizon: int, degree: int = 5):
     retimed_traj = torch.zeros((des_horizon, raw_traj.shape[-1]))
     tensor_args = TensorDeviceType(device=raw_traj.device, dtype=raw_traj.dtype)
-    cpu_traj = raw_traj.cpu().numpy()
-
+    cpu_traj = raw_traj.cpu()
     for i in range(cpu_traj.shape[-1]):
         retimed_traj[:, i] = bspline(cpu_traj[:, i], n=des_horizon, degree=degree)
     retimed_traj = retimed_traj.to(**(tensor_args.as_torch_dict()))
@@ -179,7 +178,7 @@ def get_batch_interpolated_trajectory(
         opt_dt[:] = raw_dt
     # traj_steps contains the tsteps for each trajectory
     if steps_max <= 0:
-        log_error("Steps max is less than 0")
+        log_error("Steps max is less than 1, with a value: " + str(steps_max))
 
     if out_traj_state is not None and out_traj_state.position.shape[1] < steps_max:
         log_warn(
@@ -610,5 +609,7 @@ def calculate_tsteps(
     )
     if not optimize_dt:
         opt_dt[:] = raw_dt
+    # check for nan:
+    opt_dt = torch.nan_to_num(opt_dt, nan=min_dt)
     traj_steps, steps_max = calculate_traj_steps(opt_dt, interpolation_dt, horizon)
     return traj_steps, steps_max, opt_dt

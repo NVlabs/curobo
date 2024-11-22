@@ -121,7 +121,7 @@ class CameraObservation:
         point_cloud = project_depth_using_rays(depth_image, self.projection_rays)
 
         if project_to_pose and self.pose is not None:
-            point_cloud = self.pose.batch_transform(point_cloud)
+            point_cloud = self.pose.batch_transform_points(point_cloud)
 
         return point_cloud
 

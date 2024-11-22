@@ -603,10 +603,27 @@ def _wolfe_search_tail_jit(c, g_x, x_set, m, d_opt: int):
 
 
 @get_torch_jit_decorator()
-def scale_action(dx, action_step_max):
+def scale_action_old(dx, action_step_max):
     scale_value = torch.max(torch.abs(dx) / action_step_max, dim=-1, keepdim=True)[0]
     scale_value = torch.clamp(scale_value, 1.0)
     dx_scaled = dx / scale_value
+    return dx_scaled
+
+
+@get_torch_jit_decorator()
+def scale_action(dx, action_step_max):
+
+    # get largest dx scaled by bounds across optimization variables
+    scale_value = torch.max(torch.abs(dx) / action_step_max, dim=-1, keepdim=True)[0]
+
+    # scale dx to bring all dx within bounds:
+    # only perfom for dx that are greater than 1:
+
+    new_scale = torch.where(scale_value <= 1.0, 1.0, scale_value)
+    dx_scaled = dx / new_scale
+
+    # scale_value = torch.clamp(scale_value, 1.0)
+    # dx_scaled = dx / scale_value
     return dx_scaled
 
 

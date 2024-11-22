@@ -122,7 +122,7 @@ def test_esdf_from_world(world_collision):
     world_collision.clear_voxelization_cache()
     esdf = world_collision.get_esdf_in_bounding_box(voxel_size=voxel_size).clone()
 
-    occupied = esdf.get_occupied_voxels()
+    occupied = esdf.get_occupied_voxels(feature_threshold=0.0)
 
     assert voxels.shape == occupied.shape
 
@@ -136,7 +136,7 @@ def test_esdf_from_world(world_collision):
     indirect=True,
 )
 def test_voxels_prim_mesh(world_collision, world_collision_primitive):
-    voxel_size = 0.1
+    voxel_size = 0.05
     voxels = world_collision.get_voxels_in_bounding_box(voxel_size=voxel_size).clone()
     voxels_prim = world_collision_primitive.get_voxels_in_bounding_box(
         voxel_size=voxel_size
@@ -172,7 +172,7 @@ def test_esdf_prim_mesh(world_collision, world_collision_primitive):
     indirect=True,
 )
 def test_marching_cubes_from_world(world_collision):
-    voxel_size = 0.1
+    voxel_size = 0.05
     voxels = world_collision.get_voxels_in_bounding_box(voxel_size=voxel_size)
     mesh = Mesh.from_pointcloud(voxels[:, :3].detach().cpu().numpy(), pitch=voxel_size * 0.1)
 

@@ -435,7 +435,14 @@ class ArmReacher(ArmBase, ArmReacherConfig):
             self.dist_cost.disable_cost()
             self.cspace_convergence.disable_cost()
 
-    def get_pose_costs(self, include_link_pose: bool = False, include_convergence: bool = True):
+    def get_pose_costs(
+        self,
+        include_link_pose: bool = False,
+        include_convergence: bool = True,
+        only_convergence: bool = False,
+    ):
+        if only_convergence:
+            return [self.pose_convergence]
         pose_costs = [self.goal_cost]
         if include_convergence:
             pose_costs += [self.pose_convergence]
@@ -447,33 +454,15 @@ class ArmReacher(ArmBase, ArmReacherConfig):
         self,
         metric: PoseCostMetric,
     ):
-        pose_costs = self.get_pose_costs(include_link_pose=metric.include_link_pose)
-        if metric.hold_partial_pose:
-            if metric.hold_vec_weight is None:
-                log_error("hold_vec_weight is required")
-            [x.hold_partial_pose(metric.hold_vec_weight) for x in pose_costs]
-        if metric.release_partial_pose:
-            [x.release_partial_pose() for x in pose_costs]
-        if metric.reach_partial_pose:
-            if metric.reach_vec_weight is None:
-                log_error("reach_vec_weight is required")
-            [x.reach_partial_pose(metric.reach_vec_weight) for x in pose_costs]
-        if metric.reach_full_pose:
-            [x.reach_full_pose() for x in pose_costs]
+        pose_costs = self.get_pose_costs(
+            include_link_pose=metric.include_link_pose, include_convergence=False
+        )
+        for p in pose_costs:
+            p.update_metric(metric, update_offset_waypoint=True)
 
-        pose_costs = self.get_pose_costs(include_convergence=False)
-        if metric.remove_offset_waypoint:
-            [x.remove_offset_waypoint() for x in pose_costs]
-
-        if metric.offset_position is not None or metric.offset_rotation is not None:
-            [
-                x.update_offset_waypoint(
-                    offset_position=metric.offset_position,
-                    offset_rotation=metric.offset_rotation,
-                    offset_tstep_fraction=metric.offset_tstep_fraction,
-                )
-                for x in pose_costs
-            ]
+        pose_costs = self.get_pose_costs(only_convergence=True)
+        for p in pose_costs:
+            p.update_metric(metric, update_offset_waypoint=False)
 
 
 @get_torch_jit_decorator()

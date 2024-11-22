@@ -11,16 +11,32 @@
 """Contains helper functions for interacting with file systems."""
 # Standard Library
 import os
+import re
 import shutil
 import sys
 from typing import Any, Dict, List, Union
 
 # Third Party
 import yaml
-from yaml import Loader
+from yaml import SafeLoader as Loader
 
 # CuRobo
 from curobo.util.logger import log_warn
+
+Loader.add_implicit_resolver(
+    "tag:yaml.org,2002:float",
+    re.compile(
+        """^(?:
+    [-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+]?[0-9]+)?
+    |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
+    |\\.[0-9_]+(?:[eE][-+][0-9]+)?
+    |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*
+    |[-+]?\\.(?:inf|Inf|INF)
+    |\\.(?:nan|NaN|NAN))$""",
+        re.X,
+    ),
+    list("-+0123456789."),
+)
 
 
 # get paths

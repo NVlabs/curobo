@@ -149,7 +149,7 @@ def load_curobo(
                 "base": {
                     "dims": [2.4, 2.4, 2.4],
                     "pose": [0, 0, 0, 1, 0, 0, 0],
-                    "voxel_size": 0.005,
+                    "voxel_size": 0.02,
                     "feature_dtype": torch.bfloat16,
                 },
             }
@@ -294,7 +294,7 @@ def benchmark_mb(
                 world = WorldConfig.from_dict(problem["obstacles"])
 
                 # mg.world_coll_checker.clear_cache()
-                world_coll = WorldConfig.from_dict(problem["obstacles"])
+                world_coll = WorldConfig.from_dict(problem["obstacles"]).get_collision_check_world()
                 if args.mesh:
                     world_coll = world_coll.get_mesh_world(merge_meshes=False)
                 robot_world.clear_world_cache()
@@ -302,7 +302,7 @@ def benchmark_mb(
 
                 esdf = robot_world.world_model.get_esdf_in_bounding_box(
                     Cuboid(name="base", pose=[0, 0, 0, 1, 0, 0, 0], dims=[2.4, 2.4, 2.4]),
-                    voxel_size=0.005,
+                    voxel_size=0.02,
                     dtype=torch.float32,
                 )
                 # esdf.feature_tensor[esdf.feature_tensor < -1.0] = -1000.0
@@ -336,13 +336,16 @@ def benchmark_mb(
                     world.randomize_color(r=[0.5, 0.9], g=[0.2, 0.5], b=[0.0, 0.2])
 
                     coll_mesh = mg.world_coll_checker.get_mesh_in_bounding_box(
-                        curobo_Cuboid(name="test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[2, 2, 2]),
-                        voxel_size=0.005,
+                        curobo_Cuboid(
+                            name="test", pose=[0, 0, 0, 1, 0, 0, 0], dims=[2.4, 2.4, 2.4]
+                        ),
+                        voxel_size=0.02,
                     )
 
                     coll_mesh.color = [0.0, 0.8, 0.8, 0.2]
 
                     coll_mesh.name = "voxel_world"
+
                     # world = WorldConfig(mesh=[coll_mesh])
                     world.add_obstacle(coll_mesh)
                 # get costs:
@@ -360,7 +363,7 @@ def benchmark_mb(
                         plot_cost_iteration(
                             traj_cost,
                             title=problem_name + "_" + str(success) + "_" + str(dt),
-                            save_path=join_path("benchmark/log/plot/", problem_name + "_cost"),
+                            save_path=join_path("benchmark/log/plot/", problem_name + "_cost")[1:],
                             log_scale=False,
                         )
                         if "finetune_trajopt_result" in result.debug_info:
@@ -373,7 +376,7 @@ def benchmark_mb(
                                 title=problem_name + "_" + str(success) + "_" + str(dt),
                                 save_path=join_path(
                                     "benchmark/log/plot/", problem_name + "_ft_cost"
-                                ),
+                                )[1:],
                                 log_scale=False,
                             )
                 if result.success.item():
@@ -481,7 +484,7 @@ def benchmark_mb(
                             start_state,
                             q_traj,
                             dt=result.interpolation_dt,
-                            save_path=join_path("benchmark/log/usd/", problem_name) + ".usd",
+                            save_path=join_path("benchmark/log/usd/", problem_name)[1:] + ".usd",
                             interpolation_steps=1,
                             write_robot_usd_path="benchmark/log/usd/assets/",
                             robot_usd_local_reference="assets/",
@@ -499,7 +502,7 @@ def benchmark_mb(
                             # result.get_interpolated_plan(),
                             # result.interpolation_dt,
                             title=problem_name,
-                            save_path=join_path("benchmark/log/plot/", problem_name + ".pdf"),
+                            save_path=join_path("benchmark/log/plot/", problem_name + ".pdf")[1:],
                         )
                         plot_traj(
                             # result.optimized_plan,
@@ -507,7 +510,9 @@ def benchmark_mb(
                             result.get_interpolated_plan(),
                             result.interpolation_dt,
                             title=problem_name,
-                            save_path=join_path("benchmark/log/plot/", problem_name + "_int.pdf"),
+                            save_path=join_path("benchmark/log/plot/", problem_name + "_int.pdf")[
+                                1:
+                            ],
                         )
 
                     m_list.append(current_metrics)

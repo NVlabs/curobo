@@ -852,7 +852,11 @@ class CudaRobotGenerator(CudaRobotGeneratorConfig):
 
         if not valid_data:
             use_experimental_kernel = False
-            log_warn("Self Collision checks are greater than 32 * 512, using slower kernel")
+            log_warn(
+                "Self Collision checks are greater than 32 * 512, using slower kernel."
+                + " Number of spheres: "
+                + str(self_collision_distance.shape[0])
+            )
         if use_experimental_kernel:
             self_coll_matrix = torch.zeros((2), device=self.tensor_args.device, dtype=torch.uint8)
         else:

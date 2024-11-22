@@ -9,6 +9,9 @@
 # its affiliates is strictly prohibited.
 #
 
+# Standard Library
+import copy
+
 # Third Party
 import pytest
 import torch
@@ -108,3 +111,73 @@ def test_self_collision_franka():
     cost_fn._out_distance[:] = 0.0
     out = cost_fn.forward(in_spheres)
     assert out.sum().item() > 0.0
+
+
+def test_self_collision_10k_spheres_franka():
+    tensor_args = TensorDeviceType()
+
+    robot_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
+    robot_cfg["kinematics"]["debug"] = {"self_collision_experimental": False}
+
+    robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
+    robot_cfg.kinematics.self_collision_config.experimental_kernel = True
+    kinematics = CudaRobotModel(robot_cfg.kinematics)
+    self_collision_data = kinematics.get_self_collision_config()
+    self_collision_config = SelfCollisionCostConfig(
+        **{"weight": 1.0, "classify": False, "self_collision_kin_config": self_collision_data},
+        tensor_args=tensor_args
+    )
+    cost_fn = SelfCollisionCost(self_collision_config)
+    cost_fn.self_collision_kin_config.experimental_kernel = True
+
+    b = 10
+    h = 1
+
+    q = torch.rand(
+        (b * h, kinematics.get_dof()), device=tensor_args.device, dtype=tensor_args.dtype
+    )
+
+    test_q = tensor_args.to_device([2.7735, -1.6737, 0.4998, -2.9865, 0.3386, 0.8413, 0.4371])
+    q[0, :] = test_q
+    kin_state = kinematics.get_state(q)
+
+    in_spheres = kin_state.link_spheres_tensor
+    in_spheres = in_spheres.view(b, h, -1, 4).contiguous()
+
+    out = cost_fn.forward(in_spheres)
+    assert out.sum().item() > 0.0
+
+    # create a franka robot with 10k spheres:
+    tensor_args = TensorDeviceType()
+
+    robot_cfg = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
+    robot_cfg["kinematics"]["debug"] = {"self_collision_experimental": False}
+
+    sphere_cfg = load_yaml(
+        join_path(get_robot_configs_path(), robot_cfg["kinematics"]["collision_spheres"])
+    )["collision_spheres"]
+    n_times = 10
+    for k in sphere_cfg.keys():
+        sphere_cfg[k] = [copy.deepcopy(x) for x in sphere_cfg[k] for _ in range(n_times)]
+
+    robot_cfg["kinematics"]["collision_spheres"] = sphere_cfg
+    robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
+    robot_cfg.kinematics.self_collision_config.experimental_kernel = False
+
+    kinematics = CudaRobotModel(robot_cfg.kinematics)
+    self_collision_data = kinematics.get_self_collision_config()
+    self_collision_config = SelfCollisionCostConfig(
+        **{"weight": 1.0, "classify": False, "self_collision_kin_config": self_collision_data},
+        tensor_args=tensor_args
+    )
+    cost_fn = SelfCollisionCost(self_collision_config)
+    cost_fn.self_collision_kin_config.experimental_kernel = False
+
+    kin_state = kinematics.get_state(q)
+
+    in_spheres = kin_state.link_spheres_tensor
+    in_spheres = in_spheres.view(b, h, -1, 4).contiguous()
+
+    out_10k = cost_fn.forward(in_spheres)
+    assert out_10k.sum().item() > 0.0
+    assert torch.linalg.norm(out - out_10k) < 1e-3

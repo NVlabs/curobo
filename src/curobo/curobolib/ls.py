@@ -58,7 +58,6 @@ def wolfe_line_search(
     l1 = g_x.shape[1]
     l2 = g_x.shape[2]
     r = line_search_cu.line_search(
-        # m_idx,
         best_x,
         best_c,
         best_grad,
@@ -76,7 +75,6 @@ def wolfe_line_search(
         l2,
         batchsize,
     )
-    # print("batchsize:" + str(batchsize))
     return (r[0], r[1], r[2])
 
 

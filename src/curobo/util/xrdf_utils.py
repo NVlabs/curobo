@@ -8,6 +8,7 @@
 # its affiliates is strictly prohibited.
 
 # Standard Library
+from copy import deepcopy
 from typing import Any, Dict, Optional
 
 # CuRobo
@@ -17,9 +18,13 @@ from curobo.util.logger import log_error, log_warn
 from curobo.util_file import load_yaml
 
 
-def return_value_if_exists(input_dict: Dict, key: str, suffix: str = "xrdf") -> Any:
+def return_value_if_exists(
+    input_dict: Dict, key: str, suffix: str = "xrdf", raise_error: bool = True
+) -> Any:
     if key not in input_dict:
-        log_error(key + " key not found in " + suffix)
+        if raise_error:
+            log_error(key + " key not found in " + suffix)
+        return None
     return input_dict[key]
 
 
@@ -42,7 +47,6 @@ def convert_xrdf_to_curobo(
 
     if return_value_if_exists(input_xrdf_dict, "format") != "xrdf":
         log_error("format is not xrdf")
-        raise ValueError("format is not xrdf")
 
     if return_value_if_exists(input_xrdf_dict, "format_version") > 1.0:
         log_warn("format_version is greater than 1.0")
@@ -63,7 +67,11 @@ def convert_xrdf_to_curobo(
         coll_spheres = return_value_if_exists(input_xrdf_dict["geometry"][coll_name], "spheres")
         output_dict["collision_spheres"] = coll_spheres
 
-        buffer_distance = return_value_if_exists(input_xrdf_dict["collision"], "buffer_distance")
+        buffer_distance = return_value_if_exists(
+            input_xrdf_dict["collision"], "buffer_distance", raise_error=False
+        )
+        if buffer_distance is None:
+            buffer_distance = 0.0
         output_dict["collision_sphere_buffer"] = buffer_distance
         output_dict["collision_link_names"] = list(coll_spheres.keys())
 
@@ -82,8 +90,10 @@ def convert_xrdf_to_curobo(
             self_collision_buffer = return_value_if_exists(
                 input_xrdf_dict["self_collision"],
                 "buffer_distance",
+                raise_error=False,
             )
-
+            if self_collision_buffer is None:
+                self_collision_buffer = {}
             output_dict["self_collision_ignore"] = self_collision_ignore
             output_dict["self_collision_buffer"] = self_collision_buffer
         else:
@@ -92,10 +102,10 @@ def convert_xrdf_to_curobo(
         log_warn("collision key not found in xrdf, collision avoidance is disabled")
 
     tool_frames = return_value_if_exists(input_xrdf_dict, "tool_frames")
+
     output_dict["ee_link"] = tool_frames[0]
-    output_dict["link_names"] = None
     if len(tool_frames) > 1:
-        output_dict["link_names"] = input_xrdf_dict["tool_frames"]
+        output_dict["link_names"] = deepcopy(tool_frames)
 
     # cspace:
     cspace_dict = return_value_if_exists(input_xrdf_dict, "cspace")

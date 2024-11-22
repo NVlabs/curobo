@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 # Standard Library
-import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -28,6 +27,7 @@ from curobo.geom.sphere_fit import SphereFitType, fit_spheres_to_mesh
 from curobo.types.base import TensorDeviceType
 from curobo.types.camera import CameraObservation
 from curobo.types.math import Pose
+from curobo.util.helpers import robust_floor
 from curobo.util.logger import log_error, log_warn
 from curobo.util_file import get_assets_path, join_path
 
@@ -723,12 +723,16 @@ class VoxelGrid(Obstacle):
         """Get shape of voxel grid."""
 
         bounds = self.dims
+
+        grid_shape = [bounds[0], bounds[1], bounds[2]]
+
+        inv_voxel_size = 1.0 / self.voxel_size
+
+        grid_shape = [1 + robust_floor(x * inv_voxel_size) for x in grid_shape]
+
         low = [-bounds[0] / 2, -bounds[1] / 2, -bounds[2] / 2]
         high = [bounds[0] / 2, bounds[1] / 2, bounds[2] / 2]
-        grid_shape = [
-            1 + int(high[i] / self.voxel_size) - (int(low[i] / self.voxel_size))
-            for i in range(len(low))
-        ]
+
         return grid_shape, low, high
 
     def create_xyzr_tensor(
@@ -745,10 +749,19 @@ class VoxelGrid(Obstacle):
         """
 
         trange, low, high = self.get_grid_shape()
-
-        x = torch.linspace(low[0], high[0], trange[0], device=tensor_args.device)
-        y = torch.linspace(low[1], high[1], trange[1], device=tensor_args.device)
-        z = torch.linspace(low[2], high[2], trange[2], device=tensor_args.device)
+        inv_voxel_size = 1.0 / self.voxel_size
+        x = torch.linspace(1, trange[0], trange[0], device=tensor_args.device) - round(
+            (0.5 * self.dims[0]) * inv_voxel_size
+        )
+        y = torch.linspace(1, trange[1], trange[1], device=tensor_args.device) - round(
+            (0.5 * self.dims[1]) * inv_voxel_size
+        )
+        z = torch.linspace(1, trange[2], trange[2], device=tensor_args.device) - round(
+            (0.5 * self.dims[2]) * inv_voxel_size
+        )
+        x = x * self.voxel_size - 0.5 * self.voxel_size
+        y = y * self.voxel_size - 0.5 * self.voxel_size
+        z = z * self.voxel_size - 0.5 * self.voxel_size
         w, l, h = x.shape[0], y.shape[0], z.shape[0]
         xyz = (
             torch.stack(torch.meshgrid(x, y, z, indexing="ij")).permute((1, 2, 3, 0)).reshape(-1, 3)
@@ -757,7 +770,7 @@ class VoxelGrid(Obstacle):
         if transform_to_origin:
             pose = Pose.from_list(self.pose, tensor_args=tensor_args)
             xyz = pose.transform_points(xyz.contiguous())
-        r = torch.zeros_like(xyz[:, 0:1]) + (self.voxel_size * 0.5)
+        r = torch.zeros_like(xyz[:, 0:1])
         xyzr = torch.cat([xyz, r], dim=1)
 
         return xyzr

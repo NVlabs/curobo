@@ -19,7 +19,7 @@ from curobo.geom.types import WorldConfig
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
 from curobo.types.robot import JointState, RobotConfig
-from curobo.util.logger import setup_curobo_logger
+from curobo.util.logger import setup_curobo_logger, log_error
 from curobo.util.usd_helper import UsdHelper
 from curobo.util_file import (
     get_assets_path,
@@ -44,7 +44,7 @@ def save_curobo_world_to_usd():
     usd_helper.write_stage_to_file("test.usd")
 
 
-def get_trajectory(robot_file="franka.yml", dt=1.0 / 60.0):
+def get_trajectory(robot_file="franka.yml", dt=1.0 / 60.0, plan_grasp: bool = False):
     tensor_args = TensorDeviceType()
     world_file = "collision_test.yml"
     motion_gen_config = MotionGenConfig.load_from_robot_config(
@@ -60,24 +60,40 @@ def get_trajectory(robot_file="franka.yml", dt=1.0 / 60.0):
         interpolation_dt=dt,
     )
     motion_gen = MotionGen(motion_gen_config)
-    motion_gen.warmup()
+    motion_gen.warmup(n_goalset=2)
     robot_cfg = load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"]
     robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
     retract_cfg = motion_gen.get_retract_config()
     state = motion_gen.rollout_fn.compute_kinematics(
         JointState.from_position(retract_cfg.view(1, -1))
     )
+    if plan_grasp:
+        retract_pose = Pose(
+            state.ee_pos_seq.view(1, -1, 3), quaternion=state.ee_quat_seq.view(1, -1, 4)
+        )
+        start_state = JointState.from_position(retract_cfg.view(1, -1).clone())
+        start_state.position[..., :-2] += 0.5
+        m_config = MotionGenPlanConfig(False, True)
 
-    retract_pose = Pose(state.ee_pos_seq.squeeze(), quaternion=state.ee_quat_seq.squeeze())
-    start_state = JointState.from_position(retract_cfg.view(1, -1).clone())
-    start_state.position[..., :-2] += 0.5
-    result = motion_gen.plan_single(start_state, retract_pose)
-    traj = result.get_interpolated_plan()  # optimized plan
+        result = motion_gen.plan_grasp(start_state, retract_pose, m_config.clone())
+        if not result.success:
+            log_error("Failed to plan grasp: " + result.status)
+        traj = result.grasp_interpolated_trajectory
+        traj2 = result.retract_interpolated_trajectory
+        traj = traj.stack(traj2).clone()
+        # result = motion_gen.plan_single(start_state, retract_pose)
+        # traj = result.get_interpolated_plan()  # optimized plan
+
+    else:
+        retract_pose = Pose(state.ee_pos_seq.squeeze(), quaternion=state.ee_quat_seq.squeeze())
+        start_state = JointState.from_position(retract_cfg.view(1, -1).clone())
+        start_state.position[..., :-2] += 0.5
+        result = motion_gen.plan_single(start_state, retract_pose)
+        traj = result.get_interpolated_plan()  # optimized plan
     return traj
 
 
-def save_curobo_robot_world_to_usd(robot_file="franka.yml"):
-    print(robot_file)
+def save_curobo_robot_world_to_usd(robot_file="franka.yml", plan_grasp: bool = False):
     tensor_args = TensorDeviceType()
     world_file = "collision_test.yml"
     world_model = WorldConfig.from_dict(
@@ -85,7 +101,7 @@ def save_curobo_robot_world_to_usd(robot_file="franka.yml"):
     ).get_obb_world()
     dt = 1 / 60.0
 
-    q_traj = get_trajectory(robot_file, dt)
+    q_traj = get_trajectory(robot_file, dt, plan_grasp)
     if q_traj is not None:
         q_start = q_traj[0]
         UsdHelper.write_trajectory_animation_with_robot_usd(

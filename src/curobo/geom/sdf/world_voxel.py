@@ -358,12 +358,21 @@ class WorldVoxelCollision(WorldMeshCollision):
             env_idx: Environment index to update voxel grid in.
         """
         obs_idx = self.get_voxel_idx(new_voxel.name, env_idx)
-        self._voxel_tensor_list[3][env_idx, obs_idx, :, :] = new_voxel.feature_tensor.view(
-            new_voxel.feature_tensor.shape[0], -1
-        ).to(dtype=self._voxel_tensor_list[3].dtype)
-        self._voxel_tensor_list[0][env_idx, obs_idx, :3] = self.tensor_args.to_device(
-            new_voxel.dims
-        )
+
+        feature_tensor = new_voxel.feature_tensor.view(new_voxel.feature_tensor.shape[0], -1)
+        if (
+            feature_tensor.shape[0] != self._voxel_tensor_list[3][env_idx, obs_idx, :, :].shape[0]
+            or feature_tensor.shape[1]
+            != self._voxel_tensor_list[3][env_idx, obs_idx, :, :].shape[1]
+        ):
+            log_error(
+                "Feature tensor shape mismatch, existing shape: "
+                + str(self._voxel_tensor_list[3][env_idx, obs_idx, :, :].shape)
+                + " New shape: "
+                + str(feature_tensor.shape)
+            )
+        self._voxel_tensor_list[3][env_idx, obs_idx, :, :].copy_(feature_tensor)
+        self._voxel_tensor_list[0][env_idx, obs_idx, :3].copy_(torch.as_tensor(new_voxel.dims))
         self._voxel_tensor_list[0][env_idx, obs_idx, 3] = new_voxel.voxel_size
         self._voxel_tensor_list[1][env_idx, obs_idx, :7] = (
             Pose.from_list(new_voxel.pose, self.tensor_args).inverse().get_pose_vector()
@@ -876,14 +885,19 @@ class WorldVoxelCollision(WorldMeshCollision):
             self._env_n_voxels[:] = 0
         super().clear_cache()
 
-    def get_voxel_grid_shape(self, env_idx: int = 0, obs_idx: int = 0) -> torch.Size:
+    def get_voxel_grid_shape(
+        self, env_idx: int = 0, obs_idx: int = 0, name: Optional[str] = None
+    ) -> torch.Size:
         """Get dimensions of the voxel grid.
 
         Args:
             env_idx: Environment index.
             obs_idx: Obstacle index.
+            name: Name of obstacle. When provided, obs_idx is ignored.
 
         Returns:
             Shape of the voxel grid.
         """
+        if name is not None:
+            obs_idx = self.get_voxel_idx(name, env_idx)
         return self._voxel_tensor_list[3][env_idx, obs_idx].shape

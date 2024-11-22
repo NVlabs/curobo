@@ -113,7 +113,6 @@ class KinematicsFusedFunction(Function):
     @staticmethod
     def backward(ctx, grad_out_link_pos, grad_out_link_quat, grad_out_spheres):
         grad_joint = None
-
         if ctx.needs_input_grad[4]:
             (
                 joint_seq,
@@ -193,10 +192,14 @@ class KinematicsFusedFunction(Function):
         b_size = b_shape[0]
         n_spheres = robot_sphere_out.shape[1]
         n_joints = angle.shape[-1]
-        if grad_out.is_contiguous():
-            grad_out = grad_out.view(-1)
-        else:
-            grad_out = grad_out.reshape(-1)
+        grad_out = grad_out.contiguous()
+        link_pos_out = link_pos_out.contiguous()
+        link_quat_out = link_quat_out.contiguous()
+        # if grad_out.is_contiguous():
+        #    grad_out = grad_out.view(-1)
+        # else:
+        #    grad_out = grad_out.reshape(-1)
+
         r = kinematics_fused_cu.backward(
             grad_out,
             link_pos_out,

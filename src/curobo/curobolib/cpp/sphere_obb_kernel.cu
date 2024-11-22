@@ -52,6 +52,28 @@ namespace Curobo
       return max(0.0f, sphere_length(v1, v2) - v1.w - v2.w);
     }
 
+    __device__  __forceinline__ int3 robust_floor(const float3 f_grid, const float threshold=1e-04)
+    {
+      float3 nearest_grid = make_float3(round(f_grid.x), round(f_grid.y), round(f_grid.z));
+
+      float3 abs_diff = (f_grid - nearest_grid);
+
+      if (abs_diff.x >= threshold)
+      {
+        nearest_grid.x = floorf(f_grid.x);
+      }
+      if (abs_diff.y >= threshold)
+      {
+        nearest_grid.y = floorf(f_grid.y);
+      }
+
+      if (abs_diff.z >= threshold)
+      {
+        nearest_grid.z = floorf(f_grid.z);
+      }
+      return make_int3(nearest_grid);
+
+    }
 
     #if CHECK_FP8
     __device__ __forceinline__ float
@@ -487,21 +509,20 @@ namespace Curobo
       delta = make_float3(pt.x - sphere.x, pt.y - sphere.y, pt.z - sphere.z);
 
       distance = length(delta);
-
-      if (!inside)
+      if (distance == 0.0)
+      {
+        delta = -1.0 * make_float3(pt.x, pt.y, pt.z);
+      }
+      if (!inside) // outside
       {
         distance *= -1.0;
       }
-      else
+      else // inside
       {
         delta = -1 * delta;
       }
 
-      if (distance != 0.0)
-      {
-        delta = normalize(delta);
-
-      }
+      delta = normalize(delta);
       sph_distance = distance + sphere.w;
       //
 
@@ -685,29 +706,48 @@ float4 &sum_pt)
 
     template<typename grid_scalar_t, bool INTERPOLATION=false>
     __device__ __forceinline__ void
-    compute_voxel_location_params(
+    compute_voxel_index(
     const grid_scalar_t *grid_features,
     const float4& loc_grid_params,
     const float4& loc_sphere,
+    int &voxel_idx,
     int3 &xyz_loc,
     int3 &xyz_grid,
-    float &interpolated_distance,
-    int &voxel_idx)
+    float &interpolated_distance)
     {
 
 
-      // convert location to index: can use floor to cast to int.
-      // to account for negative values, add 0.5 * bounds.
-      const float3 loc_grid = make_float3(loc_grid_params.x, loc_grid_params.y, loc_grid_params.z);
+
+
+      const float3 loc_grid = make_float3(loc_grid_params.x, loc_grid_params.y, loc_grid_params.z);// - loc_grid_params.w;
       const  float3 sphere = make_float3(loc_sphere.x, loc_sphere.y, loc_sphere.z);
-      //xyz_loc = make_int3(floorf((sphere  + 0.5 * loc_grid) / loc_grid_params.w));
-      const float inv_voxel_size = 1.0/loc_grid_params.w;
-      //xyz_loc = make_int3(sphere * inv_voxel_size)  + make_int3(0.5 * loc_grid * inv_voxel_size);
+      const float inv_voxel_size = 1.0f / loc_grid_params.w;
 
-      xyz_loc = make_int3((sphere  + 0.5 * loc_grid) * inv_voxel_size);
+      float3 f_grid = (loc_grid) * inv_voxel_size;
 
-      //xyz_loc = make_int3(sphere / loc_grid_params.w) + make_int3(floorf(0.5 * loc_grid/loc_grid_params.w));
-      xyz_grid = make_int3((loc_grid * inv_voxel_size)) + 1;
+
+      xyz_grid = robust_floor(f_grid) + 1;
+
+
+      xyz_loc = make_int3(((sphere.x + 0.5f * loc_grid.x) * inv_voxel_size),
+                          ((sphere.y + 0.5f * loc_grid.y)* inv_voxel_size),
+                          ((sphere.z + 0.5f * loc_grid.z) * inv_voxel_size));
+
+
+      // check grid bounds:
+      // 2 to catch numerical precision errors. 1 can be used when exact.
+      // We need at least 1 as we
+      // look at neighbouring voxels for finite difference
+      const int offset = 2;
+      if (xyz_loc.x >= xyz_grid.x - offset || xyz_loc.y >= xyz_grid.y - offset || xyz_loc.z >= xyz_grid.z - offset
+          || xyz_loc.x <= offset || xyz_loc.y <= offset || xyz_loc.z <= offset
+      )
+      {
+        voxel_idx = -1;
+        return;
+      }
+
+
 
       // find next nearest voxel to current point and then do weighted interpolation:
       voxel_idx = xyz_loc.x * xyz_grid.y * xyz_grid.z  + xyz_loc.y * xyz_grid.z + xyz_loc.z;
@@ -715,10 +755,6 @@ float4 &sum_pt)
 
       // compute interpolation distance between voxel origin and sphere location:
       get_array_value(grid_features, voxel_idx, interpolated_distance);
-      if(!INTERPOLATION)
-      {
-        interpolated_distance += 0.5 * loc_grid_params.w;//max(0.0, (0.3 * loc_grid_params.w) - loc_sphere.w);
-      }
       if(INTERPOLATION)
       {
       //
@@ -735,41 +771,6 @@ float4 &sum_pt)
        max(0.0, (ratio * loc_grid_params.w) - loc_sphere.w);;
 
       }
-
-
-
-
-    }
-
-    template<typename grid_scalar_t>
-    __device__ __forceinline__ void
-    compute_voxel_index(
-    const grid_scalar_t *grid_features,
-    const float4& loc_grid_params,
-    const float4& loc_sphere,
-    int &voxel_idx,
-    int3 &xyz_loc,
-    int3 &xyz_grid,
-    float &interpolated_distance)
-    {
-      // check if sphere is out of bounds
-      // loc_grid_params.x contains bounds
-      float4 local_bounds = 0.5*loc_grid_params - 2*loc_grid_params.w;
-
-      if (loc_sphere.x <= -1 * (local_bounds.x) ||
-          loc_sphere.x >= (local_bounds.x) ||
-          loc_sphere.y <= -1 * (local_bounds.y) ||
-          loc_sphere.y >=  (local_bounds.y) ||
-          loc_sphere.z <= -1 * (local_bounds.z) ||
-          loc_sphere.z >=  (local_bounds.z))
-      {
-        voxel_idx = -1;
-        return;
-      }
-
-      compute_voxel_location_params(grid_features, loc_grid_params, loc_sphere, xyz_loc, xyz_grid, interpolated_distance, voxel_idx);
-      // convert location to index: can use floor to cast to int.
-      // to account for negative values, add 0.5 * bounds.
 
 
 
@@ -979,7 +980,7 @@ float4 &sum_pt)
       // Load sphere_position input
       float4 sphere_cache = *(float4 *)&sphere_position[bn_sph_idx * 4];
 
-      if (sphere_cache.w <= 0.0)
+      if (sphere_cache.w < 0.0)
       {
         // write zeros for cost:
         out_distance[bn_sph_idx] = 0;
@@ -1044,7 +1045,7 @@ float4 &sum_pt)
       // Load sphere_position input
       float4 sphere_cache = *(float4 *)&sphere_position[bn_sph_idx * 4];
 
-      if (sphere_cache.w <= 0.0)
+      if (sphere_cache.w < 0.0)
       {
         // write zeros for cost:
         out_distance[bn_sph_idx] = 0;
@@ -1173,7 +1174,7 @@ float4 &sum_pt)
 
       // Load sphere_position input
       float4 sphere_cache = *(float4 *)&sphere_position[bn_sph_idx * 4];
-      if (sphere_cache.w <= 0.0)
+      if (sphere_cache.w < 0.0)
       {
         // write zeros for cost:
         out_distance[bn_sph_idx] = 0;
@@ -1275,7 +1276,7 @@ float4 &sum_pt)
       // Load sphere_position input
       float4 sphere_cache = *(float4 *)&sphere_position[bn_sph_idx * 4];
 
-      if (sphere_cache.w <= 0.0)
+      if (sphere_cache.w < 0.0)
       {
         // write zeros for cost:
         out_distance[bn_sph_idx] = 0;
@@ -1452,7 +1453,7 @@ float4 &sum_pt)
       // Load sphere_position input
       float4 sphere_1_cache = *(float4 *)&sphere_position[bhs_idx * 4];
 
-      if (sphere_1_cache.w <= 0.0)
+      if (sphere_1_cache.w < 0.0)
       {
         // write zeros for cost:
         out_distance[bhs_idx] = 0;
@@ -1888,7 +1889,7 @@ float4 &sum_pt)
       // Load sphere_position input
       float4 sphere_cache = *(float4 *)&sphere_position[bn_sph_idx * 4];
 
-      if (sphere_cache.w <= 0.0)
+      if (sphere_cache.w < 0.0)
       {
         // write zeros for cost:
         out_distance[bn_sph_idx] = 0;
@@ -2001,7 +2002,7 @@ float4 &sum_pt)
       float4 sphere_1_cache = *(float4 *)&sphere_position[bhs_idx * 4];
 
 
-      if (sphere_1_cache.w <= 0.0)
+      if (sphere_1_cache.w < 0.0)
       {
         // write zeros for cost:
         out_distance[bhs_idx] = 0;
@@ -2303,7 +2304,7 @@ float4 &sum_pt)
       // if h_idx == horizon -1, we just read the same index
       float4 sphere_1_cache = *(float4 *)&sphere_position[bhs_idx * 4];
 
-      if (sphere_1_cache.w <= 0.0)
+      if (sphere_1_cache.w < 0.0)
       {
         out_distance[b_addrs + h_idx * nspheres + sph_idx] = 0.0;
         return;

@@ -20,11 +20,11 @@ from curobo.types.robot import JointState
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="module")
 def motion_gen():
     tensor_args = TensorDeviceType()
     world_file = "collision_table.yml"
-    robot_file = "franka.yml"
+    robot_file = "ur5e_robotiq_2f_140.yml"
     motion_gen_config = MotionGenConfig.load_from_robot_config(
         robot_file,
         world_file,
@@ -202,3 +202,40 @@ def test_batch_goalset_padded(motion_gen_batch):
     q = result.optimized_plan.trim_trajectory(-1).squeeze(1)
     reached_state = motion_gen.compute_kinematics(q)
     assert torch.norm(goal_pose.position - reached_state.ee_pos_seq) < 0.005
+
+
+def test_grasp_goalset(motion_gen):
+    motion_gen.reset()
+    m_config = MotionGenPlanConfig(False, True)
+
+    retract_cfg = motion_gen.get_retract_config()
+
+    state = motion_gen.compute_kinematics(JointState.from_position(retract_cfg.view(1, -1)))
+
+    goal_pose = Pose(
+        state.ee_pos_seq.repeat(10, 1).view(1, -1, 3),
+        quaternion=state.ee_quat_seq.repeat(10, 1).view(1, -1, 4),
+    )
+    goal_pose.position[0, 0, 0] += 0.2
+
+    start_state = JointState.from_position(retract_cfg.view(1, -1) + 0.3)
+
+    result = motion_gen.plan_grasp(
+        start_state,
+        goal_pose,
+        m_config.clone(),
+        disable_collision_links=[
+            "left_outer_knuckle",
+            "left_inner_knuckle",
+            "left_outer_finger",
+            "left_inner_finger",
+            "left_inner_finger_pad",
+            "right_outer_knuckle",
+            "right_inner_knuckle",
+            "right_outer_finger",
+            "right_inner_finger",
+            "right_inner_finger_pad",
+        ],
+    )
+
+    assert torch.count_nonzero(result.success) == 1

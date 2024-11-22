@@ -108,21 +108,21 @@ swept_sphere_voxel_clpt(const torch::Tensor sphere_position, // batch_size, 3
                 torch::Tensor sparsity_idx, const torch::Tensor weight,
                 const torch::Tensor activation_distance,
                 const torch::Tensor max_distance,
-                const torch::Tensor speed_dt, 
+                const torch::Tensor speed_dt,
                 const torch::Tensor grid_features,       // n_boxes, 4, 4
                 const torch::Tensor grid_params,      // n_boxes, 3
                 const torch::Tensor grid_pose,        // n_boxes, 4, 4
                 const torch::Tensor grid_enable,      // n_boxes, 4, 4
                 const torch::Tensor n_env_grid,
                 const torch::Tensor env_query_idx,   // n_boxes, 4, 4
-                const int max_nobs, 
-                const int batch_size, 
+                const int max_nobs,
+                const int batch_size,
                 const int horizon,
-                const int n_spheres, 
+                const int n_spheres,
                 const int sweep_steps,
                 const bool enable_speed_metric,
                 const bool transform_back,
-                const bool compute_distance, 
+                const bool compute_distance,
                 const bool use_batch_env,
                 const bool sum_collisions);
 
@@ -145,14 +145,15 @@ std::vector<torch::Tensor>pose_distance(
   const torch::Tensor offset_waypoint,
   const torch::Tensor offset_tstep_fraction,
   const torch::Tensor batch_pose_idx,
+  const torch::Tensor project_distance,
   const int           batch_size,
   const int           horizon,
   const int           mode,
   const int           num_goals        = 1,
   const bool          compute_grad     = false,
   const bool          write_distance   = true,
-  const bool          use_metric       = false,
-  const bool          project_distance = true);
+  const bool          use_metric       = false
+  );
 
 std::vector<torch::Tensor>
 backward_pose_distance(torch::Tensor       out_grad_p,
@@ -202,7 +203,7 @@ std::vector<torch::Tensor>sphere_obb_clpt_wrapper(
   torch::Tensor closest_point,         // batch size, 3
   torch::Tensor sparsity_idx, const torch::Tensor weight,
   const torch::Tensor activation_distance,
-  const torch::Tensor max_distance, 
+  const torch::Tensor max_distance,
   const torch::Tensor obb_accel,       // n_boxes, 4, 4
   const torch::Tensor obb_bounds,      // n_boxes, 3
   const torch::Tensor obb_pose,        // n_boxes, 4, 4
@@ -210,9 +211,9 @@ std::vector<torch::Tensor>sphere_obb_clpt_wrapper(
   const torch::Tensor n_env_obb,       // n_boxes, 4, 4
   const torch::Tensor env_query_idx,   // n_boxes, 4, 4
   const int max_nobs, const int batch_size, const int horizon,
-  const int n_spheres, 
+  const int n_spheres,
   const bool transform_back, const bool compute_distance,
-  const bool use_batch_env, const bool sum_collisions = true, 
+  const bool use_batch_env, const bool sum_collisions = true,
   const bool compute_esdf = false)
 {
   const at::cuda::OptionalCUDAGuard guard(sphere_position.device());
@@ -305,10 +306,11 @@ std::vector<torch::Tensor>pose_distance_wrapper(
   const torch::Tensor weight, const torch::Tensor vec_convergence,
   const torch::Tensor run_weight, const torch::Tensor run_vec_weight,
   const torch::Tensor offset_waypoint, const torch::Tensor offset_tstep_fraction,
-  const torch::Tensor batch_pose_idx, const int batch_size, const int horizon,
+  const torch::Tensor batch_pose_idx,
+  const torch::Tensor project_distance,
+  const int batch_size, const int horizon,
   const int mode, const int num_goals = 1, const bool compute_grad = false,
-  const bool write_distance = false, const bool use_metric = false,
-  const bool project_distance = true)
+  const bool write_distance = false, const bool use_metric = false)
 {
   // at::cuda::DeviceGuard guard(angle.device());
   CHECK_INPUT(out_distance);
@@ -323,6 +325,7 @@ std::vector<torch::Tensor>pose_distance_wrapper(
   CHECK_INPUT(batch_pose_idx);
   CHECK_INPUT(offset_waypoint);
   CHECK_INPUT(offset_tstep_fraction);
+  CHECK_INPUT(project_distance);
   const at::cuda::OptionalCUDAGuard guard(current_position.device());
 
   return pose_distance(
@@ -332,8 +335,10 @@ std::vector<torch::Tensor>pose_distance_wrapper(
     vec_convergence, run_weight, run_vec_weight,
     offset_waypoint,
     offset_tstep_fraction,
-    batch_pose_idx, batch_size,
-    horizon, mode, num_goals, compute_grad, write_distance, use_metric, project_distance);
+    batch_pose_idx,
+    project_distance,
+    batch_size,
+    horizon, mode, num_goals, compute_grad, write_distance, use_metric);
 }
 
 std::vector<torch::Tensor>backward_pose_distance_wrapper(
@@ -372,8 +377,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         "Closest Point Voxel(curobolib)");
   m.def("swept_closest_point_voxel",           &swept_sphere_voxel_clpt,
         "Swpet Closest Point Voxel(curobolib)");
-  
-  
+
+
 
   m.def("self_collision_distance", &self_collision_distance_wrapper,
         "Self Collision Distance (curobolib)");

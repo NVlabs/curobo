@@ -157,6 +157,7 @@ def get_pose_distance(
     offset_waypoint,
     offset_tstep_fraction,
     batch_pose_idx,
+    project_distance,
     batch_size,
     horizon,
     mode=1,
@@ -164,7 +165,6 @@ def get_pose_distance(
     write_grad=False,
     write_distance=False,
     use_metric=False,
-    project_distance=True,
 ):
     if batch_pose_idx.shape[0] != batch_size:
         raise ValueError("Index buffer size is different from batch size")
@@ -188,6 +188,7 @@ def get_pose_distance(
         offset_waypoint,
         offset_tstep_fraction,
         batch_pose_idx,
+        project_distance,
         batch_size,
         horizon,
         mode,
@@ -195,7 +196,6 @@ def get_pose_distance(
         write_grad,
         write_distance,
         use_metric,
-        project_distance,
     )
 
     out_distance = r[0]
@@ -272,6 +272,7 @@ class PoseErrorDistance(torch.autograd.Function):
         offset_waypoint,
         offset_tstep_fraction,
         batch_pose_idx,
+        project_distance,
         out_distance,
         out_position_distance,
         out_rotation_distance,
@@ -284,8 +285,7 @@ class PoseErrorDistance(torch.autograd.Function):
         horizon,
         mode,  # =PoseErrorType.BATCH_GOAL.value,
         num_goals,
-        use_metric,  # =False,
-        project_distance,  # =True,
+        use_metric,
     ):
         # out_distance = current_position[..., 0].detach().clone() * 0.0
         # out_position_distance = out_distance.detach().clone()
@@ -322,6 +322,7 @@ class PoseErrorDistance(torch.autograd.Function):
             offset_waypoint,
             offset_tstep_fraction,
             batch_pose_idx,
+            project_distance,
             batch_size,
             horizon,
             mode,
@@ -329,7 +330,6 @@ class PoseErrorDistance(torch.autograd.Function):
             current_position.requires_grad,
             True,
             use_metric,
-            project_distance,
         )
         ctx.save_for_backward(out_p_vec, out_r_vec, weight, out_p_grad, out_q_grad)
         return out_distance, out_position_distance, out_rotation_distance, out_idx  # .view(-1,1)
@@ -406,6 +406,7 @@ class PoseError(torch.autograd.Function):
         offset_waypoint,
         offset_tstep_fraction,
         batch_pose_idx,
+        project_distance,
         out_distance,
         out_position_distance,
         out_rotation_distance,
@@ -419,7 +420,6 @@ class PoseError(torch.autograd.Function):
         mode,
         num_goals,
         use_metric,
-        project_distance,
         return_loss,
     ):
         """Compute error in pose
@@ -494,6 +494,7 @@ class PoseError(torch.autograd.Function):
             offset_waypoint,
             offset_tstep_fraction,
             batch_pose_idx,
+            project_distance,
             batch_size,
             horizon,
             mode,
@@ -501,7 +502,6 @@ class PoseError(torch.autograd.Function):
             current_position.requires_grad,
             False,
             use_metric,
-            project_distance,
         )
         ctx.save_for_backward(out_p_vec, out_r_vec)
         return out_distance

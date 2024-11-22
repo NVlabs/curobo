@@ -178,3 +178,9 @@ def get_cache_fn_decorator(maxsize: Optional[int] = None):
 
 def empty_decorator(function):
     return function
+
+
+@get_torch_jit_decorator()
+def round_away_from_zero(x: torch.Tensor) -> torch.Tensor:
+    y = torch.trunc(x + 0.5 * torch.sign(x))
+    return y

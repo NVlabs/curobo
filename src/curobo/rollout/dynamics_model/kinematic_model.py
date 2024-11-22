@@ -449,7 +449,14 @@ class KinematicModel(KinematicModelConfig):
         state_seq = self.state_seq
         curr_batch_size = self.batch_size
         num_traj_points = self.horizon
-
+        if not state_seq.position.is_contiguous():
+            state_seq.position = state_seq.position.contiguous()
+        if not state_seq.velocity.is_contiguous():
+            state_seq.velocity = state_seq.velocity.contiguous()
+        if not state_seq.acceleration.is_contiguous():
+            state_seq.acceleration = state_seq.acceleration.contiguous()
+        if not state_seq.jerk.is_contiguous():
+            state_seq.jerk = state_seq.jerk.contiguous()
         with profiler.record_function("tensor_step"):
             # forward step with step matrix:
             state_seq = self.tensor_step(start_state_shaped, act_seq, state_seq, start_state_idx)

@@ -10,17 +10,40 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
-## Latest Commit
+## Version 0.7.5
+
+### Changes in Default Behavior
+- Remove explicit global seed setting for numpy and random. To enforce deterministic behavior,
+use `np.random.seed(2)` and `random.seed(2)` in your program.
+- geom.types.VoxelGrid now uses a different algorithm to calculate number of voxels per dimension
+and also to compute xyz locations in a grid. This new implementation matches implementation in
+nvblox.
 
 ### New Features
 - Add pose cost metric to MPC to allow for partial pose reaching.
 - Update obstacle poses in cpu reference with an optional flag.
+- Add planning to grasp API in ``MotionGen.plan_grasp`` that plans a sequence of motions to grasp
+an object given grasp poses. This API also provides args to disable collisions during the grasping
+phase.
+- Constrained planning can now use either goal frame or base frame at runtime.
 
 ### BugFixes & Misc.
 - Fixed optimize_dt not being correctly set when motion gen is called in reactive mode.
 - Add documentation for geom module.
 - Add descriptive api for computing kinematics.
 - Fix cv2 import order in isaac sim realsense examples.
+- Fix attach sphere api mismatch in ``TrajOptSolver``.
+- Fix bug in ``get_spline_interpolated_trajectory`` where
+numpy array was created instead of torch tensor.
+- Fix gradient bug when sphere origin is exactly at face of a cuboid.
+- Add support for parsing Yaml 1.2 format with an updated regex for scientific notations.
+- Move to yaml `SafeLoader` from `Loader`.
+- Graph search checks if a node exists before attempting to find a path.
+- Fix `steps_max` becoming 0 when optimized dt has NaN values.
+- Clone `MotionGenPlanConfig` instance for every plan api.
+- Improve sphere position to voxel location calculation to match nvblox's implementation.
+- Add self collision checking support for spheres > 1024 and number of checks > 512 * 1024.
+- Fix gradient passthrough in warp batch transform kernels.
 
 ## Version 0.7.4
 

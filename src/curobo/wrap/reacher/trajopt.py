@@ -148,6 +148,7 @@ class TrajOptSolverConfig:
         filter_robot_command: bool = False,
         optimize_dt: bool = True,
         project_pose_to_goal_frame: bool = True,
+        use_cuda_graph_metrics: bool = False,
     ):
         """Load TrajOptSolver configuration from robot configuration.
 
@@ -290,6 +291,10 @@ class TrajOptSolverConfig:
             project_pose_to_goal_frame: Project pose to goal frame when calculating distance
                 between reached and goal pose. Use this to constrain motion to specific axes
                 either in the global frame or the goal frame.
+            use_cuda_graph_metrics: Flag to enable cuda_graph when evaluating interpolated
+                trajectories after trajectory optimization. If interpolation_buffer is smaller
+                than interpolated trajectory, then the buffers will be re-created. This can cause
+                existing cuda graph to be invalid.
 
         Returns:
             TrajOptSolverConfig: Trajectory optimization configuration.
@@ -508,7 +513,7 @@ class TrajOptSolverConfig:
             safety_rollout=arm_rollout_safety,
             optimizers=opt_list,
             compute_metrics=True,
-            use_cuda_graph_metrics=use_cuda_graph,
+            use_cuda_graph_metrics=use_cuda_graph_metrics,
             sync_cuda_time=sync_cuda_time,
         )
         trajopt = WrapBase(cfg)
@@ -539,7 +544,7 @@ class TrajOptSolverConfig:
             tensor_args=tensor_args,
             sync_cuda_time=sync_cuda_time,
             interpolate_rollout=interpolate_rollout,
-            use_cuda_graph_metrics=use_cuda_graph,
+            use_cuda_graph_metrics=use_cuda_graph_metrics,
             trim_steps=trim_steps,
             store_debug_in_result=store_debug_in_result,
             optimize_dt=optimize_dt,
@@ -720,7 +725,7 @@ class TrajOptSolver(TrajOptSolverConfig):
             link_name: Name of the link to attach the spheres to. Note that this link should
                 already have pre-allocated spheres.
         """
-        self.kinematics.attach_object(
+        self.kinematics.kinematics_config.attach_object(
             sphere_radius=sphere_radius, sphere_tensor=sphere_tensor, link_name=link_name
         )
 
@@ -730,7 +735,7 @@ class TrajOptSolver(TrajOptSolverConfig):
         Args:
             link_name: Name of the link to detach the spheres from.
         """
-        self.kinematics.detach_object(link_name)
+        self.kinematics.kinematics_config.detach_object(link_name)
 
     def _update_solve_state_and_goal_buffer(
         self,
