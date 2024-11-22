@@ -240,7 +240,7 @@ def benchmark_mb(
     og_tsteps = 32
     if override_tsteps is not None:
         og_tsteps = override_tsteps
-    og_finetune_dt_scale = 0.85
+    og_finetune_dt_scale = 0.8
     og_trajopt_seeds = 4
     og_parallel_finetune = True
     og_collision_activation_distance = 0.01

@@ -53,7 +53,7 @@ cost:
     run_weight: 0.0
 
   bound_cfg:
-    weight: [50000.0, 50000.0, 500.0,500.0]
+    weight: [50000.0, 50000.0, 5000.0,5.0]
     smooth_weight: [0.0,10000.0,5.0, 0.0]
     run_weight_velocity: 0.00
     run_weight_acceleration: 1.0

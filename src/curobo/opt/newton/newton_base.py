@@ -52,6 +52,7 @@ class NewtonOptConfig(OptimizerConfig):
     last_best: float = 0
     use_temporal_smooth: bool = False
     cost_relative_threshold: float = 0.999
+    fix_terminal_action: bool = False
 
     # use_update_best_kernel: bool
     # c_1: float
@@ -416,16 +417,21 @@ class NewtonOptBase(Optimizer, NewtonOptConfig):
     def _approx_line_search(self, x, step_direction):
         if self.step_scale != 0.0 and self.step_scale != 1.0:
             step_direction = self.scale_step_direction(step_direction)
+        if self.fix_terminal_action and self.action_horizon > 1:
+            step_direction[..., (self.action_horizon - 1) * self.d_action :] = 0.0
         if self.line_search_type == LineSearchType.GREEDY:
-            return self._greedy_line_search(x, step_direction)
+            best_x, best_c, best_grad = self._greedy_line_search(x, step_direction)
         elif self.line_search_type == LineSearchType.ARMIJO:
-            return self._armijo_line_search(x, step_direction)
+            best_x, best_c, best_grad = self._armijo_line_search(x, step_direction)
         elif self.line_search_type in [
             LineSearchType.WOLFE,
             LineSearchType.STRONG_WOLFE,
             LineSearchType.APPROX_WOLFE,
         ]:
-            return self._wolfe_line_search(x, step_direction)
+            best_x, best_c, best_grad = self._wolfe_line_search(x, step_direction)
+        if self.fix_terminal_action and self.action_horizon > 1:
+            best_grad[..., (self.action_horizon - 1) * self.d_action :] = 0.0
+        return best_x, best_c, best_grad
 
     def check_convergence(self, cost):
         above_threshold = cost > self.cost_convergence

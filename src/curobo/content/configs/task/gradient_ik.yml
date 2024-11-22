@@ -68,8 +68,8 @@ lbfgs:
   min_iters: null
   line_search_scale:  [0.1, 0.3, 0.7, 1.0]
   fixed_iters: True
-  cost_convergence: 0.001
-  cost_delta_threshold: 1.0 #0.0001
+  cost_convergence: 1e-11
+  cost_delta_threshold: 1e-11 #0.0001
   cost_relative_threshold: 0.999
   epsilon: 0.01 #0.01 # used only in stable_mode
   history: 6
@@ -84,7 +84,7 @@ lbfgs:
   use_cuda_line_search_kernel: True
   use_cuda_update_best_kernel: True
   sync_cuda_time: True
-  step_scale: 1.0
+  step_scale: 0.98
   use_coo_sparse: True
   last_best: 10
   debug_info:

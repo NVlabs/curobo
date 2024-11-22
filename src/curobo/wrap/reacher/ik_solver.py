@@ -129,7 +129,7 @@ class IKSolverConfig:
         world_coll_checker=None,
         base_cfg_file: str = "base_cfg.yml",
         particle_file: str = "particle_ik.yml",
-        gradient_file: str = "gradient_ik.yml",
+        gradient_file: str = "gradient_ik_autotune.yml",
         use_cuda_graph: bool = True,
         self_collision_check: bool = True,
         self_collision_opt: bool = True,

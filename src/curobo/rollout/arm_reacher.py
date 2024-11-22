@@ -367,8 +367,8 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                     current_fn = self._link_pose_convergence[k]
                     if current_fn.enabled:
                         # get link pose
-                        current_pos = link_poses[k].position
-                        current_quat = link_poses[k].quaternion
+                        current_pos = link_poses[k].position.contiguous()
+                        current_quat = link_poses[k].quaternion.contiguous()
 
                         pose_err, pos_err, quat_err = current_fn.forward_out_distance(
                             current_pos, current_quat, self._goal_buffer, k

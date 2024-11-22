@@ -149,6 +149,7 @@ class TrajOptSolverConfig:
         optimize_dt: bool = True,
         project_pose_to_goal_frame: bool = True,
         use_cuda_graph_metrics: bool = False,
+        fix_terminal_action: bool = False,
     ):
         """Load TrajOptSolver configuration from robot configuration.
 
@@ -318,8 +319,6 @@ class TrajOptSolverConfig:
         if not self_collision_check:
             base_config_data["constraint"]["self_collision_cfg"]["weight"] = 0.0
             self_collision_opt = False
-        if not minimize_jerk:
-            filter_robot_command = False
 
         if collision_checker_type is not None:
             base_config_data["world_collision_checker_cfg"]["checker_type"] = collision_checker_type
@@ -340,6 +339,7 @@ class TrajOptSolverConfig:
         base_config_data["convergence"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
         config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
         grad_config_data["cost"]["pose_cfg"]["project_distance"] = project_pose_to_goal_frame
+        grad_config_data["lbfgs"]["fix_terminal_action"] = fix_terminal_action
 
         config_data["model"]["horizon"] = traj_tsteps
         grad_config_data["model"]["horizon"] = traj_tsteps
@@ -1543,6 +1543,10 @@ class TrajOptSolver(TrajOptSolverConfig):
         edges = torch.cat((start_q, end_q), dim=1)
 
         seed = self.delta_vec @ edges
+
+        # Setting final state to end_q explicitly to avoid matmul numerical precision issues.
+        seed[..., -1:, :] = end_q
+
         return seed
 
     def get_start_seed(self, start_state) -> torch.Tensor:
@@ -1725,6 +1729,10 @@ class TrajOptSolver(TrajOptSolverConfig):
         bias_q = self.bias_node.view(-1, 1, self.dof).repeat(start_q.shape[0], 1, 1)
         edges = torch.cat((start_q, bias_q, end_q), dim=1)
         seed = self.waypoint_delta_vec @ edges
+
+        # Setting final state to end_q explicitly to avoid matmul numerical precision issues.
+        seed[..., -1:, :] = end_q
+
         return seed
 
     @profiler.record_function("trajopt/interpolation")

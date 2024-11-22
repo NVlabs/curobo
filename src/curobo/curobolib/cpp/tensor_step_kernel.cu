@@ -850,7 +850,7 @@ namespace Curobo
                      (1.333333333f) * g_acc[3] + (-0.083333333f) * g_acc[4]) * dt * dt +
 
 // ( g_acc[3] + g_acc[1] - (2.0) * g_acc[2]) * dt * dt +
-                    (0.5f * g_jerk[0] - g_jerk[1] + g_jerk[3] - 0.5f * g_jerk[4]) * dt * dt * dt);
+                    (-0.5f * g_jerk[0] + g_jerk[1] - g_jerk[3] + 0.5f * g_jerk[4]) * dt * dt * dt);
       }
       else if (hid == horizon - 3)
       {

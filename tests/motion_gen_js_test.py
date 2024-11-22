@@ -66,3 +66,4 @@ def test_motion_gen_plan_js_delta(motion_gen_str, delta, request):
     )
     result = motion_gen.plan_single_js(start_state, goal_state, MotionGenPlanConfig(max_attempts=1))
     assert result.success.item()
+    assert result.cspace_error < 0.0001

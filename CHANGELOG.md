@@ -10,6 +10,34 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
+## Version 0.7.6
+
+### Changes in Default Behavior
+- Acceleration and Jerk in Output trajectory from motion_gen is not filtered. Previously, this was
+filtered with a sliding window to remove aliasing artifacts. To get previous behavior, set
+`filter_robot_command=True` in `MotionGenConfig.load_from_robot_config()`.
+- Terminal action for motion planning is now fixed from initial seed. This improves accuracy (10x).
+To get previous behavior, set `trajopt_fix_terminal_action=True` and also
+`trajopt_js_fix_terminal_action=True` in `MotionGenConfig.load_from_robot_config()`.
+- Introduce higher accuracy weights for IK in `gradient_ik_autotune.yml`. To use old file,
+pass `gradient_ik_file='gradient_ik.yml'` in `MotionGenConfig.load_from_robot_config()`. Similarly
+for IKSolver, pass `gradient_file='gradient_ik.yml'` in `IKSolverConfig.load_from_robot_config()`.
+
+### New Features
+- Add fix terminal action in quasi-netwon solvers. This keeps the final action constant (from
+initial seed) and only optimizing for the remaining states. Improved accuracy in
+reaching targets (10x improvement for Cartesian pose targets and exact reaching for joint position
+targets).
+
+
+### BugFixes & Misc.
+
+- Fix bug (opposite sign) in gradient calculation for jerk. Trajectory optimizaiton generates
+shorter motion time trajectories.
+- Fix numerical precision issues when calculating linear interpolated seeds by copying terminal
+state to final action of trajectory after interpolation.
+
+
 ## Version 0.7.5
 
 ### Changes in Default Behavior
@@ -44,6 +72,7 @@ numpy array was created instead of torch tensor.
 - Improve sphere position to voxel location calculation to match nvblox's implementation.
 - Add self collision checking support for spheres > 1024 and number of checks > 512 * 1024.
 - Fix gradient passthrough in warp batch transform kernels.
+- Remove torch.Size() initialization with device kwarg.
 
 ## Version 0.7.4
 

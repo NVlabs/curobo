@@ -1,0 +1,114 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+cost:
+  bound_cfg:
+    activation_distance:
+    - 0.001
+    null_space_weight: 0.0
+    use_l2_kernel: true
+    weight: 6617.916155103846
+  cspace_cfg:
+    weight: 0.0
+  link_pose_cfg:
+    run_weight: 1.0
+    terminal: false
+    use_metric: true
+    vec_convergence:
+    - 0.0
+    - 0.0
+    vec_weight:
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    weight:
+    - 51057.936375400066
+    - 843196.9018921662
+    - 57.65743420107279
+    - 27.3008552454367
+  pose_cfg:
+    project_distance: false
+    run_weight: 1.0
+    terminal: false
+    use_metric: true
+    vec_convergence:
+    - 0.0
+    - 0.0
+    vec_weight:
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    weight:
+    - 51057.936375400066
+    - 843196.9018921662
+    - 57.65743420107279
+    - 27.3008552454367
+  primitive_collision_cfg:
+    activation_distance: 0.01
+    classify: false
+    use_sweep: false
+    weight: 6955.6913192212
+  self_collision_cfg:
+    classify: false
+    weight: 2140.4341585026104
+lbfgs:
+  cold_start_n_iters: null
+  cost_convergence: 1.0e-11
+  cost_delta_threshold: 1.0e-11
+  cost_relative_threshold: 0.999
+  debug_info:
+    visual_traj: null
+  epsilon: 0.01
+  fixed_iters: true
+  history: 6
+  horizon: 1
+  inner_iters: 25
+  last_best: 10
+  line_search_scale:
+  - 0.11626529237230242
+  - 0.5544193619969185
+  - 0.7460490833893989
+  - 1.0502486637627748
+  line_search_type: approx_wolfe
+  min_iters: null
+  n_iters: 100
+  n_problems: 1
+  stable_mode: true
+  step_scale: 0.98
+  store_debug: false
+  sync_cuda_time: true
+  use_coo_sparse: true
+  use_cuda_graph: true
+  use_cuda_kernel: true
+  use_cuda_line_search_kernel: true
+  use_cuda_update_best_kernel: true
+  use_shared_buffers_kernel: true
+model:
+  control_space: POSITION
+  dt_traj_params:
+    base_dt: 0.02
+    base_ratio: 1.0
+    max_dt: 0.25
+  horizon: 1
+  state_filter_cfg:
+    enable: false
+    filter_coeff:
+      acceleration: 0.0
+      position: 1.0
+      velocity: 1.0
+  teleport_mode: true
+  vel_scale: 1.0

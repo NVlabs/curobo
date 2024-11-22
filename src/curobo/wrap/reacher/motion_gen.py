@@ -180,7 +180,7 @@ class MotionGenConfig:
         world_coll_checker=None,
         base_cfg_file: str = "base_cfg.yml",
         particle_ik_file: str = "particle_ik.yml",
-        gradient_ik_file: str = "gradient_ik.yml",
+        gradient_ik_file: str = "gradient_ik_autotune.yml",
         graph_file: str = "graph.yml",
         particle_trajopt_file: str = "particle_trajopt.yml",
         gradient_trajopt_file: str = "gradient_trajopt.yml",
@@ -202,7 +202,7 @@ class MotionGenConfig:
         traj_evaluator_config: Optional[TrajEvaluatorConfig] = None,
         traj_evaluator: Optional[TrajEvaluator] = None,
         minimize_jerk: bool = True,
-        filter_robot_command: bool = True,
+        filter_robot_command: bool = False,
         use_gradient_descent: bool = False,
         collision_cache: Optional[Dict[str, int]] = None,
         n_collision_envs: Optional[int] = None,
@@ -243,6 +243,8 @@ class MotionGenConfig:
         graph_seed: int = 1531,
         high_precision: bool = False,
         use_cuda_graph_trajopt_metrics: bool = False,
+        trajopt_fix_terminal_action: bool = True,
+        trajopt_js_fix_terminal_action: bool = True,
     ):
         """Create a motion generation configuration from robot and world configuration.
 
@@ -478,6 +480,14 @@ class MotionGenConfig:
                 trajectories after trajectory optimization. If interpolation_buffer is smaller
                 than interpolated trajectory, then the buffers will be re-created. This can cause
                 existing cuda graph to be invalid.
+            trajopt_fix_terminal_action: Flag to disable optimizing for final state. When true,
+                the final state is unchanged from initial seed. When false, terminal state can
+                change based on cost. Setting to False will lead to worse accuracy at target
+                pose (>0.1mm). Setting to True can achieve < 0.01mm accuracy.
+            trajopt_js_fix_terminal_action: Flag to disable optimizing for final state for joint
+                space target planning. When true, the final state is unchanged from initial seed.
+                When false, terminal state can change based on cost. Setting to False will lead to
+                worse accuracy at target joint configuration.
 
         Returns:
             MotionGenConfig: Instance of motion generation configuration.
@@ -728,6 +738,7 @@ class MotionGenConfig:
             optimize_dt=optimize_dt,
             project_pose_to_goal_frame=project_pose_to_goal_frame,
             use_cuda_graph_metrics=use_cuda_graph_trajopt_metrics,
+            fix_terminal_action=trajopt_fix_terminal_action,
         )
         trajopt_solver = TrajOptSolver(trajopt_cfg)
 
@@ -770,6 +781,7 @@ class MotionGenConfig:
             optimize_dt=optimize_dt,
             num_seeds=num_trajopt_noisy_seeds,
             use_cuda_graph_metrics=use_cuda_graph_trajopt_metrics,
+            fix_terminal_action=trajopt_js_fix_terminal_action,
         )
         js_trajopt_solver = TrajOptSolver(js_trajopt_cfg)
 
@@ -813,6 +825,7 @@ class MotionGenConfig:
             optimize_dt=optimize_dt,
             project_pose_to_goal_frame=project_pose_to_goal_frame,
             use_cuda_graph_metrics=use_cuda_graph_trajopt_metrics,
+            fix_terminal_action=trajopt_fix_terminal_action,
         )
 
         finetune_trajopt_solver = TrajOptSolver(finetune_trajopt_cfg)
@@ -856,6 +869,7 @@ class MotionGenConfig:
             optimize_dt=optimize_dt,
             num_seeds=num_trajopt_noisy_seeds,
             use_cuda_graph_metrics=use_cuda_graph_trajopt_metrics,
+            fix_terminal_action=trajopt_js_fix_terminal_action,
         )
         finetune_js_trajopt_solver = TrajOptSolver(finetune_js_trajopt_cfg)
 
