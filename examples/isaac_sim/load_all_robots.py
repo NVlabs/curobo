@@ -68,13 +68,17 @@ from curobo.types.math import Pose
 from curobo.types.robot import RobotConfig
 
 ########### OV #################
-from curobo.util.logger import setup_curobo_logger
+from curobo.util.logger import setup_curobo_logger, log_warn
 from curobo.util.usd_helper import UsdHelper
 from curobo.util_file import get_motion_gen_robot_list, get_robot_configs_path, join_path, load_yaml
 
 
 def main():
+    log_warn("This example will not work correctly in isaac sim 4.5+")
     list_of_robots = get_motion_gen_robot_list()  # [:2]
+    # remove tm12 as meshes don't load correctly in isaac sim 4.5
+    if "tm12.yml" in list_of_robots:
+        list_of_robots.remove("tm12.yml")
     usd_help = UsdHelper()
 
     # assuming obstacles are in objects_path:
@@ -107,12 +111,14 @@ def main():
             pose.position[0, 1] = 0
         robot_cfg = load_yaml(join_path(get_robot_configs_path(), list_of_robots[i]))["robot_cfg"]
         robot_cfg_list.append(robot_cfg)
+        print("Loading robot: ", list_of_robots[i])
         r = add_robot_to_scene(
             robot_cfg,
             my_world,
             "/World/world_" + str(i) + "/",
             robot_name="/World/world_" + str(i) + "/" "robot_" + str(i),
             position=pose.position[0].cpu().numpy(),
+            initialize_world=False,
         )
 
         robot_list.append(r[0])
@@ -135,6 +141,9 @@ def main():
 
     setup_curobo_logger("warn")
 
+    my_world.initialize_physics()
+    my_world.reset()
+
     add_extensions(simulation_app, args.headless_mode)
     while simulation_app.is_running():
         my_world.step(render=True)
@@ -146,9 +155,9 @@ def main():
             continue
         step_index = my_world.current_time_step_index
 
-        if step_index <= 2:
-            my_world.reset()
+        if step_index <= 10:
             for ri, robot in enumerate(robot_list):
+                robot._articulation_view.initialize()
                 j_names = robot_cfg_list[ri]["kinematics"]["cspace"]["joint_names"]
                 default_config = robot_cfg_list[ri]["kinematics"]["cspace"]["retract_config"]
 

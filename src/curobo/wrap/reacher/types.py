@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-""" Module contains custom types and dataclasses used across reacher solvers. """
+"""Module contains custom types and dataclasses used across reacher solvers."""
 from __future__ import annotations
 
 # Standard Library

@@ -272,12 +272,9 @@ def main():
             continue
 
         step_index = my_world.current_time_step_index
-        # print(step_index)
         if articulation_controller is None:
-            # robot.initialize()
             articulation_controller = robot.get_articulation_controller()
-        if step_index < 2:
-            my_world.reset()
+        if step_index < 10:
             robot._articulation_view.initialize()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
@@ -291,7 +288,7 @@ def main():
         if step_index == 50 or step_index % 1000 == 0.0:
             print("Updating world, reading w.r.t.", robot_prim_path)
             obstacles = usd_help.get_obstacles_from_stage(
-                # only_paths=[obstacles_path],
+                only_paths=["/World"],
                 reference_prim_path=robot_prim_path,
                 ignore_substring=[
                     robot_prim_path,
@@ -319,6 +316,9 @@ def main():
             past_orientation = cube_orientation
 
         sim_js = robot.get_joints_state()
+        if sim_js is None:
+            print("sim_js is None")
+            continue
         sim_js_names = robot.dof_names
         if np.any(np.isnan(sim_js.positions)):
             log_error("isaac sim has returned NAN joint position values.")
@@ -362,7 +362,7 @@ def main():
                         spheres[si].set_radius(float(s.radius))
 
         robot_static = False
-        if (np.max(np.abs(sim_js.velocities)) < 0.2) or args.reactive:
+        if (np.max(np.abs(sim_js.velocities)) < 0.5) or args.reactive:
             robot_static = True
         if (
             (

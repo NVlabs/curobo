@@ -8,9 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-""" Example computing collisions using curobo
-
-"""
+"""Example computing collisions using curobo"""
 # Third Party
 import torch
 

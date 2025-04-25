@@ -149,6 +149,7 @@ def main():
         collision_activation_distance=0.025,
         fixed_iters_trajopt=True,
         maximum_trajectory_dt=0.5,
+        ik_opt_iters=500,
     )
     motion_gen = MotionGen(motion_gen_config)
     print("warming up...")
@@ -221,8 +222,9 @@ def main():
 
         step_index = my_world.current_time_step_index
         # print(step_index)
-        if step_index <= 2:
-            my_world.reset()
+        if step_index <= 10:
+            # my_world.reset()
+            robot._articulation_view.initialize()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
 
@@ -235,7 +237,7 @@ def main():
         if step_index == 50 or step_index % 1000 == 0.0:
             print("Updating world, reading w.r.t.", robot_prim_path)
             obstacles = usd_help.get_obstacles_from_stage(
-                # only_paths=[obstacles_path],
+                only_paths=["/World"],
                 reference_prim_path=robot_prim_path,
                 ignore_substring=[
                     robot_prim_path,
@@ -258,6 +260,9 @@ def main():
         if target_pose is None:
             target_pose = cube_position
         sim_js = robot.get_joints_state()
+        if sim_js is None:
+            print("sim_js is None")
+            continue
         sim_js_names = robot.dof_names
         cu_js = JointState(
             position=tensor_args.to_device(sim_js.positions),
@@ -287,11 +292,10 @@ def main():
                 for si, s in enumerate(sph_list[0]):
                     spheres[si].set_world_pose(position=np.ravel(s.position))
                     spheres[si].set_radius(float(s.radius))
-        # print(sim_js.velocities)
         if (
             np.linalg.norm(cube_position - target_pose) > 1e-3
             and np.linalg.norm(past_pose - cube_position) == 0.0
-            and np.max(np.abs(sim_js.velocities)) < 0.2
+            and np.max(np.abs(sim_js.velocities)) < 0.5
         ):
             # Set EE teleop goals, use cube for simple non-vr init:
             ee_translation_goal = cube_position

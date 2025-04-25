@@ -8,9 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-""" Example computing fk using curobo
-
-"""
+"""Example computing fk using curobo"""
 # Third Party
 import torch
 

@@ -58,7 +58,11 @@ import argparse
 # Third Party
 import carb
 from omni.isaac.core import World
-from omni.isaac.core.materials import OmniGlass, OmniPBR
+
+try:
+    from omni.isaac.core.materials import OmniGlass, OmniPBR
+except ImportError:
+    from isaacsim.core.api.materials import OmniGlass, OmniPBR
 from omni.isaac.core.objects import cuboid, sphere
 from omni.isaac.core.utils.types import ArticulationAction
 
@@ -207,8 +211,9 @@ if __name__ == "__main__":
             continue
         step_index = my_world.current_time_step_index
 
-        if step_index <= 2:
-            my_world.reset()
+        if step_index <= 10:
+            # my_world.reset()
+            robot._articulation_view.initialize()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
 
@@ -218,7 +223,7 @@ if __name__ == "__main__":
 
         if False and step_index % 50 == 0.0:  # No obstacle update
             obstacles = usd_help.get_obstacles_from_stage(
-                # only_paths=[obstacles_path],
+                only_paths=["/World"],
                 reference_prim_path=robot_prim_path,
                 ignore_substring=[
                     robot_prim_path,

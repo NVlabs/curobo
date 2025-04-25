@@ -9,5 +9,4 @@
 # its affiliates is strictly prohibited.
 #
 
-"""
-"""
+""" """

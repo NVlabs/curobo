@@ -642,7 +642,7 @@ def jit_diag_a_cov_update(w, actions, mean_action):
     # weighted_delta =
     # sum across horizon and mean across particles:
     # cov_update = torch.diag(torch.mean(torch.sum(weighted_delta.T  , dim=0), dim=0))
-    cov_update = torch.mean(torch.sum(weighted_delta, dim=-2), dim=-2).unsqueeze(-2)
+    cov_update = torch.mean(torch.sum(weighted_delta, dim=-3), dim=-2).unsqueeze(-2)
     return cov_update
 
 

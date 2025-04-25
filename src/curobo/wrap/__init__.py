@@ -8,4 +8,4 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-""" Module contains high-level APIs for robotics applications. """
+"""Module contains high-level APIs for robotics applications."""

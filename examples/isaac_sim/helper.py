@@ -16,7 +16,6 @@ from typing import Dict, List
 import numpy as np
 from matplotlib import cm
 from omni.isaac.core import World
-from omni.isaac.core.materials import OmniPBR
 from omni.isaac.core.objects import cuboid
 from omni.isaac.core.robots import Robot
 from pxr import UsdPhysics
@@ -26,14 +25,28 @@ from curobo.util.logger import log_warn
 from curobo.util.usd_helper import set_prim_transform
 
 ISAAC_SIM_23 = False
+ISAAC_SIM_45 = False
 try:
     # Third Party
     from omni.isaac.urdf import _urdf  # isaacsim 2022.2
 except ImportError:
     # Third Party
-    from omni.importer.urdf import _urdf  # isaac sim 2023.1 or above
+    try:
+        from omni.importer.urdf import _urdf  # isaac sim 2023.1 or above
+    except ImportError:
+        from isaacsim.asset.importer.urdf import _urdf  # isaac sim 4.5+
 
+        ISAAC_SIM_45 = True
     ISAAC_SIM_23 = True
+
+try:
+    # import for older isaacsim installations
+    from omni.isaac.core.materials import OmniPBR
+except ImportError:
+    # import for isaac sim 4.5+
+    from isaacsim.core.api.materials import OmniPBR
+
+
 # Standard Library
 from typing import Optional
 
@@ -67,6 +80,7 @@ def add_robot_to_scene(
     subroot: str = "",
     robot_name: str = "robot",
     position: np.array = np.array([0, 0, 0]),
+    initialize_world: bool = True,
 ):
 
     urdf_interface = _urdf.acquire_urdf_interface()
@@ -91,18 +105,57 @@ def add_robot_to_scene(
         and robot_config["kinematics"]["external_asset_path"] is not None
     ):
         asset_path = robot_config["kinematics"]["external_asset_path"]
+
+    # urdf_path:
+    # meshes_path:
+    # meshes path should be a subset of urdf_path
     full_path = join_path(asset_path, robot_config["kinematics"]["urdf_path"])
+    # full path contains the path to urdf
+    # Get meshes path
     robot_path = get_path_of_dir(full_path)
     filename = get_filename(full_path)
-    imported_robot = urdf_interface.parse_urdf(robot_path, filename, import_config)
-    dest_path = subroot
-    robot_path = urdf_interface.import_robot(
-        robot_path,
-        filename,
-        imported_robot,
-        import_config,
-        dest_path,
-    )
+    if ISAAC_SIM_45:
+        from isaacsim.core.utils.extensions import get_extension_path_from_name
+        import omni.kit.commands
+        import omni.usd
+
+        # Retrieve the path of the URDF file from the extension
+        extension_path = get_extension_path_from_name("isaacsim.asset.importer.urdf")
+        root_path = robot_path
+        file_name = filename
+
+        # Parse the robot's URDF file to generate a robot model
+
+        dest_path = join_path(
+            root_path, get_filename(file_name, remove_extension=True) + "_temp.usd"
+        )
+
+        result, robot_path = omni.kit.commands.execute(
+            "URDFParseAndImportFile",
+            urdf_path="{}/{}".format(root_path, file_name),
+            import_config=import_config,
+            dest_path=dest_path,
+        )
+        prim_path = omni.usd.get_stage_next_free_path(
+            my_world.scene.stage,
+            str(my_world.scene.stage.GetDefaultPrim().GetPath()) + robot_path,
+            False,
+        )
+        robot_prim = my_world.scene.stage.OverridePrim(prim_path)
+        robot_prim.GetReferences().AddReference(dest_path)
+        robot_path = prim_path
+    else:
+
+        imported_robot = urdf_interface.parse_urdf(robot_path, filename, import_config)
+        dest_path = subroot
+
+        robot_path = urdf_interface.import_robot(
+            robot_path,
+            filename,
+            imported_robot,
+            import_config,
+            dest_path,
+        )
 
     base_link_name = robot_config["kinematics"]["base_link"]
 
@@ -117,6 +170,11 @@ def add_robot_to_scene(
     set_prim_transform(linkp, [position[0], position[1], position[2], 1, 0, 0, 0])
 
     robot = my_world.scene.add(robot_p)
+    if initialize_world:
+        if ISAAC_SIM_45:
+            my_world.initialize_physics()
+            robot.initialize()
+
     return robot, robot_path
 
 

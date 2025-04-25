@@ -41,6 +41,7 @@ if [ $input_arg == "x86" ]; then
     --env DISPLAY=unix$DISPLAY \
     --volume /tmp/.X11-unix:/tmp/.X11-unix \
     --volume /dev:/dev \
+    --ipc=host \
     curobo_docker:user_$input_arg
 
 elif [ $input_arg == "aarch64" ]; then
@@ -60,7 +61,7 @@ elif [ $input_arg == "aarch64" ]; then
     curobo_docker:user_$input_arg
 
 elif [[ $input_arg == *isaac_sim* ]] ; then
-   echo "Isaac Sim Dev Docker is not supported" 
+   echo "Isaac Sim Dev Docker is not supported"
 
    mkdir -p ~/docker/isaac-sim ~/docker/isaac-sim/cache/kit \
     ~/docker/isaac-sim/cache/ov \
@@ -70,7 +71,7 @@ elif [[ $input_arg == *isaac_sim* ]] ; then
     ~/docker/isaac-sim/logs \
     ~/docker/isaac-sim/data \
     ~/docker/isaac-sim/documents
- 
+
 
 
    docker run --name container_$input_arg -it --gpus all -e "ACCEPT_EULA=Y" --rm --network=host \
@@ -89,7 +90,7 @@ elif [[ $input_arg == *isaac_sim* ]] ; then
         --volume /dev:/dev \
         --mount type=bind,src=/home/$USER/code,target=/home/$USER/code \
         curobo_docker:user_$input_arg
-    
+
 
 else
     echo "Unknown docker"

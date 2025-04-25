@@ -10,6 +10,20 @@ its affiliates is strictly prohibited.
 -->
 # Changelog
 
+## Version 0.7.7
+
+### New Features
+- Add cpu support for types.math.Pose
+- Add cdist fallback for robot segmentation when triton is not available. Requires half the memory.
+
+### BugFixes & Misc.
+- Fix bug in LBFGS where buffers were not reinitialized upon change in history.
+- Isaac Sim 4.5 support for examples. All but one example works now. ``load_all_robots.py`` does
+not work correctly.
+- Fix bug in jerk gradient calculation. Improves convergence in trajectory optimization. Multi-arm
+reacher is slightly improved (see isaac sim example).
+
+
 ## Version 0.7.6
 
 ### Changes in Default Behavior

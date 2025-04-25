@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-""" Base module for Optimization. """
+"""Base module for Optimization."""
 from __future__ import annotations
 
 # Standard Library

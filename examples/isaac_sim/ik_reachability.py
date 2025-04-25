@@ -112,7 +112,10 @@ def get_pose_grid(n_x, n_y, n_z, max_x, max_y, max_z):
 
 def draw_points(pose, success):
     # Third Party
-    from omni.isaac.debug_draw import _debug_draw
+    try:
+        from omni.isaac.debug_draw import _debug_draw
+    except ImportError:
+        from isaacsim.util.debug_draw import _debug_draw
 
     draw = _debug_draw.acquire_debug_draw_interface()
     N = 100
@@ -236,9 +239,8 @@ def main():
             continue
 
         step_index = my_world.current_time_step_index
-        # print(step_index)
-        if step_index <= 2:
-            my_world.reset()
+        if step_index <= 10:
+            # my_world.reset()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
 
@@ -251,7 +253,7 @@ def main():
         if step_index == 50 or step_index % 500 == 0.0:  # and cmd_plan is None:
             print("Updating world, reading w.r.t.", robot_prim_path)
             obstacles = usd_help.get_obstacles_from_stage(
-                # only_paths=[obstacles_path],
+                only_paths=["/World"],
                 reference_prim_path=robot_prim_path,
                 ignore_substring=[
                     robot_prim_path,

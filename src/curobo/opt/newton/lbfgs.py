@@ -117,6 +117,7 @@ class LBFGSOpt(NewtonOptBase, LBFGSOptConfig):
         if self.history > self.d_opt:
             log_info("LBFGS: history >= d_opt, reducing history to d_opt-1")
             self.history = self.d_opt - 1
+            self.init_hessian(self.n_problems)
 
     @profiler.record_function("lbfgs/reset")
     def reset(self):

@@ -68,7 +68,10 @@ def draw_points(voxels):
     # Third Party
 
     # Third Party
-    from omni.isaac.debug_draw import _debug_draw
+    try:
+        from omni.isaac.debug_draw import _debug_draw
+    except ImportError:
+        from isaacsim.util.debug_draw import _debug_draw
 
     draw = _debug_draw.acquire_debug_draw_interface()
     # if draw.get_num_points() > 0:
@@ -125,7 +128,10 @@ def clip_camera(camera_data):
 
 def draw_line(start, gradient):
     # Third Party
-    from omni.isaac.debug_draw import _debug_draw
+    try:
+        from omni.isaac.debug_draw import _debug_draw
+    except ImportError:
+        from isaacsim.util.debug_draw import _debug_draw
 
     draw = _debug_draw.acquire_debug_draw_interface()
     # if draw.get_num_points() > 0:
@@ -270,7 +276,10 @@ if __name__ == "__main__":
             draw_line(sph_position, d_vec[..., :3].view(3).cpu().numpy())
         else:
             # Third Party
-            from omni.isaac.debug_draw import _debug_draw
+            try:
+                from omni.isaac.debug_draw import _debug_draw
+            except ImportError:
+                from isaacsim.util.debug_draw import _debug_draw
 
             draw = _debug_draw.acquire_debug_draw_interface()
             # if draw.get_num_points() > 0:

@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-""" This modules contains heuristics for scoring trajectories. """
+"""This modules contains heuristics for scoring trajectories."""
 
 from __future__ import annotations
 

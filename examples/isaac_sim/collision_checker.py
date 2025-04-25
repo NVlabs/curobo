@@ -54,7 +54,11 @@ import carb
 import numpy as np
 from helper import add_extensions
 from omni.isaac.core import World
-from omni.isaac.core.materials import OmniPBR
+
+try:
+    from omni.isaac.core.materials import OmniPBR
+except ImportError:
+    from isaacsim.core.api.materials import OmniPBR
 from omni.isaac.core.objects import sphere
 
 # CuRobo
@@ -73,7 +77,10 @@ from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
 
 def draw_line(start, gradient):
     # Third Party
-    from omni.isaac.debug_draw import _debug_draw
+    try:
+        from omni.isaac.debug_draw import _debug_draw
+    except ImportError:
+        from isaacsim.util.debug_draw import _debug_draw
 
     draw = _debug_draw.acquire_debug_draw_interface()
     # if draw.get_num_points() > 0:
@@ -194,7 +201,10 @@ def main():
 
         else:
             # Third Party
-            from omni.isaac.debug_draw import _debug_draw
+            try:
+                from omni.isaac.debug_draw import _debug_draw
+            except ImportError:
+                from isaacsim.util.debug_draw import _debug_draw
 
             draw = _debug_draw.acquire_debug_draw_interface()
             # if draw.get_num_points() > 0:

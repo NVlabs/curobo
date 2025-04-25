@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-" This example moves the robot through a sequence of poses and dumps an animated usd."
+"This example moves the robot through a sequence of poses and dumps an animated usd."
 # CuRobo
 from curobo.types.math import Pose
 from curobo.types.robot import JointState

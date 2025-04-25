@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 #
 
-""" This module contains aliases for structured Tensors, improving readability."""
+"""This module contains aliases for structured Tensors, improving readability."""
 
 # Third Party
 import torch

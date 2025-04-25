@@ -104,7 +104,10 @@ def draw_points(rollouts: torch.Tensor):
     import random
 
     # Third Party
-    from omni.isaac.debug_draw import _debug_draw
+    try:
+        from omni.isaac.debug_draw import _debug_draw
+    except ImportError:
+        from isaacsim.util.debug_draw import _debug_draw
 
     draw = _debug_draw.acquire_debug_draw_interface()
     N = 100
@@ -242,8 +245,9 @@ def main():
 
         step_index = my_world.current_time_step_index
 
-        if step_index <= 2:
-            my_world.reset()
+        if step_index <= 10:
+            # my_world.reset()
+            robot._articulation_view.initialize()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
 
@@ -278,6 +282,9 @@ def main():
 
         # get robot current state:
         sim_js = robot.get_joints_state()
+        if sim_js is None:
+            print("sim_js is None")
+            continue
         js_names = robot.dof_names
         sim_js_names = robot.dof_names
 

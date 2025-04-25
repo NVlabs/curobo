@@ -51,7 +51,13 @@ import carb
 import numpy as np
 from helper import add_extensions
 from omni.isaac.core import World
-from omni.isaac.core.materials import OmniPBR
+
+try:
+    from omni.isaac.core.materials import OmniPBR
+except ImportError:
+    from isaacsim.core.api.materials import OmniPBR
+
+
 from omni.isaac.core.objects import sphere
 
 # CuRobo

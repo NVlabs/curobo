@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-""" This example shows how to use cuRobo's kinematics to generate a mask. """
+"""This example shows how to use cuRobo's kinematics to generate a mask."""
 
 
 # Standard Library
@@ -19,7 +19,7 @@ import imageio
 import numpy as np
 import torch
 import torch.autograd.profiler as profiler
-from nvblox_torch.datasets.mesh_dataset import MeshDataset
+from mesh_dataset import MeshDataset
 from torch.profiler import ProfilerActivity, profile, record_function
 
 # CuRobo
@@ -79,7 +79,7 @@ def create_render_dataset(
     mesh_dataset = MeshDataset(
         None,
         n_frames=n_frames,
-        image_size=640,
+        image_size=1920,
         save_data_dir=None,
         trimesh_mesh=robot_mesh,
         fov_deg=fov_deg,
@@ -96,10 +96,14 @@ def mask_image(robot_file="ur5e.yml"):
     tensor_args = TensorDeviceType()
 
     curobo_segmenter = RobotSegmenter.from_robot_file(
-        robot_file, collision_sphere_buffer=0.01, distance_threshold=0.05, use_cuda_graph=True
+        robot_file,
+        collision_sphere_buffer=0.01,
+        distance_threshold=0.05,
+        use_cuda_graph=True,
+        ops_dtype=torch.float16,
     )
 
-    mesh_dataset, q_js = create_render_dataset(robot_file, write_pointcloud, n_frames=20)
+    mesh_dataset, q_js = create_render_dataset(robot_file, write_pointcloud, n_frames=30)
 
     if save_debug_data:
         visualize_scale = 10.0
@@ -179,28 +183,32 @@ def mask_image(robot_file="ur5e.yml"):
         )
 
     dt_list = []
+    for j in range(10):
 
-    for i in range(len(mesh_dataset)):
+        for i in range(len(mesh_dataset)):
+            data = mesh_dataset[i]
+            cam_obs = CameraObservation(
+                depth_image=tensor_args.to_device(data["depth"]).unsqueeze(0) * 1000,
+                intrinsics=data["intrinsics"],
+                pose=Pose.from_matrix(data["pose"].to(device=tensor_args.device)),
+            )
+            if not curobo_segmenter.ready:
+                curobo_segmenter.update_camera_projection(cam_obs)
+            st_time = time.time()
 
-        data = mesh_dataset[i]
-        cam_obs = CameraObservation(
-            depth_image=tensor_args.to_device(data["depth"]).unsqueeze(0) * 1000,
-            intrinsics=data["intrinsics"],
-            pose=Pose.from_matrix(data["pose"].to(device=tensor_args.device)),
+            depth_mask, filtered_image = curobo_segmenter.get_robot_mask_from_active_js(
+                cam_obs,
+                q_js,
+            )
+
+            torch.cuda.synchronize()
+            dt_list.append(time.time() - st_time)
+
+        print(
+            "Segmentation Time (ms), (hz)",
+            np.mean(dt_list[5:]) * 1000.0,
+            1.0 / np.mean(dt_list[5:]),
         )
-        if not curobo_segmenter.ready:
-            curobo_segmenter.update_camera_projection(cam_obs)
-        st_time = time.time()
-
-        depth_mask, filtered_image = curobo_segmenter.get_robot_mask_from_active_js(
-            cam_obs,
-            q_js,
-        )
-
-        torch.cuda.synchronize()
-        dt_list.append(time.time() - st_time)
-
-    print("Segmentation Time (ms), (hz)", np.mean(dt_list[5:]) * 1000.0, 1.0 / np.mean(dt_list[5:]))
 
 
 def batch_mask_image(robot_file="ur5e.yml"):
@@ -216,7 +224,11 @@ def batch_mask_image(robot_file="ur5e.yml"):
     tensor_args = TensorDeviceType()
 
     curobo_segmenter = RobotSegmenter.from_robot_file(
-        robot_file, collision_sphere_buffer=0.01, distance_threshold=0.05, use_cuda_graph=True
+        robot_file,
+        collision_sphere_buffer=0.01,
+        distance_threshold=0.05,
+        use_cuda_graph=True,
+        ops_dtype=torch.float16,
     )
 
     mesh_dataset, q_js = create_render_dataset(robot_file, save_debug_data, fov_deg=60)
@@ -489,7 +501,8 @@ def profile_mask_image(robot_file="ur5e.yml"):
 
 
 if __name__ == "__main__":
-    mask_image()
+    robot_file = "quad_ur10e.yml"  # "ur10e.yml" #"ur5e_robotiq_2f_140.yml"
+    # mask_image(robot_file)
     # profile_mask_image()
-    # batch_mask_image()
+    batch_mask_image(robot_file)
     # batch_robot_mask_image()

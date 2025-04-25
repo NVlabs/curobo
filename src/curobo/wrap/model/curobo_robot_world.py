@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-"""This module has differentiable layers built from CuRobo's core features for use in Pytorch. """
+"""This module has differentiable layers built from CuRobo's core features for use in Pytorch."""
 
 # Standard Library
 from dataclasses import dataclass

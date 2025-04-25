@@ -116,8 +116,10 @@ def draw_points(rollouts: torch.Tensor):
     import random
 
     # Third Party
-    from omni.isaac.debug_draw import _debug_draw
-
+    try:
+        from omni.isaac.debug_draw import _debug_draw
+    except ImportError:
+        from isaacsim.util.debug_draw import _debug_draw
     draw = _debug_draw.acquire_debug_draw_interface()
     N = 100
     # if draw.get_num_points() > 0:
@@ -265,8 +267,10 @@ def main():
 
         step_index = my_world.current_time_step_index
 
-        if step_index <= 2:
-            my_world.reset()
+        if step_index <= 10:
+            # my_world.reset()
+            robot._articulation_view.initialize()
+
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
 
@@ -281,7 +285,7 @@ def main():
         if step_index % 1000 == 0:
             print("Updating world")
             obstacles = usd_help.get_obstacles_from_stage(
-                # only_paths=[obstacles_path],
+                only_paths=["/World"],
                 ignore_substring=[
                     robot_prim_path,
                     "/World/target",
@@ -315,6 +319,9 @@ def main():
 
         # get robot current state:
         sim_js = robot.get_joints_state()
+        if sim_js is None:
+            print("sim_js is None")
+            continue
         js_names = robot.dof_names
         sim_js_names = robot.dof_names
 
@@ -354,7 +361,7 @@ def main():
         cmd_state_full = cmd_state
 
         art_action = ArticulationAction(
-            cmd_state.position.cpu().numpy(),
+            cmd_state.position.view(-1).cpu().numpy(),
             # cmd_state.velocity.cpu().numpy(),
             joint_indices=idx_list,
         )
@@ -364,7 +371,7 @@ def main():
 
         if succ:
             # set desired joint angles obtained from IK:
-            for _ in range(3):
+            for _ in range(1):
                 articulation_controller.apply_action(art_action)
 
         else:

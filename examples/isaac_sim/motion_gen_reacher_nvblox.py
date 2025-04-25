@@ -188,8 +188,9 @@ def main():
 
         step_index = my_world.current_time_step_index
         # print(step_index)
-        if step_index <= 2:
-            my_world.reset()
+        if step_index <= 10:
+            # my_world.reset()
+            robot._articulation_view.initialize()
             idx_list = [robot.get_dof_index(x) for x in j_names]
             robot.set_joint_positions(default_config, idx_list)
 
@@ -207,6 +208,9 @@ def main():
         if target_pose is None:
             target_pose = cube_position
         sim_js = robot.get_joints_state()
+        if sim_js is None:
+            print("sim_js is None")
+            continue
         sim_js_names = robot.dof_names
         cu_js = JointState(
             position=tensor_args.to_device(sim_js.positions),

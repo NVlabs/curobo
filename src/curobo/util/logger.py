@@ -10,7 +10,7 @@
 #
 """
 This module provides logging API, wrapping :py:class:`logging.Logger`. These functions are used
-to log messages in the cuRobo package. The functions can also be used in other packages by 
+to log messages in the cuRobo package. The functions can also be used in other packages by
 creating a new logger (:py:meth:`setup_logger`) with the desired name.
 """
 # Standard Library

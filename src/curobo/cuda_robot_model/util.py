@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 #
 
-""" This module contains a function to load robot representation from a yaml or xrdf file. """
+"""This module contains a function to load robot representation from a yaml or xrdf file."""
 
 # Standard Library
 from typing import Optional, Union

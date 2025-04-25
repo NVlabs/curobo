@@ -29,7 +29,7 @@ from curobo.geom.sdf.world import (
 from curobo.geom.types import Mesh, WorldConfig
 from curobo.types.math import Pose
 from curobo.util.logger import log_error, log_info, log_warn
-from curobo.util.warp import init_warp
+from curobo.util.warp import init_warp, warp_support_bvh_constructor_type
 
 
 @dataclass(frozen=True)
@@ -149,7 +149,10 @@ class WorldMeshCollision(WorldPrimitiveCollision):
         verts, faces = mesh.get_mesh_data()
         v = wp.array(verts, dtype=wp.vec3, device=self._wp_device)
         f = wp.array(np.ravel(faces), dtype=int, device=self._wp_device)
-        new_mesh = wp.Mesh(points=v, indices=f)
+        if warp_support_bvh_constructor_type():
+            new_mesh = wp.Mesh(points=v, indices=f, bvh_constructor="sah")
+        else:
+            new_mesh = wp.Mesh(points=v, indices=f)
         return WarpMeshData(mesh.name, new_mesh.id, v, f, new_mesh)
 
     def _load_mesh_into_cache(self, mesh: Mesh) -> WarpMeshData:
@@ -188,6 +191,7 @@ class WorldMeshCollision(WorldPrimitiveCollision):
 
             id_list[i] = m_data.m_id
             name_list.append(m_data.name)
+
         pose_buffer = Pose.from_batch_list(pose_list, self.tensor_args)
         inv_pose_buffer = pose_buffer.inverse()
         return name_list, id_list, inv_pose_buffer.get_pose_vector()
