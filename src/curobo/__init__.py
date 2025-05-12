@@ -45,36 +45,38 @@ cuRobo package is split into several modules:
 # NOTE (roflaherty): This is inspired by how matplotlib does creates its version value.
 # https://github.com/matplotlib/matplotlib/blob/master/lib/matplotlib/__init__.py#L161
 def _get_version():
-    """Return the version string used for __version__."""
-    # Standard Library
-    import pathlib
-
-    root = pathlib.Path(__file__).resolve().parent.parent.parent
-    if (root / ".git").exists() and not (root / ".git/shallow").exists():
-        # Third Party
-        import setuptools_scm
-
-        # See the `setuptools_scm` documentation for the description of the schemes used below.
-        # https://pypi.org/project/setuptools-scm/
-        # NOTE: If these values are updated, they need to be also updated in `pyproject.toml`.
-        return setuptools_scm.get_version(
-            root=root,
-            version_scheme="no-guess-dev",
-            local_scheme="dirty-tag",
-        )
-    else:  # Get the version from the _version.py setuptools_scm file.
+    try:
+        # First try: import pre-generated version file (built by setuptools_scm)
+        from ._version import version as __version__
+        return __version__
+    except ImportError:
+        import pathlib
         try:
-            # Standard Library
-            from importlib.metadata import version
-        except ModuleNotFoundError:
-            # NOTE: `importlib.resources` is part of the standard library in Python 3.9.
-            # `importlib_metadata` is the back ported library for older versions of python.
             # Third Party
-            from importlib_metadata import version
-        try:
-            return version("nvidia_curobo")
-        except:
-            return "v0.7.0-no-tag"
+            import setuptools_scm
+            root = pathlib.Path(__file__).resolve().parent.parent.parent
+
+            # See the `setuptools_scm` documentation for the description of the schemes used below.
+            # https://pypi.org/project/setuptools-scm/
+            # NOTE: If these values are updated, they need to be also updated in `pyproject.toml`.
+            return setuptools_scm.get_version(
+                root=root,
+                version_scheme="no-guess-dev",
+                local_scheme="dirty-tag",
+            )
+        except Exception:  # Get the version from the _version.py setuptools_scm file.
+            try:
+                # Standard Library
+                from importlib.metadata import version
+            except ModuleNotFoundError:
+                # NOTE: `importlib.resources` is part of the standard library in Python 3.9.
+                # `importlib_metadata` is the back ported library for older versions of python.
+                # Third Party
+                from importlib_metadata import version
+            try:
+                return version("nvidia_curobo")
+            except Exception:
+                return "v0.7.0-no-tag"
 
 
 # Set `__version__` attribute
