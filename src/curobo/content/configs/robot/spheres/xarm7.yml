@@ -1,0 +1,53 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+robot: 'XArm7'
+urdf_path: "/home/gilwoo/workspace/zordi_sim_assets/robot_resources/urdf/xarm7.urdf"  # Path to XArm7 URDF file
+collision_spheres:
+    base_link:
+        - "center": [0.0, 0.0, 0.05]
+          "radius": 0.03
+    link1:
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.03
+    link2:
+        - "center": [0.0, -0.08, 0.0]
+          "radius": 0.03
+    link3:
+        - "center": [0.03, 0.0, 0.0]
+          "radius": 0.025
+    link4:
+        - "center": [0.05, -0.06, 0.0]
+          "radius": 0.03
+    link5:
+        - "center": [0.0, 0.03, 0.0]
+          "radius": 0.025
+        - "center": [0.0, 0.01, -0.08]
+          "radius": 0.02
+    link6:
+        - "center": [0.04, 0.01, 0.0]
+          "radius": 0.025
+    link7:
+        - "center": [0.0, 0.0, 0.04]
+          "radius": 0.015
+        - "center": [0.0, 0.0, 0.08]
+          "radius": 0.001
+    gripper_finger:
+        - "center": [-0.01, 0.0, 0.0]
+          "radius": 0.001
+    attached_object:
+        - "center": [0.0, 0.0, 0.0]
+          "radius": -10.0
+        - "center": [0.0, 0.0, 0.0]
+          "radius": -10.0
+        - "center": [0.0, 0.0, 0.0]
+          "radius": -10.0
+        - "center": [0.0, 0.0, 0.0]
+          "radius": -10.0
