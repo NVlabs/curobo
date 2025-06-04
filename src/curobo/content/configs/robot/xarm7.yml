@@ -12,12 +12,12 @@
 robot_cfg:
   kinematics:
     use_usd_kinematics: False  # DISABLE USD kinematics - use URDF for kinematic chain
-    isaac_usd_path: "/home/gilwoo/workspace/zordi_sim_assets/robot_resources/usd/xarm7/xarm7.usd"  # Path to XArm7 USD file in Isaac Sim
-    usd_path: "/home/gilwoo/workspace/zordi_sim_assets/robot_resources/usd/xarm7/xarm7.usd"  # Path to XArm7 USD file with modified collision meshes
+    isaac_usd_path: "ZORDI_PLACEHOLDER/robot_resources/usd/xarm7/xarm7.usd"  # Path to XArm7 USD file in Isaac Sim - will be resolved at runtime
+    usd_path: "ZORDI_PLACEHOLDER/robot_resources/usd/xarm7/xarm7.usd"  # Path to XArm7 USD file with modified collision meshes - will be resolved at runtime
     usd_robot_root: "zordi_arm"  # Root prim name in USD (should match your USD structure)
     usd_flip_joints:
       "joint1": "Z"
-      "joint2": "Z" 
+      "joint2": "Z"
       "joint3": "Z"
       "joint4": "Z"
       "joint5": "Z"
@@ -25,16 +25,16 @@ robot_cfg:
       "joint7": "Z"
       "gripper_finger_joint": "Y"
     usd_flip_joint_limits: []  # Add if needed
-    urdf_path: "/home/gilwoo/workspace/zordi_sim_assets/robot_resources/urdf/xarm7.urdf"  # PRIMARY: Use URDF for kinematics
-    asset_root_path: "/home/gilwoo/workspace/zordi_sim_assets/robot_resources"  # Asset root path
+    urdf_path: "ZORDI_PLACEHOLDER/robot_resources/urdf/xarm7.urdf"  # PRIMARY: Use URDF for kinematics - will be resolved at runtime
+    asset_root_path: "ZORDI_PLACEHOLDER/robot_resources"  # Asset root path - will be resolved at runtime
     base_link: "base_link"
     ee_link: "tool_pose"  # This exists in URDF - use URDF kinematic chain
-    
+
     # **FIXED: Match actual URDF link structure**
     collision_link_names:
       [
         "link_base",
-        "link1", 
+        "link1",
         "link2",
         "link3",
         "link4",
@@ -47,7 +47,7 @@ robot_cfg:
         "attached_object",
       ]
     mesh_link_names: null  # Disable USD mesh collision - use spheres instead
-    
+
     # **USE COLLISION SPHERES: Load from xarm7_improved_gripper.yml**
     collision_spheres: "spheres/xarm7_improved_gripper.yml"  # Load collision spheres from YAML file
     collision_sphere_buffer: 0.004  # Buffer around collision spheres
@@ -57,7 +57,7 @@ robot_cfg:
       {
         "link_base": ["link1"],
         "link1": ["link2"],
-        "link2": ["link3"], 
+        "link2": ["link3"],
         "link3": ["link4"],
         "link4": ["link5"],
         "link5": ["link6"],
@@ -84,7 +84,7 @@ robot_cfg:
       }
     # **FIXED: Lock gripper joint instead of excluding it**
     lock_joints: {"gripper_finger_joint": 0.2}  # Lock gripper at open position
-    extra_links: 
+    extra_links:
       "attached_object":
         "parent_link_name": "link7"
         "link_name": "attached_object"
@@ -93,13 +93,13 @@ robot_cfg:
         "joint_name": "attach_joint"
     cspace:
       # **FIXED: Include ALL joints (arm + gripper) like Franka, but lock gripper**
-      joint_names: 
+      joint_names:
         [
           "joint1",
-          "joint2", 
+          "joint2",
           "joint3",
           "joint4",
-          "joint5", 
+          "joint5",
           "joint6",
           "joint7",
           "gripper_finger_joint"

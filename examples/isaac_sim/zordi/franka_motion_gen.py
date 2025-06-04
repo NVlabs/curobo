@@ -1,14 +1,3 @@
-"""
-Copyright 2024 Zordi, Inc. All rights reserved.
-
-Isaac Sim example for reactive collision-free motion generation using CuRobo.
-This script demonstrates a Franka Panda robot reaching for a target sphere in a strawberry plant
-while avoiding the rest of the plant structure using collision avoidance.
-
-Usage:
-    python franka_motion_gen.py [--headless_mode native|websocket]
-"""
-
 try:
     # Third Party
     import isaacsim
@@ -62,13 +51,11 @@ args = parser.parse_args()
 # Third Party
 from omni.isaac.kit import SimulationApp
 
-simulation_app = SimulationApp(
-    {
-        "headless": args.headless_mode is not None,
-        "width": "1920",
-        "height": "1080",
-    }
-)
+simulation_app = SimulationApp({
+    "headless": args.headless_mode is not None,
+    "width": "1920",
+    "height": "1080",
+})
 
 # CuRobo and Isaac Sim imports
 from curobo.geom.sdf.world import CollisionCheckerType, WorldConfig
@@ -88,13 +75,14 @@ from curobo.wrap.reacher.motion_gen import (
     MotionGenPlanConfig,
     PoseCostMetric,
 )
-from helper import add_extensions, add_robot_to_scene
 from omni.isaac.core import World
 from omni.isaac.core.objects import sphere
 from omni.isaac.core.utils.types import ArticulationAction
 
 # USD imports for plant manipulation
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
+
+from ..helper import add_extensions, add_robot_to_scene
 
 # Plant configuration constants
 PLANT_ROOT = "/home/gilwoo/workspace/zordi_sim_assets/lightwheel"
@@ -407,13 +395,11 @@ class FrankaPlantMotionGenExample:
             rotation = world_transform.ExtractRotationQuat()
 
             # Store actual target position
-            self.target_position = np.array(
-                [
-                    float(translation[0]),
-                    float(translation[1]),
-                    float(translation[2]),
-                ]
-            )
+            self.target_position = np.array([
+                float(translation[0]),
+                float(translation[1]),
+                float(translation[2]),
+            ])
 
             # Check if geometry has changed significantly
             if self.last_target_position is not None:
@@ -430,14 +416,12 @@ class FrankaPlantMotionGenExample:
             self.last_target_position = self.target_position.copy()
 
             # Store orientation as quaternion (w, x, y, z)
-            extracted_orientation = np.array(
-                [
-                    float(rotation.GetReal()),  # w
-                    float(rotation.GetImaginary()[0]),  # x
-                    float(rotation.GetImaginary()[1]),  # y
-                    float(rotation.GetImaginary()[2]),  # z
-                ]
-            )
+            extracted_orientation = np.array([
+                float(rotation.GetReal()),  # w
+                float(rotation.GetImaginary()[0]),  # x
+                float(rotation.GetImaginary()[1]),  # y
+                float(rotation.GetImaginary()[2]),  # z
+            ])
 
             # Validate and normalize quaternion
             quat_norm = np.linalg.norm(extracted_orientation)
@@ -860,9 +844,10 @@ class FrankaPlantMotionGenExample:
                                     )
 
                                 # Combine position [x,y,z] and radius [r] -> [x,y,z,r]
-                                sphere_tensor_item = torch.cat(
-                                    [pos.flatten(), rad.flatten()]
-                                )
+                                sphere_tensor_item = torch.cat([
+                                    pos.flatten(),
+                                    rad.flatten(),
+                                ])
                                 sphere_data.append(sphere_tensor_item)
 
                         if sphere_data:
@@ -980,9 +965,14 @@ class FrankaPlantMotionGenExample:
 
             relaxed_planning = PoseCostMetric(
                 reach_partial_pose=True,
-                reach_vec_weight=self.tensor_args.to_device(
-                    [0.5, 0.5, 0.5, 1.0, 1.0, 1.0]
-                ),
+                reach_vec_weight=self.tensor_args.to_device([
+                    0.5,
+                    0.5,
+                    0.5,
+                    1.0,
+                    1.0,
+                    1.0,
+                ]),
             )
 
             relaxed_config = self.plan_config.clone()
@@ -1130,9 +1120,14 @@ class FrankaPlantMotionGenExample:
                 time_dilation_factor=1.0,
                 pose_cost_metric=PoseCostMetric(
                     reach_partial_pose=False,  # Full pose constraint
-                    reach_vec_weight=self.tensor_args.to_device(
-                        [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-                    ),
+                    reach_vec_weight=self.tensor_args.to_device([
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                    ]),
                 ),
             )
 
@@ -1439,9 +1434,14 @@ class FrankaPlantMotionGenExample:
                             time_dilation_factor=1.0,
                             pose_cost_metric=PoseCostMetric(
                                 reach_partial_pose=False,
-                                reach_vec_weight=self.tensor_args.to_device(
-                                    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-                                ),
+                                reach_vec_weight=self.tensor_args.to_device([
+                                    1.0,
+                                    1.0,
+                                    1.0,
+                                    1.0,
+                                    1.0,
+                                    1.0,
+                                ]),
                             ),
                         )
 
@@ -1557,9 +1557,14 @@ class FrankaPlantMotionGenExample:
                 time_dilation_factor=1.0,
                 pose_cost_metric=PoseCostMetric(
                     reach_partial_pose=False,
-                    reach_vec_weight=self.tensor_args.to_device(
-                        [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-                    ),
+                    reach_vec_weight=self.tensor_args.to_device([
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                    ]),
                 ),
             )
 
@@ -1691,13 +1696,11 @@ class FrankaPlantMotionGenExample:
             # Test 1: Current robot position (should be collision-free)
             sim_js_names = self.robot.dof_names
             current_js = JointState(
-                position=self.tensor_args.to_device(
-                    [
-                        sim_js.positions[sim_js_names.index(x)]
-                        for x in self.j_names
-                        if x in sim_js_names
-                    ]
-                ),
+                position=self.tensor_args.to_device([
+                    sim_js.positions[sim_js_names.index(x)]
+                    for x in self.j_names
+                    if x in sim_js_names
+                ]),
                 velocity=self.tensor_args.to_device([0.0] * len(self.j_names)),
                 acceleration=self.tensor_args.to_device([0.0] * len(self.j_names)),
                 jerk=self.tensor_args.to_device([0.0] * len(self.j_names)),
@@ -2239,13 +2242,11 @@ class FrankaPlantMotionGenExample:
             if hasattr(self.motion_gen, "kinematics") and hasattr(self, "target_pose"):
                 try:
                     current_js = JointState(
-                        position=self.tensor_args.to_device(
-                            [
-                                sim_js.positions[sim_js_names.index(x)]
-                                for x in self.j_names
-                                if x in sim_js_names
-                            ]
-                        ),
+                        position=self.tensor_args.to_device([
+                            sim_js.positions[sim_js_names.index(x)]
+                            for x in self.j_names
+                            if x in sim_js_names
+                        ]),
                         velocity=self.tensor_args.to_device([0.0] * len(self.j_names)),
                         acceleration=self.tensor_args.to_device(
                             [0.0] * len(self.j_names)
@@ -2630,28 +2631,25 @@ class FrankaPlantMotionGenExample:
                     else:
                         debug_print("No collision vector data available", "warning")
                         clear_collision_lines()
-                else:
-                    # Alternative approach: Show direction toward target if available
-                    if (
-                        hasattr(self, "target_position")
-                        and self.target_position is not None
-                    ):
-                        target_direction = self.target_position - ee_position
-                        target_direction_norm = np.linalg.norm(target_direction)
+                # Alternative approach: Show direction toward target if available
+                elif (
+                    hasattr(self, "target_position")
+                    and self.target_position is not None
+                ):
+                    target_direction = self.target_position - ee_position
+                    target_direction_norm = np.linalg.norm(target_direction)
 
-                        if target_direction_norm > 0.01:  # Valid direction
-                            normalized_direction = (
-                                target_direction / target_direction_norm
-                            )
-                            draw_collision_line(
-                                ee_position, normalized_direction * 0.2
-                            )  # Scale for visibility
-                            debug_print(
-                                f"EE moving toward target, direction: {normalized_direction}, distance: {target_direction_norm:.3f}m",
-                                "info",
-                            )
-                        else:
-                            clear_collision_lines()
+                    if target_direction_norm > 0.01:  # Valid direction
+                        normalized_direction = target_direction / target_direction_norm
+                        draw_collision_line(
+                            ee_position, normalized_direction * 0.2
+                        )  # Scale for visibility
+                        debug_print(
+                            f"EE moving toward target, direction: {normalized_direction}, distance: {target_direction_norm:.3f}m",
+                            "info",
+                        )
+                    else:
+                        clear_collision_lines()
             else:
                 debug_print(
                     "No collision checker available for visualization", "warning"

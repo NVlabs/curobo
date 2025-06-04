@@ -1,13 +1,3 @@
-"""
-Copyright 2024 Zordi, Inc. All rights reserved.
-
-Example usage of ZordiMotionExpert for two-phase motion planning.
-This script demonstrates how to integrate the expert policy into a simulation loop.
-
-Usage:
-    python example_expert_usage.py [--headless]
-"""
-
 try:
     # Third Party
     import isaacsim
@@ -16,6 +6,14 @@ except ImportError:
 
 # Standard Library
 import argparse
+import os
+import sys
+
+# Add parent directory to Python path for importing helper
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 import numpy as np
 
@@ -30,6 +28,8 @@ from omni.isaac.kit import SimulationApp
 simulation_app = SimulationApp({"headless": args.headless})
 
 # CuRobo
+# Import configuration utilities
+from config_utils import get_plant_usd_path, load_robot_config_with_zordi_paths
 from curobo.geom.sdf.world import CollisionCheckerType, WorldConfig
 from curobo.types.base import TensorDeviceType
 from curobo.util.logger import setup_curobo_logger
@@ -49,8 +49,6 @@ from pxr import Gf, UsdGeom
 from zordi_motion_expert import create_motion_expert
 
 # Constants
-PLANT_ROOT = "/home/gilwoo/workspace/zordi_sim_assets/lightwheel"
-PLANT_USD = f"{PLANT_ROOT}/Scene001_kinematics.usd"
 right_home_deg = [5, -30, 25, 0, 0, -60, -5, 0.5]
 right_home_q = np.deg2rad(right_home_deg)
 
@@ -72,7 +70,7 @@ def setup_simulation() -> tuple:
     stage = my_world.stage
     plant_prim_path = "/World/PlantScene"
     plant_prim = stage.DefinePrim(plant_prim_path, "Xform")
-    plant_prim.GetReferences().AddReference(PLANT_USD)
+    plant_prim.GetReferences().AddReference(get_plant_usd_path())
 
     # Position plant
     xformable = UsdGeom.Xformable(plant_prim)
@@ -82,8 +80,7 @@ def setup_simulation() -> tuple:
 
     # Setup robot
     tensor_args = TensorDeviceType()
-    robot_cfg_path = get_robot_configs_path()
-    robot_cfg = load_yaml(join_path(robot_cfg_path, "xarm7.yml"))["robot_cfg"]
+    robot_cfg = load_robot_config_with_zordi_paths("xarm7.yml")["robot_cfg"]
 
     all_joint_names = robot_cfg["kinematics"]["cspace"]["joint_names"]
     j_names = [name for name in all_joint_names if "gripper" not in name.lower()]

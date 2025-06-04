@@ -1,6 +1,4 @@
 """
-Copyright 2024 Zordi, Inc. All rights reserved.
-
 Expert motion policy for two-phase reactive collision-free motion generation using CuRobo.
 This module provides a reusable expert policy that can be called to generate motions
 for reaching target primitives in a plant environment with collision avoidance.
@@ -20,9 +18,6 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-# Third Party
-from scipy.spatial.transform import Rotation as R
-
 # CuRobo
 from curobo.types.base import TensorDeviceType
 from curobo.types.math import Pose
@@ -38,6 +33,9 @@ from omni.isaac.core.utils.types import ArticulationAction
 
 # USD imports
 from pxr import Usd, UsdGeom
+
+# Third Party
+from scipy.spatial.transform import Rotation as R
 
 from isaacsim.core.utils.xforms import get_world_pose
 
@@ -123,10 +121,9 @@ class ZordiMotionExpert:
         self.robot_tool_prim_path = f"{self.robot_prim_path}/tool_pose"
 
         # Get gripper position from robot config (like working code)
-        from curobo.util_file import get_robot_configs_path, join_path, load_yaml
+        from config_utils import load_robot_config_with_zordi_paths
 
-        robot_cfg_path = get_robot_configs_path()
-        robot_cfg = load_yaml(join_path(robot_cfg_path, "xarm7.yml"))["robot_cfg"]
+        robot_cfg = load_robot_config_with_zordi_paths("xarm7.yml")["robot_cfg"]
 
         all_joint_names = robot_cfg["kinematics"]["cspace"]["joint_names"]
         self.j_names = [
@@ -381,9 +378,14 @@ class ZordiMotionExpert:
             time_dilation_factor=1.0,
             pose_cost_metric=PoseCostMetric(
                 reach_partial_pose=True,
-                reach_vec_weight=self.tensor_args.to_device(
-                    [1.0, 1.0, 1.0, 0.05, 0.05, 0.05]
-                ),
+                reach_vec_weight=self.tensor_args.to_device([
+                    1.0,
+                    1.0,
+                    1.0,
+                    0.05,
+                    0.05,
+                    0.05,
+                ]),
             ),
         )
 
@@ -553,9 +555,11 @@ class ZordiMotionExpert:
         gripper_y_axis = np.cross(gripper_z_axis, gripper_x_axis)
 
         # Construct rotation matrix and convert to quaternion
-        rotation_matrix = np.column_stack(
-            (gripper_x_axis, gripper_y_axis, gripper_z_axis)
-        )
+        rotation_matrix = np.column_stack((
+            gripper_x_axis,
+            gripper_y_axis,
+            gripper_z_axis,
+        ))
         rotation = R.from_matrix(rotation_matrix)
         new_quaternion = rotation.as_quat()[[3, 0, 1, 2]]  # Convert to [w, x, y, z]
 

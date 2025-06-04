@@ -1,6 +1,4 @@
 """
-Copyright 2024 Zordi, Inc. All rights reserved.
-
 Isaac Sim example for two-phase reactive collision-free motion generation using CuRobo.
 This script demonstrates a XArm7 robot reaching for a target sphere in a strawberry plant
 while avoiding the rest of the plant structure using collision avoidance.
@@ -26,7 +24,15 @@ except ImportError:
 
 # Standard Library
 import argparse
+import os
+import sys
 from typing import Optional
+
+# Add parent directory to Python path for importing helper
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 import numpy as np
 
@@ -57,16 +63,16 @@ args = parser.parse_args()
 # Third Party
 from omni.isaac.kit import SimulationApp
 
-simulation_app = SimulationApp(
-    {
-        "headless": args.headless,
-        "width": "1920",
-        "height": "1080",
-    }
-)
+simulation_app = SimulationApp({
+    "headless": args.headless,
+    "width": "1920",
+    "height": "1080",
+})
 
 # CuRobo
 
+# Import configuration utilities
+from config_utils import get_plant_usd_path, load_robot_config_with_zordi_paths
 from curobo.geom.sdf.world import CollisionCheckerType, WorldConfig
 from curobo.geom.types import WorldConfig
 from curobo.types.base import TensorDeviceType
@@ -93,10 +99,6 @@ from pxr import Gf, Usd, UsdGeom
 from scipy.spatial.transform import Rotation as R
 
 from isaacsim.core.utils.xforms import get_world_pose
-
-# Plant configuration constants
-PLANT_ROOT = "/home/gilwoo/workspace/zordi_sim_assets/lightwheel"
-PLANT_USD = f"{PLANT_ROOT}/Scene001_kinematics.usd"
 
 # Robot configuration from bimanual environment
 # Using right arm configuration from plant_zordi_bimanual_env_cfg.py
@@ -200,7 +202,7 @@ class ZordiPlantMotionGenExample:
 
         stage = self.my_world.stage
         plant_prim = stage.DefinePrim(self.plant_prim_path, "Xform")
-        plant_prim.GetReferences().AddReference(PLANT_USD)
+        plant_prim.GetReferences().AddReference(get_plant_usd_path())
 
         # Set plant position and orientation - KEEP ORIGINAL Z=0.6 as requested
         xformable = UsdGeom.Xformable(plant_prim)
@@ -220,8 +222,7 @@ class ZordiPlantMotionGenExample:
         """Setup the XArm7 robot with configuration from bimanual environment."""
         debug_print("Setting up robot...", "info")
         self.tensor_args = TensorDeviceType()
-        robot_cfg_path = get_robot_configs_path()
-        robot_cfg = load_yaml(join_path(robot_cfg_path, "xarm7.yml"))["robot_cfg"]
+        robot_cfg = load_robot_config_with_zordi_paths("xarm7.yml")["robot_cfg"]
 
         all_joint_names = robot_cfg["kinematics"]["cspace"]["joint_names"]
         self.j_names = [
@@ -245,8 +246,7 @@ class ZordiPlantMotionGenExample:
         """Setup CuRobo motion generation with plant obstacle configuration."""
         debug_print("Setting up motion generation...", "info")
 
-        robot_cfg_path = get_robot_configs_path()
-        robot_cfg = load_yaml(join_path(robot_cfg_path, "xarm7.yml"))["robot_cfg"]
+        robot_cfg = load_robot_config_with_zordi_paths("xarm7.yml")["robot_cfg"]
         robot_cfg["kinematics"]["ee_link"] = "tool_pose"
 
         robot_cfg["kinematics"]["cspace"]["joint_names"] = self.j_names
@@ -443,7 +443,7 @@ class ZordiPlantMotionGenExample:
 
         sim_js_names = self.robot.dof_names
 
-        while simulation_app.is_running():  # noqa: PLR1702
+        while simulation_app.is_running():
             self.my_world.step(render=True)
 
             if self.cmd_plan is None and not self.phase1_completed:
@@ -591,16 +591,14 @@ class ZordiPlantMotionGenExample:
             time_dilation_factor=1.0,
             pose_cost_metric=PoseCostMetric(
                 reach_partial_pose=True,  # Allow partial pose constraints
-                reach_vec_weight=self.tensor_args.to_device(
-                    [
-                        1.0,
-                        1.0,
-                        1.0,
-                        0.05,
-                        0.05,
-                        0.05,
-                    ]
-                ),
+                reach_vec_weight=self.tensor_args.to_device([
+                    1.0,
+                    1.0,
+                    1.0,
+                    0.05,
+                    0.05,
+                    0.05,
+                ]),
             ),
         )
 
@@ -674,9 +672,11 @@ class ZordiPlantMotionGenExample:
         gripper_y_axis = np.cross(gripper_z_axis, gripper_x_axis)
 
         # Construct rotation matrix and convert to quaternion
-        rotation_matrix = np.column_stack(
-            (gripper_x_axis, gripper_y_axis, gripper_z_axis)
-        )
+        rotation_matrix = np.column_stack((
+            gripper_x_axis,
+            gripper_y_axis,
+            gripper_z_axis,
+        ))
         rotation = R.from_matrix(rotation_matrix)
         new_quaternion = rotation.as_quat()[
             [3, 0, 1, 2]

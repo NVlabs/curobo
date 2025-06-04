@@ -9,7 +9,7 @@
 ## its affiliates is strictly prohibited.
 ##
 robot: 'XArm7'
-urdf_path: "/home/gilwoo/workspace/zordi_sim_assets/robot_resources/urdf/xarm7.urdf"  # Path to XArm7 URDF file
+urdf_path: "ZORDI_PLACEHOLDER/robot_resources/urdf/xarm7.urdf"  # Path to XArm7 URDF file - will be resolved at runtime
 collision_spheres:
     link_base:
         - "center": [0.0, 0.0, 0.05]
@@ -83,7 +83,7 @@ collision_spheres:
         - "center": [-0.025, -0.003, 0.0]
           "radius": 0.005
     # **FIXED: Added missing gripper collision spheres**
-    # This link exists in URDF and is referenced in xarm7.yml collision_link_names  
+    # This link exists in URDF and is referenced in xarm7.yml collision_link_names
     gripper:
         # Main gripper body - larger coverage
         - "center": [0.0, 0.0, -0.05]
@@ -108,4 +108,4 @@ collision_spheres:
         - "center": [0.0, 0.0, 0.0]
           "radius": -10.0
         - "center": [0.0, 0.0, 0.0]
-          "radius": -10.0 
+          "radius": -10.0
