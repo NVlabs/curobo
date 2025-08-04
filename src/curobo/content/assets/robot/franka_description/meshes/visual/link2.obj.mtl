@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:62501040642d4dd994054739ea61d30ee361f6b53a6a349b96e6dcef231721e0
-size 201
+#
+# Wavefront material file
+# Converted by Meshlab Group
+#
+
+newmtl material_0
+Ka 0.200000 0.200000 0.200000
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Tr 1.000000
+illum 2
+Ns 0.000000
+

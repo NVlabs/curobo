@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:256005c6754da719cfd497b0f77eb917bdfce90fc8c669cb9559b8a8a73fd47e
-size 161
+﻿newmtl DEFAULT_MTL
+Kd 0.695 0.743 0.790
+
+newmtl MTL0 
+Kd 1.000 1.000 1.000
+
+newmtl MTL1 
+Kd 0.011 0.012 1.000
+
+newmtl MTL2 
+Kd 0.310 0.300 0.320
+
