@@ -1,0 +1,111 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+robot: 'XArm7'
+urdf_path: "ZORDI_PLACEHOLDER/robot_resources/urdf/xarm7.urdf"  # Path to XArm7 URDF file - will be resolved at runtime
+collision_spheres:
+    link_base:
+        - "center": [0.0, 0.0, 0.05]
+          "radius": 0.03
+    link1:
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.03
+    link2:
+        - "center": [0.0, -0.08, 0.0]
+          "radius": 0.03
+    link3:
+        - "center": [0.03, 0.0, 0.0]
+          "radius": 0.025
+    link4:
+        - "center": [0.05, -0.06, 0.0]
+          "radius": 0.03
+    link5:
+        - "center": [0.0, 0.03, 0.0]
+          "radius": 0.025
+        - "center": [0.0, 0.01, -0.08]
+          "radius": 0.02
+    link6:
+        - "center": [0.04, 0.01, 0.0]
+          "radius": 0.025
+    link7:
+        - "center": [0.0, 0.0, 0.04]
+          "radius": 0.015
+        - "center": [0.0, 0.0, 0.08]
+          "radius": 0.001
+    # **FIXED: Added missing eoat_base_link collision spheres**
+    # This link exists in URDF and is referenced in xarm7.yml collision_link_names
+    eoat_base_link:
+        # Base of EOAT assembly - larger sphere at center
+        - "center": [0.0, 0.0, 0.006]
+          "radius": 0.02
+        # Coverage along Z axis (EOAT height)
+        - "center": [0.0, 0.0, 0.03]
+          "radius": 0.018
+        - "center": [0.0, 0.0, 0.06]
+          "radius": 0.015
+        # Side coverage for width
+        - "center": [0.02, 0.0, 0.03]
+          "radius": 0.012
+        - "center": [-0.02, 0.0, 0.03]
+          "radius": 0.012
+    # IMPROVED GRIPPER FINGER COLLISION SPHERES
+    # Original had only 1 tiny sphere (0.001 radius) - completely inadequate!
+    # New configuration provides much better coverage of gripper geometry
+    gripper_finger:
+        # Base of finger - larger sphere at attachment point
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.008
+        # Along finger length - main coverage
+        - "center": [-0.01, 0.0, 0.0]
+          "radius": 0.008
+        - "center": [-0.02, 0.0, 0.0]
+          "radius": 0.008
+        - "center": [-0.03, 0.0, 0.0]
+          "radius": 0.007
+        # Finger tip - slightly smaller
+        - "center": [-0.035, 0.0, 0.0]
+          "radius": 0.006
+        # Width coverage - spheres at sides for better collision detection
+        - "center": [-0.015, 0.005, 0.0]
+          "radius": 0.006
+        - "center": [-0.015, -0.005, 0.0]
+          "radius": 0.006
+        # Additional coverage for finger thickness
+        - "center": [-0.025, 0.003, 0.0]
+          "radius": 0.005
+        - "center": [-0.025, -0.003, 0.0]
+          "radius": 0.005
+    # **FIXED: Added missing gripper collision spheres**
+    # This link exists in URDF and is referenced in xarm7.yml collision_link_names
+    gripper:
+        # Main gripper body - larger coverage
+        - "center": [0.0, 0.0, -0.05]
+          "radius": 0.025
+        - "center": [0.0, 0.0, -0.08]
+          "radius": 0.022
+        - "center": [0.0, 0.0, -0.11]
+          "radius": 0.02
+        # Side coverage for gripper width
+        - "center": [0.015, 0.0, -0.08]
+          "radius": 0.018
+        - "center": [-0.015, 0.0, -0.08]
+          "radius": 0.018
+        # Bottom coverage
+        - "center": [0.0, 0.0, -0.13]
+          "radius": 0.015
+    attached_object:
+        - "center": [0.0, 0.0, 0.0]
+          "radius": -10.0
+        - "center": [0.0, 0.0, 0.0]
+          "radius": -10.0
+        - "center": [0.0, 0.0, 0.0]
+          "radius": -10.0
+        - "center": [0.0, 0.0, 0.0]
+          "radius": -10.0
