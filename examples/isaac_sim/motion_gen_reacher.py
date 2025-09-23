@@ -138,11 +138,46 @@ from curobo.wrap.reacher.motion_gen import (
 
 ############################################################
 
+from scipy.spatial.transform import Rotation as R
+def _world_to_base_scipy(tar_pos, tar_quat, base_pos, base_quat, quat_format='wxyz'):
+    """Deal with issues in curobo, which always need relative pose to robot not pose in world"""
+
+    # Handle quaternion format conversion for scipy (expects xyzw)
+    if quat_format == "wxyz":
+        # Convert wxyz to xyzw for scipy
+        tar_quat_scipy = np.array([tar_quat[1], tar_quat[2], tar_quat[3], tar_quat[0]])
+        base_quat_scipy = np.array([base_quat[1], base_quat[2], base_quat[3], base_quat[0]])
+    else:
+        tar_quat_scipy = tar_quat
+        base_quat_scipy = base_quat
+    
+    # Create rotation objects
+    R_base = R.from_quat(base_quat_scipy)
+    R_target = R.from_quat(tar_quat_scipy)
+    
+    # Transform position: relative_pos = R_base^(-1) * (tar_pos - base_pos)
+    relative_pos = R_base.inv().apply(tar_pos - base_pos)
+    
+    # Transform orientation: relative_rotation = R_base^(-1) * R_target
+    R_relative = R_base.inv() * R_target
+    relative_quat_scipy = R_relative.as_quat()  # Returns xyzw
+    
+    # Convert back to requested quaternion format
+    if quat_format == "wxyz":
+        relative_quat = np.array([relative_quat_scipy[3], relative_quat_scipy[0], 
+                                 relative_quat_scipy[1], relative_quat_scipy[2]])
+    else:
+        relative_quat = relative_quat_scipy
+    
+    return relative_pos.astype(np.float32), relative_quat.astype(np.float32)
 
 ########### OV #################;;;;;
 
 
 def main():
+    robot_pos = np.array([0.0, 0.0, 0.0])
+    robot_quat = np.array([1.0, 0.0, 0.0, 0.0])  # wxyz
+
     # create a curobo motion gen instance:
     num_targets = 0
     # assuming obstacles are in objects_path:
@@ -187,7 +222,11 @@ def main():
     j_names = robot_cfg["kinematics"]["cspace"]["joint_names"]
     default_config = robot_cfg["kinematics"]["cspace"]["retract_config"]
 
-    robot, robot_prim_path = add_robot_to_scene(robot_cfg, my_world)
+    robot, robot_prim_path = add_robot_to_scene(
+        robot_cfg, my_world,
+        position=robot_pos,
+        orientation=robot_quat,
+    )
 
     articulation_controller = None
 
@@ -374,8 +413,9 @@ def main():
             and robot_static
         ):
             # Set EE teleop goals, use cube for simple non-vr init:
-            ee_translation_goal = cube_position
-            ee_orientation_teleop_goal = cube_orientation
+            ee_translation_goal, ee_orientation_teleop_goal = _world_to_base_scipy(
+                cube_position, cube_orientation, robot_pos, robot_quat, quat_format='wxyz'
+            )
 
             # compute curobo solution:
             ik_goal = Pose(
