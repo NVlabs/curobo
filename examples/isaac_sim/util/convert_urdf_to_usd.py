@@ -49,7 +49,10 @@ try:
     # Third Party
     from omni.isaac.urdf import _urdf  # isaacsim 2022.2
 except ImportError:
-    from omni.importer.urdf import _urdf  # isaac sim 2023.1
+    try:
+        from omni.importer.urdf import _urdf  # isaac sim 2023.1
+    except ImportError:
+        from isaacsim.asset.importer.urdf import _urdf  # isaacsim after 2024-10-31
 
 # CuRobo
 from curobo.util.usd_helper import UsdHelper
