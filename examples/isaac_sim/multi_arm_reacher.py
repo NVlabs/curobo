@@ -308,9 +308,9 @@ def main():
             )
             # add link poses:
             link_poses = {}
-            for i in target_links.keys():
-                c_p, c_rot = target_links[i].get_world_pose()
-                link_poses[i] = Pose(
+            for k in target_links.keys():
+                c_p, c_rot = target_links[k].get_world_pose()
+                link_poses[k] = Pose(
                     position=tensor_args.to_device(c_p),
                     quaternion=tensor_args.to_device(c_rot),
                 )
