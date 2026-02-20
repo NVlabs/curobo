@@ -117,6 +117,7 @@ class MpcSolverConfig:
         particle_file: str = "particle_mpc.yml",
         override_particle_file: str = None,
         project_pose_to_goal_frame: bool = True,
+        use_exp_dt: bool = False,
     ):
         """Create an MPC solver configuration from robot and world configuration.
 
@@ -167,6 +168,7 @@ class MpcSolverConfig:
             project_pose_to_goal_frame: Project pose to goal frame when calculating distance
                 between reached and goal pose. Use this to constrain motion to specific axes
                 either in the global frame or the goal frame.
+            use_exp_dt: Use exponentially increasing time steps in the trajectory.
 
         Returns:
             MpcSolverConfig: Configuration for the MPC solver.
@@ -181,6 +183,8 @@ class MpcSolverConfig:
         config_data["mppi"]["n_problems"] = 1
         if step_dt is not None:
             config_data["model"]["dt_traj_params"]["base_dt"] = step_dt
+        
+        config_data["model"]["dt_traj_params"]["use_exp_dt"] = use_exp_dt
         if particle_opt_iters is not None:
             config_data["mppi"]["n_iters"] = particle_opt_iters
 
@@ -223,6 +227,8 @@ class MpcSolverConfig:
             if step_dt is not None:
                 grad_config_data["model"]["dt_traj_params"]["base_dt"] = step_dt
                 grad_config_data["model"]["dt_traj_params"]["max_dt"] = step_dt
+            
+            grad_config_data["model"]["dt_traj_params"]["use_exp_dt"] = use_exp_dt
 
             config_data["model"] = grad_config_data["model"]
             if use_cuda_graph is not None:
@@ -833,8 +839,8 @@ class MpcSolver(MpcSolverConfig):
             solve_state: solve state object containing information about the current MPC problem.
             goal: goal object containing target pose or joint configuration.
             shift_steps: Number of steps to shift the trajectory before optimization.
-            seed_traj: Initial trajectory to seed the optimization. If None, the solver
-                uses the solution from the previous step.
+            seed_traj: Initial trajectory to seed the optimization. If None, the solver   
+                uses the solution from the previous step. 
 
         Returns:
             WrapResult: Result of the optimization.

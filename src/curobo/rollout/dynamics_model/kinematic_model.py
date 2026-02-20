@@ -40,8 +40,18 @@ class TimeTrajConfig:
     base_dt: float
     base_ratio: float
     max_dt: float
+    use_exp_dt: bool = False
 
     def get_dt_array(self, num_points: int):
+        if self.use_exp_dt:
+            if num_points > 1:
+                gamma = (self.max_dt / self.base_dt) ** (1.0 / (num_points - 1))
+            else:
+                gamma = 1.0
+            dt_array = [self.base_dt * (gamma**i) for i in range(num_points)]
+            print(f"[EXPONENTIAL] dt traj: {len(dt_array)}")
+            return dt_array
+        
         dt_array = [self.base_dt] * int(self.base_ratio * num_points)
 
         smooth_blending = torch.linspace(
@@ -52,6 +62,7 @@ class TimeTrajConfig:
         dt_array += smooth_blending
         if len(dt_array) != num_points:
             dt_array.insert(0, dt_array[0])
+        print(f"[LINEAR INTERPOLATION] dt traj: {len(dt_array)}")
         return dt_array
 
     def update_dt(
@@ -152,6 +163,8 @@ class KinematicModelConfig:
         if isinstance(robot_cfg, dict):
             robot_cfg = RobotConfig.from_dict(robot_cfg, tensor_args)
         data_dict["robot_config"] = robot_cfg
+        
+        # Check if use_exp_dt is in dt_traj_params dict, if not it will use default False from dataclass
         data_dict["dt_traj_params"] = TimeTrajConfig(**data_dict["dt_traj_params"])
         data_dict["control_space"] = StateType[data_dict["control_space"]]
         data_dict["state_filter_cfg"] = FilterConfig.from_dict(
