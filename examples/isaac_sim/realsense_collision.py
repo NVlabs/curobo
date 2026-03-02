@@ -50,7 +50,7 @@ import argparse
 
 # Third Party
 from omni.isaac.core import World
-from omni.isaac.core.materials import OmniPBR
+from isaacsim.core.api.materials import OmniPBR
 from omni.isaac.core.objects import cuboid, sphere
 
 parser = argparse.ArgumentParser()

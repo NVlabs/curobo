@@ -58,7 +58,7 @@ import argparse
 import carb
 from helper import VoxelManager, add_robot_to_scene
 from omni.isaac.core import World
-from omni.isaac.core.materials import OmniPBR
+from isaacsim.core.api.materials import OmniPBR
 from omni.isaac.core.objects import cuboid, sphere
 from omni.isaac.core.utils.types import ArticulationAction
 

@@ -56,7 +56,7 @@ from helper import add_extensions
 from omni.isaac.core import World
 
 try:
-    from omni.isaac.core.materials import OmniPBR
+    from isaacsim.core.api.materials import OmniPBR
 except ImportError:
     from isaacsim.core.api.materials import OmniPBR
 from omni.isaac.core.objects import sphere

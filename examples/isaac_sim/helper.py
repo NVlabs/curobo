@@ -41,7 +41,7 @@ except ImportError:
 
 try:
     # import for older isaacsim installations
-    from omni.isaac.core.materials import OmniPBR
+    from isaacsim.core.api.materials import OmniPBR
 except ImportError:
     # import for isaac sim 4.5+
     from isaacsim.core.api.materials import OmniPBR
