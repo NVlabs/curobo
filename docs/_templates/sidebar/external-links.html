@@ -1,0 +1,18 @@
+{#
+  Horizontal icon row of external resource links, rendered just below the
+  brand area in the Furo sidebar. Tooltips (title attribute) provide labels
+  on hover.
+#}
+<div class="sidebar-external-links" role="navigation" aria-label="External links">
+  <a class="sidebar-external-link" href="{{ repo_url }}" title="GitHub" aria-label="GitHub" rel="noopener" target="_blank">
+    <svg class="sidebar-external-link-icon" stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16" aria-hidden="true">
+      <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
+    </svg>
+  </a>
+  <a class="sidebar-external-link" href="{{ pathto('technical_reports') }}" title="arXiv / Technical Reports" aria-label="arXiv / Technical Reports">
+    <svg class="sidebar-external-link-icon" stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0H14a.5.5 0 0 1 .5.5v13.793l-1 1V14H4.5A1.5 1.5 0 0 0 3 15.5h11.5a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5V2.5zM4.5 1A1.5 1.5 0 0 0 3 2.5v10.978A2.49 2.49 0 0 1 4.5 13H13.5V1H4.5z"/>
+      <path d="M5.5 4a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1h-6zm0 2a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1h-6zm0 2a.5.5 0 0 0 0 1h4a.5.5 0 0 0 0-1h-4z"/>
+    </svg>
+  </a>
+</div>

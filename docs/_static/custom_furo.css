@@ -47,3 +47,38 @@ code.literal {
     font-family: monospace;
     font-size: var(--font-size-normal);
 }
+
+/* External resource icons (GitHub, arXiv) rendered under the sidebar brand */
+.sidebar-external-links {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin: 0.25rem 0 1rem 0;
+    padding: 0;
+}
+
+.sidebar-external-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.25rem;
+    color: var(--color-sidebar-link-text);
+    text-decoration: none;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.sidebar-external-link:hover,
+.sidebar-external-link:focus {
+    color: var(--color-brand-primary);
+    background: var(--color-sidebar-item-background--hover);
+    text-decoration: none;
+}
+
+.sidebar-external-link-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
