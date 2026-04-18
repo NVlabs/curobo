@@ -1,0 +1,1582 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" />
+
+    <!-- Generated with Sphinx 8.1.3 and Furo 2024.08.06 -->
+        <title>curobo.geom.sdf.world_mesh module - cuRobo</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
+    <link rel="stylesheet" type="text/css" href="../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom_furo.css?v=a13d9812" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f8f8f8;
+  --color-code-foreground: black;
+  --color-api-pre-name: #76b900;
+  --color-api-name: #76b900;
+  --color-admonition-title--seealso: #ffffff;
+  --color-admonition-title-background--seealso: #448aff;
+  --color-admonition-title-background--note: #76b900;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-sidebar-background: #f5fff5;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-admonition-title-background--note: #535353;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-brand-content: #76b900;
+  --color-sidebar-background: #000000;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-admonition-title-background--note: #535353;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-brand-content: #76b900;
+  --color-sidebar-background: #000000;
+  
+      }
+    }
+  }
+</style><script>document.addEventListener("DOMContentLoaded",function(){var b=document.createElement("div");var bp2=(function(){var m2=window.location.pathname.match(/^(.*?)\/(latest|v[0-9.]+)\//);return m2?m2[1]:""})();b.innerHTML='You are viewing docs for cuRobo <b>v0.7.6</b> (legacy). <a href="'+bp2+'/latest/" style="color:#fff;text-decoration:underline;">View the latest docs</a>.';b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:9999;padding:8px 16px;background:#d32f2f;color:#fff;text-align:center;font-size:14px;font-family:sans-serif;";document.body.style.marginTop="36px";document.body.insertBefore(b,document.body.firstChild);});var p=window.location.pathname;var m=p.match(/^(.*?)\/(latest|v[0-9.]+)\//);if(m){var bp=m[1];fetch(bp+"/versions.json").then(function(r){return r.json()}).then(function(vs){if(!vs||vs.length<2)return;var s=document.createElement("select");s.setAttribute("aria-label","Version");s.style.cssText="margin:0.5rem 0;padding:4px 8px;width:100%;border:1px solid var(--color-sidebar-link-text,#666);border-radius:4px;background:var(--color-sidebar-background,#fff);color:var(--color-sidebar-link-text,#333);font-size:0.85rem;cursor:pointer;";vs.forEach(function(v){var o=document.createElement("option");o.value=bp+v.url;o.textContent=v.name;if(p.indexOf(bp+v.url)===0)o.selected=true;s.appendChild(o)});s.addEventListener("change",function(){window.location.href=s.value});var c=document.querySelector(".sidebar-brand");if(c)c.appendChild(s)}).catch(function(){});}</script></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
+<label class="overlay sidebar-overlay" for="__navigation">
+  <div class="visually-hidden">Hide navigation sidebar</div>
+</label>
+<label class="overlay toc-overlay" for="__toc">
+  <div class="visually-hidden">Hide table of contents sidebar</div>
+</label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <div class="visually-hidden">Toggle site navigation sidebar</div>
+        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">cuRobo</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle">
+          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <div class="visually-hidden">Toggle table of contents sidebar</div>
+        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <div class="sidebar-logo-container">
+    <img class="sidebar-logo only-light" src="../_static/logo-light-mode.png" alt="Light Logo"/>
+    <img class="sidebar-logo only-dark" src="../_static/logo-dark-mode.png" alt="Dark Logo"/>
+  </div>
+  
+  <span class="sidebar-brand-text">cuRobo</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../research_index.html">Research</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of Research</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../research/research.html">Technical Report</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../research/research_using_curobo.html">Research using cuRobo</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../get_started_index.html">Get Started</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Get Started</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/1_install_instructions.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/1a_quick_overview.html">Basics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2a_python_examples.html">Using in Python</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2b_isaacsim_examples.html">Using with Isaac Sim</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2c_world_collision.html">Collision World Representation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2d_nvblox_demo.html">Using with Depth Camera</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2e_torch_layer_example.html">Using in a Neural Network</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/4_benchmarks.html">Benchmarks &amp; Profiling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/5_docker_development.html">Docker Development</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/6_known_issues.html">Known Issues</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/7_api.html">Python API</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../advanced_examples_index.html">Advanced Examples</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of Advanced Examples</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/1_batch_env.html">Batched Environments</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/2_block_stacking_example.html">Block Stacking</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/3_constrained_planning.html">Constrained Planning</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/4_robot_segmentation.html">Robot Segmentation</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../tutorials_index.html">Tutorials</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><div class="visually-hidden">Toggle navigation of Tutorials</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../tutorials/1_robot_configuration.html">Configuring a New Robot</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../developer_notes_index.html">Developer Notes</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><div class="visually-hidden">Toggle navigation of Developer Notes</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../notes/01_robot_list.html">Supported Robots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/02_numerical_optimization.html">Numerical Optimization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/03_performance_tuning.html">Performance Tuning</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/04_cuda_kernels.html">CUDA Notes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/05_usd_api.html">USD for Robot and World Representation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/07_environment_variables.html">Environment Variables</a></li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle">
+              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <div class="visually-hidden">Toggle table of contents sidebar</div>
+            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="module-curobo.geom.sdf.world_mesh">
+<span id="curobo-geom-sdf-world-mesh-module"></span><h1>curobo.geom.sdf.world_mesh module<a class="headerlink" href="#module-curobo.geom.sdf.world_mesh" title="Link to this heading">¶</a></h1>
+<p>World represented as Meshes can be used with this module for collision checking.</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WarpMeshData">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">WarpMeshData</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">m_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">vertices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://nvidia.github.io/warp/modules/runtime.html#warp.array" title="(in Warp v1.4.2)"><span class="pre">array</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">faces</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://nvidia.github.io/warp/modules/runtime.html#warp.array" title="(in Warp v1.4.2)"><span class="pre">array</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">mesh</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://nvidia.github.io/warp/modules/runtime.html#warp.Mesh" title="(in Warp v1.4.2)"><span class="pre">Mesh</span></a></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WarpMeshData" title="Link to this definition">¶</a></dt>
+<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3/library/functions.html#object" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></a></p>
+<p>Data helper to use with warp for representing a mesh</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WarpMeshData.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WarpMeshData.name" title="Link to this definition">¶</a></dt>
+<dd><p>Name of the mesh.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WarpMeshData.m_id">
+<span class="sig-name descname"><span class="pre">m_id</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WarpMeshData.m_id" title="Link to this definition">¶</a></dt>
+<dd><p>Mesh ID, created by warp once mesh is loaded to device.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WarpMeshData.vertices">
+<span class="sig-name descname"><span class="pre">vertices</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://nvidia.github.io/warp/modules/runtime.html#warp.array" title="(in Warp v1.4.2)"><span class="pre">array</span></a></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WarpMeshData.vertices" title="Link to this definition">¶</a></dt>
+<dd><p>Vertices of the mesh.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WarpMeshData.faces">
+<span class="sig-name descname"><span class="pre">faces</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://nvidia.github.io/warp/modules/runtime.html#warp.array" title="(in Warp v1.4.2)"><span class="pre">array</span></a></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WarpMeshData.faces" title="Link to this definition">¶</a></dt>
+<dd><p>Faces of the mesh.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WarpMeshData.mesh">
+<span class="sig-name descname"><span class="pre">mesh</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://nvidia.github.io/warp/modules/runtime.html#warp.Mesh" title="(in Warp v1.4.2)"><span class="pre">Mesh</span></a></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WarpMeshData.mesh" title="Link to this definition">¶</a></dt>
+<dd><p>Warp mesh instance.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">WorldMeshCollision</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.WorldCollisionConfig" title="curobo.geom.sdf.world.WorldCollisionConfig"><span class="pre">WorldCollisionConfig</span></a></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision" title="Link to this definition">¶</a></dt>
+<dd><p>Bases: <a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.WorldPrimitiveCollision" title="curobo.geom.sdf.world.WorldPrimitiveCollision"><code class="xref py py-class docutils literal notranslate"><span class="pre">WorldPrimitiveCollision</span></code></a></p>
+<p>World Mesh Collision using Nvidia’s warp library.</p>
+<p>Initialize World Mesh Collision with given configuration.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.tensor_args">
+<span class="sig-name descname"><span class="pre">tensor_args</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="curobo.types.base.html#curobo.types.base.TensorDeviceType" title="curobo.types.base.TensorDeviceType"><span class="pre">TensorDeviceType</span></a></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.tensor_args" title="Link to this definition">¶</a></dt>
+<dd><p>Device and precision of the tensors.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._init_cache">
+<span class="sig-name descname"><span class="pre">_init_cache</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._init_cache" title="Link to this definition">¶</a></dt>
+<dd><p>Initialize cache for storing meshes.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.load_collision_model">
+<span class="sig-name descname"><span class="pre">load_collision_model</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">world_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.WorldConfig" title="curobo.geom.types.WorldConfig"><span class="pre">WorldConfig</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">load_obb_obs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">fix_cache_reference</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.load_collision_model" title="Link to this definition">¶</a></dt>
+<dd><p>Load world obstacles into collision checker.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>world_model</strong> – Obstacles to load.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to load obstacles into.</p></li>
+<li><p><strong>load_obb_obs</strong> – Load OBB (cuboid) obstacles.</p></li>
+<li><p><strong>fix_cache_reference</strong> – If True, throws error if number of obstacles is greater than
+cache. If False, creates a larger cache. Note that when using collision checker
+inside a recorded cuda graph, recreating the cache will break the graph as the
+reference pointer to the cache will change.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.load_batch_collision_model">
+<span class="sig-name descname"><span class="pre">load_batch_collision_model</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">world_config_list</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.WorldConfig" title="curobo.geom.types.WorldConfig"><span class="pre">WorldConfig</span></a><span class="p"><span class="pre">]</span></span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.load_batch_collision_model" title="Link to this definition">¶</a></dt>
+<dd><p>Load multiple world obstacles into collision checker across environments.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>world_config_list</strong> – List of obstacles to load.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._load_mesh_to_warp">
+<span class="sig-name descname"><span class="pre">_load_mesh_to_warp</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">mesh</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Mesh" title="curobo.geom.types.Mesh"><span class="pre">Mesh</span></a></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WarpMeshData" title="curobo.geom.sdf.world_mesh.WarpMeshData"><span class="pre">WarpMeshData</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._load_mesh_to_warp" title="Link to this definition">¶</a></dt>
+<dd><p>Load cuRobo mesh into warp.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>mesh</strong> – mesh instance to load.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>loaded mesh data.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._load_mesh_into_cache">
+<span class="sig-name descname"><span class="pre">_load_mesh_into_cache</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">mesh</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Mesh" title="curobo.geom.types.Mesh"><span class="pre">Mesh</span></a></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WarpMeshData" title="curobo.geom.sdf.world_mesh.WarpMeshData"><span class="pre">WarpMeshData</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._load_mesh_into_cache" title="Link to this definition">¶</a></dt>
+<dd><p>Load cuRobo mesh into cache.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>mesh</strong> – mesh instance to load.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>loaded mesh data.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._load_batch_mesh_to_warp">
+<span class="sig-name descname"><span class="pre">_load_batch_mesh_to_warp</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">mesh_list</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Mesh" title="curobo.geom.types.Mesh"><span class="pre">Mesh</span></a><span class="p"><span class="pre">]</span></span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._load_batch_mesh_to_warp" title="Link to this definition">¶</a></dt>
+<dd><p>Load multiple meshes into warp.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>mesh_list</strong> – List of meshes to load.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>List of mesh names, mesh ids, and inverse poses.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.add_mesh">
+<span class="sig-name descname"><span class="pre">add_mesh</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">new_mesh</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Mesh" title="curobo.geom.types.Mesh"><span class="pre">Mesh</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.add_mesh" title="Link to this definition">¶</a></dt>
+<dd><p>Add a mesh to the world.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>new_mesh</strong> – Mesh to add.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to add mesh to.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_mesh_idx">
+<span class="sig-name descname"><span class="pre">get_mesh_idx</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_mesh_idx" title="Link to this definition">¶</a></dt>
+<dd><p>Get index of mesh with given name.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> – Name of the mesh.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to search in.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Mesh index.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.create_collision_cache">
+<span class="sig-name descname"><span class="pre">create_collision_cache</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">mesh_cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">obb_cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">n_envs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.create_collision_cache" title="Link to this definition">¶</a></dt>
+<dd><p>Create cache of obstacles.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>mesh_cache</strong> – Number of mesh obstacles to cache.</p></li>
+<li><p><strong>obb_cache</strong> – Number of OBB (cuboid) obstacles to cache.</p></li>
+<li><p><strong>n_envs</strong> – Number of environments to cache.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._create_mesh_cache">
+<span class="sig-name descname"><span class="pre">_create_mesh_cache</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">mesh_cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._create_mesh_cache" title="Link to this definition">¶</a></dt>
+<dd><p>Create cache for mesh obstacles.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>mesh_cache</strong> – Number of mesh obstacles to cache.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.update_mesh_pose">
+<span class="sig-name descname"><span class="pre">update_mesh_pose</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">w_obj_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">obj_w_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_obj_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_mesh_pose" title="Link to this definition">¶</a></dt>
+<dd><p>Update pose of mesh.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>w_obj_pose</strong> – Pose of the mesh in world frame.</p></li>
+<li><p><strong>obj_w_pose</strong> – Inverse pose of the mesh.</p></li>
+<li><p><strong>name</strong> – Name of mesh to update.</p></li>
+<li><p><strong>env_obj_idx</strong> – Index of mesh in environment. If name is given, this is ignored.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to update mesh in.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.update_mesh_from_warp">
+<span class="sig-name descname"><span class="pre">update_mesh_from_warp</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">warp_mesh_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">w_obj_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">obj_w_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">obj_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_mesh_from_warp" title="Link to this definition">¶</a></dt>
+<dd><p>Update mesh information in world cache.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>warp_mesh_idx</strong> – New warp mesh index.</p></li>
+<li><p><strong>w_obj_pose</strong> – Pose of the mesh in world frame.</p></li>
+<li><p><strong>obj_w_pose</strong> – Invserse pose of the mesh. Not required if w_obj_pose is given.</p></li>
+<li><p><strong>obj_idx</strong> – Index of mesh in environment. If name is given, this is ignored.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to update mesh in.</p></li>
+<li><p><strong>name</strong> – Name of mesh to update.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obstacle_pose">
+<span class="sig-name descname"><span class="pre">update_obstacle_pose</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">w_obj_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">update_cpu_reference</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obstacle_pose" title="Link to this definition">¶</a></dt>
+<dd><p>Update pose of obstacle.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> – Name of the obstacle.</p></li>
+<li><p><strong>w_obj_pose</strong> – Pose of obstacle in world frame.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to update obstacle in.</p></li>
+<li><p><strong>update_cpu_reference</strong> – If True, updates the CPU reference with the new pose. This is
+useful for debugging and visualization. Only supported for env_idx=0.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_obstacle">
+<span class="sig-name descname"><span class="pre">enable_obstacle</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">enable</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_obstacle" title="Link to this definition">¶</a></dt>
+<dd><p>Enable/Disable object in collision checking functions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> – Name of the obstacle to enable.</p></li>
+<li><p><strong>enable</strong> – True to enable, False to disable.</p></li>
+<li><p><strong>env_idx</strong> – Index of the environment to enable the obstacle in.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_obstacle_names">
+<span class="sig-name descname"><span class="pre">get_obstacle_names</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_obstacle_names" title="Link to this definition">¶</a></dt>
+<dd><p>Get names of all obstacles in the environment.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>env_idx</strong> – Environment index to get obstacles from.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>List of obstacle names.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_mesh">
+<span class="sig-name descname"><span class="pre">enable_mesh</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">enable</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_mesh_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_mesh" title="Link to this definition">¶</a></dt>
+<dd><p>Enable/Disable mesh in collision checking functions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>enable</strong> – True to enable, False to disable.</p></li>
+<li><p><strong>name</strong> – Name of the mesh to enable.</p></li>
+<li><p><strong>env_mesh_idx</strong> – Index of the mesh in environment. If name is given, this is ignored.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to enable the mesh in.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_sphere_distance">
+<span class="sig-name descname"><span class="pre">get_sphere_distance</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">query_sphere</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">collision_query_buffer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.CollisionQueryBuffer" title="curobo.geom.sdf.world.CollisionQueryBuffer"><span class="pre">CollisionQueryBuffer</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">activation_distance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_query_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">return_loss</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">sum_collisions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">compute_esdf</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_sphere_distance" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the signed distance between query spheres and world obstacles.</p>
+<p>This distance can be used as a collision cost for optimization.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>query_sphere</strong> – Input tensor with query spheres [batch, horizon, number of spheres, 4].
+With [x, y, z, radius] as the last column for each sphere.</p></li>
+<li><p><strong>collision_query_buffer</strong> – Buffer to store collision query results.</p></li>
+<li><p><strong>weight</strong> – Weight of the collision cost.</p></li>
+<li><p><strong>activation_distance</strong> – Distance outside the object to start computing the cost.</p></li>
+<li><p><strong>env_query_idx</strong> – Environment index for each batch of query spheres.</p></li>
+<li><p><strong>return_loss</strong> – If the returned tensor will be scaled or changed before calling backward,
+set this to True. If the returned tensor will be used directly through addition,
+set this to False.</p></li>
+<li><p><strong>sum_collisions</strong> – Sum the collision cost across all obstacles. This variable is currently
+not passed to the underlying CUDA kernel as setting this to False caused poor
+performance.</p></li>
+<li><p><strong>compute_esdf</strong> – Compute Euclidean signed distance instead of collision cost. When True,
+the returned tensor will be the signed distance with positive values inside an
+obstacle and negative values outside obstacles.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Signed distance between query spheres and world obstacles.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_sphere_collision">
+<span class="sig-name descname"><span class="pre">get_sphere_collision</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">query_sphere</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">collision_query_buffer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.CollisionQueryBuffer" title="curobo.geom.sdf.world.CollisionQueryBuffer"><span class="pre">CollisionQueryBuffer</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">activation_distance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_query_idx</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">return_loss</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_sphere_collision" title="Link to this definition">¶</a></dt>
+<dd><p>Compute binary collision between query spheres and world obstacles.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>query_sphere</strong> – Input tensor with query spheres [batch, horizon, number of spheres, 4].
+With [x, y, z, radius] as the last column for each sphere.</p></li>
+<li><p><strong>collision_query_buffer</strong> – Collision query buffer to store the results.</p></li>
+<li><p><strong>weight</strong> – Weight to scale the collision cost.</p></li>
+<li><p><strong>activation_distance</strong> – Distance outside the object to start computing the cost.</p></li>
+<li><p><strong>env_query_idx</strong> – Environment index for each batch of query spheres.</p></li>
+<li><p><strong>return_loss</strong> – True is not supported for binary classification. Set to False.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Tensor with binary collision results.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_swept_sphere_distance">
+<span class="sig-name descname"><span class="pre">get_swept_sphere_distance</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">query_sphere</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">collision_query_buffer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.CollisionQueryBuffer" title="curobo.geom.sdf.world.CollisionQueryBuffer"><span class="pre">CollisionQueryBuffer</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">activation_distance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">speed_dt</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">sweep_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">enable_speed_metric</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_query_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">return_loss</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">sum_collisions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_swept_sphere_distance" title="Link to this definition">¶</a></dt>
+<dd><p>Compute the signed distance between trajectory of spheres and world obstacles.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>query_sphere</strong> – Input tensor with query spheres [batch, horizon, number of spheres, 4].
+With [x, y, z, radius] as the last column for each sphere.</p></li>
+<li><p><strong>collision_query_buffer</strong> – Collision query buffer to store the results.</p></li>
+<li><p><strong>weight</strong> – Collision cost weight.</p></li>
+<li><p><strong>activation_distance</strong> – Distance outside the object to start computing the cost. A smooth
+scaling is applied to the cost starting from this distance. See
+<a class="reference internal" href="../research/research.html#research-page"><span class="std std-ref">Technical Report</span></a> for more details.</p></li>
+<li><p><strong>speed_dt</strong> – Length of time (seconds) to use when calculating the speed of the sphere
+using finite difference.</p></li>
+<li><p><strong>sweep_steps</strong> – Number of steps to sweep the sphere along the trajectory. More steps will
+allow for catching small obstacles, taking more time to compute.</p></li>
+<li><p><strong>enable_speed_metric</strong> – True will scale the collision cost by the speed of the sphere.
+This has the effect of slowing down the robot when near obstacles. This also has
+shown to improve convergence from poor initialization.</p></li>
+<li><p><strong>env_query_idx</strong> – Environment index for each batch of query spheres.</p></li>
+<li><p><strong>return_loss</strong> – If the returned tensor will be scaled or changed before calling backward,
+set this to True. If the returned tensor will be used directly through addition,
+set this to False.</p></li>
+<li><p><strong>sum_collisions</strong> – Sum the collision cost across all obstacles. This variable is currently
+not passed to the underlying CUDA kernel as setting this to False caused poor
+performance.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Collision cost between trajectory of spheres and world obstacles.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_swept_sphere_collision">
+<span class="sig-name descname"><span class="pre">get_swept_sphere_collision</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">query_sphere</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">collision_query_buffer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.CollisionQueryBuffer" title="curobo.geom.sdf.world.CollisionQueryBuffer"><span class="pre">CollisionQueryBuffer</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">sweep_steps</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">activation_distance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">speed_dt</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">enable_speed_metric</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_query_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">return_loss</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_swept_sphere_collision" title="Link to this definition">¶</a></dt>
+<dd><p>Get binary collision between trajectory of spheres and world obstacles.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>query_sphere</strong> – Input tensor with query spheres [batch, horizon, number of spheres, 4].
+With [x, y, z, radius] as the last column for each sphere.</p></li>
+<li><p><strong>collision_query_buffer</strong> – Collision query buffer to store the results.</p></li>
+<li><p><strong>weight</strong> – Collision cost weight.</p></li>
+<li><p><strong>activation_distance</strong> – Distance outside the object to start computing the cost. A smooth
+scaling is applied to the cost starting from this distance. See
+<a class="reference internal" href="../research/research.html#research-page"><span class="std std-ref">Technical Report</span></a> for more details.</p></li>
+<li><p><strong>speed_dt</strong> – Length of time (seconds) to use when calculating the speed of the sphere
+using finite difference. This is not used.</p></li>
+<li><p><strong>sweep_steps</strong> – Number of steps to sweep the sphere along the trajectory. More steps will
+allow for catching small obstacles, taking more time to compute.</p></li>
+<li><p><strong>enable_speed_metric</strong> – True will scale the collision cost by the speed of the sphere.
+This has the effect of slowing down the robot when near obstacles. This also has
+shown to improve convergence from poor initialization. This is not used.</p></li>
+<li><p><strong>env_query_idx</strong> – Environment index for each batch of query spheres.</p></li>
+<li><p><strong>return_loss</strong> – This is not supported for binary classification. Set to False.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Collision value between trajectory of spheres and world obstacles.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.clear_cache">
+<span class="sig-name descname"><span class="pre">clear_cache</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.clear_cache" title="Link to this definition">¶</a></dt>
+<dd><p>Delete all cuboid and mesh obstacles from the world.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._get_sdf">
+<span class="sig-name descname"><span class="pre">_get_sdf</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">query_spheres</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">collision_query_buffer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.CollisionQueryBuffer" title="curobo.geom.sdf.world.CollisionQueryBuffer"><span class="pre">CollisionQueryBuffer</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">activation_distance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_query_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">return_loss</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">compute_esdf</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._get_sdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute signed distance for mesh obstacles using warp kernel.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>query_spheres</strong> – Input tensor with query spheres [batch, horizon, number of spheres, 4].
+With [x, y, z, radius] as the last column for each sphere.</p></li>
+<li><p><strong>collision_query_buffer</strong> – Collision query buffer to store the results.</p></li>
+<li><p><strong>weight</strong> – Weight to scale the collision cost.</p></li>
+<li><p><strong>activation_distance</strong> – Distance outside the object to start computing the cost.</p></li>
+<li><p><strong>env_query_idx</strong> – Environment index for each batch of query spheres.</p></li>
+<li><p><strong>return_loss</strong> – If the returned tensor will be scaled or changed before calling backward,
+set this to True. If the returned tensor will be used directly through addition,
+set this to False.</p></li>
+<li><p><strong>compute_esdf</strong> – Compute Euclidean signed distance instead of collision cost. When True,
+the returned tensor will be the signed distance with positive values inside an
+obstacle and negative values outside obstacles.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Collision cost between query spheres and world obstacles.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._get_swept_sdf">
+<span class="sig-name descname"><span class="pre">_get_swept_sdf</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">query_spheres</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">collision_query_buffer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.CollisionQueryBuffer" title="curobo.geom.sdf.world.CollisionQueryBuffer"><span class="pre">CollisionQueryBuffer</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">activation_distance</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">speed_dt</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">sweep_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">enable_speed_metric</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_query_idx</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">return_loss</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._get_swept_sdf" title="Link to this definition">¶</a></dt>
+<dd><p>Compute signed distance for mesh obstacles using warp kernel.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>query_sphere</strong> – Input tensor with query spheres [batch, horizon, number of spheres, 4].
+With [x, y, z, radius] as the last column for each sphere.</p></li>
+<li><p><strong>collision_query_buffer</strong> – Collision query buffer to store the results.</p></li>
+<li><p><strong>weight</strong> – Collision cost weight.</p></li>
+<li><p><strong>activation_distance</strong> – Distance outside the object to start computing the cost. A smooth
+scaling is applied to the cost starting from this distance. See
+<a class="reference internal" href="../research/research.html#research-page"><span class="std std-ref">Technical Report</span></a> for more details.</p></li>
+<li><p><strong>speed_dt</strong> – Length of time (seconds) to use when calculating the speed of the sphere
+using finite difference.</p></li>
+<li><p><strong>sweep_steps</strong> – Number of steps to sweep the sphere along the trajectory. More steps will
+allow for catching small obstacles, taking more time to compute.</p></li>
+<li><p><strong>enable_speed_metric</strong> – True will scale the collision cost by the speed of the sphere.
+This has the effect of slowing down the robot when near obstacles. This also has
+shown to improve convergence from poor initialization.</p></li>
+<li><p><strong>env_query_idx</strong> – Environment index for each batch of query spheres.</p></li>
+<li><p><strong>return_loss</strong> – If the returned tensor will be scaled or changed before calling backward,
+set this to True. If the returned tensor will be used directly through addition,
+set this to False.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Collision cost between trajectory of spheres and world obstacles.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._create_obb_cache">
+<span class="sig-name descname"><span class="pre">_create_obb_cache</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">obb_cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._create_obb_cache" title="Link to this definition">¶</a></dt>
+<dd><p>Create cache for cuboid (oriented bounding box) obstacles.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>obb_cache</strong> – Number of cuboids to cache for collision checking.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._get_obstacle_poses">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">_get_obstacle_poses</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">w_obj_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">obj_w_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._get_obstacle_poses" title="Link to this definition">¶</a></dt>
+<dd><p>Get pose of world from obstacle frame of reference.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>w_obj_pose</strong> – Pose of the obstacle in world frame.</p></li>
+<li><p><strong>obj_w_pose</strong> – Pose of world in obstacle frame of reference.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Pose of world in obstacle frame of reference.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision._load_collision_model_in_cache">
+<span class="sig-name descname"><span class="pre">_load_collision_model_in_cache</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">world_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.WorldConfig" title="curobo.geom.types.WorldConfig"><span class="pre">WorldConfig</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">fix_cache_reference</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._load_collision_model_in_cache" title="Link to this definition">¶</a></dt>
+<dd><p>Load world obstacles into collision checker cache. This only loads cuboids.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>world_config</strong> – World obstacles to load into the collision checker.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to load the obstacles.</p></li>
+<li><p><strong>fix_cache_reference</strong> – If True, does not allow to load more obstacles than cache size.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.add_obb">
+<span class="sig-name descname"><span class="pre">add_obb</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">cuboid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Cuboid" title="curobo.geom.types.Cuboid"><span class="pre">Cuboid</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.add_obb" title="Link to this definition">¶</a></dt>
+<dd><p>Add cuboid obstacle to world.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cuboid</strong> – Cuboid to add.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to add the obstacle to.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Index of the obstacle in the world.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.add_obb_from_raw">
+<span class="sig-name descname"><span class="pre">add_obb_from_raw</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">dims</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">w_obj_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">obj_w_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.add_obb_from_raw" title="Link to this definition">¶</a></dt>
+<dd><p>Add cuboid obstacle to world.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> – Name of the obstacle. Must be unique.</p></li>
+<li><p><strong>dims</strong> – Dimensions of the cuboid obstacle [length, width, height].</p></li>
+<li><p><strong>env_idx</strong> – Environment index to add the obstacle to.</p></li>
+<li><p><strong>w_obj_pose</strong> – Pose of the obstacle in world frame.</p></li>
+<li><p><strong>obj_w_pose</strong> – Inverse pose of the obstacle in world frame.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Index of the obstacle in the world.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.cache">
+<span class="sig-name descname"><span class="pre">cache</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Obstacle" title="curobo.geom.types.Obstacle"><span class="pre">Obstacle</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.cache" title="Link to this definition">¶</a></dt>
+<dd><p>Number of obstacles to cache for collision checking across representations.
+Use this to create a fixed size buffer for collision checking, e.g, {‘obb’: 1000} will
+create a buffer of 1000 cuboids for each environment.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.check_obstacle_exists">
+<span class="sig-name descname"><span class="pre">check_obstacle_exists</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.check_obstacle_exists" title="Link to this definition">¶</a></dt>
+<dd><p>Check if an obstacle exists in the world by name.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> – Name of the obstacle to check.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to check the obstacle.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>True if the obstacle exists in the world, else False.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.checker_type">
+<span class="sig-name descname"><span class="pre">checker_type</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.CollisionCheckerType" title="curobo.geom.sdf.world.CollisionCheckerType"><span class="pre">CollisionCheckerType</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'PRIMITIVE'</span></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.checker_type" title="Link to this definition">¶</a></dt>
+<dd><p>Type of collision checker to use.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.clear_voxelization_cache">
+<span class="sig-name descname"><span class="pre">clear_voxelization_cache</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.clear_voxelization_cache" title="Link to this definition">¶</a></dt>
+<dd><p>Clear cache that contains voxelization locations.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_obb">
+<span class="sig-name descname"><span class="pre">enable_obb</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">enable</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_obj_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_obb" title="Link to this definition">¶</a></dt>
+<dd><p>Enable/Disable cuboid in collision checking functions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>enable</strong> – True to enable, False to disable.</p></li>
+<li><p><strong>name</strong> – Name of the obstacle to enable.</p></li>
+<li><p><strong>env_obj_idx</strong> – Index of the obstacle to enable. Not required if name is provided.</p></li>
+<li><p><strong>env_idx</strong> – Index of the environment to enable the obstacle in.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_esdf_in_bounding_box">
+<span class="sig-name descname"><span class="pre">get_esdf_in_bounding_box</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">cuboid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Cuboid" title="curobo.geom.types.Cuboid"><span class="pre">Cuboid</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">Cuboid(name='test',</span> <span class="pre">pose=[0,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">1,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">0],</span> <span class="pre">scale=None,</span> <span class="pre">color=None,</span> <span class="pre">texture_id=None,</span> <span class="pre">texture=None,</span> <span class="pre">material=Material(metallic=0.0,</span> <span class="pre">roughness=0.4),</span> <span class="pre">tensor_args=TensorDeviceType(device=device(type='cuda',</span> <span class="pre">index=0),</span> <span class="pre">dtype=torch.float32,</span> <span class="pre">collision_geometry_dtype=torch.float32,</span> <span class="pre">collision_gradient_dtype=torch.float32,</span> <span class="pre">collision_distance_dtype=torch.float32),</span> <span class="pre">dims=[1,</span> <span class="pre">1,</span> <span class="pre">1])</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">voxel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.02</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">torch.float32</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.VoxelGrid" title="curobo.geom.types.VoxelGrid"><span class="pre">VoxelGrid</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_esdf_in_bounding_box" title="Link to this definition">¶</a></dt>
+<dd><p>Get the Euclidean signed distance in a grid bounded by the given cuboid.</p>
+<p>Distance is positive inside obstacles and negative outside obstacles.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cuboid</strong> – Bounding cuboid to query signed distance.</p></li>
+<li><p><strong>voxel_size</strong> – Size of the voxels in meters.</p></li>
+<li><p><strong>dtype</strong> – Data type of the feature tensor. Use <a href="#id1"><span class="problematic" id="id2">:var:`torch.bfloat16`</span></a> or
+<a href="#id3"><span class="problematic" id="id4">:var:`torch.float8_e4m3fn`</span></a> for reduced memory usage.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Voxels with the Euclidean signed distance in the bounding box.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_mesh_in_bounding_box">
+<span class="sig-name descname"><span class="pre">get_mesh_in_bounding_box</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">cuboid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Cuboid" title="curobo.geom.types.Cuboid"><span class="pre">Cuboid</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">Cuboid(name='test',</span> <span class="pre">pose=[0,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">1,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">0],</span> <span class="pre">scale=None,</span> <span class="pre">color=None,</span> <span class="pre">texture_id=None,</span> <span class="pre">texture=None,</span> <span class="pre">material=Material(metallic=0.0,</span> <span class="pre">roughness=0.4),</span> <span class="pre">tensor_args=TensorDeviceType(device=device(type='cuda',</span> <span class="pre">index=0),</span> <span class="pre">dtype=torch.float32,</span> <span class="pre">collision_geometry_dtype=torch.float32,</span> <span class="pre">collision_gradient_dtype=torch.float32,</span> <span class="pre">collision_distance_dtype=torch.float32),</span> <span class="pre">dims=[1,</span> <span class="pre">1,</span> <span class="pre">1])</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">voxel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.02</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">run_marching_cubes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Mesh" title="curobo.geom.types.Mesh"><span class="pre">Mesh</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_mesh_in_bounding_box" title="Link to this definition">¶</a></dt>
+<dd><p>Get a mesh representation of the world obstacles based on occupancy in a bounding box.</p>
+<p>This uses marching cubes to create a mesh representation of the world obstacles. Use this
+to debug world representations.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cuboid</strong> – Bounding box to get the mesh representation.</p></li>
+<li><p><strong>voxel_size</strong> – Size of the voxels in meters.</p></li>
+<li><p><strong>run_marching_cubes</strong> – Runs marching cubes over occupied voxels to generate a mesh. If
+set to False, then all occupied voxels are merged into a mesh and returned.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Mesh representation of the world obstacles in the bounding box.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_obb_idx">
+<span class="sig-name descname"><span class="pre">get_obb_idx</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_obb_idx" title="Link to this definition">¶</a></dt>
+<dd><p>Get index of the cuboid obstacle in the world.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> – Name of the obstacle to get the index.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to get the obstacle index.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Index of the obstacle in the world.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_occupancy_in_bounding_box">
+<span class="sig-name descname"><span class="pre">get_occupancy_in_bounding_box</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">cuboid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Cuboid" title="curobo.geom.types.Cuboid"><span class="pre">Cuboid</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">Cuboid(name='test',</span> <span class="pre">pose=[0,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">1,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">0],</span> <span class="pre">scale=None,</span> <span class="pre">color=None,</span> <span class="pre">texture_id=None,</span> <span class="pre">texture=None,</span> <span class="pre">material=Material(metallic=0.0,</span> <span class="pre">roughness=0.4),</span> <span class="pre">tensor_args=TensorDeviceType(device=device(type='cuda',</span> <span class="pre">index=0),</span> <span class="pre">dtype=torch.float32,</span> <span class="pre">collision_geometry_dtype=torch.float32,</span> <span class="pre">collision_gradient_dtype=torch.float32,</span> <span class="pre">collision_distance_dtype=torch.float32),</span> <span class="pre">dims=[1,</span> <span class="pre">1,</span> <span class="pre">1])</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">voxel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.02</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.VoxelGrid" title="curobo.geom.types.VoxelGrid"><span class="pre">VoxelGrid</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_occupancy_in_bounding_box" title="Link to this definition">¶</a></dt>
+<dd><p>Get the occupancy of voxels in a grid bounded by the given cuboid.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cuboid</strong> – Cuboid to get the occupancy of voxels. Provide pose and dimenstions to
+create occupancy information.</p></li>
+<li><p><strong>voxel_size</strong> – Size in meters to use as the voxel size.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Grid with the occupancy of voxels in the bounding box.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.get_voxels_in_bounding_box">
+<span class="sig-name descname"><span class="pre">get_voxels_in_bounding_box</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">cuboid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Cuboid" title="curobo.geom.types.Cuboid"><span class="pre">Cuboid</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">Cuboid(name='test',</span> <span class="pre">pose=[0,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">1,</span> <span class="pre">0,</span> <span class="pre">0,</span> <span class="pre">0],</span> <span class="pre">scale=None,</span> <span class="pre">color=None,</span> <span class="pre">texture_id=None,</span> <span class="pre">texture=None,</span> <span class="pre">material=Material(metallic=0.0,</span> <span class="pre">roughness=0.4),</span> <span class="pre">tensor_args=TensorDeviceType(device=device(type='cuda',</span> <span class="pre">index=0),</span> <span class="pre">dtype=torch.float32,</span> <span class="pre">collision_geometry_dtype=torch.float32,</span> <span class="pre">collision_gradient_dtype=torch.float32,</span> <span class="pre">collision_distance_dtype=torch.float32),</span> <span class="pre">dims=[1,</span> <span class="pre">1,</span> <span class="pre">1])</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">voxel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.02</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.Cuboid" title="curobo.geom.types.Cuboid"><span class="pre">Cuboid</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_voxels_in_bounding_box" title="Link to this definition">¶</a></dt>
+<dd><p>Get occupied voxels in a grid bounded by the given cuboid.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>cuboid</strong> – Bounding box to get the occupied voxels.</p></li>
+<li><p><strong>voxel_size</strong> – Size of the voxel grid.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Tensor with the occupied voxels in the bounding box.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.load_from_dict">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">load_from_dict</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">world_coll_checker_dict</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.13)"><span class="pre">Dict</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">world_model_dict</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.WorldConfig" title="curobo.geom.types.WorldConfig"><span class="pre">WorldConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.13)"><span class="pre">Dict</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.WorldConfig" title="curobo.geom.types.WorldConfig"><span class="pre">WorldConfig</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">tensor_args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.base.html#curobo.types.base.TensorDeviceType" title="curobo.types.base.TensorDeviceType"><span class="pre">TensorDeviceType</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">TensorDeviceType(device=device(type='cuda',</span> <span class="pre">index=0),</span> <span class="pre">dtype=torch.float32,</span> <span class="pre">collision_geometry_dtype=torch.float32,</span> <span class="pre">collision_gradient_dtype=torch.float32,</span> <span class="pre">collision_distance_dtype=torch.float32)</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.WorldCollisionConfig" title="curobo.geom.sdf.world.WorldCollisionConfig"><span class="pre">WorldCollisionConfig</span></a></span></span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.load_from_dict" title="Link to this definition">¶</a></dt>
+<dd><p>Load the WorldCollisionConfig from a dictionary.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>world_coll_checker_dict</strong> – Dictionary containing the configuration parameters.</p></li>
+<li><p><strong>world_model_dict</strong> – Dictionary containing obstacles.</p></li>
+<li><p><strong>tensor_args</strong> – Device and precision of the tensors.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Initialized WorldCollisionConfig object.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference internal" href="curobo.geom.sdf.world.html#curobo.geom.sdf.world.WorldCollisionConfig" title="curobo.geom.sdf.world.WorldCollisionConfig">WorldCollisionConfig</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.max_distance">
+<span class="sig-name descname"><span class="pre">max_distance</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">torch.Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.1</span></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.max_distance" title="Link to this definition">¶</a></dt>
+<dd><p>Maximum distance to compute collision checking cost outside the object. This value is
+added in addition to a query sphere radius and collision activation distance. A smaller
+value will speedup collision checking but can result in slower convergence with swept
+sphere collision checking.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.max_esdf_distance">
+<span class="sig-name descname"><span class="pre">max_esdf_distance</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">torch.Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">100.0</span></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.max_esdf_distance" title="Link to this definition">¶</a></dt>
+<dd><p>Maximum distance outside an obstacle to use when computing euclidean signed distance field
+(ESDF) from different world representations.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.n_envs">
+<span class="sig-name descname"><span class="pre">n_envs</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">1</span></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.n_envs" title="Link to this definition">¶</a></dt>
+<dd><p>Number of environments to use for collision checking.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.update_cache_voxelization">
+<span class="sig-name descname"><span class="pre">update_cache_voxelization</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">new_grid</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.VoxelGrid" title="curobo.geom.types.VoxelGrid"><span class="pre">VoxelGrid</span></a></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_cache_voxelization" title="Link to this definition">¶</a></dt>
+<dd><p>Update locaiton of voxels based on new grid parameters. Only for debugging.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>new_grid</strong> – New grid to use for getting voxelized occupancy of current world obstacles.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obb_dims">
+<span class="sig-name descname"><span class="pre">update_obb_dims</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">obj_dims</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_obj_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obb_dims" title="Link to this definition">¶</a></dt>
+<dd><p>Update dimensinots of an existing cuboid obstacle.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>obj_dims</strong> – [dim.x,dim.y, dim.z].</p></li>
+<li><p><strong>name</strong> – Name of the obstacle to update.</p></li>
+<li><p><strong>env_obj_idx</strong> – Index of the obstacle to update. Not required if name is provided.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to update the obstacle.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obb_pose">
+<span class="sig-name descname"><span class="pre">update_obb_pose</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">w_obj_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">obj_w_pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_obj_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v2.5)"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obb_pose" title="Link to this definition">¶</a></dt>
+<dd><p>Update pose of an existing cuboid obstacle.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>w_obj_pose</strong> – Pose of the obstacle in world frame.</p></li>
+<li><p><strong>obj_w_pose</strong> – Inverse pose of the obstacle in world frame. Not required if w_obj_pose is
+provided.</p></li>
+<li><p><strong>name</strong> – Name of the obstacle to update.</p></li>
+<li><p><strong>env_obj_idx</strong> – Index of the obstacle to update. Not required if name is provided.</p></li>
+<li><p><strong>env_idx</strong> – Index of the environment to update the obstacle.</p></li>
+<li><p><strong>update_cpu_reference</strong> – If True, updates the CPU reference with the new pose. This is
+useful for debugging and visualization. Only supported for env_idx=0.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obstacle_pose_in_world_model">
+<span class="sig-name descname"><span class="pre">update_obstacle_pose_in_world_model</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">pose</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="curobo.types.math.html#curobo.types.math.Pose" title="curobo.types.math.Pose"><span class="pre">Pose</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">env_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obstacle_pose_in_world_model" title="Link to this definition">¶</a></dt>
+<dd><p>Update the pose of an obstacle in the world model.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>name</strong> – Name of the obstacle to update.</p></li>
+<li><p><strong>pose</strong> – Pose to update the obstacle.</p></li>
+<li><p><strong>env_idx</strong> – Environment index to update the obstacle.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="curobo.geom.sdf.world_mesh.WorldMeshCollision.world_model">
+<span class="sig-name descname"><span class="pre">world_model</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.WorldConfig" title="curobo.geom.types.WorldConfig"><span class="pre">WorldConfig</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="curobo.geom.types.html#curobo.geom.types.WorldConfig" title="curobo.geom.types.WorldConfig"><span class="pre">WorldConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.world_model" title="Link to this definition">¶</a></dt>
+<dd><p>World obstacles to load for collision checking.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          
+          
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2023-2024, NVIDIA
+            </div>
+            Made with 
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            <div class="icons">
+              <a class="muted-link " href="https://github.com/NVLabs/curobo" aria-label="GitHub">
+                <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
+                </svg>
+            </a>
+              
+            </div>
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">curobo.geom.sdf.world_mesh module</a><ul>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WarpMeshData"><code class="docutils literal notranslate"><span class="pre">WarpMeshData</span></code></a><ul>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WarpMeshData.name"><code class="docutils literal notranslate"><span class="pre">WarpMeshData.name</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WarpMeshData.m_id"><code class="docutils literal notranslate"><span class="pre">WarpMeshData.m_id</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WarpMeshData.vertices"><code class="docutils literal notranslate"><span class="pre">WarpMeshData.vertices</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WarpMeshData.faces"><code class="docutils literal notranslate"><span class="pre">WarpMeshData.faces</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WarpMeshData.mesh"><code class="docutils literal notranslate"><span class="pre">WarpMeshData.mesh</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision</span></code></a><ul>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.tensor_args"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.tensor_args</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._init_cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._init_cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.load_collision_model"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.load_collision_model</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.load_batch_collision_model"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.load_batch_collision_model</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._load_mesh_to_warp"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._load_mesh_to_warp</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._load_mesh_into_cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._load_mesh_into_cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._load_batch_mesh_to_warp"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._load_batch_mesh_to_warp</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.add_mesh"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.add_mesh</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_mesh_idx"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_mesh_idx</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.create_collision_cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.create_collision_cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._create_mesh_cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._create_mesh_cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_mesh_pose"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.update_mesh_pose</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_mesh_from_warp"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.update_mesh_from_warp</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obstacle_pose"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.update_obstacle_pose</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_obstacle"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.enable_obstacle</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_obstacle_names"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_obstacle_names</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_mesh"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.enable_mesh</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_sphere_distance"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_sphere_distance</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_sphere_collision"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_sphere_collision</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_swept_sphere_distance"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_swept_sphere_distance</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_swept_sphere_collision"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_swept_sphere_collision</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.clear_cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.clear_cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._get_sdf"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._get_sdf</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._get_swept_sdf"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._get_swept_sdf</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._create_obb_cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._create_obb_cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._get_obstacle_poses"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._get_obstacle_poses</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision._load_collision_model_in_cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision._load_collision_model_in_cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.add_obb"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.add_obb</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.add_obb_from_raw"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.add_obb_from_raw</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.check_obstacle_exists"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.check_obstacle_exists</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.checker_type"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.checker_type</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.clear_voxelization_cache"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.clear_voxelization_cache</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.enable_obb"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.enable_obb</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_esdf_in_bounding_box"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_esdf_in_bounding_box</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_mesh_in_bounding_box"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_mesh_in_bounding_box</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_obb_idx"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_obb_idx</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_occupancy_in_bounding_box"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_occupancy_in_bounding_box</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.get_voxels_in_bounding_box"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.get_voxels_in_bounding_box</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.load_from_dict"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.load_from_dict</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.max_distance"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.max_distance</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.max_esdf_distance"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.max_esdf_distance</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.n_envs"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.n_envs</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_cache_voxelization"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.update_cache_voxelization</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obb_dims"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.update_obb_dims</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obb_pose"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.update_obb_pose</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.update_obstacle_pose_in_world_model"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.update_obstacle_pose_in_world_model</span></code></a></li>
+<li><a class="reference internal" href="#curobo.geom.sdf.world_mesh.WorldMeshCollision.world_model"><code class="docutils literal notranslate"><span class="pre">WorldMeshCollision.world_model</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=674563c9"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/scripts/furo.js?v=5fa4622c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    </body>
+</html>

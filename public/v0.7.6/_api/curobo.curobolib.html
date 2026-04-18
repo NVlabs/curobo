@@ -1,0 +1,891 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" />
+
+    <!-- Generated with Sphinx 8.1.3 and Furo 2024.08.06 -->
+        <title>curobo.curobolib package - cuRobo</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
+    <link rel="stylesheet" type="text/css" href="../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom_furo.css?v=a13d9812" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f8f8f8;
+  --color-code-foreground: black;
+  --color-api-pre-name: #76b900;
+  --color-api-name: #76b900;
+  --color-admonition-title--seealso: #ffffff;
+  --color-admonition-title-background--seealso: #448aff;
+  --color-admonition-title-background--note: #76b900;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-sidebar-background: #f5fff5;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-admonition-title-background--note: #535353;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-brand-content: #76b900;
+  --color-sidebar-background: #000000;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-admonition-title-background--note: #535353;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-brand-content: #76b900;
+  --color-sidebar-background: #000000;
+  
+      }
+    }
+  }
+</style><script>document.addEventListener("DOMContentLoaded",function(){var b=document.createElement("div");var bp2=(function(){var m2=window.location.pathname.match(/^(.*?)\/(latest|v[0-9.]+)\//);return m2?m2[1]:""})();b.innerHTML='You are viewing docs for cuRobo <b>v0.7.6</b> (legacy). <a href="'+bp2+'/latest/" style="color:#fff;text-decoration:underline;">View the latest docs</a>.';b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:9999;padding:8px 16px;background:#d32f2f;color:#fff;text-align:center;font-size:14px;font-family:sans-serif;";document.body.style.marginTop="36px";document.body.insertBefore(b,document.body.firstChild);});var p=window.location.pathname;var m=p.match(/^(.*?)\/(latest|v[0-9.]+)\//);if(m){var bp=m[1];fetch(bp+"/versions.json").then(function(r){return r.json()}).then(function(vs){if(!vs||vs.length<2)return;var s=document.createElement("select");s.setAttribute("aria-label","Version");s.style.cssText="margin:0.5rem 0;padding:4px 8px;width:100%;border:1px solid var(--color-sidebar-link-text,#666);border-radius:4px;background:var(--color-sidebar-background,#fff);color:var(--color-sidebar-link-text,#333);font-size:0.85rem;cursor:pointer;";vs.forEach(function(v){var o=document.createElement("option");o.value=bp+v.url;o.textContent=v.name;if(p.indexOf(bp+v.url)===0)o.selected=true;s.appendChild(o)});s.addEventListener("change",function(){window.location.href=s.value});var c=document.querySelector(".sidebar-brand");if(c)c.appendChild(s)}).catch(function(){});}</script></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
+<label class="overlay sidebar-overlay" for="__navigation">
+  <div class="visually-hidden">Hide navigation sidebar</div>
+</label>
+<label class="overlay toc-overlay" for="__toc">
+  <div class="visually-hidden">Hide table of contents sidebar</div>
+</label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <div class="visually-hidden">Toggle site navigation sidebar</div>
+        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">cuRobo</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle">
+          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <div class="visually-hidden">Toggle table of contents sidebar</div>
+        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <div class="sidebar-logo-container">
+    <img class="sidebar-logo only-light" src="../_static/logo-light-mode.png" alt="Light Logo"/>
+    <img class="sidebar-logo only-dark" src="../_static/logo-dark-mode.png" alt="Dark Logo"/>
+  </div>
+  
+  <span class="sidebar-brand-text">cuRobo</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../research_index.html">Research</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of Research</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../research/research.html">Technical Report</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../research/research_using_curobo.html">Research using cuRobo</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../get_started_index.html">Get Started</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Get Started</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/1_install_instructions.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/1a_quick_overview.html">Basics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2a_python_examples.html">Using in Python</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2b_isaacsim_examples.html">Using with Isaac Sim</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2c_world_collision.html">Collision World Representation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2d_nvblox_demo.html">Using with Depth Camera</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2e_torch_layer_example.html">Using in a Neural Network</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/4_benchmarks.html">Benchmarks &amp; Profiling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/5_docker_development.html">Docker Development</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/6_known_issues.html">Known Issues</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/7_api.html">Python API</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../advanced_examples_index.html">Advanced Examples</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of Advanced Examples</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/1_batch_env.html">Batched Environments</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/2_block_stacking_example.html">Block Stacking</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/3_constrained_planning.html">Constrained Planning</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/4_robot_segmentation.html">Robot Segmentation</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../tutorials_index.html">Tutorials</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><div class="visually-hidden">Toggle navigation of Tutorials</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../tutorials/1_robot_configuration.html">Configuring a New Robot</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../developer_notes_index.html">Developer Notes</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><div class="visually-hidden">Toggle navigation of Developer Notes</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../notes/01_robot_list.html">Supported Robots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/02_numerical_optimization.html">Numerical Optimization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/03_performance_tuning.html">Performance Tuning</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/04_cuda_kernels.html">CUDA Notes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/05_usd_api.html">USD for Robot and World Representation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/07_environment_variables.html">Environment Variables</a></li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle">
+              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <div class="visually-hidden">Toggle table of contents sidebar</div>
+            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="module-curobo.curobolib">
+<span id="curobo-curobolib-package"></span><h1>curobo.curobolib package<a class="headerlink" href="#module-curobo.curobolib" title="Link to this heading">¶</a></h1>
+<p>cuRoboLib module contains CUDA implementations (kernels) of robotics algorithms, wrapped in
+C++, and compiled with PyTorch for use in Python.</p>
+<p>All implementations are in <code class="docutils literal notranslate"><span class="pre">.cu</span></code> files in <code class="docutils literal notranslate"><span class="pre">cpp</span></code> sub-directory.</p>
+<section id="submodules">
+<h2>Submodules<a class="headerlink" href="#submodules" title="Link to this heading">¶</a></h2>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.geom.html">curobo.curobolib.geom module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.get_self_collision_distance"><code class="docutils literal notranslate"><span class="pre">get_self_collision_distance</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.forward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.backward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._backward_cls"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._input_metadata"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._register_hook"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._sequence_nr"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.apply"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.jvp"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.mark_dirty"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.materialize_grads"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.metadata"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.name"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.next_functions"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.non_differentiable"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.register_hook"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.register_prehook"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.requires_grad"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.save_for_backward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.save_for_forward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.saved_tensors"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.saved_variables"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.setup_context"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.to_save"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.vjp"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistance.vmap"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistance.vmap</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.backward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._backward_cls"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._input_metadata"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._register_hook"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._sequence_nr"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.apply"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.forward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.jvp"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.mark_dirty"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.materialize_grads"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.metadata"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.name"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.next_functions"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.non_differentiable"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.register_hook"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.register_prehook"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.requires_grad"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.save_for_backward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.save_for_forward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.saved_tensors"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.saved_variables"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.setup_context"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.to_save"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.vjp"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SelfCollisionDistanceLoss.vmap"><code class="docutils literal notranslate"><span class="pre">SelfCollisionDistanceLoss.vmap</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.get_pose_distance"><code class="docutils literal notranslate"><span class="pre">get_pose_distance</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.get_pose_distance_backward"><code class="docutils literal notranslate"><span class="pre">get_pose_distance_backward</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.backward_PoseError_jit"><code class="docutils literal notranslate"><span class="pre">backward_PoseError_jit</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.backward_full_PoseError_jit"><code class="docutils literal notranslate"><span class="pre">backward_full_PoseError_jit</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.forward"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.backward"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._backward_cls"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._input_metadata"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._register_hook"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._sequence_nr"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.apply"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.jvp"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.mark_dirty"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.materialize_grads"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.metadata"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.name"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.next_functions"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.non_differentiable"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.register_hook"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.register_prehook"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.requires_grad"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.save_for_backward"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.save_for_forward"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.saved_tensors"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.saved_variables"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.setup_context"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.to_save"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.vjp"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseErrorDistance.vmap"><code class="docutils literal notranslate"><span class="pre">PoseErrorDistance.vmap</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError"><code class="docutils literal notranslate"><span class="pre">PoseError</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.forward"><code class="docutils literal notranslate"><span class="pre">PoseError.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.backward"><code class="docutils literal notranslate"><span class="pre">PoseError.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._backward_cls"><code class="docutils literal notranslate"><span class="pre">PoseError._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">PoseError._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">PoseError._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">PoseError._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._input_metadata"><code class="docutils literal notranslate"><span class="pre">PoseError._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">PoseError._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">PoseError._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">PoseError._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._register_hook"><code class="docutils literal notranslate"><span class="pre">PoseError._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">PoseError._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._sequence_nr"><code class="docutils literal notranslate"><span class="pre">PoseError._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">PoseError._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.apply"><code class="docutils literal notranslate"><span class="pre">PoseError.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">PoseError.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">PoseError.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.jvp"><code class="docutils literal notranslate"><span class="pre">PoseError.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.mark_dirty"><code class="docutils literal notranslate"><span class="pre">PoseError.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">PoseError.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">PoseError.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.materialize_grads"><code class="docutils literal notranslate"><span class="pre">PoseError.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">PoseError.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.metadata"><code class="docutils literal notranslate"><span class="pre">PoseError.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.name"><code class="docutils literal notranslate"><span class="pre">PoseError.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">PoseError.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.next_functions"><code class="docutils literal notranslate"><span class="pre">PoseError.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.non_differentiable"><code class="docutils literal notranslate"><span class="pre">PoseError.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.register_hook"><code class="docutils literal notranslate"><span class="pre">PoseError.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.register_prehook"><code class="docutils literal notranslate"><span class="pre">PoseError.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.requires_grad"><code class="docutils literal notranslate"><span class="pre">PoseError.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.save_for_backward"><code class="docutils literal notranslate"><span class="pre">PoseError.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.save_for_forward"><code class="docutils literal notranslate"><span class="pre">PoseError.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">PoseError.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.saved_tensors"><code class="docutils literal notranslate"><span class="pre">PoseError.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.saved_variables"><code class="docutils literal notranslate"><span class="pre">PoseError.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">PoseError.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.setup_context"><code class="docutils literal notranslate"><span class="pre">PoseError.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.to_save"><code class="docutils literal notranslate"><span class="pre">PoseError.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.vjp"><code class="docutils literal notranslate"><span class="pre">PoseError.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.PoseError.vmap"><code class="docutils literal notranslate"><span class="pre">PoseError.vmap</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.forward"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.backward"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._backward_cls"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._input_metadata"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._register_hook"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._sequence_nr"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.apply"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.jvp"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.mark_dirty"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.materialize_grads"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.metadata"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.name"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.next_functions"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.non_differentiable"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.register_hook"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.register_prehook"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.requires_grad"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.save_for_backward"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.save_for_forward"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.saved_variables"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.setup_context"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.to_save"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.vjp"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereOBB.vmap"><code class="docutils literal notranslate"><span class="pre">SdfSphereOBB.vmap</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.forward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.backward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._backward_cls"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._input_metadata"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._register_hook"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._sequence_nr"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.apply"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.jvp"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.mark_dirty"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.materialize_grads"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.metadata"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.name"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.next_functions"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.non_differentiable"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.register_hook"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.register_prehook"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.requires_grad"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.save_for_backward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.save_for_forward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.saved_variables"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.setup_context"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.to_save"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.vjp"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereOBB.vmap"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereOBB.vmap</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.forward"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.backward"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._backward_cls"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._input_metadata"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._register_hook"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._sequence_nr"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.apply"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.jvp"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.mark_dirty"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.materialize_grads"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.metadata"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.name"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.next_functions"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.non_differentiable"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.register_hook"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.register_prehook"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.requires_grad"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.save_for_backward"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.save_for_forward"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.saved_variables"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.setup_context"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.to_save"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.vjp"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSphereVoxel.vmap"><code class="docutils literal notranslate"><span class="pre">SdfSphereVoxel.vmap</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.forward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.backward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._backward_cls"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._input_metadata"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._register_hook"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._sequence_nr"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.apply"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.jvp"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.mark_dirty"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.materialize_grads"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.metadata"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.name"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.next_functions"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.non_differentiable"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.register_hook"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.register_prehook"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.requires_grad"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.save_for_backward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.save_for_forward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.saved_tensors"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.saved_variables"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.setup_context"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.to_save"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.vjp"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.geom.html#curobo.curobolib.geom.SdfSweptSphereVoxel.vmap"><code class="docutils literal notranslate"><span class="pre">SdfSweptSphereVoxel.vmap</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.geom_cu.html">curobo.curobolib.geom_cu module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom_cu.html#curobo.curobolib.geom_cu.closest_point"><code class="docutils literal notranslate"><span class="pre">closest_point</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom_cu.html#curobo.curobolib.geom_cu.closest_point_voxel"><code class="docutils literal notranslate"><span class="pre">closest_point_voxel</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom_cu.html#curobo.curobolib.geom_cu.pose_distance"><code class="docutils literal notranslate"><span class="pre">pose_distance</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom_cu.html#curobo.curobolib.geom_cu.pose_distance_backward"><code class="docutils literal notranslate"><span class="pre">pose_distance_backward</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom_cu.html#curobo.curobolib.geom_cu.self_collision_distance"><code class="docutils literal notranslate"><span class="pre">self_collision_distance</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom_cu.html#curobo.curobolib.geom_cu.swept_closest_point"><code class="docutils literal notranslate"><span class="pre">swept_closest_point</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.geom_cu.html#curobo.curobolib.geom_cu.swept_closest_point_voxel"><code class="docutils literal notranslate"><span class="pre">swept_closest_point_voxel</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.kinematics.html">curobo.curobolib.kinematics module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.rotation_matrix_to_quaternion"><code class="docutils literal notranslate"><span class="pre">rotation_matrix_to_quaternion</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.forward"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.backward"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._call_backward_cuda"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._call_backward_cuda</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._backward_cls"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._input_metadata"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._register_hook"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._sequence_nr"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.apply"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.jvp"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.mark_dirty"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.materialize_grads"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.metadata"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.name"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.next_functions"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.non_differentiable"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.register_hook"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.register_prehook"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.requires_grad"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.save_for_backward"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.save_for_forward"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.saved_tensors"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.saved_variables"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.setup_context"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.to_save"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.vjp"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.KinematicsFusedFunction.vmap"><code class="docutils literal notranslate"><span class="pre">KinematicsFusedFunction.vmap</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.kinematics.html#curobo.curobolib.kinematics.get_cuda_kinematics"><code class="docutils literal notranslate"><span class="pre">get_cuda_kinematics</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.kinematics_fused_cu.html">curobo.curobolib.kinematics_fused_cu module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.kinematics_fused_cu.html#curobo.curobolib.kinematics_fused_cu.backward"><code class="docutils literal notranslate"><span class="pre">backward</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.kinematics_fused_cu.html#curobo.curobolib.kinematics_fused_cu.forward"><code class="docutils literal notranslate"><span class="pre">forward</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.kinematics_fused_cu.html#curobo.curobolib.kinematics_fused_cu.matrix_to_quaternion"><code class="docutils literal notranslate"><span class="pre">matrix_to_quaternion</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.lbfgs_step_cu.html">curobo.curobolib.lbfgs_step_cu module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.lbfgs_step_cu.html#curobo.curobolib.lbfgs_step_cu.forward"><code class="docutils literal notranslate"><span class="pre">forward</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.line_search_cu.html">curobo.curobolib.line_search_cu module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.line_search_cu.html#curobo.curobolib.line_search_cu.line_search"><code class="docutils literal notranslate"><span class="pre">line_search</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.line_search_cu.html#curobo.curobolib.line_search_cu.update_best"><code class="docutils literal notranslate"><span class="pre">update_best</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.ls.html">curobo.curobolib.ls module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.ls.html#curobo.curobolib.ls.wolfe_line_search"><code class="docutils literal notranslate"><span class="pre">wolfe_line_search</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.ls.html#curobo.curobolib.ls.update_best"><code class="docutils literal notranslate"><span class="pre">update_best</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.opt.html">curobo.curobolib.opt module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu"><code class="docutils literal notranslate"><span class="pre">LBFGScu</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.forward"><code class="docutils literal notranslate"><span class="pre">LBFGScu.forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.backward"><code class="docutils literal notranslate"><span class="pre">LBFGScu.backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._backward_cls"><code class="docutils literal notranslate"><span class="pre">LBFGScu._backward_cls</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._compiled_autograd_backward_state"><code class="docutils literal notranslate"><span class="pre">LBFGScu._compiled_autograd_backward_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._compiled_autograd_key"><code class="docutils literal notranslate"><span class="pre">LBFGScu._compiled_autograd_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._get_compiled_autograd_symints"><code class="docutils literal notranslate"><span class="pre">LBFGScu._get_compiled_autograd_symints</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._input_metadata"><code class="docutils literal notranslate"><span class="pre">LBFGScu._input_metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._is_compiled_autograd_tracing"><code class="docutils literal notranslate"><span class="pre">LBFGScu._is_compiled_autograd_tracing</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._materialize_non_diff_grads"><code class="docutils literal notranslate"><span class="pre">LBFGScu._materialize_non_diff_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._raw_saved_tensors"><code class="docutils literal notranslate"><span class="pre">LBFGScu._raw_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._register_hook"><code class="docutils literal notranslate"><span class="pre">LBFGScu._register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._register_hook_dict"><code class="docutils literal notranslate"><span class="pre">LBFGScu._register_hook_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._sequence_nr"><code class="docutils literal notranslate"><span class="pre">LBFGScu._sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu._set_sequence_nr"><code class="docutils literal notranslate"><span class="pre">LBFGScu._set_sequence_nr</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.apply"><code class="docutils literal notranslate"><span class="pre">LBFGScu.apply</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.dirty_tensors"><code class="docutils literal notranslate"><span class="pre">LBFGScu.dirty_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.generate_vmap_rule"><code class="docutils literal notranslate"><span class="pre">LBFGScu.generate_vmap_rule</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.jvp"><code class="docutils literal notranslate"><span class="pre">LBFGScu.jvp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.mark_dirty"><code class="docutils literal notranslate"><span class="pre">LBFGScu.mark_dirty</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.mark_non_differentiable"><code class="docutils literal notranslate"><span class="pre">LBFGScu.mark_non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.mark_shared_storage"><code class="docutils literal notranslate"><span class="pre">LBFGScu.mark_shared_storage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.materialize_grads"><code class="docutils literal notranslate"><span class="pre">LBFGScu.materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.maybe_clear_saved_tensors"><code class="docutils literal notranslate"><span class="pre">LBFGScu.maybe_clear_saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.metadata"><code class="docutils literal notranslate"><span class="pre">LBFGScu.metadata</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.name"><code class="docutils literal notranslate"><span class="pre">LBFGScu.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.needs_input_grad"><code class="docutils literal notranslate"><span class="pre">LBFGScu.needs_input_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.next_functions"><code class="docutils literal notranslate"><span class="pre">LBFGScu.next_functions</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.non_differentiable"><code class="docutils literal notranslate"><span class="pre">LBFGScu.non_differentiable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.register_hook"><code class="docutils literal notranslate"><span class="pre">LBFGScu.register_hook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.register_prehook"><code class="docutils literal notranslate"><span class="pre">LBFGScu.register_prehook</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.requires_grad"><code class="docutils literal notranslate"><span class="pre">LBFGScu.requires_grad</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.save_for_backward"><code class="docutils literal notranslate"><span class="pre">LBFGScu.save_for_backward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.save_for_forward"><code class="docutils literal notranslate"><span class="pre">LBFGScu.save_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.saved_for_forward"><code class="docutils literal notranslate"><span class="pre">LBFGScu.saved_for_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.saved_tensors"><code class="docutils literal notranslate"><span class="pre">LBFGScu.saved_tensors</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.saved_variables"><code class="docutils literal notranslate"><span class="pre">LBFGScu.saved_variables</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.set_materialize_grads"><code class="docutils literal notranslate"><span class="pre">LBFGScu.set_materialize_grads</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.setup_context"><code class="docutils literal notranslate"><span class="pre">LBFGScu.setup_context</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.to_save"><code class="docutils literal notranslate"><span class="pre">LBFGScu.to_save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.vjp"><code class="docutils literal notranslate"><span class="pre">LBFGScu.vjp</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.curobolib.opt.html#curobo.curobolib.opt.LBFGScu.vmap"><code class="docutils literal notranslate"><span class="pre">LBFGScu.vmap</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.tensor_step.html">curobo.curobolib.tensor_step module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step.html#curobo.curobolib.tensor_step.tensor_step_pos_clique_idx_fwd"><code class="docutils literal notranslate"><span class="pre">tensor_step_pos_clique_idx_fwd</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step.html#curobo.curobolib.tensor_step.tensor_step_pos_clique_fwd"><code class="docutils literal notranslate"><span class="pre">tensor_step_pos_clique_fwd</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step.html#curobo.curobolib.tensor_step.tensor_step_acc_fwd"><code class="docutils literal notranslate"><span class="pre">tensor_step_acc_fwd</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step.html#curobo.curobolib.tensor_step.tensor_step_acc_idx_fwd"><code class="docutils literal notranslate"><span class="pre">tensor_step_acc_idx_fwd</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step.html#curobo.curobolib.tensor_step.tensor_step_pos_clique_bwd"><code class="docutils literal notranslate"><span class="pre">tensor_step_pos_clique_bwd</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.tensor_step_cu.html">curobo.curobolib.tensor_step_cu module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step_cu.html#curobo.curobolib.tensor_step_cu.step_acceleration"><code class="docutils literal notranslate"><span class="pre">step_acceleration</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step_cu.html#curobo.curobolib.tensor_step_cu.step_acceleration_idx"><code class="docutils literal notranslate"><span class="pre">step_acceleration_idx</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step_cu.html#curobo.curobolib.tensor_step_cu.step_idx_position2"><code class="docutils literal notranslate"><span class="pre">step_idx_position2</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step_cu.html#curobo.curobolib.tensor_step_cu.step_position"><code class="docutils literal notranslate"><span class="pre">step_position</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step_cu.html#curobo.curobolib.tensor_step_cu.step_position2"><code class="docutils literal notranslate"><span class="pre">step_position2</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step_cu.html#curobo.curobolib.tensor_step_cu.step_position_backward"><code class="docutils literal notranslate"><span class="pre">step_position_backward</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.curobolib.tensor_step_cu.html#curobo.curobolib.tensor_step_cu.step_position_backward2"><code class="docutils literal notranslate"><span class="pre">step_position_backward2</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.curobolib.util_file.html">curobo.curobolib.util_file module</a></li>
+</ul>
+</div>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          
+          
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2023-2024, NVIDIA
+            </div>
+            Made with 
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            <div class="icons">
+              <a class="muted-link " href="https://github.com/NVLabs/curobo" aria-label="GitHub">
+                <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
+                </svg>
+            </a>
+              
+            </div>
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">curobo.curobolib package</a><ul>
+<li><a class="reference internal" href="#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=674563c9"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/scripts/furo.js?v=5fa4622c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    </body>
+</html>

@@ -1,22 +1,18 @@
+# Editors / IDEs
 .vscode*
-*.hdf5
-*data/
-*.bat
-*.p
-*.mlx
+*.code-workspace
+*swp
+*swo
+\#*\#
+.\#*
+*Flymake log*
 
-*#
-*logs
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
-*.json
-
-# C extensions
 *.so
-requirements.txt
+
 # Distribution / packaging
 .Python
 build/
@@ -36,10 +32,13 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+nvidia_curobo*/
+
+# uv (library project — lockfile is intentionally not committed)
+uv.lock
+requirements.txt
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -53,7 +52,6 @@ htmlcov/
 .nox/
 .coverage
 .coverage.*
-.cache
 nosetests.xml
 coverage.xml
 *.cover
@@ -62,60 +60,35 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
 # Translations
 *.mo
 *.pot
 
-# Django stuff:
+# Logs
 *.log
+*logs/
+log/*
+benchmark/log/*
 local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-docs/_source/
-_build/
 
 # PyBuilder
 .pybuilder/
 target/
 
-# Jupyter Notebook
+# Jupyter / IPython
 .ipynb_checkpoints
-
-# IPython
 profile_default/
 ipython_config.py
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow
+# PEP 582
 __pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
 
 # Environments
 .env
@@ -125,80 +98,53 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-.#*
-# Spyder project settings
-.spyderproject
-.spyproject
 
 # Rope project settings
 .ropeproject
 
-# mkdocs documentation
+# mkdocs
 /site
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
+# Cython debug
 cython_debug/
 
+# Project-specific outputs
 experiments/
-
-# torch pickles:
-*.t
-*.npy
-*.zip
-*.qdrep
-*.sql*
-*.npz
-/examples/*.stl
-
-*Flymake log*
-#*.pt
-*.pth*
-*.tar
-examples/*.pt
-
-# VIM
-*swp
-*swo
-
-examples/debug/*.onnx
-*.engine
-*.profile
-*.cache
-*.flatbuffers
-#*.obj
-*.glb
-*.onnx
-*stltoobj.bat
+**/outputs/
+**/datasets/
 external/*
-public/*
-docs/doxygen/html/*
-docs/doxygen/xml/*
-
-
 docker/pkgs/*
 
+# Profiling / tracing
+*.ncu*
+*.nsys*
+*.qdrep
+*.sql*
+*.nvcudmp
+*.profile
+*.etli
 
-nvidia_curobo*/
-
-*.code-workspace
-*.usda
-*.pdf
-#*.png
+# Data / asset files (large or generated)
+*.hdf5
+*.npy
+*.npz
+*.zip
+*.tar
+*.t
+*.p
+*.pt
+*.pth*
+*.engine
+*.cache
+*.flatbuffers
+*.glb
+*.onnx
 *.usd
-*.SLDPRT
-
-*tfevents*
-
+*.usda
 *.csv
-docs/*
+*.json
+*.SLDPRT
+*.xacro
+*.gazebo
+*tfevents*
+/examples/*.stl

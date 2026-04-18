@@ -1,0 +1,56 @@
+/*
+Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+property and proprietary rights in and to this material, related
+documentation and any modifications thereto. Any use, reproduction,
+disclosure or distribution of this material and related documentation
+without an express license agreement from NVIDIA CORPORATION or
+its affiliates is strictly prohibited.
+*/
+
+@import url("theme.css");
+@import url("../pygments.css");
+
+iframe {
+	aspect-ratio: 16 / 9;
+	height: 100%;
+	width: 100%;
+}
+
+html { font-size: 100%; }
+
+
+.sidebar-brand-text {
+    text-align: center;
+    margin: 0 0;
+}
+
+
+/* Use our green for literals (it's very similar to the original color) */
+.rst-content tt.literal, .rst-content tt.literal, .rst-content code.literal {
+    color: #76b900 !important;
+    border-style: none;
+}
+
+/* Change link colors (except for the menu) */
+
+a {
+    color: #76b900;
+}
+
+a:hover {
+    color: #76b900;
+}
+
+
+a:visited {
+    color: #76b900;
+}
+
+
+code.literal {
+    color: #76b900;
+    font-family: monospace;
+    font-size: var(--font-size-normal);
+}

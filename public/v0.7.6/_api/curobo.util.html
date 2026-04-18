@@ -1,0 +1,782 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" />
+
+    <!-- Generated with Sphinx 8.1.3 and Furo 2024.08.06 -->
+        <title>curobo.util package - cuRobo</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
+    <link rel="stylesheet" type="text/css" href="../_static/graphviz.css?v=4ae1632d" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom_furo.css?v=a13d9812" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f8f8f8;
+  --color-code-foreground: black;
+  --color-api-pre-name: #76b900;
+  --color-api-name: #76b900;
+  --color-admonition-title--seealso: #ffffff;
+  --color-admonition-title-background--seealso: #448aff;
+  --color-admonition-title-background--note: #76b900;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-sidebar-background: #f5fff5;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-admonition-title-background--note: #535353;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-brand-content: #76b900;
+  --color-sidebar-background: #000000;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-admonition-title-background--note: #535353;
+  --color-admonition-title--note: #ffffff;
+  --color-brand-primary: #76b900;
+  --color-brand-content: #76b900;
+  --color-sidebar-background: #000000;
+  
+      }
+    }
+  }
+</style><script>document.addEventListener("DOMContentLoaded",function(){var b=document.createElement("div");var bp2=(function(){var m2=window.location.pathname.match(/^(.*?)\/(latest|v[0-9.]+)\//);return m2?m2[1]:""})();b.innerHTML='You are viewing docs for cuRobo <b>v0.7.6</b> (legacy). <a href="'+bp2+'/latest/" style="color:#fff;text-decoration:underline;">View the latest docs</a>.';b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:9999;padding:8px 16px;background:#d32f2f;color:#fff;text-align:center;font-size:14px;font-family:sans-serif;";document.body.style.marginTop="36px";document.body.insertBefore(b,document.body.firstChild);});var p=window.location.pathname;var m=p.match(/^(.*?)\/(latest|v[0-9.]+)\//);if(m){var bp=m[1];fetch(bp+"/versions.json").then(function(r){return r.json()}).then(function(vs){if(!vs||vs.length<2)return;var s=document.createElement("select");s.setAttribute("aria-label","Version");s.style.cssText="margin:0.5rem 0;padding:4px 8px;width:100%;border:1px solid var(--color-sidebar-link-text,#666);border-radius:4px;background:var(--color-sidebar-background,#fff);color:var(--color-sidebar-link-text,#333);font-size:0.85rem;cursor:pointer;";vs.forEach(function(v){var o=document.createElement("option");o.value=bp+v.url;o.textContent=v.name;if(p.indexOf(bp+v.url)===0)o.selected=true;s.appendChild(o)});s.addEventListener("change",function(){window.location.href=s.value});var c=document.querySelector(".sidebar-brand");if(c)c.appendChild(s)}).catch(function(){});}</script></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
+<label class="overlay sidebar-overlay" for="__navigation">
+  <div class="visually-hidden">Hide navigation sidebar</div>
+</label>
+<label class="overlay toc-overlay" for="__toc">
+  <div class="visually-hidden">Hide table of contents sidebar</div>
+</label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <div class="visually-hidden">Toggle site navigation sidebar</div>
+        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">cuRobo</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle">
+          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <div class="visually-hidden">Toggle table of contents sidebar</div>
+        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <div class="sidebar-logo-container">
+    <img class="sidebar-logo only-light" src="../_static/logo-light-mode.png" alt="Light Logo"/>
+    <img class="sidebar-logo only-dark" src="../_static/logo-dark-mode.png" alt="Dark Logo"/>
+  </div>
+  
+  <span class="sidebar-brand-text">cuRobo</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../research_index.html">Research</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of Research</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../research/research.html">Technical Report</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../research/research_using_curobo.html">Research using cuRobo</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../get_started_index.html">Get Started</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Get Started</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/1_install_instructions.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/1a_quick_overview.html">Basics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2a_python_examples.html">Using in Python</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2b_isaacsim_examples.html">Using with Isaac Sim</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2c_world_collision.html">Collision World Representation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2d_nvblox_demo.html">Using with Depth Camera</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/2e_torch_layer_example.html">Using in a Neural Network</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/4_benchmarks.html">Benchmarks &amp; Profiling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/5_docker_development.html">Docker Development</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/6_known_issues.html">Known Issues</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../get_started/7_api.html">Python API</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../advanced_examples_index.html">Advanced Examples</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of Advanced Examples</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/1_batch_env.html">Batched Environments</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/2_block_stacking_example.html">Block Stacking</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/3_constrained_planning.html">Constrained Planning</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../advanced_examples/4_robot_segmentation.html">Robot Segmentation</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../tutorials_index.html">Tutorials</a><input class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><div class="visually-hidden">Toggle navigation of Tutorials</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../tutorials/1_robot_configuration.html">Configuring a New Robot</a></li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../developer_notes_index.html">Developer Notes</a><input class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><div class="visually-hidden">Toggle navigation of Developer Notes</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../notes/01_robot_list.html">Supported Robots</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/02_numerical_optimization.html">Numerical Optimization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/03_performance_tuning.html">Performance Tuning</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/04_cuda_kernels.html">CUDA Notes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/05_usd_api.html">USD for Robot and World Representation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/07_environment_variables.html">Environment Variables</a></li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle">
+              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <div class="visually-hidden">Toggle table of contents sidebar</div>
+            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="module-curobo.util">
+<span id="curobo-util-package"></span><h1>curobo.util package<a class="headerlink" href="#module-curobo.util" title="Link to this heading">¶</a></h1>
+<section id="submodules">
+<h2>Submodules<a class="headerlink" href="#submodules" title="Link to this heading">¶</a></h2>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.error_metrics.html">curobo.util.error_metrics module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.error_metrics.html#curobo.util.error_metrics.rotation_error_quaternion"><code class="docutils literal notranslate"><span class="pre">rotation_error_quaternion</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.error_metrics.html#curobo.util.error_metrics.rotation_error_matrix"><code class="docutils literal notranslate"><span class="pre">rotation_error_matrix</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.helpers.html">curobo.util.helpers module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.helpers.html#curobo.util.helpers.default_to_regular"><code class="docutils literal notranslate"><span class="pre">default_to_regular</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.helpers.html#curobo.util.helpers.list_idx_if_not_none"><code class="docutils literal notranslate"><span class="pre">list_idx_if_not_none</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.helpers.html#curobo.util.helpers.robust_floor"><code class="docutils literal notranslate"><span class="pre">robust_floor</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.logger.html">curobo.util.logger module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.logger.html#curobo.util.logger.setup_logger"><code class="docutils literal notranslate"><span class="pre">setup_logger</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.logger.html#curobo.util.logger.setup_curobo_logger"><code class="docutils literal notranslate"><span class="pre">setup_curobo_logger</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.logger.html#curobo.util.logger.log_warn"><code class="docutils literal notranslate"><span class="pre">log_warn</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.logger.html#curobo.util.logger.log_info"><code class="docutils literal notranslate"><span class="pre">log_info</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.logger.html#curobo.util.logger.log_error"><code class="docutils literal notranslate"><span class="pre">log_error</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.metrics.html">curobo.util.metrics module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.time"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.time</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.cspace_path_length"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.cspace_path_length</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.perception_success"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.perception_success</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.perception_interpolated_success"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.perception_interpolated_success</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.jerk"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.jerk</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.perception_time"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.perception_time</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.attempts"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.attempts</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.collision"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.collision</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.eef_orientation_path_length"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.eef_orientation_path_length</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.eef_position_path_length"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.eef_position_path_length</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.joint_limit_violation"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.joint_limit_violation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.motion_time"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.motion_time</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.orientation_error"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.orientation_error</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.physical_violation"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.physical_violation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.position_error"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.position_error</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.self_collision"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.self_collision</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.skip"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.skip</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.solve_time"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.solve_time</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.success"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.success</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboMetrics.trajectory_length"><code class="docutils literal notranslate"><span class="pre">CuroboMetrics.trajectory_length</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.time"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.time</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.cspace_path_length"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.cspace_path_length</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.perception_success"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.perception_success</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.perception_interpolated_success"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.perception_interpolated_success</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.jerk"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.jerk</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.perception_time"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.perception_time</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.from_list"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.from_list</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.print_summary"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.print_summary</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.group_size"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.group_size</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.success"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.success</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.skips"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.skips</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.env_collision_rate"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.env_collision_rate</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.self_collision_rate"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.self_collision_rate</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.joint_violation_rate"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.joint_violation_rate</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.physical_violation_rate"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.physical_violation_rate</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.within_one_cm_rate"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.within_one_cm_rate</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.within_five_cm_rate"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.within_five_cm_rate</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.within_fifteen_deg_rate"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.within_fifteen_deg_rate</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.within_thirty_deg_rate"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.within_thirty_deg_rate</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.eef_position_path_length"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.eef_position_path_length</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.eef_orientation_path_length"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.eef_orientation_path_length</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.attempts"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.attempts</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.position_error"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.position_error</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.orientation_error"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.orientation_error</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.motion_time"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.motion_time</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.solve_time"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.solve_time</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.metrics.html#curobo.util.metrics.CuroboGroupMetrics.solve_time_per_step"><code class="docutils literal notranslate"><span class="pre">CuroboGroupMetrics.solve_time_per_step</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.sample_lib.html">curobo.util.sample_lib module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig"><code class="docutils literal notranslate"><span class="pre">SampleConfig</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.horizon"><code class="docutils literal notranslate"><span class="pre">SampleConfig.horizon</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.d_action"><code class="docutils literal notranslate"><span class="pre">SampleConfig.d_action</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.tensor_args"><code class="docutils literal notranslate"><span class="pre">SampleConfig.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.fixed_samples"><code class="docutils literal notranslate"><span class="pre">SampleConfig.fixed_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.sample_ratio"><code class="docutils literal notranslate"><span class="pre">SampleConfig.sample_ratio</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.seed"><code class="docutils literal notranslate"><span class="pre">SampleConfig.seed</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.filter_coeffs"><code class="docutils literal notranslate"><span class="pre">SampleConfig.filter_coeffs</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.n_knots"><code class="docutils literal notranslate"><span class="pre">SampleConfig.n_knots</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.scale_tril"><code class="docutils literal notranslate"><span class="pre">SampleConfig.scale_tril</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.covariance_matrix"><code class="docutils literal notranslate"><span class="pre">SampleConfig.covariance_matrix</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.sample_method"><code class="docutils literal notranslate"><span class="pre">SampleConfig.sample_method</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.cov_mode"><code class="docutils literal notranslate"><span class="pre">SampleConfig.cov_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.sine_period"><code class="docutils literal notranslate"><span class="pre">SampleConfig.sine_period</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleConfig.degree"><code class="docutils literal notranslate"><span class="pre">SampleConfig.degree</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.scale_tril"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.scale_tril</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.get_samples"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.filter_samples"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.filter_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.filter_smooth"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.filter_smooth</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.cov_mode"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.cov_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.covariance_matrix"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.covariance_matrix</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.degree"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.degree</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.fixed_samples"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.fixed_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.n_knots"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.n_knots</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.sample_method"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.sample_method</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.seed"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.seed</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.sine_period"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.sine_period</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.horizon"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.horizon</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.d_action"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.d_action</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.tensor_args"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.sample_ratio"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.sample_ratio</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.BaseSampleLib.filter_coeffs"><code class="docutils literal notranslate"><span class="pre">BaseSampleLib.filter_coeffs</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.get_samples"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.cov_mode"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.cov_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.covariance_matrix"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.covariance_matrix</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.degree"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.degree</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.filter_samples"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.filter_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.filter_smooth"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.filter_smooth</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.fixed_samples"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.fixed_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.n_knots"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.n_knots</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.sample_method"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.sample_method</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.scale_tril"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.scale_tril</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.seed"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.seed</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.sine_period"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.sine_period</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.horizon"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.horizon</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.d_action"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.d_action</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.tensor_args"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.sample_ratio"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.sample_ratio</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonSampleLib.filter_coeffs"><code class="docutils literal notranslate"><span class="pre">HaltonSampleLib.filter_coeffs</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.bspline"><code class="docutils literal notranslate"><span class="pre">bspline</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.scale_tril"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.scale_tril</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.get_samples"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.cov_mode"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.cov_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.covariance_matrix"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.covariance_matrix</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.degree"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.degree</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.fixed_samples"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.fixed_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.n_knots"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.n_knots</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.sample_method"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.sample_method</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.seed"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.seed</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.sine_period"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.sine_period</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.horizon"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.horizon</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.d_action"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.d_action</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.tensor_args"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.sample_ratio"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.sample_ratio</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.KnotSampleLib.filter_coeffs"><code class="docutils literal notranslate"><span class="pre">KnotSampleLib.filter_coeffs</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.scale_tril"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.scale_tril</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.get_samples"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.cov_mode"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.cov_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.covariance_matrix"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.covariance_matrix</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.degree"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.degree</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.filter_samples"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.filter_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.filter_smooth"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.filter_smooth</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.fixed_samples"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.fixed_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.n_knots"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.n_knots</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.sample_method"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.sample_method</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.seed"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.seed</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.sine_period"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.sine_period</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.horizon"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.horizon</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.d_action"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.d_action</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.tensor_args"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.sample_ratio"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.sample_ratio</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.RandomSampleLib.filter_coeffs"><code class="docutils literal notranslate"><span class="pre">RandomSampleLib.filter_coeffs</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib"><code class="docutils literal notranslate"><span class="pre">SineSampleLib</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.get_samples"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.generate_sine_wave"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.generate_sine_wave</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.cov_mode"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.cov_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.covariance_matrix"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.covariance_matrix</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.degree"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.degree</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.filter_samples"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.filter_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.filter_smooth"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.filter_smooth</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.fixed_samples"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.fixed_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.n_knots"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.n_knots</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.sample_method"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.sample_method</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.scale_tril"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.scale_tril</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.seed"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.seed</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.sine_period"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.sine_period</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.horizon"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.horizon</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.d_action"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.d_action</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.tensor_args"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.sample_ratio"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.sample_ratio</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SineSampleLib.filter_coeffs"><code class="docutils literal notranslate"><span class="pre">SineSampleLib.filter_coeffs</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib"><code class="docutils literal notranslate"><span class="pre">StompSampleLib</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.filter_coeffs"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.filter_coeffs</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.get_samples"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.cov_mode"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.cov_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.covariance_matrix"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.covariance_matrix</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.degree"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.degree</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.filter_samples"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.filter_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.filter_smooth"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.filter_smooth</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.fixed_samples"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.fixed_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.n_knots"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.n_knots</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.sample_method"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.sample_method</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.scale_tril"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.scale_tril</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.seed"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.seed</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.sine_period"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.sine_period</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.horizon"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.horizon</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.d_action"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.d_action</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.tensor_args"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.StompSampleLib.sample_ratio"><code class="docutils literal notranslate"><span class="pre">StompSampleLib.sample_ratio</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib"><code class="docutils literal notranslate"><span class="pre">SampleLib</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.get_samples"><code class="docutils literal notranslate"><span class="pre">SampleLib.get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.cov_mode"><code class="docutils literal notranslate"><span class="pre">SampleLib.cov_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.covariance_matrix"><code class="docutils literal notranslate"><span class="pre">SampleLib.covariance_matrix</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.degree"><code class="docutils literal notranslate"><span class="pre">SampleLib.degree</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.filter_samples"><code class="docutils literal notranslate"><span class="pre">SampleLib.filter_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.filter_smooth"><code class="docutils literal notranslate"><span class="pre">SampleLib.filter_smooth</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.fixed_samples"><code class="docutils literal notranslate"><span class="pre">SampleLib.fixed_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.n_knots"><code class="docutils literal notranslate"><span class="pre">SampleLib.n_knots</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.sample_method"><code class="docutils literal notranslate"><span class="pre">SampleLib.sample_method</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.scale_tril"><code class="docutils literal notranslate"><span class="pre">SampleLib.scale_tril</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.seed"><code class="docutils literal notranslate"><span class="pre">SampleLib.seed</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.sine_period"><code class="docutils literal notranslate"><span class="pre">SampleLib.sine_period</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.horizon"><code class="docutils literal notranslate"><span class="pre">SampleLib.horizon</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.d_action"><code class="docutils literal notranslate"><span class="pre">SampleLib.d_action</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.tensor_args"><code class="docutils literal notranslate"><span class="pre">SampleLib.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.sample_ratio"><code class="docutils literal notranslate"><span class="pre">SampleLib.sample_ratio</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.SampleLib.filter_coeffs"><code class="docutils literal notranslate"><span class="pre">SampleLib.filter_coeffs</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.get_ranged_halton_samples"><code class="docutils literal notranslate"><span class="pre">get_ranged_halton_samples</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonGenerator"><code class="docutils literal notranslate"><span class="pre">HaltonGenerator</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonGenerator.reset"><code class="docutils literal notranslate"><span class="pre">HaltonGenerator.reset</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonGenerator.fast_forward"><code class="docutils literal notranslate"><span class="pre">HaltonGenerator.fast_forward</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonGenerator._get_samples"><code class="docutils literal notranslate"><span class="pre">HaltonGenerator._get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonGenerator.get_samples"><code class="docutils literal notranslate"><span class="pre">HaltonGenerator.get_samples</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.HaltonGenerator.get_gaussian_samples"><code class="docutils literal notranslate"><span class="pre">HaltonGenerator.get_gaussian_samples</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.bound_samples"><code class="docutils literal notranslate"><span class="pre">bound_samples</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.gaussian_transform"><code class="docutils literal notranslate"><span class="pre">gaussian_transform</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.generate_noise"><code class="docutils literal notranslate"><span class="pre">generate_noise</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.generate_noise_np"><code class="docutils literal notranslate"><span class="pre">generate_noise_np</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.generate_prime_numbers"><code class="docutils literal notranslate"><span class="pre">generate_prime_numbers</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.generate_van_der_corput_sample"><code class="docutils literal notranslate"><span class="pre">generate_van_der_corput_sample</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.generate_van_der_corput_samples_batch"><code class="docutils literal notranslate"><span class="pre">generate_van_der_corput_samples_batch</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.generate_halton_samples"><code class="docutils literal notranslate"><span class="pre">generate_halton_samples</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.generate_gaussian_halton_samples"><code class="docutils literal notranslate"><span class="pre">generate_gaussian_halton_samples</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.sample_lib.html#curobo.util.sample_lib.generate_gaussian_sobol_samples"><code class="docutils literal notranslate"><span class="pre">generate_gaussian_sobol_samples</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.state_filter.html">curobo.util.state_filter module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.FilterConfig"><code class="docutils literal notranslate"><span class="pre">FilterConfig</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.FilterConfig.filter_coeff"><code class="docutils literal notranslate"><span class="pre">FilterConfig.filter_coeff</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.FilterConfig.dt"><code class="docutils literal notranslate"><span class="pre">FilterConfig.dt</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.FilterConfig.control_space"><code class="docutils literal notranslate"><span class="pre">FilterConfig.control_space</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.FilterConfig.tensor_args"><code class="docutils literal notranslate"><span class="pre">FilterConfig.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.FilterConfig.enable"><code class="docutils literal notranslate"><span class="pre">FilterConfig.enable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.FilterConfig.teleport_mode"><code class="docutils literal notranslate"><span class="pre">FilterConfig.teleport_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.FilterConfig.from_dict"><code class="docutils literal notranslate"><span class="pre">FilterConfig.from_dict</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter"><code class="docutils literal notranslate"><span class="pre">JointStateFilter</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.filter_joint_state"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.filter_joint_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.integrate_jerk"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.integrate_jerk</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.integrate_acc"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.integrate_acc</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.integrate_vel"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.integrate_vel</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.enable"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.enable</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.from_dict"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.from_dict</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.integrate_pos"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.integrate_pos</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.teleport_mode"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.teleport_mode</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.tensor_args"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.tensor_args</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.filter_coeff"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.filter_coeff</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.dt"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.dt</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.control_space"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.control_space</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.state_filter.html#curobo.util.state_filter.JointStateFilter.reset"><code class="docutils literal notranslate"><span class="pre">JointStateFilter.reset</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.tensor_util.html">curobo.util.tensor_util module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.check_tensor_shapes"><code class="docutils literal notranslate"><span class="pre">check_tensor_shapes</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.copy_tensor"><code class="docutils literal notranslate"><span class="pre">copy_tensor</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.copy_if_not_none"><code class="docutils literal notranslate"><span class="pre">copy_if_not_none</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.clone_if_not_none"><code class="docutils literal notranslate"><span class="pre">clone_if_not_none</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.cat_sum"><code class="docutils literal notranslate"><span class="pre">cat_sum</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.cat_sum_horizon"><code class="docutils literal notranslate"><span class="pre">cat_sum_horizon</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.cat_max"><code class="docutils literal notranslate"><span class="pre">cat_max</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.tensor_repeat_seeds"><code class="docutils literal notranslate"><span class="pre">tensor_repeat_seeds</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.tensor_util.html#curobo.util.tensor_util.fd_tensor"><code class="docutils literal notranslate"><span class="pre">fd_tensor</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.torch_utils.html">curobo.util.torch_utils module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.find_first_idx"><code class="docutils literal notranslate"><span class="pre">find_first_idx</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.find_last_idx"><code class="docutils literal notranslate"><span class="pre">find_last_idx</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.is_cuda_graph_available"><code class="docutils literal notranslate"><span class="pre">is_cuda_graph_available</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.is_cuda_graph_reset_available"><code class="docutils literal notranslate"><span class="pre">is_cuda_graph_reset_available</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.is_torch_compile_available"><code class="docutils literal notranslate"><span class="pre">is_torch_compile_available</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.get_torch_compile_options"><code class="docutils literal notranslate"><span class="pre">get_torch_compile_options</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.disable_torch_compile_global"><code class="docutils literal notranslate"><span class="pre">disable_torch_compile_global</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.set_torch_compile_global_options"><code class="docutils literal notranslate"><span class="pre">set_torch_compile_global_options</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.get_torch_jit_decorator"><code class="docutils literal notranslate"><span class="pre">get_torch_jit_decorator</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.is_lru_cache_avaiable"><code class="docutils literal notranslate"><span class="pre">is_lru_cache_avaiable</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.get_cache_fn_decorator"><code class="docutils literal notranslate"><span class="pre">get_cache_fn_decorator</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.empty_decorator"><code class="docutils literal notranslate"><span class="pre">empty_decorator</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.torch_utils.html#curobo.util.torch_utils.round_away_from_zero"><code class="docutils literal notranslate"><span class="pre">round_away_from_zero</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.trajectory.html">curobo.util.trajectory module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.InterpolateType"><code class="docutils literal notranslate"><span class="pre">InterpolateType</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.InterpolateType.LINEAR"><code class="docutils literal notranslate"><span class="pre">InterpolateType.LINEAR</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.InterpolateType.CUBIC"><code class="docutils literal notranslate"><span class="pre">InterpolateType.CUBIC</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.InterpolateType.QUINTIC"><code class="docutils literal notranslate"><span class="pre">InterpolateType.QUINTIC</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.InterpolateType.LINEAR_CUDA"><code class="docutils literal notranslate"><span class="pre">InterpolateType.LINEAR_CUDA</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.InterpolateType.KUNZ_STILMAN_OPTIMAL"><code class="docutils literal notranslate"><span class="pre">InterpolateType.KUNZ_STILMAN_OPTIMAL</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.get_linear_traj"><code class="docutils literal notranslate"><span class="pre">get_linear_traj</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.get_smooth_trajectory"><code class="docutils literal notranslate"><span class="pre">get_smooth_trajectory</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.get_spline_interpolated_trajectory"><code class="docutils literal notranslate"><span class="pre">get_spline_interpolated_trajectory</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.get_batch_interpolated_trajectory"><code class="docutils literal notranslate"><span class="pre">get_batch_interpolated_trajectory</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.get_cpu_linear_interpolation"><code class="docutils literal notranslate"><span class="pre">get_cpu_linear_interpolation</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.get_cpu_kunz_stilman_interpolation"><code class="docutils literal notranslate"><span class="pre">get_cpu_kunz_stilman_interpolation</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.get_interpolated_trajectory"><code class="docutils literal notranslate"><span class="pre">get_interpolated_trajectory</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.linear_smooth"><code class="docutils literal notranslate"><span class="pre">linear_smooth</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.calculate_dt_fixed"><code class="docutils literal notranslate"><span class="pre">calculate_dt_fixed</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.calculate_dt"><code class="docutils literal notranslate"><span class="pre">calculate_dt</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.calculate_dt_no_clamp"><code class="docutils literal notranslate"><span class="pre">calculate_dt_no_clamp</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.calculate_traj_steps"><code class="docutils literal notranslate"><span class="pre">calculate_traj_steps</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.trajectory.html#curobo.util.trajectory.calculate_tsteps"><code class="docutils literal notranslate"><span class="pre">calculate_tsteps</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.usd_helper.html">curobo.util.usd_helper module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.set_prim_translate"><code class="docutils literal notranslate"><span class="pre">set_prim_translate</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.set_prim_transform"><code class="docutils literal notranslate"><span class="pre">set_prim_transform</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.get_prim_world_pose"><code class="docutils literal notranslate"><span class="pre">get_prim_world_pose</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.get_transform"><code class="docutils literal notranslate"><span class="pre">get_transform</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.get_position_quat"><code class="docutils literal notranslate"><span class="pre">get_position_quat</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.set_geom_mesh_attrs"><code class="docutils literal notranslate"><span class="pre">set_geom_mesh_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.set_geom_cube_attrs"><code class="docutils literal notranslate"><span class="pre">set_geom_cube_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.set_geom_cylinder_attrs"><code class="docutils literal notranslate"><span class="pre">set_geom_cylinder_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.set_geom_sphere_attrs"><code class="docutils literal notranslate"><span class="pre">set_geom_sphere_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.set_cylinder_attrs"><code class="docutils literal notranslate"><span class="pre">set_cylinder_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.get_cylinder_attrs"><code class="docutils literal notranslate"><span class="pre">get_cylinder_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.get_capsule_attrs"><code class="docutils literal notranslate"><span class="pre">get_capsule_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.get_cube_attrs"><code class="docutils literal notranslate"><span class="pre">get_cube_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.get_sphere_attrs"><code class="docutils literal notranslate"><span class="pre">get_sphere_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.get_mesh_attrs"><code class="docutils literal notranslate"><span class="pre">get_mesh_attrs</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.create_stage"><code class="docutils literal notranslate"><span class="pre">create_stage</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper"><code class="docutils literal notranslate"><span class="pre">UsdHelper</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.create_stage"><code class="docutils literal notranslate"><span class="pre">UsdHelper.create_stage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.add_subroot"><code class="docutils literal notranslate"><span class="pre">UsdHelper.add_subroot</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.load_stage_from_file"><code class="docutils literal notranslate"><span class="pre">UsdHelper.load_stage_from_file</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.load_stage"><code class="docutils literal notranslate"><span class="pre">UsdHelper.load_stage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.get_pose"><code class="docutils literal notranslate"><span class="pre">UsdHelper.get_pose</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.get_obstacles_from_stage"><code class="docutils literal notranslate"><span class="pre">UsdHelper.get_obstacles_from_stage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.add_world_to_stage"><code class="docutils literal notranslate"><span class="pre">UsdHelper.add_world_to_stage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.get_prim_from_obstacle"><code class="docutils literal notranslate"><span class="pre">UsdHelper.get_prim_from_obstacle</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.add_cuboid_to_stage"><code class="docutils literal notranslate"><span class="pre">UsdHelper.add_cuboid_to_stage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.add_cylinder_to_stage"><code class="docutils literal notranslate"><span class="pre">UsdHelper.add_cylinder_to_stage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.add_sphere_to_stage"><code class="docutils literal notranslate"><span class="pre">UsdHelper.add_sphere_to_stage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.add_mesh_to_stage"><code class="docutils literal notranslate"><span class="pre">UsdHelper.add_mesh_to_stage</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.get_obstacle_from_prim"><code class="docutils literal notranslate"><span class="pre">UsdHelper.get_obstacle_from_prim</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.write_stage_to_file"><code class="docutils literal notranslate"><span class="pre">UsdHelper.write_stage_to_file</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.create_animation"><code class="docutils literal notranslate"><span class="pre">UsdHelper.create_animation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.create_obstacle_animation"><code class="docutils literal notranslate"><span class="pre">UsdHelper.create_obstacle_animation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.create_linkpose_robot_animation"><code class="docutils literal notranslate"><span class="pre">UsdHelper.create_linkpose_robot_animation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.add_material"><code class="docutils literal notranslate"><span class="pre">UsdHelper.add_material</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.save"><code class="docutils literal notranslate"><span class="pre">UsdHelper.save</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.write_trajectory_animation"><code class="docutils literal notranslate"><span class="pre">UsdHelper.write_trajectory_animation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.load_robot"><code class="docutils literal notranslate"><span class="pre">UsdHelper.load_robot</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.write_trajectory_animation_with_robot_usd"><code class="docutils literal notranslate"><span class="pre">UsdHelper.write_trajectory_animation_with_robot_usd</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.create_grid_usd"><code class="docutils literal notranslate"><span class="pre">UsdHelper.create_grid_usd</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.load_robot_usd"><code class="docutils literal notranslate"><span class="pre">UsdHelper.load_robot_usd</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.get_robot_prims"><code class="docutils literal notranslate"><span class="pre">UsdHelper.get_robot_prims</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.update_robot_joint_state"><code class="docutils literal notranslate"><span class="pre">UsdHelper.update_robot_joint_state</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="curobo.util.usd_helper.html#curobo.util.usd_helper.UsdHelper.write_motion_gen_log"><code class="docutils literal notranslate"><span class="pre">UsdHelper.write_motion_gen_log</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.warp.html">curobo.util.warp module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.warp.html#curobo.util.warp.init_warp"><code class="docutils literal notranslate"><span class="pre">init_warp</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.warp.html#curobo.util.warp.warp_support_sdf_struct"><code class="docutils literal notranslate"><span class="pre">warp_support_sdf_struct</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.warp.html#curobo.util.warp.warp_support_kernel_key"><code class="docutils literal notranslate"><span class="pre">warp_support_kernel_key</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.warp.html#curobo.util.warp.is_runtime_warp_kernel_enabled"><code class="docutils literal notranslate"><span class="pre">is_runtime_warp_kernel_enabled</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.warp_interpolation.html">curobo.util.warp_interpolation module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.warp_interpolation.html#curobo.util.warp_interpolation.get_cuda_linear_interpolation"><code class="docutils literal notranslate"><span class="pre">get_cuda_linear_interpolation</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="curobo.util.xrdf_utils.html">curobo.util.xrdf_utils module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.xrdf_utils.html#curobo.util.xrdf_utils.return_value_if_exists"><code class="docutils literal notranslate"><span class="pre">return_value_if_exists</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="curobo.util.xrdf_utils.html#curobo.util.xrdf_utils.convert_xrdf_to_curobo"><code class="docutils literal notranslate"><span class="pre">convert_xrdf_to_curobo</span></code></a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          
+          
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2023-2024, NVIDIA
+            </div>
+            Made with 
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            <div class="icons">
+              <a class="muted-link " href="https://github.com/NVLabs/curobo" aria-label="GitHub">
+                <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
+                </svg>
+            </a>
+              
+            </div>
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">curobo.util package</a><ul>
+<li><a class="reference internal" href="#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=674563c9"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/scripts/furo.js?v=5fa4622c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    </body>
+</html>
