@@ -1,0 +1,19 @@
+# Force users to choose a structured template; "blank" issues skip all triage info.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Usage question / how-to
+    url: https://github.com/NVlabs/curobo/discussions
+    about: |
+      Not sure if it's a bug? Trying to figure out how to use a feature? Please ask in
+      Discussions — that's where the cuRobo team and community help with usage questions.
+
+  - name: Documentation
+    url: https://nvlabs.github.io/curobo/
+    about: API reference, getting-started tutorials, and how-to guides.
+
+  - name: cuRobo v1 (legacy, v0.7.x)
+    url: https://github.com/NVlabs/curobo/tree/v0.7.8
+    about: |
+      cuRoboV2 has a new API. If you're still on v0.7.x, please pin to the v0.7.8 tag
+      and mention the version in your report.

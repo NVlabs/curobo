@@ -1,50 +1,196 @@
-# Copyright (c) 2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-#
-# NVIDIA CORPORATION and its licensors retain all intellectual property
-# and proprietary rights in and to this software, related documentation
-# and any modifications thereto. Any use, reproduction, disclosure or
-# distribution of this software and related documentation without an express
-# license agreement from NVIDIA CORPORATION is strictly prohibited.
+# SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["setuptools>=45", "setuptools_scm>=6.2", "wheel", "torch"]
-
+requires = ["setuptools>=45", "setuptools_scm>=6.2", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.black]
-line-length = 100
-extend-exclude = "deprecated/"
+[project]
+name = "nvidia-curobo"
+dynamic = ["version"]
+description = "GPU robot motion toolkit containing cuda accelerated kinematics, IK, MPC, Global motion planning, and optimization solvers."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [{name = "NVIDIA"}]
+requires-python = ">=3.10"
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Robotics",
+]
 
-# See the `setuptools_scm` documentation for the description of the schemes used below.
-# https://pypi.org/project/setuptools-scm/
-# NOTE: If these values are updated, they need to be also updated in `__init__.py`.
+dependencies = [
+    "importlib_resources",
+    "matplotlib",
+    "networkx",
+    "numpy",
+    "numpy-quaternion",
+    "pyyaml",
+    "scipy>=1.7.0",
+    "setuptools_scm>=6.2",
+    "tqdm",
+    "trimesh",
+    "viser",
+    "warp-lang>=0.10.0",
+    "wheel",
+    "yourdfpy>=0.0.53",
+]
+
+[project.optional-dependencies]
+
+cu12 = [
+    "cuda-core[cu12]>=0.7",
+    "nvidia-cuda-runtime-cu12>=12",
+]
+
+cu13 = [
+    "cuda-core[cu13]>=0.7",
+    "nvidia-cuda-runtime>=13",
+]
+
+cu12-torch = [
+    "cuda-core[cu12]>=0.6",
+    "nvidia-cuda-runtime-cu12>=12",
+    "torch>=2.5",
+]
+
+cu13-torch = [
+    "cuda-core[cu13]>=0.6",
+    "nvidia-cuda-runtime>=13",
+    "torch>=2.9",
+]
+
+pybind =[
+    "pybind11",
+]
+
+usd = [
+    "usd-core",
+]
+
+dev = [
+    "build",
+    "ruff",
+    "pytest>6.2.5,<9.0",
+    "pytest-cov",
+    "pytest-xdist",
+    "ty",
+]
+
+doc = [
+    "anybadge",
+    "sphinx",
+    "sphinx_rtd_theme",
+    "graphviz>=0.20.1",
+    "furo",
+    "myst-parser",
+    "sphinx-copybutton",
+    "sphinx-autodoc-typehints",
+    "sphinx_reredirects",
+]
+
+benchmark = [
+    "tabulate",
+    "pandas",
+    "robometrics[evaluator] @ git+https://github.com/fishbotics/robometrics.git",
+    "pin",
+    "seaborn",
+]
+
+[project.urls]
+Homepage = "https://nvlabs.github.io/curobo"
+Repository = "https://github.com/NVlabs/curobo"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+exclude = ["tests"]
+
+[tool.setuptools.package-data]
+# Include kernel source files for cuda.core runtime compilation
+"curobo._src.curobolib.kernels" = ["**/*.cu", "**/*.cuh", "**/*.h"]
+# Include pybind binding and launch files for optional pybind compilation
+"curobo._src.curobolib.backends.pybind" = ["*.cpp", "*.cu"]
+# Include compiled shared objects
+"*" = ["*.so"]
+
+[tool.ruff]
+line-length = 99
+exclude = [".git", "build", "deprecated", "dist", "venv"]
+target-version = "py38"
+
+[tool.ruff.format]
+# Use ruff's formatter instead of black (same style, much faster)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint]
+# Enable flake8 rules (F), pycodestyle errors (E) and warnings (W)
+# Plus docstring conventions (D) and isort (I)
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "D",   # pydocstyle
+]
+
+ignore = [
+    "E203",  # whitespace before ':'
+    "E731",  # do not assign a lambda expression, use a def
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+# Replicate isort configuration
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+known-first-party = ["curobo"]
+
+
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"
 local_scheme = "dirty-tag"
 
-[tool.isort]
-# see https://github.com/PyCQA/isort#multi-line-output-modes
-multi_line_output = 2
-import_heading_stdlib = "Standard Library"
-import_heading_thirdparty = "Third Party"
-import_heading_firstparty = "CuRobo"
-import_heading_localfolder = "Local Folder"
-import_heading_isaacgym = "Loading isaacgym before pytorch"
-known_first_party = "CuRobo"
-known_isaacgym = "isaacgym"
-line_length = 100
-sections = "FUTURE, STDLIB, ISAACGYM, THIRDPARTY, FIRSTPARTY, LOCALFOLDER"
 
 [tool.pytest.ini_options]
-norecursedirs = [".git", ".venv", "deprecated", "dist"]
-python_files = ["*_test.py"]
-
-
-#[tool.pylint.TYPECHECK]
-# List of members which are set dynamically and missed by Pylint inference
-# system, and so shouldn't trigger E1101 when accessed.
-# generated-members=numpy.*, torch.*
-
+minversion = "7.0"
+testpaths = ["curobo/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "-l",
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-n", "4",
+    "--dist", "loadscope",
+]
+norecursedirs = [
+    ".git",
+    ".tox",
+    "dist",
+    "build",
+    "*.egg",
+    "__pycache__",
+    "_build",
+    "docs",
+    "examples",
+    "content",
+]
+log_cli = false
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 
 
 [tool.coverage.report]
@@ -53,17 +199,74 @@ exclude_lines = [
 	"pragma: no cover", # Need to re-enable the standard no cover match
 	'^\s*pass\s*$',  # Skip any pass lines
     "wp.kernel",
+    "wp.func",
     "torch.jit.script",
     "abstractmethod",
     "def backward",
     "staticmethod\ndef forward",
+    "get_torch_jit_decorator",
+    "deprecated",
 ]
+
 omit = [
-    "src/curobo/util/error_metrics.py",
-    "src/curobo/rollout/cost/straight_line_cost.py",
-    "src/curobo/rollout/cost/projected_dist_cost.py",
-    "src/curobo/rollout/cost/manipulability_cost.py",
+    "curobo/examples/*",
+    "curobo/tests/*",
+    "curobo/content",
+    "curobo/_src/curobolib/*",
+    "curobo/_src/cuda_robot_model/usd_kinematics_parser.py",
 ]
 
 [tool.interrogate]
 ignore-regex = ["forward", "backward"]
+
+[tool.ty]
+# Files and directories to exclude from type checking
+extend-exclude = [
+    ".git",
+    "build",
+    "deprecated",
+    "dist",
+    "venv",
+    ".venv",
+]
+
+# Configure specific type checking rules
+# See: https://docs.astral.sh/ty/rules/
+[tool.ty.lint]
+# Add any specific rule configurations here as needed
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "cu12" },
+    { extra = "cu13" },
+  ],
+  [
+    { extra = "cu12" },
+    { extra = "cu13-torch" },
+  ],
+  [
+    { extra = "cu12-torch" },
+    { extra = "cu13" },
+  ],
+  [
+    { extra = "cu12-torch" },
+    { extra = "cu13-torch" },
+  ],
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128", extra = "cu12-torch" },
+  { index = "pytorch-cu130", extra = "cu13-torch" },
+]

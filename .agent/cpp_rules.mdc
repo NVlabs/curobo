@@ -1,0 +1,80 @@
+---
+globs: *.cuh,*.cpp,*.h,*.cu
+alwaysApply: false
+---
+
+
+
+# C++ Production-Ready Coding Standards
+
+Use C++17 standards.
+
+## Naming Conventions
+
+1. **Functions and Variables**: Use snake_case for function names, variable names.
+2. **Classes and Structs**: Use PascalCase for class, struct names.
+3. **Template Parameters**: Use PascalCase without prefixes (e.g., `ScalarType`, `AccumulatorType`, `ValueType`)
+   - ✅ Good: `template<typename AccumulatorType>`
+   - ❌ Avoid: `template<typename TSum>`, `template<typename sum_t>`
+4. **Constants**: Use SCREAMING_SNAKE_CASE for compile-time constants.
+5. **Namespaces**: Use snake_case for namespace names.
+6. **Enums**: Use PascalCase for enum class names, SCREAMING_SNAKE_CASE for values.
+
+## Modern C++ Best Practices
+
+7. **Prefer `auto`**: Use `auto` for type deduction when type is obvious from context.
+8. **Use `const` and `constexpr`**: Mark variables const when they don't change, use constexpr for compile-time constants.
+9. **Range-based for loops**: Prefer `for (const auto& item : container)` over index-based loops.
+10. **Smart pointers**: Use `std::unique_ptr`, `std::shared_ptr` instead of raw pointers for ownership.
+11. **RAII**: Use Resource Acquisition Is Initialization for all resource management.
+12. **Move semantics**: Use `std::move` and `std::forward` appropriately for performance.
+
+## Code Organization
+
+13. **Header guards**: Use `#pragma once` in headers instead of traditional include guards.
+14. **Forward declarations**: Use forward declarations in headers to reduce compilation dependencies.
+15. **Separate interface from implementation**: Keep headers clean with minimal includes.
+16. **One class per file**: Generally keep one main class per header/source file pair.
+
+## Error Handling
+
+17. **Exceptions**: Use exceptions for exceptional circumstances, not for control flow.
+18. **Error codes**: For performance-critical code (like CUDA kernels), prefer error codes over exceptions.
+19. **Input validation**: Always validate function parameters, especially in public APIs.
+20. **Assertions**: Use `assert()` for debugging, `static_assert()` for compile-time checks.
+
+## Performance and Safety
+
+21. **Pass by const reference**: For non-trivial types, pass by `const T&` unless you need to copy.
+22. **Avoid unnecessary copies**: Use move constructors and assignment operators.
+23. **Initialize all variables**: Always initialize variables at declaration.
+24. **Prefer stack allocation**: Use stack allocation over heap when possible.
+25. **Bounds checking**: Use `.at()` instead of `[]` for containers when bounds checking is needed.
+
+## CUDA-Specific Rules
+
+26. **Device functions**: Mark CUDA device functions with `__device__` and `__forceinline__` for performance.
+27. **Memory management**: Always check CUDA error codes for memory operations.
+28. **Shared memory**: Use `__shared__` memory efficiently, avoid bank conflicts.
+29. **Thread synchronization**: Use `__syncthreads()` properly to avoid race conditions.
+
+## Documentation
+
+30. **Function documentation**: Document all public functions with clear parameter and return descriptions.
+31. **Complex algorithms**: Add comments explaining the mathematical or algorithmic approach.
+32. **Template parameters**: Document template parameter requirements and constraints.
+
+## Code Quality
+
+33. **No magic numbers**: Use named constants instead of hardcoded values.
+34. **Single responsibility**: Each function should have one clear purpose.
+35. **Consistent formatting**: Use consistent indentation and spacing throughout.
+36. **Avoid deep nesting**: Prefer early returns to reduce nesting levels.
+37. **Meaningful names**: Use descriptive names that explain intent, not implementation.
+
+
+## Compilation
+This project is compiled using pytorch. Here are the steps to compile:
+
+1. Go to repository root folder
+2. export TORCH_CUDA_ARCH_LIST=8.0+PTX && pip install -e . --no-build-isolation

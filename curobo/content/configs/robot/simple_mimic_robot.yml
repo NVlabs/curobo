@@ -1,0 +1,35 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+robot_cfg:
+  version: 2.0
+  kinematics:
+    urdf_path: "robot/simple/simple_mimic_robot.urdf"
+    asset_root_path: "robot/simple"
+    base_link: "base_link"
+    tool_frames: ["ee_link"]
+    collision_link_names: null
+    collision_spheres: null
+    collision_sphere_buffer: 0.004 # 0.0025
+    extra_collision_spheres: null
+    use_global_cumul: True
+    self_collision_ignore: null
+
+
+    self_collision_buffer: null
+    mesh_link_names:
+      [
+        "base_link",
+        "chain_1_link_1",
+        "chain_1_link_2",
+        "ee_link",
+
+      ]
+    lock_joints: {"chain_1_active_joint_1": 0.2}
+    extra_links: null
+    cspace:
+      joint_names: ["chain_1_active_joint_1", "active_joint_2"]
+      default_joint_position: [0.3, 0.0]
+      null_space_weight: [1,1]
+      cspace_distance_weight: [1,1]
+      max_acceleration: 15.0
+      max_jerk: 500.0

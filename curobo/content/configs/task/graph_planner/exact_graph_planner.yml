@@ -1,0 +1,25 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+graph_planner:
+  max_nodes: 20000 # node list
+  steer_buffer_size: 5000 # for steering
+  cspace_similarity_threshold: 0.001
+
+  sample_rejection_ratio: 10
+  neighbors_per_node: 10
+  feasibility_buffer_size: 2000
+  new_nodes_per_iteration: 20
+
+  max_path_finding_iterations: 4
+  min_finetune_iterations: 2
+  use_default_position_heuristic: True
+
+  exploration_radius: 1.05
+  exploration_radius_growth_factor: 1.05
+  sampler_seed: 0
+  sampler_buffer_size: 2000
+  connect_terminal_nodes_with_nearest: False
+  ellipsoid_projection_method: "householder"
+
+  neighbors_per_node_growth_factor: 1.05
+  new_nodes_per_iteration_growth_factor: 1.05

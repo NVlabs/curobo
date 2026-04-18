@@ -1,0 +1,87 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+optimizer:
+  cost_convergence: 0.00
+  cost_delta_threshold: 0.00
+  cost_relative_threshold: 0.001
+  convergence_iteration: 10
+  debug_info:
+    visual_traj: null
+  epsilon: 0.01
+  fixed_iters: true
+  history: 27 # 27
+  inner_iters: 25
+  last_best: 10
+  line_search_scale:
+  - 0.0
+  - 0.1
+  - 0.5
+  - 1.0
+  line_search_type: approx_wolfe
+  num_iters: 100
+  num_problems: 1
+  solver_name: lbfgs
+  solver_type: lbfgs
+  stable_mode: true
+  step_scale: 0.98
+  store_debug: false
+  sync_cuda_time: true
+  use_coo_sparse: true
+  use_cuda_kernel_step_direction: true
+  use_cuda_kernel_line_search: true
+  use_cuda_kernel_shared_buffers: true
+  use_cuda_kernel_update_best: true
+  return_best_action: true
+  initial_step_scale: 0.001
+
+
+rollout:
+  constraint_cfg:
+    scene_collision_cfg:
+      activation_distance: 0.0025
+      use_speed_metric: true
+      use_sweep: true
+      use_sweep_kernel: true
+      weight: 100000.0 # 100000.0
+    self_collision_cfg:
+      weight: 10000.0
+
+  cost_cfg:
+    cspace_cfg:
+      activation_distance:
+      - 0.01
+      - 0.01
+      - 0.01
+      - 0.01
+      - 0.01
+      cost_type: STATE
+      retime_regularization_weights: true
+      retime_weights: true
+      squared_l2_regularization_weight:
+      - 1000.0 # velocity
+      - 10000.0 # acceleration
+      - 5.0 # jerk
+      - 0.0
+      - 10000.0 # energy
+      weight:
+      - 10000.0
+      - 10000.0
+      - 100.0
+      - 50.0
+      - 100.0
+      cspace_target_weight: 0.0
+      cspace_non_terminal_weight_factor: 0.0
+
+    tool_pose_cfg:
+      use_lie_group: false
+      _non_terminal_pose_axes_weight_factor:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+
+      weight:
+      - 1000000.0
+      - 100000.0

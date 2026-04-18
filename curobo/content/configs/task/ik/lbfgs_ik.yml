@@ -1,0 +1,70 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+rollout:
+  cost_cfg:
+    cspace_cfg:
+      activation_distance:
+      - 0.01
+      - 0.01
+
+      weight:
+      - 5000.0
+      - 1000.0
+      cost_type: POSITION
+      cspace_target_weight: 0.0
+      squared_l2_regularization_weight:
+      - 0.0   # velocity regularization
+      - 0.0   # acceleration regularization
+
+    tool_pose_cfg:
+      _project_distance_to_goal: false
+      weight:
+        - 10000.0
+        - 500.0
+
+      _terminal_pose_convergence_tolerance:
+        - 1.0e-8 #1.0e-8 #1.0e-8
+        - 1.0e-8 #1.0e-8 #1.0e-6
+      use_grad_input: false
+      use_lie_group: false
+
+
+  constraint_cfg:
+    scene_collision_cfg:
+      activation_distance: 0.00
+      weight: 5000.0
+    self_collision_cfg:
+      weight: 5000.0
+
+optimizer:
+  solver_type: "lbfgs"
+  solver_name: "lbfgs"
+  cost_convergence: 0.0
+  cost_delta_threshold: 0.0
+  cost_relative_threshold: 0.01
+  convergence_iteration: 10
+  convergence_ratio: 0.98
+  debug_info:
+    visual_traj: null
+  epsilon: 0.01
+  fixed_iters: True
+  minum_iters: 10
+  history: 7
+  inner_iters: 20
+  line_search_scale:
+  - 0.0
+  - 0.1
+  - 0.5
+  - 1.0
+  line_search_type: approx_wolfe
+  num_iters: 100
+  num_problems: 1
+  stable_mode: true
+  step_scale: 0.98
+  store_debug: false
+  sync_cuda_time: true
+  use_cuda_kernel_step_direction: true
+  use_cuda_kernel_line_search: true
+  use_cuda_kernel_shared_buffers: true
+  return_best_action: true
+  initial_step_scale: 0.001

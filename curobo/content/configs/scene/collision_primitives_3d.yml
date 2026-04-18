@@ -1,0 +1,28 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+cuboid:
+  cube2:
+    dims: [0.3, 0.1, 0.5] # x, y, z
+    pose: [0.4, -0.3, 0.2, 1, 0, 0, 0.0] # x
+  cube3:
+    dims: [2.0, 2.0, 0.2] # x, y, z
+    pose: [0.0, 0.0, -0.1, 1, 0, 0, 0.0] # x
+sphere:
+  sphere1:
+    position: [0.5,0.1,0.1]
+    radius: 0.1
+  sphere2:
+    position: [-0.5,0.1,0.1]
+    radius: 0.1
+
+capsule:
+  capsule1:
+    radius: 0.1
+    base: [0.0,0.0,0.1]
+    tip: [0.0,0.0,0.5]
+    pose: [0.5,0.0,0.0,1.0,0.0,0.0,0.0]
+  capsule2:
+    radius: 0.1
+    base: [0.0,0.0,0.1]
+    tip: [0.0,0.0,0.5]
+    pose: [0.0,0.5,0.0,1.0,0.0,0.0,0.0]

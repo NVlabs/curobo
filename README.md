@@ -1,60 +1,48 @@
-<!--
-Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-
-NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-property and proprietary rights in and to this material, related
-documentation and any modifications thereto. Any use, reproduction,
-disclosure or distribution of this material and related documentation
-without an express license agreement from NVIDIA CORPORATION or
-its affiliates is strictly prohibited.
--->
+<!-- SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # cuRobo
 
 *CUDA Accelerated Robot Library*
 
-**Check [curobo.org](https://curobo.org) for installing and getting started with examples!**
+**[Documentation](https://nvlabs.github.io/curobo) | [Paper](https://arxiv.org/abs/2603.05493)**
 
-Use [Discussions](https://github.com/NVlabs/curobo/discussions) for questions on using this package.
+> [!NOTE]
+> cuRoboV2 is a significant rewrite and the public API has changed from cuRobo v1.
+> If you depend on the v1 API, pin to the [`v0.7.8`](https://github.com/NVlabs/curobo/tree/v0.7.8) tag.
 
-Use [Issues](https://github.com/NVlabs/curobo/issues) if you find a bug.
+cuRobo is a CUDA-accelerated library for robot motion generation. It provides GPU-parallel algorithms for forward/inverse kinematics, collision checking, trajectory optimization, geometric planning, and motion generation, scaling from single-arm manipulators to high-DoF humanoids.
 
-
-cuRobo's collision-free motion planner is available for commercial applications as a
-MoveIt plugin: [Isaac ROS cuMotion](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion)
-
-For business inquiries of this python library, please visit our website and submit the form: [NVIDIA Research Licensing](https://www.nvidia.com/en-us/research/inquiries/)
-
-
-## Overview
-
-cuRobo is a CUDA accelerated library containing a suite of robotics algorithms that run significantly faster than existing implementations leveraging parallel compute. cuRobo currently provides the following algorithms: (1) forward and inverse kinematics,
-(2) collision checking between robot and world, with the world represented as Cuboids, Meshes, and Depth images, (3) numerical optimization with gradient descent, L-BFGS, and MPPI, (4) geometric planning, (5) trajectory optimization, (6) motion generation that combines inverse kinematics, geometric planning, and trajectory optimization to generate global motions within 30ms.
-
-<p align="center">
-<img width="500" src="images/robot_demo.gif">
-</p>
-
-
-cuRobo performs trajectory optimization across many seeds in parallel to find a solution. cuRobo's trajectory optimization penalizes jerk and accelerations, encouraging smoother and shorter trajectories. Below we compare cuRobo's motion generation on the left to a BiRRT planner for the motion planning phases in a pick and place task.
-
-<p align="center">
-<img width="500" src="images/rrt_compare.gif">
-</p>
-
+Key capabilities:
+- **Dynamics-aware trajectory optimization** with B-spline representation enforcing smoothness and torque limits
+- **GPU-native ESDF perception** that generates dense signed distance fields from depth images, up to 10x faster than state-of-the-art
+- **Scalable whole-body computation** including topology-aware kinematics, differentiable inverse dynamics, and map-reduce self-collision for high-DoF robots
+- **Collision-free motion generation** combining IK, geometric planning, and trajectory optimization.
 
 ## Citation
 
-If you found this work useful, please cite the below report,
+If you found this work useful, please cite cuRoboV2,
 
 ```
-@misc{curobo_report23,
-      title={cuRobo: Parallelized Collision-Free Minimum-Jerk Robot Motion Generation},
-      author={Balakumar Sundaralingam and Siva Kumar Sastry Hari and Adam Fishman and Caelan Garrett
-              and Karl Van Wyk and Valts Blukis and Alexander Millane and Helen Oleynikova and Ankur Handa
-              and Fabio Ramos and Nathan Ratliff and Dieter Fox},
-      year={2023},
-      eprint={2310.17274},
+@misc{curobo_v2,
+      title={cuRoboV2: Dynamics-Aware Motion Generation with Depth-Fused Distance Fields for High-DoF Robots},
+      author={Balakumar Sundaralingam and Adithyavairavan Murali and Stan Birchfield},
+      year={2026},
+      eprint={2603.05493},
       archivePrefix={arXiv},
       primaryClass={cs.RO}
 }
 ```
+
+## Contributing
+
+Contributions are welcome. Bugs: [open an issue](https://github.com/NVlabs/curobo/issues). General usage questions: [GitHub Discussions](https://github.com/NVlabs/curobo/discussions). For pull requests, please read [`CONTRIBUTING.md`](CONTRIBUTING.md). All commits must include a DCO sign-off (`git commit -s`).
+
+## License
+
+cuRobo is released under the [Apache 2.0 license](LICENSE).
+
+The example robot assets bundled in this repository are provided under their respective licenses. See [LICENSE_ASSETS](LICENSE_ASSETS) for details.
+
+## Third-Party Software
+
+This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.

@@ -1,11 +1,15 @@
----
-Language: Cpp
-BasedOnStyle: Google
-ColumnLimit: 100
-IncludeBlocks: Preserve
-DerivePointerAlignment: false
-PointerAlignment: Right
----
-Language: Proto
-BasedOnStyle: Google
-...
+CompileFlags:
+  Add:
+    - -std=c++17
+    - -I/usr/local/cuda/include
+  Remove:
+    - -W*
+Diagnostics:
+  ClangTidy:
+    Add:
+      - modernize-*
+      - performance-*
+      - readability-*
+    Remove:
+      - modernize-use-trailing-return-type
+      - readability-braces-around-statements

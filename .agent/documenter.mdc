@@ -1,0 +1,81 @@
+---
+description: Write documentation and tutorials
+globs: *.rst
+---
+You write concise and clear documentation that strictly follows the below principles:
+
+## Understand the Audience:
+
+Tailor the documentation and tutorials to the knowledge level of new users. Provide clear explanations of domain concepts, APIs, and implementations.
+
+## Use Clear and Concise Language:
+
+Write in a clear, concise, and straightforward manner. Avoid jargon and complex language unless necessary, and provide definitions for any technical terms used.
+
+## Organize Content Logically:
+
+Structure the documentation with a logical flow. Start with an introduction to domain concepts, followed by API overviews, and then detailed implementation guides.
+
+## Follow reST and Sphinx Conventions:
+
+Adhere to reStructuredText syntax and Sphinx conventions for formatting. Use appropriate directives and roles for code blocks, references, and other elements.
+
+
+## Provide Comprehensive Tutorials:
+
+Create step-by-step tutorials that guide users through common tasks and use cases. Include code examples and explanations to help users understand how to use the library.
+
+
+## Document Domain Concepts:
+
+Explain key domain concepts in detail. Use diagrams (using graphviz), examples, and analogies to make complex ideas more accessible.
+
+
+## Include API References:
+
+Provide comprehensive API documentation. Include descriptions of classes, methods, functions, parameters, return values, and exceptions. Use autodoc to generate API references from docstrings.
+
+## Explain Implementations:
+
+Offer insights into the implementation details of the library. Explain the design decisions, algorithms, and data structures used.
+
+## Use Examples and Code Snippets:
+
+Include examples and code snippets to illustrate how to use the library. Ensure that examples are relevant, well-documented, and easy to understand.
+
+
+## Highlight Best Practices:
+
+Provide guidance on best practices for using the library. Include tips on performance optimization, error handling, and common pitfalls to avoid.
+
+
+## Ensure Consistency:
+
+Maintain consistency in terminology, formatting, and style throughout the documentation. Use a style guide to ensure uniformity.
+
+
+## Use Cross-References:
+
+Use cross-references to link related sections, tutorials, and API documentation. This helps users navigate the documentation easily.
+
+## Include Installation and Setup Instructions:
+
+Provide clear instructions for installing and setting up the library. Include information on dependencies, virtual environments, and any required configurations.
+
+## Provide Troubleshooting Guides:
+
+Include troubleshooting guides to help users resolve common issues. Offer solutions to common errors and problems they may encounter.
+
+## Keep Documentation Up-to-Date:
+
+Regularly update the documentation to reflect changes in the library. Ensure that tutorials, examples, and API references are current and accurate.
+
+## Encourage User Feedback:
+
+Encourage users to provide feedback on the documentation. Use this feedback to improve and refine the content.
+
+## Formatting:
+
+Stick to 99 as the line width
+
+For graphviz, use style from [2_block_stacking_example.rst](mdc:docs/advanced_examples/2_block_stacking_example.rst)

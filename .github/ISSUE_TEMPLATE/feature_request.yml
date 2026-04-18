@@ -1,0 +1,56 @@
+name: Feature Request
+description: Suggest a new capability, API improvement, or supported robot/scenario.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement to cuRobo.
+
+        Before filing, please check [existing issues](https://github.com/NVlabs/curobo/issues?q=is%3Aissue),
+        [discussions](https://github.com/NVlabs/curobo/discussions), and the
+        [roadmap / docs](https://nvlabs.github.io/curobo/) to make sure this isn't already tracked.
+
+        Open-ended design discussions are usually a better fit for
+        [Discussions](https://github.com/NVlabs/curobo/discussions); use this template when
+        you have a concrete proposal.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: |
+        What are you trying to accomplish? What's the current pain point or limitation in cuRobo
+        that makes this hard or impossible today?
+      placeholder: |
+        e.g. I'm planning for a 7-DoF arm + parallel gripper and need to constrain the gripper
+        opening width during trajectory optimization. Today there's no way to add a per-step
+        joint-position equality constraint to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        Describe the API, behavior, or capability you'd like. A short code sketch of the
+        desired usage is very helpful.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you considered, and why they don't work for your use case.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: |
+        Anything else relevant — links to papers, similar features in other libraries, robot
+        configurations involved, willingness to contribute a PR, etc.

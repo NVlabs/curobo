@@ -1,0 +1,11 @@
+---
+alwaysApply: true
+---
+
+# Python environment:
+1. Check if .venv exists and activate before running commands.
+2. Check if uv is used for installation, then use uv pip install commands.
+
+
+# General Guidelines:
+1. Don't write reports. No summary, No progress reports unless user asks explicitly.

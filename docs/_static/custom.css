@@ -1,0 +1,226 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+@import url("theme.css");
+@import url("../pygments.css");
+body {
+    font-family: "Lato","proxima-nova","Helvetica Neue",Arial,sans-serif;
+}
+
+/* Default header fonts are ugly */
+h1, h2, .rst-content .toctree-wrapper p.caption, h3, h4, h5, h6, legend, p.caption {
+    font-family: "Lato","proxima-nova","Helvetica Neue",Arial,sans-serif;
+}
+
+.sidebar-brand-text {
+    text-align: center;
+    margin: 0 0;
+}
+
+.wy-nav-side {
+    /* background-color: #404452; */
+    background-color: #5e5e5e;
+    
+}
+
+.wy-side-nav-search {
+    background-color: #efefef;
+}
+
+.wy-side-nav-search .icon {
+    font-size: 175%;
+}
+
+.wy-menu-vertical li.toctree-l2.current>a {
+    /* background-color: #c5c5d2 !important; */
+    background-color: #efefef !important;
+}
+
+.wy-menu-vertical a:hover, .wy-menu-vertical li.current a:hover, .wy-menu-vertical li.toctree-l2.current>a:hover {
+    color: #eeedee !important;
+    background-color: #76b900 !important;
+}
+
+@media screen and (min-width: 1400px) {
+    .wy-nav-content {
+        background-color: #fff;
+    }
+}
+
+.wy-nav-content {
+    max-width: 1000px;
+    margin: auto;
+}
+/* Fixes for mobile */
+.wy-nav-top {
+    background-color: #fff;
+    background-image: url('../modulus_logo_v7_64h.png');
+    background-repeat: no-repeat;
+    background-position: center;
+    padding: 0;
+    margin: 0.4045em 0.809em;
+    color: #333;
+}
+
+.wy-nav-top > a {
+    display: none;
+}
+
+@media screen and (max-width: 768px) {
+    .wy-nav-content-wrap.shift {
+        left: 50%;
+    }
+    .wy-nav-side.shift {
+        left: 0;
+        width: 50%;
+    }
+}
+
+.wy-side-nav-search>a img.logo {
+    max-width: 50%;
+}
+
+/* This is needed to ensure that logo above search scales properly */
+.wy-side-nav-search a {
+    display: block;
+}
+
+.wy-side-nav-search input[type="text"] {
+    border-color:  #76b900;
+}
+
+
+/* This ensures that multiple constructors will remain in separate lines. */
+.rst-content dl:not(.docutils) dt {
+    display: table;
+    color: rgba(83, 150, 0, 0.9);
+    background-color: rgba(118, 185, 0, 0.15);
+    border-top-color: rgba(83, 150, 0, 0.9);
+}
+
+/* Use our green for literals (it's very similar to the original color) */
+.rst-content tt.literal, .rst-content tt.literal, .rst-content code.literal {
+    color: #76b900 !important;
+    border-style: none;
+}
+
+.rst-content tt.xref, a .rst-content tt, .rst-content tt.xref,
+.rst-content code.xref, a .rst-content tt, a .rst-content code {
+    color: #fff;
+    border-width: 0px;
+}
+
+/* Change link colors (except for the menu) */
+
+a {
+    color: #76b900;
+}
+
+a:hover {
+    color: #76b900;
+}
+
+
+a:visited {
+    color: #76b900;
+}
+
+.wy-menu a {
+    color: #efefef;
+}
+
+.wy-menu a:hover {
+    color: #b3b3b3;
+}
+
+/* Default footer text is quite big */
+footer {
+    font-size: 80%;
+}
+
+footer .rst-footer-buttons {
+    font-size: 125%; /* revert footer settings - 1/80% = 125% */
+}
+
+footer p {
+    font-size: 100%;
+}
+
+/* For hidden headers that appear in TOC tree */
+/* see http://stackoverflow.com/a/32363545/3343043 */
+.rst-content .hidden-section {
+    display: none;
+}
+
+nav .hidden-section {
+    display: inherit;
+}
+
+.wy-side-nav-search>div.version {
+    color: #000;
+}
+
+/* Provides nice properties to make screenshots stand out clearly. */
+.screenshot {
+    box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2), 0 6px 20px 0 rgba(0, 0, 0, 0.19);
+}
+
+/* override table width restrictions */
+@media screen and (min-width: 767px) {
+
+    .wy-table-responsive table td {
+      /* !important prevents the common CSS stylesheets from overriding
+         this as on RTD they are loaded after this stylesheet */
+        white-space: normal !important;
+    }
+
+    .wy-table-responsive {
+        overflow: visible !important;
+    }
+}
+
+/* Makes the left-side TOC headers green */
+.wy-menu-vertical p.caption {
+    color: #76b900;
+}
+
+/* Add a little space after images */
+.wy-plain-list-decimal li, .rst-content img {
+    margin-bottom: 24px;
+}
+
+.rst-content .note .admonition-title, .rst-content .hint .admonition-title , .rst-content .important .admonition-title, .rst-content .tip .admonition-title {
+    background: #76b900;
+}
+
+.rst-content .note, .rst-content .hint , .rst-content .important, .rst-content .tip {
+    background: #ddeebf
+}
+
+.toggle .header {
+    display: flex;
+    clear: both;
+}
+
+.toggle .header:after {
+    content: "▶";
+    margin-left: 5px;
+    font-size: 75%;
+}
+
+.toggle .header.open:after {
+    content: "▼";
+    margin-left: 5px;
+    font-size: 75%;
+}
+
+.indent {
+    margin-left: 24px;
+}
+
+iframe {
+	aspect-ratio: 16 / 9;
+	height: 100%;
+	width: 100%;
+}

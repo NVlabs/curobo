@@ -1,0 +1,106 @@
+---
+description:  When refactoring existing code or creating new files, always audit and ensure
+compliance with this category-first naming convention. Consistency across the codebase is essential.
+globs:
+alwaysApply: false
+---
+
+# Category-First File Naming Convention
+
+When organizing code in this project, strictly follow these category-first file naming conventions:
+
+## File Naming Rules
+
+1. **Always use the format `category_specific.py`** where:
+   - `category` identifies the broader component type or subsystem
+   - `specific` describes the particular implementation or variant
+
+2. **Examples of correct file names**:
+   - `connector_linear.py` (NOT linear_connector.py)
+   - `sampler_node.py` (NOT node_sampler.py)
+
+3. **Multiple adjectives** should appear in order from general to specific:
+   - `connector_cubic_spline.py` (NOT connector_spline_cubic.py)
+
+4. **Module directory structure** should follow the same categorical organization:
+   ```
+   /connectors/
+     connector_linear.py
+   ```
+
+5. **Import statements** should reflect this structure:
+   ```python
+   from curobo.connectors.connector_linear import LinearConnector
+   ```
+
+## Class Naming
+- Class names should remain in standard CamelCase format with specific-type first:
+  - File `connector_linear.py` contains class `LinearConnector`
+
+When refactoring existing code or creating new files, always audit and ensure compliance with
+this category-first naming convention. Consistency across the codebase is essential.
+
+
+
+## Scope: Internal Implementation Only
+
+**The category-first naming convention applies ONLY to internal implementation code**, not to public API modules.
+
+### Where to Apply Category-First Naming ✅
+
+**Internal implementation code** (under `curobo/_src/`):
+```
+curobo/_src/
+├── geom/
+│   ├── types/
+│   │   ├── primitive_cuboid.py      # category_specific pattern
+│   │   ├── primitive_sphere.py
+│   │   └── primitive_mesh.py
+├── opt/
+│   ├── particle/
+│   │   ├── optimizer_parallel_es.py
+│   │   └── optimizer_parallel_mppi.py
+└── wrap/
+    ├── reacher/
+    │   ├── motion_gen.py
+    │   └── trajopt.py
+```
+
+### Exemptions: Public API Modules ⚠️
+
+**Public API modules** (under `curobo/`) use **user-friendly, descriptive names** that prioritize:
+- Developer experience and discoverability
+- Consistency with standard Python library conventions (PyTorch, scikit-learn, HuggingFace)
+- Clear intent over categorical organization
+
+```
+curobo/
+├── __init__.py
+├── robot.py                       # NOT kinematics_forward.py
+├── inverse_kinematics.py          # NOT kinematics_inverse.py
+├── trajectory_optimizer.py        # NOT optimizer_trajectory.py
+├── motion_planner.py              # NOT planner_motion.py
+├── model_predictive_control.py   # NOT control_model_predictive.py
+├── scene.py                       # NOT representation_scene.py
+├── collision_checking.py          # NOT checker_collision.py
+├── perception.py                  # NOT sensor_perception.py
+├── robot_builder.py               # NOT builder_robot.py
+├── viewer.py                      # NOT visualizer_viewer.py
+└── types.py
+```
+
+**Rationale for Public API Exception**:
+1. **User Experience**: `from curobo.inverse_kinematics import InverseKinematics` is more intuitive than `from curobo.kinematics_inverse import InverseKinematics`
+2. **Discoverability**: IDE autocomplete works better with descriptive module names
+3. **Standard Practice**: Major Python libraries (torch.optim, sklearn.preprocessing) use descriptive names, not categorical prefixes
+4. **Import Clarity**: Public imports read naturally: "I'm importing inverse kinematics from curobo"
+
+### Summary
+
+- **Internal code** (`_src/`): Use `category_specific.py` pattern ✅
+- **Public API** (`curobo/` root): Use descriptive, user-friendly names ✅
+- **Goal**: Balance internal consistency with external usability
+
+When refactoring existing code or creating new files, always audit and ensure compliance with
+this category-first naming convention for **internal implementation code**. Consistency across the codebase is essential.
+
