@@ -2,6 +2,8 @@
 cuRobo: CUDA Accelerated Robot Library
 ########################################
 
+|gh_stars| |gh_license| |gh_release|
+
 [:ref:`API <api>`] [`GTC Talk <https://www.nvidia.com/gtc/session-catalog/?tab.allsessions=1700692987788001F1cG&search=S62122#/session/1694550714094001UhGc>`_] [`Code <https://github.com/nvlabs/curobo>`_] [:doc:`Paper <technical_reports>`]
 
 A unified, dynamics-aware GPU stack for safe, feasible, and reactive robot
@@ -15,8 +17,9 @@ computation built on PyTorch, CUDA, and Warp.
    <video autoplay loop muted playsinline preload="auto" width="100%">
      <source src="videos/tsdf_esdf_dual_rgbd.webm" type="video/webm">
    </video>
-   <figcaption>GPU-native perception from dual RGBD streams: TSDF at 5 mm in 1.2 ms, ESDF at 2 cm in 0.2 ms (1.4 ms total).</figcaption>
+   <figcaption>Dual RGBD streams: TSDF(5 mm resolution), ESDF(2 cm resolution) in 1.4 ms.</figcaption>
    </figure>
+
 
 
 .. raw:: html
@@ -45,9 +48,7 @@ Documentation
 Research
 ========
 
-Read the cuRobo technical reports for algorithm details and benchmarks.
-
-:doc:`technical_reports`
+Read the cuRobo :doc:`technical_reports` for algorithm details and benchmarks.
 
 .. toctree::
    :hidden:

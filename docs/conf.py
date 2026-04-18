@@ -15,6 +15,7 @@ import pathlib
 import re
 import subprocess
 from datetime import date
+from urllib.parse import urlparse
 
 # Third Party
 from sphinx.ext import apidoc
@@ -47,7 +48,6 @@ try:
     if _remote.endswith(".git"):
         _remote = _remote[:-4]
     if _remote.startswith("ssh://"):
-        from urllib.parse import urlparse
         _parsed = urlparse(_remote)
         _remote = f"https://{_parsed.hostname}{_parsed.path}"
     elif _remote.startswith("git@"):
@@ -57,9 +57,24 @@ try:
 except Exception:
     repo_url = _DEFAULT_REPO_URL
 
+# Derive "owner/repo" slug from repo_url for use in shields.io badges, etc.
+_owner_repo = urlparse(repo_url).path.strip("/")
+
 rst_epilog = f"""
 .. |repo_url| replace:: {repo_url}
 .. _changelog_link: {repo_url}/blob/main/CHANGELOG.md
+
+.. |gh_stars| image:: https://img.shields.io/github/stars/{_owner_repo}?style=social
+   :target: {repo_url}
+   :alt: GitHub stars
+
+.. |gh_license| image:: https://img.shields.io/github/license/{_owner_repo}
+   :target: {repo_url}/blob/main/LICENSE
+   :alt: License: Apache 2.0
+
+.. |gh_release| image:: https://img.shields.io/github/v/release/{_owner_repo}
+   :target: {repo_url}/releases
+   :alt: Latest release
 """
 
 # -- Project information -----------------------------------------------------
@@ -126,7 +141,12 @@ extensions = [
 
 # redirects = {"tutorials/1_robot_configuration.html": "../tutorials/robot_configuration.html"}
 # Add any paths that contain templates here, relative to this directory.
-# templates_path = ["_templates"]
+templates_path = ["_templates"]
+
+# Variables exposed to Jinja templates (e.g. sidebar/external-links.html).
+html_context = {
+    "repo_url": repo_url,
+}
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -172,6 +192,20 @@ html_extra_path = ["_html_extra"]
 html_css_files = ["custom_furo.css"]
 html_js_files = ["version-switcher.js"]
 html_logo = "_static/logo-light-mode.png"
+
+# Furo's default sidebar plus our custom external links block.
+html_sidebars = {
+    "**": [
+        "sidebar/scroll-start.html",
+        "sidebar/brand.html",
+        "sidebar/external-links.html",
+        "sidebar/search.html",
+        "sidebar/navigation.html",
+        "sidebar/ethical-ads.html",
+        "sidebar/scroll-end.html",
+        "sidebar/variant-selector.html",
+    ],
+}
 
 # -- Options for extensions --------------------------------------------------
 
@@ -239,6 +273,13 @@ elif html_theme == "furo":
     html_logo = None
     html_theme_options = {
         # "top_of_page_button": None,
+        "source_repository": repo_url,
+        "source_branch": "main",
+        "source_directory": "docs/",
+        "top_of_page_buttons": ["view", "edit"],
+        "announcement": (
+            f"<p>cuRobo is now <a href='{repo_url}'>open source</a> under Apache 2.0</p>"
+        ),
         "light_css_variables": {
             # "admonition-title-font-size": "100%",
             # "admonition-font-size": "100%",
