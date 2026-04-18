@@ -3,7 +3,6 @@ Benchmarks & Profiling
 
 Latest Motion Generation Results
 *********************************
-Results obtained on November 22 2024 (v0.7.6).
 
 Motion Generation on 2600 problems from motion benchmaker and motion policy networks, on a
 RTX 6000 Ada:
@@ -59,7 +58,6 @@ With torque limits at full payload of 3kg:
 
 Latest Inverse Kinematics Results
 *********************************
-Results obtained on April 17 2026.
 
 Reported errors are 90th percentile. You can run this with ``python benchmark/ik_benchmark.py``.
 
