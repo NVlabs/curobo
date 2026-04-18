@@ -3,9 +3,10 @@
 # Changelog
 
 
-## Latest Commit (will be Version 0.8.0)
+## Version 0.8.0
 
 ### New Features
+- Bring features from cuRoboV2 research: https://arxiv.org/abs/2603.05493
 - Major refactor to a flat, inheritance-free architecture (curobov2). Introduce
   `Optimizer` (`curobo._src.optim.optimizer_protocol.Optimizer`) and `Rollout`
   (`curobo._src.rollout.rollout_protocol.Rollout`) `typing.Protocol`s; the
