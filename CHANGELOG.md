@@ -1,14 +1,56 @@
-<!--
-Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-
-NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-property and proprietary rights in and to this material, related
-documentation and any modifications thereto. Any use, reproduction,
-disclosure or distribution of this material and related documentation
-without an express license agreement from NVIDIA CORPORATION or
-its affiliates is strictly prohibited.
--->
+<!-- SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Changelog
+
+
+## Latest Commit (will be Version 0.8.0)
+
+### New Features
+- Major refactor to a flat, inheritance-free architecture (curobov2). Introduce
+  `Optimizer` (`curobo._src.optim.optimizer_protocol.Optimizer`) and `Rollout`
+  (`curobo._src.rollout.rollout_protocol.Rollout`) `typing.Protocol`s; the
+  optimizer stack (MPPI, evolution strategies, gradient descent, L-BFGS,
+  L-SR1, CG), cost manager, rollout, and solver layers are now standalone
+  classes composed rather than inherited. CUDA graph support is a constructor
+  parameter (`use_cuda_graph`) instead of a mixin/subclass.
+- Reorganise implementation under `curobo._src/` with clear module boundaries
+  (`types`, `geom`, `motion`, `solver`, `rollout`, `optim`, `cost`,
+  `perception`, `transition`, `graph_planner`).
+- New `MotionPlanner` / `MotionPlannerCfg` built on flat composition, with
+  first-class batch planning (`max_batch_size`, `multi_env`, `max_goalset`)
+  and batched grasp planning.
+- New tool-frame abstractions: `Pose`, `GoalToolPose`, and `SequenceToolPose`.
+  `MotionPlanner.plan_pose` now takes
+  `GoalToolPose.from_poses({tool_frame: Pose(...)}, ordered_tool_frames=...)`
+  for multi-tool targets.
+- New `curobo._src.perception.mapper.Mapper` subsystem: block-sparse TSDF with
+  primitive stamping (`update_static_obstacles`) and ESDF extraction
+  (`compute_esdf`). The resulting `VoxelGrid` can be passed directly to motion
+  planning for voxel-based collision checking. Includes batched depth-image
+  filtering and batched cameras for multi-camera / multi-env fusion.
+- Add `ActionSeedManager` to centralise action seed generation and preparation
+  for reach tasks, removing per-task duplication.
+- Add CPU backend for `Pose`.
+- Add self-collision debugger script.
+- Benchmark overhaul: minimal refactored motion-plan / IK / cost-gradient
+  benchmarks,
+  and unit-tagged result keys (`time_ms`, `time_per_sample_ms`, `memory_mb`)
+  in `benchmark/cost_gradient_benchmark.py`.
+
+### BugFixes & Misc.
+- Fix bug in LBFGS where buffers were not reinitialized upon change in history.
+- Make global_cumul_mat be 4,3 instead of 4,4.
+- Fix bug in lbfgs reduction.
+- Add support for odd number of interpolation steps with bspline.
+- Add graph planner support for bspline trajopt.
+- Add warp is finite check in mesh collision checking kernels. If a non finite sphere is given, then
+distance is reported as zero.
+- When batch size is less than max per block, kinematics kernels now only launch threads to compute
+batch size instead of launching a full block.
+
+### Breaking Changes
+- Major refactor breaks most existing api.
+
 
 ## Version 0.7.7
 
@@ -182,7 +224,7 @@ optimization results.
 slow down optimized trajectories. Use `MotionGenPlanConfig.time_dilation_factor<1.0` to slow down a
 planned trajectory. This is more robust than setting `velocity_scale<1.0` and also allows for
 changing the speed of trajectories between planning calls
-- `curobo.util.logger` adds `logger_name` as an input, enabling use of logging api with other
+- `curobo.util.logging` adds `logger_name` as an input, enabling use of logging api with other
 packages.
 
 ### Changes in default behavior
@@ -205,12 +247,12 @@ at their limits.
 - Remove 0.02 offset for `max_joint_vel` and `max_joint_acc` in `TrajOptSolver`
 - Bound cost now scales the cost by `1/limit_range**2` when `limit_range<1.0` to be robust to small
 joint limits.
-- Added documentation for `curobo.util.logger`, `curobo.wrap.reacher.motion_gen`,
+- Added documentation for `curobo.util.logging`, `curobo.wrap.reacher.motion_gen`,
 `curobo.wrap.reacher.mpc`, and `curobo.wrap.reacher.trajopt`.
 - When interpolation buffer is smaller than required, a new buffer is created with a warning
 instead of raising an exception.
 - `torch.cuda.synchronize()` now only synchronizes specified cuda device with
-`torch.cuda.synchronize(device=self.tensor_args.device)`
+`torch.cuda.synchronize(device=self.tensor_cfg.device)`
 - Added python example for MPC.
 
 ## Version 0.7.1
@@ -301,8 +343,7 @@ now only 2x slower than cuboid (from 5x slower). Optimization convergence is als
 - 2x faster LBFGS kernel that allocates upto 68kb of shared memory, preventing use in CUDA devices
 with compute capability ``<7.0``.
 - On benchmarking Dataset, Planning time is now 42ms on average from 50ms. Higher quality solutions
-are also obtained. See [benchmarks](https://curobo.org/source/getting_started/4_benchmarks.html)
-for more details.
+are also obtained.
 - Add ``WorldCollisionVoxel``, a new collision checking implementation that uses a voxel grid
 of signed distances (SDF) to compute collision avoidance metrics. Documentation coming soon, see
 ``benchmark/curobo_voxel_benchmark.py`` for an example.

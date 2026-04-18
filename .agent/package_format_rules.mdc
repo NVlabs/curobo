@@ -1,0 +1,26 @@
+---
+description: rules for formatting code
+globs:
+alwaysApply: false
+---
+# Docstrings
+- follow flake8 rules from [setup.cfg](mdc:setup.cfg)
+- Always docstring in the same line as '''.
+- Use :func:, :class:,  :attr: for references
+- Write shape of inputs and outputs when possible
+- For dataclass, always document attributes as they are declared. Do not document in the class
+docstring.
+
+# Python
+- Follow flake8 rules from [setup.cfg](mdc:setup.cfg)
+- Use descriptive names for functions, classess and other members
+- Use type hints for all function signatures
+- Use logging functions from [logging.py](mdc:src/curobo/util/logging.py) for print and raising
+warnigs, errors
+- Avoid using deprecated functions
+- Follow PEP 563 (Postponed Evaluation of Annotations)
+
+# Writing Tests
+- tests should be src/curobo/tests folder.
+- Do not write unit tests for wp.kernel decorators.
+- When writing gradient checking using gradcheck, use float32 and not float64.

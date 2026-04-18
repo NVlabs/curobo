@@ -1,0 +1,21 @@
+---
+description: For writing unit tests
+alwaysApply: false
+---
+
+# Writing unit tests:
+1. Never use float64, even for gradchecks as our library does not support float64.
+2. If there are edge cases in the core functionality that is caught by unit tests, discuss with user
+on how to proceed. Do not skip tests.
+
+# Running Coverage:
+
+Checking coverage for specific files/modules is not supported due to
+existing bug: https://github.com/coveragepy/coveragepy/issues/1925
+
+Instead use coverage. For e.g., to get coverage on _src:
+
+1. coverage run --source curobo/_src/ -m pytest curobo/test/_src
+2. coverage report -m
+
+

@@ -1,0 +1,173 @@
+name: Bug Report
+description: Report a reproducible bug in cuRobo (crash, wrong result, install failure, etc.).
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+        **Before opening this issue, please:**
+        - Search [existing issues](https://github.com/NVlabs/curobo/issues?q=is%3Aissue) and [discussions](https://github.com/NVlabs/curobo/discussions) for duplicates.
+        - Skim the [documentation](https://nvlabs.github.io/curobo/) for the feature you're using.
+        - For *usage questions* (e.g. "how do I do X?"), please use [Discussions](https://github.com/NVlabs/curobo/discussions) instead.
+        - For *cuRobo v1* (`v0.7.x`) bugs, please file against the [`v0.7.8` tag](https://github.com/NVlabs/curobo/tree/v0.7.8) and mention the version explicitly below.
+
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Prerequisites
+      description: Please confirm before submitting.
+      options:
+        - label: I have searched existing issues and discussions and could not find a duplicate.
+          required: true
+        - label: I have read the relevant section of the [documentation](https://nvlabs.github.io/curobo/).
+          required: true
+        - label: I can reproduce this on the latest `main` (or the most recent release).
+          required: false
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Bug summary
+      description: A clear, concise description of the bug. What happened, and what did you expect?
+      placeholder: |
+        e.g. `MotionPlanner.plan(...)` returns success=True but the returned trajectory passes through
+        a known cuboid obstacle when `world_collision_check=True`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Provide a **minimal, self-contained Python snippet** that reproduces the bug.
+        Prefer a script that uses cuRobo's bundled robots / assets so we can run it as-is.
+        If you cannot share a minimal repro, describe the exact sequence of operations.
+      render: python
+      placeholder: |
+        import torch
+        from curobo.kinematics import Kinematics, KinematicsCfg
+
+        kin = Kinematics(KinematicsCfg.from_robot_yaml_file("franka.yml"))
+        # ... rest of the minimal example that triggers the bug ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / error output
+      description: |
+        What actually happened? Include the **full stack trace** or error message inside a code block.
+        For numerical issues, include the offending values (joint positions, poses, etc.).
+      render: shell
+      placeholder: |
+        Traceback (most recent call last):
+          File "repro.py", line 12, in <module>
+            ...
+        RuntimeError: ...
+    validations:
+      required: true
+
+  - type: input
+    id: curobo_version
+    attributes:
+      label: cuRobo version + commit SHA
+      description: 'Output of `python -c "import curobo; print(curobo.__version__)"` and `git rev-parse --short HEAD` from your cloned cuRobo checkout.'
+      placeholder: "e.g. 1.0.0  @ a1b2c3d"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Installation method
+      description: |
+        How did you install cuRobo? The supported path is `git clone` + `uv pip install .[<extra>]`
+        as documented in [`docs/getting-started/installation.rst`](https://nvlabs.github.io/curobo/getting-started/installation.html).
+      options:
+        - Source — CUDA 12 + PyTorch (`uv pip install .[cu12-torch]`)
+        - Source — CUDA 13 + PyTorch (`uv pip install .[cu13-torch]`)
+        - Source — CUDA 12, PyTorch pre-installed (`uv pip install .[cu12]`)
+        - Source — CUDA 13, PyTorch pre-installed (`uv pip install .[cu13]`)
+        - Source — with `pybind` extra (`uv pip install .[<cuda>,pybind]`)
+        - Other (please describe in "Additional context")
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kernel_backend
+    attributes:
+      label: Kernel backend
+      description: |
+        Which curobolib backend is in use? Check by running
+        `python -c "from curobo._src.curobolib.backends import get_backend_name; print(get_backend_name())"`,
+        or by inspecting the `CUROBO_KERNEL_BACKEND` environment variable.
+      options:
+        - cuda_core (default, runtime compilation)
+        - pybind (pre-compiled extension)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version
+      description: Output of `python --version`.
+      placeholder: "e.g. 3.11.9"
+    validations:
+      required: true
+
+  - type: input
+    id: torch_version
+    attributes:
+      label: PyTorch version (if installed)
+      description: 'Output of `python -c "import torch; print(torch.__version__, torch.version.cuda)"`. Leave blank if PyTorch is not installed.'
+      placeholder: "e.g. 2.5.1+cu124  /  CUDA 12.4"
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU / driver / CUDA toolkit
+      description: |
+        GPU model, NVIDIA driver version, and CUDA toolkit version.
+        Get these from `nvidia-smi` (top of the output) and `nvcc --version`.
+      placeholder: "e.g. RTX 4090, driver 555.42.06, CUDA 12.6"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: OS and version. For Linux, include the distro and kernel.
+      placeholder: "e.g. Ubuntu 22.04, kernel 6.8.0-45-generic"
+    validations:
+      required: true
+
+  - type: input
+    id: isaac_sim_version
+    attributes:
+      label: Isaac Sim version (if applicable)
+      description: Only fill in if you are running cuRobo inside Isaac Sim. Leave blank otherwise.
+      placeholder: "e.g. 4.5.0"
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: |
+        Anything else that may help — robot URDF, world description, screenshots, profiling output,
+        related issues, or links to a fork with a longer repro.

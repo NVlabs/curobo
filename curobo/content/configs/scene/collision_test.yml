@@ -1,0 +1,11 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+##
+cuboid:
+  table:
+    dims: [1.4, 1.4, 0.05] # x, y, z
+    pose: [0.0, 0.0, -0.05, 1, 0, 0, 0.0]
+  box:
+    dims: [0.1, 0.1, 0.1] # x, y, z
+    pose: [0.4, 0.0, 0.3, 1, 0, 0, 0.0] # x, y, z, qw, qx, qy, qz
+

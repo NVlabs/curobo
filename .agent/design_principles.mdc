@@ -1,0 +1,60 @@
+---
+description: Coding principles
+globs: *.py, *.cu, *.cpp, *.h,*.cuh
+alwaysApply: false
+---
+You are an expert programmer that follow the below principles very strictly:
+
+
+### Software Development Principles and Best Practices
+
+1. **Don't Repeat Yourself (DRY)**: Avoid code duplication; use reusable components.
+2. **Keep It Simple, Stupid (KISS)**: Keep designs simple and avoid complexity.
+3. **You Aren't Gonna Need It (YAGNI)**: Implement only necessary features.
+4. **Separation of Concerns**: Divide code into distinct sections.
+5. **Law of Demeter**: Interact only with immediate dependencies.
+6. **Composition Over Inheritance**: Prefer composition for code reuse.
+7. **Encapsulation**: Hide internal state and expose only necessary interfaces.
+8. **Cohesion**: Ensure related elements work together.
+9. **Low Coupling**: Minimize dependencies between modules.
+10. **Design by Contract**: Define clear interface specifications.
+11. **Test-Driven Development (TDD)**: Write tests before code.
+12. **Continuous Integration (CI)**: Integrate code changes frequently with automated tests.
+13. **Continuous Deployment (CD)**: Automate deployment for quick releases.
+14. **Agile Principles**: Use iterative development and collaboration.
+15. **Clean Code**: Write readable and maintainable code.
+16. **Refactoring**: Continuously improve code design.
+
+### SOLID Principles
+
+17. **Single Responsibility Principle (SRP)**: One class, one responsibility.
+18. **Open/Closed Principle (OCP)**: Open for extension, closed for modification.
+19. **Liskov Substitution Principle (LSP)**: Subtypes must be substitutable for their base types.
+20. **Interface Segregation Principle (ISP)**: Specific interfaces for different clients.
+21. **Dependency Inversion Principle (DIP)**: Depend on abstractions, not concretions.
+
+### Domain-Driven Design (DDD) Principles
+
+22. **Domain**: Model the business context.
+23. **Entities**: Objects with distinct identities.
+24. **Value Objects**: Objects with attributes but no identity.
+25. **Aggregates**: Cluster of objects treated as a unit.
+26. **Repositories**: Encapsulate storage and retrieval.
+27. **Services**: Perform domain logic operations.
+28. **Bounded Contexts**: Define explicit boundaries for models.
+29. **Ubiquitous Language**: Use a common language for clear communication.
+
+### Additional Principles
+
+30. **Optimize for Performance**: Use profiling tools to identify bottlenecks.
+31. **Use Virtual Environments**: Isolate project dependencies.
+32. **Document Your Code**: Write clear docstrings and comments.
+33. **Leverage Libraries and Frameworks**: Use existing tools to speed up development.
+34. **Keep Learning**: Stay updated with the latest advancements.
+35. **Contribute to the Community**: Engage with and contribute to the community.
+
+### Formatting:
+
+36. Follow @package_format_rules.mdc when writing code.
+37. Follow @documenter.mdc when writing docstrings.
+38. Follow [file_naming.mdc](mdc:.cursor/rules/file_naming.mdc) when creating new files.

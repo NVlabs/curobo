@@ -1,0 +1,87 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+rollout:
+  cost_cfg:
+    cspace_cfg:
+      activation_distance:
+      - 0.01
+      - 0.01
+      - 0.01
+      - 0.01
+      - 0.01 # torque
+
+      squared_l2_regularization_weight:
+      - 0.01 #10.0 # velocity
+      - 10000.0 #1000.0 #10000.0 #100000.0 #0.1 #0.1 # acceleration
+      - 10.0 #1.0 #100.0 #100.0 #10.0 #10.0 # jerk
+      - 0.0 # torque smooth
+      - 00.0 # energy smooth
+      weight:
+      - 1000.0 #2580.629328965345
+      - 1000.0 #200.617385298613
+      - 1000.0 #200.005643900817
+      - 100.0 #200.277791080565
+      - 0.0 # torque limit
+      cost_type: STATE
+      retime_weights: false
+      retime_regularization_weights: true
+      cspace_target_weight: 1000.0
+      cspace_non_terminal_weight_factor: 0.05
+
+
+    tool_pose_cfg:
+      use_lie_group: false
+
+      weight:
+      - 10000.0
+      - 200.0
+      _terminal_pose_convergence_tolerance:
+      - 0.0
+      - 0.0
+
+
+
+  constraint_cfg:
+    scene_collision_cfg:
+      activation_distance: 0.01
+      use_speed_metric: true
+      use_sweep: true
+      use_sweep_kernel: true
+      weight: 5000.0
+    self_collision_cfg:
+      weight: 5000.0
+
+
+optimizer:
+  solver_type: "lbfgs"
+  solver_name: "lbfgs"
+  cost_convergence: 1.0e-11
+  cost_delta_threshold: 0.0
+  cost_relative_threshold: 1.0
+  debug_info:
+    visual_traj: null
+  epsilon: 0.01
+  fixed_iters: true
+  history: 15
+  inner_iters: 25
+  last_best: 10
+  line_search_scale:
+  - 0.0
+  - 0.1
+  - 0.5
+  - 1.0
+  line_search_type: approx_wolfe
+  num_iters: 100
+  num_problems: 1
+  stable_mode: true
+  step_scale: 0.98
+  store_debug: false
+  sync_cuda_time: true
+  use_coo_sparse: true
+  use_cuda_kernel: true
+  use_cuda_line_search_kernel: true
+  use_cuda_update_best_kernel: true
+  use_shared_buffers_kernel: true
+  line_search_wolfe_c_1: 1e-3
+  line_search_wolfe_c_2: 0.98
+  return_best_action: true

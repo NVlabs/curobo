@@ -1,0 +1,64 @@
+---
+alwaysApply: false
+---
+# Python Sphinx Documentation Standards
+
+This project uses Sphinx with `myst-parser` for documentation. Follow these rules when creating or editing documentation.
+
+## 1. File Format & Syntax
+- **Prefer Markdown:** Write all new documentation files in Markdown (`.md`), not reStructuredText (`.rst`).
+- **Use MyST Syntax:** Use MyST syntax for Sphinx directives.
+  - *Correct:* ````{note}` or ````{toctree}`
+  - *Incorrect:* `.. note::` or `.. toctree::`
+- **Math:** Use standard LaTeX delimiters `$$` for both inline and display math.
+  - *Inline:* `$$E=mc^2$$`
+  - *Display:*
+    $$
+    x = \frac{-b \pm \sqrt{b^2-4ac}}{2a}
+    $$
+
+## 2. Root File Inclusion (DRY Principle)
+- **No Symlinks:** Do NOT use symbolic links to include root files (like `README.md` or `CHANGELOG.md`) into the `docs/` directory.
+- **Use Wrapper Files:** Create a "thin" Markdown wrapper file inside `docs/` that imports the root file using the `{include}` directive.
+- **Enable Relative Images:** Always add the `:relative-images:` option to the include directive. This allows Sphinx to automatically rewrite image paths found in the root README so they work in the docs build.
+
+## 3. Image Linking
+- **Storage:** Store documentation assets in `docs/_static/` or `docs/images/`.
+- **Standard Syntax:** Use standard Markdown syntax `![Alt Text](path/to/image.png)`.
+- **Path Resolution:**
+  - In **Root Files** (`README.md`): Link relative to the project root (e.g., `![Logo](docs/images/logo.png)`). This ensures it renders on GitHub.
+  - In **Doc Files** (`docs/guide.md`): Link relative to the file (e.g., `![Logo](images/logo.png)`).
+- **Resizing:** If you need to resize an image, use the MyST `{image}` directive instead of raw HTML.
+  ```markdown
+  ```{image} ../docs/images/logo.png
+  :width: 200px
+  :alt: Alternative text
+
+4. Configuration
+
+    Ensure myst_parser is listed in extensions in docs/conf.py.
+
+Examples
+Including the README (Correct)
+
+Create docs/intro.md:
+markdown
+
+# Introduction
+
+```{include} ../README.md
+:relative-images:
+
+
+### Including the README (Incorrect)
+- ❌ Creating a symlink: `ln -s ../README.md docs/README.md`
+- ❌ Using RST wrapper:
+  ```rst
+  .. mdinclude:: ../README.md
+
+Directives (Correct)
+markdown
+
+```{note}
+This is a note in MyST syntax.
+

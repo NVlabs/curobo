@@ -1,0 +1,12 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 100
+IncludeBlocks: Preserve
+DerivePointerAlignment: false
+PointerAlignment: Right
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Attach
+---
+Language: Proto
+BasedOnStyle: Google

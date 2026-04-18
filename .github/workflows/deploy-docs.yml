@@ -1,0 +1,105 @@
+# Build and deploy cuRobo's Sphinx documentation to GitHub Pages.
+#
+# - Runs only on merge to `main` (push to main) or manual dispatch.
+# - Runs on a CPU-only `ubuntu-latest` runner; no GPU is required. The docs
+#   import `torch` and `warp-lang` for autodoc, which both work on CPU.
+
+name: Deploy Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'curobo/**'
+      - 'pyproject.toml'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+# Allow only one concurrent Pages deployment; don't cancel in-flight deploys.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Default permissions: read-only. The deploy job elevates what it needs.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Sphinx docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # `setuptools_scm` needs full history + tags to derive the version.
+          # We also fetch the `docs-site` branch below for legacy-version HTML,
+          # so we need full history here.
+          fetch-depth: 0
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends graphviz
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install documentation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch wheel — runner has no GPU, and autodoc only needs
+          # torch to be importable (not runnable).
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[doc]"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build HTML documentation
+        run: make -C docs html SPHINXOPTS="--keep-going"
+
+      - name: Assemble multi-version site
+        # Mirror of the GitLab `.docs_build` recipe so that `version-switcher.js`
+        # has the layout it expects:
+        #   public/latest/         <- freshly built docs from this commit
+        #   public/v0.7.6/         <- prebuilt legacy docs from the `docs-site` branch
+        #   public/index.html      <- redirect to latest/
+        #   public/versions.json   <- list consumed by version-switcher.js
+        run: |
+          set -euo pipefail
+          mkdir -p public/latest
+          cp -r _build/docs/html/. public/latest/
+          git fetch origin docs-site --depth=1
+          git checkout FETCH_HEAD -- public/v0.7.6
+          cat > public/index.html <<'EOF'
+          <html><head><meta http-equiv="refresh" content="0;url=latest/"></head></html>
+          EOF
+          cat > public/versions.json <<'EOF'
+          [{"name":"latest","url":"/latest/"},{"name":"v0.7.6","url":"/v0.7.6/"}]
+          EOF
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

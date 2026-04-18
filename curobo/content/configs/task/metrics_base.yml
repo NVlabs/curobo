@@ -1,0 +1,36 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+# costs, hybrid_costs_constraints, constraints
+# convergence is a special case.
+rollout:
+
+  constraint_cfg:
+    scene_collision_cfg:
+      weight: 5000.0
+      use_sweep: False
+      convert_to_binary: True
+      activation_distance: 0.0
+    self_collision_cfg:
+      weight: 5000.0
+      convert_to_binary: True
+    cspace_cfg:
+      weight: [5000.0, 5000.0, 5000.0, 5000.0, 5000.0] # position, velocity, acceleration, jerk, torque
+      activation_distance: [0.0,0.0,0.0,0.0, 0.0] # for position, velocity, acceleration and jerk
+      cost_type: STATE
+
+
+
+  convergence_cfg:
+    tool_pose_cfg:
+      weight: [1.0,1.0]
+      use_lie_group: False
+    target_cspace_dist_cfg:
+      weight: 0.0
+    start_cspace_dist_cfg:
+      weight: 0.001
+
+
+scene_collision_checker_cfg:
+  cache: null
+  checker_type: "PRIMITIVE"
+  max_distance: 10.0

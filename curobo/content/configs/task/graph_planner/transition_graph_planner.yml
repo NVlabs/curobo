@@ -1,0 +1,18 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+transition_model_cfg:
+  control_space: POSITION
+  dt_traj_params:
+    base_dt: 0.02
+    base_ratio: 1.0
+    max_dt: 0.25
+  horizon: 1
+  state_filter_cfg:
+    enable: false
+    filter_coeff:
+      acceleration: 0.0
+      position: 1.0
+      velocity: 1.0
+  teleport_mode: true
+  vel_scale: 1.0
+  return_full_act_buffer: True
