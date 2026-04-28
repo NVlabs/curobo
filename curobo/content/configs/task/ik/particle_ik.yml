@@ -2,7 +2,7 @@
 ## SPDX-License-Identifier: Apache-2.0
 rollout:
   cost_cfg:
-    bound_cfg:
+    cspace_cfg:
       activation_distance:
       - 0.001
       - 0.001
@@ -10,9 +10,9 @@ rollout:
       weight:
       - 50.0
       - 1.0
-      cost_type: TELEPORT
+      cost_type: POSITION
 
-    multi_link_pose_cfg:
+    tool_pose_cfg:
       _project_distance_to_goal: false
       weight:
         - 1000.0
