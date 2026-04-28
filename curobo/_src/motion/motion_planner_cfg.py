@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type, Union
 
 # CuRobo
-from curobo._src.geom.collision import SceneCollisionCfg
+from curobo._src.geom.collision.collision_scene import SceneCollisionCfg
 from curobo._src.geom.types import SceneCfg
 from curobo._src.graph_planner.graph_planner_prm import PRMGraphPlannerCfg
 from curobo._src.rollout.cost_manager.cost_manager_robot_cfg import RobotCostManagerCfg

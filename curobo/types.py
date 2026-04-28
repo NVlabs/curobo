@@ -43,6 +43,7 @@ from curobo._src.types.content_path import ContentPath
 from curobo._src.types.device_cfg import DeviceCfg
 
 # Pose types
+from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.types.pose import Pose
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 
@@ -52,6 +53,7 @@ __all__ = [
     "Pose",
     "ToolPose",
     "GoalToolPose",
+    "ToolPoseCriteria",
     "CameraObservation",
     "ContentPath",
     "DeviceCfg",

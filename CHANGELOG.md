@@ -3,6 +3,85 @@
 # Changelog
 
 
+## Latest Commit
+
+### New Features
+- Add feature-aware volumetric mapping. `CameraObservation` can carry an
+  optional channels-last `feature_grid`; `MapperCfg.feature_dim` enables
+  RGB and neural-feature fusion into per-block accumulators.
+- Add feature-query helpers for mapped volumes. `extract_occupied_voxels()`
+  returns `OccupiedVoxels`, and `get_matching_feature_voxels()` returns
+  `MatchedVoxels` with matched block ids, cosine scores, and
+  `scores_per_voxel()`. Feature matching also supports optional
+  `minimum_score` filtering. `OccupiedVoxels` and `MatchedVoxels` are
+  exported from `curobo.perception`.
+- Make mapper block size configurable per mapper instance. `MapperCfg`,
+  `BlockSparseTSDFCfg`, `BlockSparseTSDFIntegratorCfg`, and
+  `BlockSparseESDFIntegratorCfg` now expose `block_size`, replacing the
+  old module-level `BLOCK_SIZE` constant.
+- Add a cached per-`(block_size, seeding_method)` Warp kernel factory for
+  block-sparse mapper kernels. Mapper construction now specializes kernels
+  for the selected block size and compiles only the pipeline stages that
+  are enabled by configuration.
+- Store per-block RGB and feature accumulators in fp16 and cap their
+  weights with `MapperCfg.accumulator_w_max`. This reduces feature-map
+  memory use and gives old observations EMA-like decay for dynamic scenes.
+- Add feature-mapping docs, videos, and an interactive getting-started
+  example at `curobo/examples/getting_started/feature_mapping.py`.
+
+### Bug Fixes & Misc.
+- Fix `RobotBuilder.save()` emitting runtime-only fields
+  (`load_collision_spheres`, `num_envs`) that caused duplicate-kwarg
+  `TypeError` when the saved YAML was reloaded via `RobotCfg.create`.
+  `build_robot_model --test` now roundtrips through `Kinematics` + FK.
+- Fix mapper block allocation and storage bugs found while exercising
+  non-default block sizes and feature-grid integration.
+- Fix `BlockSparseRaycastPoseRefiner` so its tiled ray-SDF alignment kernel
+  uses the integrator's actual TSDF kernel specialization instead of always
+  falling back to default block-size samplers.
+- Add regression coverage for mapper kernel factories, block integration,
+  feature grids, feature matching, generated observations, and multi-camera
+  behavior.
+- Add a guard to `MPCSolverCfg` creation: `interpolation_steps` must be `4`;
+  use `optimization_dt` to change the command rate.
+- Export `ToolPoseCriteria` from `curobo.types`.
+- Cleaned up internal _src package initializers by replacing barrel imports with concrete module
+  imports, leaving only the runtime backend selector as a non-marker initializer.
+
+### Breaking Changes
+- `MapperCfg` now requires `image_height` and `image_width` so the
+  voxel-project scratch buffer can be allocated during mapper construction.
+- `MapperCfg.block_size`, `BlockSparseTSDFCfg.block_size`,
+  `BlockSparseTSDFIntegratorCfg.block_size`, and
+  `BlockSparseESDFIntegratorCfg.block_size` are regular dataclass fields
+  instead of read-only properties backed by `BLOCK_SIZE`. Config equality,
+  hashing, and repr now include `block_size`.
+- `MapperCfg.block_size` defaults to `4` instead of the previous implicit
+  `8`. Set `block_size=8` explicitly to preserve the old mapper block size.
+- `constants.BLOCK_SIZE` is removed. Use `cfg.block_size` for mapper
+  configuration or `constants.REFERENCE_BLOCK_SIZE` for allocation scaling.
+- `MapperCfg.rgb_scale`, `MapperCfg.block_fill_ratio`, and
+  `integration_method` are removed. Voxel-project is now the only TSDF
+  integration backend; the old `sort_filter` integration path and
+  `SortFilterIntegrator` are gone.
+- `Mapper.extract_occupied_voxels()` now returns an `OccupiedVoxels`
+  object instead of tuple-like outputs. Use `.centers`, `.colors_uint8()`,
+  `.features()`, and `len(voxels)`.
+- `Mapper.get_matching_feature_voxels()` now returns `MatchedVoxels`.
+  Code that accessed matched voxel fields directly should use
+  `matched.voxels`, for example `matched.voxels.centers`.
+- Raw mapper storage fields `tsdf.data.block_rgb`, `block_features`, and
+  `block_feature_weight` are now `torch.float16`. Upcast to `float()` before
+  doing arithmetic on them directly. RGB accumulators are stored normalized
+  to `[0, 1]`; public helper outputs continue to return uint8 colors where
+  documented.
+- Direct imports from removed internal mapper kernel modules such as
+  `wp_hash`, `wp_coord`, `wp_raycast`, and `wp_raycast_common` must move to
+  the per-instance kernel factory accessors.
+- Remove unused `PoseCostMetric` and `update_pose_cost_metric` solver APIs;
+  the downstream cost manager did not consume the metric, so the API was
+  effectively a no-op.
+
 ## Version 0.8.0
 
 ### New Features

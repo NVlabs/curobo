@@ -31,13 +31,13 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
 
     Example:
         ```python
-        from curobo._src.collision import RobotSceneCollision, RobotSceneCollisionCfg
+        from curobo.collision_checking import RobotCollisionChecker, RobotCollisionCheckerCfg
 
-        cfg = RobotSceneCollisionCfg.load_from_config(
+        cfg = RobotCollisionCheckerCfg.load_from_config(
             robot_config="franka.yml",
             scene_model="scene.yml",
         )
-        checker = RobotSceneCollision(cfg)
+        checker = RobotCollisionChecker(cfg)
 
         # Check collision at joint configurations
         joint_positions = torch.rand((10, 7))
@@ -471,4 +471,3 @@ def _point_robot_distance(
         torch.linalg.norm(points - robot_spheres[..., :3], dim=-1) - robot_radius
     )
     return torch.max(sph_distance, dim=-1)[0]
-

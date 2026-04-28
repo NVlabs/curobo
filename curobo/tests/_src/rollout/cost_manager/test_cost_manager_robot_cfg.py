@@ -165,14 +165,17 @@ class TestRobotCostManagerCfgCreateSceneCollision:
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_with_scene_collision_checker(self, cuda_device_cfg):
-        from curobo._src.geom.collision import SceneCollisionCfg, create_collision_checker
+        from curobo._src.geom.collision.collision_scene import (
+            SceneCollisionCfg,
+            create_scene_collision,
+        )
 
         world_cfg = SceneCollisionCfg(
             device_cfg=cuda_device_cfg,
             max_distance=0.1,
             cache={"primitive": 10},
         )
-        scene_collision_checker = create_collision_checker(world_cfg)
+        scene_collision_checker = create_scene_collision(world_cfg)
 
         data_dict = {"scene_collision_cfg": {"weight": 1.0}}
         cfg = RobotCostManagerCfg.create(

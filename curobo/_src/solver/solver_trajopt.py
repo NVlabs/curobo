@@ -18,7 +18,7 @@ import torch.autograd.profiler as profiler
 
 # CuRobo
 import curobo._src.runtime as curobo_runtime
-from curobo._src.geom.collision import SceneCollision
+from curobo._src.geom.collision.collision_scene import SceneCollision
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.metrics import RolloutMetrics
 from curobo._src.rollout.rollout_robot import RobotRollout
@@ -167,9 +167,6 @@ class TrajOptSolver:
         return self.core.sample_configs(
             num_samples, rejection_ratio, self.config.optimizer_collision_activation_distance
         )
-
-    def update_pose_cost_metric(self, pose_cost_metric):
-        return self.core.update_pose_cost_metric(pose_cost_metric)
 
     def update_tool_pose_criteria(self, tool_pose_criteria):
         return self.core.update_tool_pose_criteria(tool_pose_criteria)

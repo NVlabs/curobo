@@ -10,8 +10,7 @@ and complex geometry.
 
 Key differences from dense pose refiner:
 - Uses hash table lookups instead of direct grid indexing
-- Corner-origin convention (no grid center offset)
-- No fixed grid bounds (unbounded spatial extent)
+- Center-origin bounded TSDF grid with sparse block allocation
 
 Reference:
 - "KinectFusion: Real-time Dense Surface Mapping and Tracking" (Newcombe et al.)
@@ -208,7 +207,7 @@ class BlockSparseRaycastRefinerCfg:
     lambda_initial: float = 1e-3
     lambda_factor: float = 10.0
     lambda_min: float = 1e-7
-    lambda_max: float = 1e+7
+    lambda_max: float = 1e7
     rho_min: float = 0.25
 
     @property
@@ -251,9 +250,13 @@ class BlockSparseRaycastPoseRefiner:
         # Pre-allocate buffers
         self._allocate_buffers()
 
-        # Create tiled kernel
+        # Create tiled kernel bound to the integrator's TSDF
+        # specialization. The sampler helpers closure-capture the
+        # matching ``block_size``; without this the tiled kernel would
+        # silently use BS=8 samplers against a BS≠8 TSDF.
         self._tiled_kernel = create_ray_sdf_alignment_block_sparse_tiled_kernel(
-            n_samples_per_ray=self.config.n_samples_per_ray
+            n_samples_per_ray=self.config.n_samples_per_ray,
+            kernels=integrator._tsdf.kernels,
         )
 
         # CUDA graph executor for inner iterations
@@ -344,14 +347,10 @@ class BlockSparseRaycastPoseRefiner:
         # Prepare pose tensors
         intrinsics_on_device = intrinsics.to(self.device, dtype=torch.float32)
         position = (
-            estimated_pose.position.squeeze(0)
-            .to(self.device, dtype=torch.float32)
-            .view(1, 3)
+            estimated_pose.position.squeeze(0).to(self.device, dtype=torch.float32).view(1, 3)
         )
         quaternion = (
-            estimated_pose.quaternion.squeeze(0)
-            .to(self.device, dtype=torch.float32)
-            .view(1, 4)
+            estimated_pose.quaternion.squeeze(0).to(self.device, dtype=torch.float32).view(1, 4)
         )
 
         # Get block-sparse data
@@ -363,11 +362,7 @@ class BlockSparseRaycastPoseRefiner:
         truncation_distance = tsdf.config.truncation_distance
 
         # Get grid dimensions for center-origin convention
-        grid_shape = tsdf.data.grid_shape
-        if grid_shape is not None:
-            grid_D, grid_H_dim, grid_W_dim = grid_shape  # nz, ny, nx -> D, H, W
-        else:
-            grid_W_dim, grid_H_dim, grid_D = 0, 0, 0
+        grid_D, grid_H_dim, grid_W_dim = tsdf.data.grid_shape  # nz, ny, nx -> D, H, W
 
         # Compute initial JtJ/Jtr/error
         n_total_samples = n_pixels * self.config.n_samples_per_ray
@@ -442,9 +437,7 @@ class BlockSparseRaycastPoseRefiner:
             best_n_valid=n_valid.clone(),
             best_JtJ=self._state_JtJ.clone(),
             best_Jtr=self._state_Jtr.clone(),
-            lambda_damping=torch.tensor(
-                [self.config.lambda_initial], device=self.device
-            ),
+            lambda_damping=torch.tensor([self.config.lambda_initial], device=self.device),
         )
 
         return self._cached_state
@@ -468,11 +461,9 @@ class BlockSparseRaycastPoseRefiner:
             state.lambda_damping,
             self._eye6,
         )
-        #print("BEST JtJ:", torch.sum(state.best_JtJ), "BEST Jtr:", torch.sum(state.best_Jtr), "DELTA:", (delta))
+        # print("BEST JtJ:", torch.sum(state.best_JtJ), "BEST Jtr:", torch.sum(state.best_Jtr), "DELTA:", (delta))
 
-        pred_reduction = compute_predicted_reduction(
-            delta, state.best_Jtr, state.best_JtJ
-        )
+        pred_reduction = compute_predicted_reduction(delta, state.best_Jtr, state.best_JtJ)
 
         # Step 2: Compute candidate pose
         delta_pose = Pose.from_euler_xyz(delta[3:], delta[:3])
@@ -638,4 +629,3 @@ class BlockSparseRaycastPoseRefiner:
             state.best_error.item(),
             iteration + 1,
         )
-

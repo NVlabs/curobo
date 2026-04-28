@@ -27,7 +27,9 @@ class CuroboRuntime:
             CudaCoreKernelCache instance
         """
         if self._cuda_core_cache is None:
-            from curobo._src.curobolib.backends.cuda_core_backend import CudaCoreKernelCache
+            from curobo._src.curobolib.backends.cuda_core_backend.kernel_cache import (
+                CudaCoreKernelCache,
+            )
 
             self._cuda_core_cache = CudaCoreKernelCache()
         return self._cuda_core_cache

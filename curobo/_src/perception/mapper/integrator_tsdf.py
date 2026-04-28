@@ -11,6 +11,7 @@ Example:
     integrator = BlockSparseTSDFIntegrator(
         voxel_size=0.005,
         origin=torch.tensor([-1.0, -1.0, 0.0]),
+        grid_shape=(400, 400, 400),
         max_blocks=100_000,
     )
 
@@ -22,20 +23,29 @@ Example:
 
 import math
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 
-from curobo._src.geom.data import SceneData
+from curobo._src.geom.data.data_scene import SceneData
 from curobo._src.geom.types import Mesh
-from curobo._src.perception.mapper.block_allocation import calculate_tsdf_max_blocks
-from curobo._src.perception.mapper.kernel.warp_types import BLOCK_SIZE
+from curobo._src.perception.mapper.block_allocation import (
+    calculate_tsdf_max_blocks,
+)
+from curobo._src.perception.mapper.constants import (
+    DEFAULT_HASH_LAYOUT,
+    _validate_feature_channels_per_thread,
+    _validate_feature_integration_kernel,
+    _validate_block_size,
+    resolve_feature_integration_kernel,
+    validate_grid_shape_for_hash_layout,
+)
+from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
+    make_block_sparse_kernels,
+)
 from curobo._src.perception.mapper.kernel.wp_decay import (
     decay_and_recycle,
     decay_frustum_aware_multi_camera,
-)
-from curobo._src.perception.mapper.kernel.wp_integrate_sort_filter import (
-    SortFilterIntegrator,
 )
 from curobo._src.perception.mapper.kernel.wp_integrate_voxel_project import (
     VoxelProjectIntegrator,
@@ -45,6 +55,7 @@ from curobo._src.perception.mapper.kernel.wp_stamp_obstacles import (
     stamp_scene_obstacles,
 )
 from curobo._src.perception.mapper.kernel.wp_voxel_extraction import (
+    extract_matching_voxels_block_sparse,
     extract_occupied_voxels_block_sparse,
     extract_surface_voxels_block_sparse,
 )
@@ -54,10 +65,13 @@ from curobo._src.perception.mapper.mesh_extractor import (
 from curobo._src.perception.mapper.storage import (
     BlockSparseTSDF,
     BlockSparseTSDFCfg,
+    MatchedVoxels,
+    OccupiedVoxels,
 )
 from curobo._src.types.camera import CameraObservation
-from curobo._src.util.logging import log_and_raise, log_info
+from curobo._src.util.logging import log_info
 from curobo._src.util.torch_util import profile_class_methods
+from curobo.logging import log_and_raise
 
 
 @dataclass
@@ -71,7 +85,10 @@ class BlockSparseTSDFIntegratorCfg:
         max_blocks: Maximum number of allocatable blocks.
             If None and grid_shape is provided, auto-calculated using surface area heuristic.
         hash_capacity: Hash table size (should be ~2× max_blocks). Auto-calculated if None.
-        block_size: Voxels per block edge (default 8).
+        block_size: Voxels per block edge. Supported values are 1 or
+            powers of 2 in [2, 32]
+            (default 8). Specializes the Warp kernels used by this
+            integrator.
         depth_minimum_distance: Minimum valid depth in meters.
         depth_maximum_distance: Maximum valid depth in meters.
         frustum_decay: Decay for in-view voxels (0.5=quick adapt, 1.0=no extra decay).
@@ -80,10 +97,9 @@ class BlockSparseTSDFIntegratorCfg:
             Since weight = 1/depth² (clamped to [0.001, 2.0]), this can be interpreted
             as the number of observations at 1m depth. E.g., 0.5 = half an observation
             at 1m, or one observation at ~1.4m, or two observations at 2m.
-        grid_shape: Optional (W, H, D) voxel grid dimensions for bounds checking.
-            If provided, uses center-origin convention (origin at center of grid)
-            matching the dense TSDFIntegrator. Voxels outside [0, W)×[0, H)×[0, D) are skipped.
-            If None (default), no bounds checking is performed (unbounded, corner-origin).
+        grid_shape: Required (nz, ny, nx) voxel grid dimensions. The map
+            uses center-origin convention, and voxels outside the bounded
+            grid are skipped.
         roughness: Geometric complexity multiplier for max_blocks calculation.
             1.0 = simple walls, 3.0 = cluttered room (default).
         image_height: Image height for buffer pre-allocation.
@@ -101,44 +117,124 @@ class BlockSparseTSDFIntegratorCfg:
     frustum_decay: float = 1.0  # 1.0 = no extra decay for in-view voxels
     time_decay: float = 1.0  # 1.0 = no time decay
     minimum_tsdf_weight: float = 0.1
-    grid_shape: Optional[Tuple[int, int, int]] = None  # Optional bounds checking
+    grid_shape: Tuple[int, int, int] = None
     roughness: float = 3.0  # Geometric complexity multiplier
     image_height: Optional[int] = None  # For buffer pre-allocation
     image_width: Optional[int] = None  # For buffer pre-allocation
     enable_static: bool = False  # Enable static obstacle integration
     static_obstacle_color: Tuple[int, int, int] = (20, 20, 20)  # RGB for static obstacles
-    integration_method: str = "voxel_project"  # "voxel_project" or "sort_filter"
+    seeding_method: str = "gather"  # "gather" or "scatter"; selects ESDF seed kernel variant
     num_cameras: int = 1
     device: str = "cuda:0"
-
-    @property
-    def block_size(self) -> int:
-        """Block size (voxels per edge). Fixed at BLOCK_SIZE=8."""
-        return BLOCK_SIZE
+    #: Voxels per block edge. Supported values are 1 or powers of 2 in [2, 32].
+    block_size: int = 8
+    #: Per-block feature channel dimensionality. 0 disables features.
+    feature_dim: int = 0
+    #: Maximum visible blocks one integration frame may process. Defaults
+    #: to ``max_blocks`` after auto-calculation.
+    max_visible_blocks_per_integration: Optional[int] = None
+    #: Maximum support pixels stored per visible block per camera for RGB
+    #: and feature integration. ``32`` matches the memory budget in the
+    #: visible-capacity refactor note and keeps scratch bounded.
+    max_support_pixels_per_block_camera: int = 32
+    #: Number of adjacent feature channels accumulated by one feature-kernel
+    #: thread. Must match the compiled Warp kernel's thread decoding.
+    feature_channels_per_thread: int = 4
+    #: Compile-time cap for feature channels accumulated by one tiled
+    #: feature-kernel CTA.
+    max_feature_tile_channels: int = 4096
+    #: Feature integration launch policy: ``"auto"``, ``"grouped"``, or
+    #: ``"tiled"``. Resolved to a low-level tiled bool at construction time.
+    feature_integration_kernel: str = "auto"
+    #: Record per-kernel integration timings into
+    #: ``get_stats()["last_integration_kernel_timings_ms"]``.
+    profile_integration_kernel_timings: bool = False
+    #: Upper bound on per-block accumulator weight after each frame. Caps
+    #: the fp16 weighted-sum magnitudes in ``block_rgb`` and
+    #: ``block_features``; also sets EMA decay rate
+    #: ``W_max / mean_per_frame_weight`` for old observations. See
+    #: :attr:`BlockSparseTSDFCfg.accumulator_w_max`.
+    accumulator_w_max: float = 10000.0
 
     def __post_init__(self):
         if self.origin is None:
             self.origin = torch.tensor([-1.0, -1.0, 0.0], dtype=torch.float32)
         if not isinstance(self.origin, torch.Tensor):
             self.origin = torch.tensor(self.origin, dtype=torch.float32)
+        _validate_block_size(self.block_size)
+        self.grid_shape = validate_grid_shape_for_hash_layout(
+            self.grid_shape,
+            self.block_size,
+            field_name="BlockSparseTSDFIntegratorCfg.grid_shape",
+        )
 
         # Auto-calculate max_blocks if not provided
         if self.max_blocks is None:
-            if self.grid_shape is not None:
-                self.max_blocks = calculate_tsdf_max_blocks(
-                    grid_shape=self.grid_shape,
-                    voxel_size=self.voxel_size,
-                    block_dim=BLOCK_SIZE,
-                    truncation_dist=self.truncation_distance,
-                    roughness=self.roughness,
-                )
-            else:
-                # Default fallback for unbounded mode
-                self.max_blocks = 100_000
+            self.max_blocks = calculate_tsdf_max_blocks(
+                grid_shape=self.grid_shape,
+                voxel_size=self.voxel_size,
+                block_size=self.block_size,
+                truncation_dist=self.truncation_distance,
+                roughness=self.roughness,
+            )
+        if self.max_blocks > DEFAULT_HASH_LAYOUT.max_pool_idx:
+            log_and_raise(
+                f"max_blocks={self.max_blocks:,} exceeds the "
+                f"{DEFAULT_HASH_LAYOUT.name} pool limit of "
+                f"{DEFAULT_HASH_LAYOUT.max_pool_idx:,}."
+            )
 
-        # Auto-calculate hash_capacity
+        # Auto-calculate hash_capacity as 2× max_blocks (active load factor
+        # ~0.5). ``hash_lookup`` now probes the full capacity (not a fixed
+        # 64-slot cap), so probe-chain saturation from recycle-induced
+        # tombstones no longer produces silent allocation failures; the
+        # tighter 2× packing is safe.
         if self.hash_capacity is None:
             self.hash_capacity = int(math.ceil(self.max_blocks * 2.0))
+        if self.max_visible_blocks_per_integration is None:
+            self.max_visible_blocks_per_integration = self.max_blocks
+        if (
+            self.max_visible_blocks_per_integration <= 0
+            or self.max_visible_blocks_per_integration > self.max_blocks
+        ):
+            log_and_raise(
+                "max_visible_blocks_per_integration must satisfy "
+                f"0 < C <= max_blocks ({self.max_blocks}), got "
+                f"{self.max_visible_blocks_per_integration}."
+            )
+
+        if self.image_height is None or self.image_width is None:
+            log_and_raise(
+                "BlockSparseTSDFIntegratorCfg requires image_height and "
+                "image_width to pre-allocate the voxel-project scratch "
+                "buffer. Got image_height="
+                f"{self.image_height}, image_width={self.image_width}."
+            )
+        if self.image_height <= 0 or self.image_width <= 0:
+            log_and_raise(
+                f"image_height and image_width must be positive, got "
+                f"image_height={self.image_height}, image_width={self.image_width}."
+            )
+        if self.num_cameras <= 0:
+            log_and_raise(f"num_cameras must be positive, got num_cameras={self.num_cameras}.")
+        _validate_feature_channels_per_thread(self.feature_channels_per_thread)
+        if self.max_feature_tile_channels <= 0:
+            log_and_raise(
+                "max_feature_tile_channels must be positive, got "
+                f"max_feature_tile_channels={self.max_feature_tile_channels}."
+            )
+        if self.max_support_pixels_per_block_camera <= 0:
+            log_and_raise(
+                "max_support_pixels_per_block_camera must be positive, got "
+                f"max_support_pixels_per_block_camera="
+                f"{self.max_support_pixels_per_block_camera}."
+            )
+        _validate_feature_integration_kernel(self.feature_integration_kernel)
+        if not isinstance(self.profile_integration_kernel_timings, bool):
+            log_and_raise(
+                "profile_integration_kernel_timings must be bool, got "
+                f"{type(self.profile_integration_kernel_timings).__name__}."
+            )
 
 
 @profile_class_methods
@@ -178,7 +274,12 @@ class BlockSparseTSDFIntegrator:
         """
         self.config = config
 
-        # Create block-sparse TSDF storage
+        use_tiled_feature_kernel = resolve_feature_integration_kernel(
+            config.feature_integration_kernel,
+            config.feature_dim,
+            config.max_support_pixels_per_block_camera,
+        )
+
         tsdf_config = BlockSparseTSDFCfg(
             max_blocks=config.max_blocks,
             hash_capacity=config.hash_capacity,
@@ -189,27 +290,36 @@ class BlockSparseTSDFIntegrator:
             grid_shape=config.grid_shape,
             enable_static=config.enable_static,
             static_obstacle_color=config.static_obstacle_color,
+            block_size=config.block_size,
+            feature_dim=config.feature_dim,
+            feature_channels_per_thread=config.feature_channels_per_thread,
+            max_feature_tile_channels=config.max_feature_tile_channels,
+            max_support_pixels_per_block_camera=config.max_support_pixels_per_block_camera,
+            accumulator_w_max=config.accumulator_w_max,
         )
-        self._tsdf = BlockSparseTSDF(tsdf_config)
+        self._tsdf = BlockSparseTSDF(
+            tsdf_config,
+            kernels=make_block_sparse_kernels(config),
+        )
 
         # Frame counter for periodic operations
         self._frame_count = 0
 
-        # Create integration backend
-        if config.integration_method == "voxel_project":
-            self._integrator = VoxelProjectIntegrator(
-                device=config.device,
-            )
-        elif config.integration_method == "sort_filter":
-            self._integrator = SortFilterIntegrator(
-                device=config.device,
-            )
-        else:
-            log_and_raise(
-                ValueError,
-                f"Unknown integration_method: {config.integration_method}. "
-                "Must be 'voxel_project' or 'sort_filter'.",
-            )
+        self._integrator = VoxelProjectIntegrator(
+            num_cameras=config.num_cameras,
+            image_height=config.image_height,
+            image_width=config.image_width,
+            voxel_size=config.voxel_size,
+            block_size=config.block_size,
+            truncation_distance=config.truncation_distance,
+            max_blocks=self._tsdf.config.max_blocks,
+            max_visible_blocks_per_integration=config.max_visible_blocks_per_integration,
+            max_support_pixels_per_block_camera=config.max_support_pixels_per_block_camera,
+            device=config.device,
+            feature_channels_per_thread=config.feature_channels_per_thread,
+            use_tiled_feature_kernel=use_tiled_feature_kernel,
+            profile_kernel_timings=config.profile_integration_kernel_timings,
+        )
 
     @property
     def tsdf(self) -> BlockSparseTSDF:
@@ -234,6 +344,8 @@ class BlockSparseTSDFIntegrator:
         - ``intrinsics``: ``(num_cameras, 3, 3)``
         - ``pose.position``: ``(num_cameras, 3)``
         - ``pose.quaternion``: ``(num_cameras, 4)``
+        - ``feature_grid``: optional ``(num_cameras, feature_H, feature_W, feature_dim)``
+          float16 tensor when features are enabled
 
         Args:
             observation: Batched camera observation.
@@ -258,23 +370,50 @@ class BlockSparseTSDFIntegrator:
         quaternions = observation.pose.quaternion.view(n_cameras, 4)
         intrinsics = observation.intrinsics
 
-        self._integrator.integrate(
-            self._tsdf,
-            depth_images,
-            rgb_images,
-            positions,
-            quaternions,
-            intrinsics,
-            depth_min=self.config.depth_minimum_distance,
-            depth_max=self.config.depth_maximum_distance,
-            grid_size=self.config.grid_shape,
-        )
+        feature_grid = observation.feature_grid
+        if feature_grid is not None and not self._tsdf.data.has_features:
+            log_and_raise(
+                "feature_grid was provided but feature_dim == 0; enable features via "
+                "MapperCfg.feature_dim or BlockSparseTSDFIntegratorCfg.feature_dim."
+            )
+        if self._tsdf.data.has_features and feature_grid is not None:
+            if feature_grid.ndim != 4:
+                log_and_raise(
+                    "feature_grid must be (num_cameras, feature_H, feature_W, feature_dim), "
+                    f"got shape {tuple(feature_grid.shape)}."
+                )
+            if feature_grid.shape[0] != n_cameras:
+                log_and_raise(
+                    f"feature_grid num_cameras={feature_grid.shape[0]} "
+                    f"does not match depth_image num_cameras={n_cameras}."
+                )
+            if feature_grid.shape[1] <= 0 or feature_grid.shape[2] <= 0:
+                log_and_raise(
+                    "feature_grid feature_H and feature_W must be positive, got "
+                    f"shape {tuple(feature_grid.shape)}."
+                )
+            if feature_grid.shape[-1] != self._tsdf.data.feature_dim:
+                log_and_raise(
+                    f"feature_grid feature_dim={feature_grid.shape[-1]} does not match "
+                    f"configured feature_dim={self._tsdf.data.feature_dim}."
+                )
+            if feature_grid.dtype != torch.float16:
+                log_and_raise(
+                    f"feature_grid dtype must be torch.float16, got {feature_grid.dtype}."
+                )
+            if feature_grid.device != depth_images.device:
+                log_and_raise(
+                    f"feature_grid device {feature_grid.device} does not match "
+                    f"depth_image device {depth_images.device}."
+                )
+            if feature_grid.stride(-1) != 1:
+                log_and_raise(
+                    "feature_grid must be channels-last with stride 1 on the channel dim."
+                )
 
-        if self.config.time_decay < 1.0 or self.config.frustum_decay < 1.0:
+        if self._frame_count > 0 and (self.config.time_decay < 1.0 or self.config.frustum_decay < 1.0):
             img_shape = (depth_images.shape[1], depth_images.shape[2])
-            num_blocks = None
-            if self.config.integration_method == "voxel_project":
-                num_blocks = int(self._tsdf.data.num_allocated.item())
+            num_blocks = int(self._tsdf.data.num_allocated.item())
             decay_frustum_aware_multi_camera(
                 self._tsdf,
                 intrinsics=intrinsics,
@@ -287,6 +426,19 @@ class BlockSparseTSDFIntegrator:
                 frustum_decay=self.config.frustum_decay,
                 num_blocks=num_blocks,
             )
+
+        self._integrator.integrate(
+            self._tsdf,
+            depth_images,
+            rgb_images,
+            positions,
+            quaternions,
+            intrinsics,
+            depth_min=self.config.depth_minimum_distance,
+            depth_max=self.config.depth_maximum_distance,
+            grid_size=self.config.grid_shape,
+            feature_grid=feature_grid,
+        )
 
         self._frame_count += 1
 
@@ -301,22 +453,48 @@ class BlockSparseTSDFIntegrator:
         """
         return decay_and_recycle(self._tsdf, 1.0)  # No additional decay
 
+    def clear_region(self, bounds_min, bounds_max) -> int:
+        """Clear dynamic map contents for allocated blocks intersecting an AABB.
+
+        Args:
+            bounds_min: World-space lower AABB corner, shape ``(3,)``.
+            bounds_max: World-space upper AABB corner, shape ``(3,)``.
+
+        Returns:
+            Number of allocated blocks cleared. Blocks remain allocated; only
+            dynamic TSDF/RGB, block sums, and per-block features are reset.
+        """
+        return self._integrator.clear_region(self._tsdf, bounds_min, bounds_max)
+
+    def clear_blocks(self, pool_indices) -> int:
+        """Clear dynamic map contents for explicit block-pool indices.
+
+        Args:
+            pool_indices: Tensor/list of allocated ``pool_idx`` values.
+
+        Returns:
+            Number of blocks cleared. Blocks remain allocated; only dynamic
+            TSDF/RGB, block sums, and per-block features are reset.
+        """
+        return self._integrator.clear_blocks(self._tsdf, pool_indices)
+
     def extract_mesh(
         self,
-        level: float = 0.0,
+        refine_iterations: int = 2,
         surface_only: bool = False,
-        refine_iterations: int = 0,
+        level: float = 0.0,
     ) -> Mesh:
         """Extract mesh from the TSDF using marching cubes.
 
         Args:
-            level: Isosurface level (typically 0.0).
-            surface_only: If True, only extract mesh near the surface (|sdf| < truncation).
-                Excludes triangles from regions deep inside the object where TSDF
-                is clamped to -truncation_distance.
             refine_iterations: Number of Newton-Raphson iterations for vertex refinement.
                 0 = no refinement (linear interpolation only). Higher values (2-5)
                 produce smoother meshes at the cost of more computation.
+            surface_only: If True, only extract mesh near the surface (|sdf| < truncation).
+                Excludes triangles from regions deep inside the object where TSDF
+                is clamped to -truncation_distance.
+            level: Isosurface level (typically 0.0).
+
 
         Returns:
             Mesh object with vertices, triangles, normals, and colors.
@@ -333,10 +511,10 @@ class BlockSparseTSDFIntegrator:
         # faces should be (N, 3) for trimesh compatibility
         return Mesh(
             name="block_sparse_tsdf_mesh",
-            vertices=vertices, #.cpu().tolist(),
-            faces=triangles, #.cpu().tolist(),  # Keep as (N, 3), not flattened
-            vertex_colors=(colors.float() / 255.0),#.cpu().tolist(),
-            vertex_normals=normals,#.cpu().tolist(),
+            vertices=vertices,  # .cpu().tolist(),
+            faces=triangles,  # .cpu().tolist(),  # Keep as (N, 3), not flattened
+            vertex_colors=(colors.float() / 255.0),  # .cpu().tolist(),
+            vertex_normals=normals,  # .cpu().tolist(),
         )
 
     def extract_mesh_tensors(
@@ -371,15 +549,40 @@ class BlockSparseTSDFIntegrator:
             minimum_tsdf_weight=self.config.minimum_tsdf_weight,
         )
 
-    def get_stats(self) -> Dict[str, float]:
+    def get_stats(
+        self,
+        scan_pool: bool = True,
+        scan_hash: bool = False,
+    ) -> Dict[str, Any]:
         """Get integrator statistics.
 
+        Args:
+            scan_pool: Forwarded to ``BlockSparseTSDF.get_stats``.
+                When True (default) returns the ground-truth
+                ``active_blocks`` and the ``holes`` invariant via an
+                O(num_allocated) GPU reduction.
+            scan_hash: Forwarded to ``BlockSparseTSDF.get_stats``.
+                When True, adds hash table occupancy stats via an
+                O(hash_capacity) reduction. Periodic use only.
+
         Returns:
-            Dictionary with block usage and allocation stats.
+            Dictionary with block usage, allocation stats, and the last
+            integration's kernel timing dict. See
+            :meth:`BlockSparseTSDF.get_stats` for the full block-pool key list.
         """
-        stats = self._tsdf.get_stats()
+        stats = self._tsdf.get_stats(scan_pool=scan_pool, scan_hash=scan_hash)
         stats["frame_count"] = self._frame_count
         stats["memory_mb"] = self._tsdf.memory_usage_mb()
+        last_integration = dict(self._integrator.last_integration_stats)
+        last_integration["support_overflow_count"] = int(
+            self._integrator.support_overflow_count.item()
+        )
+        last_integration["profile_kernel_timings"] = self._integrator.profile_kernel_timings
+        last_integration["use_tiled_feature_kernel"] = self._integrator.use_tiled_feature_kernel
+        stats["last_integration"] = last_integration
+        stats["last_integration_kernel_timings_ms"] = dict(
+            self._integrator.last_kernel_timings_ms
+        )
         return stats
 
     def memory_usage_mb(self) -> float:
@@ -419,8 +622,8 @@ class BlockSparseTSDFIntegrator:
         self,
         surface_only: bool = False,
         sdf_threshold: float = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Extract occupied voxel centers and colors.
+    ) -> OccupiedVoxels:
+        """Extract occupied voxel centers and per-voxel block indices.
 
         Matches dense TSDFIntegrator.extract_occupied_voxels behavior:
         - surface_only=True: extract voxels near zero-crossing (|SDF| < sdf_threshold)
@@ -432,9 +635,10 @@ class BlockSparseTSDFIntegrator:
             sdf_threshold: Threshold for surface_only=True. Defaults to voxel_size.
 
         Returns:
-            Tuple of (centers, colors):
-                - centers: (N, 3) float32 voxel world positions
-                - colors: (N, 3) uint8 RGB colors
+            :class:`OccupiedVoxels` — ``.centers`` for voxel positions,
+            ``.block_idx_per_voxel`` for the per-voxel ``pool_idx``, and
+            ``.block_data`` as a read-only view over per-block storage.
+            Use ``.colors_uint8()`` to gather per-voxel RGB.
         """
         # Default threshold to voxel_size (matches dense behavior)
         if sdf_threshold is None:
@@ -446,6 +650,178 @@ class BlockSparseTSDFIntegrator:
             sdf_threshold=sdf_threshold,
             minimum_tsdf_weight=self.config.minimum_tsdf_weight,
             grid_shape=self.config.grid_shape,
+        )
+
+    def extract_matching_feature_voxels(
+        self,
+        feature_vector: torch.Tensor,
+        top_k: int,
+        surface_only: bool = False,
+        sdf_threshold: Optional[float] = None,
+        minimum_score: Optional[float] = None,
+        feature_projector: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ) -> MatchedVoxels:
+        """Extract voxels from the top-k blocks whose per-block feature vector
+        is most similar (cosine) to ``feature_vector``.
+
+        Args:
+            feature_vector: ``(D,)`` float32 query vector. ``D`` must
+                match ``feature_dim`` unless ``feature_projector`` maps
+                stored block features to another query space.
+            top_k: Number of most-similar blocks to extract voxels from.
+            surface_only: If True, keep only surface voxels.
+            sdf_threshold: Surface threshold; defaults to voxel_size.
+            minimum_score: If set, drop blocks with cosine score strictly
+                below this threshold *after* the top-k selection. Lets
+                callers pair a generous ``top_k`` with a quality cut
+                without paying voxel-extraction cost on rejected blocks.
+                Score is cosine in the same feature space as
+                ``feature_vector`` (range ``[-1, 1]``); pick a threshold
+                appropriate for that space (raw RADIO and teacher-projected
+                features have different score distributions). ``None``
+                disables the cut.
+            feature_projector: Optional callable applied to normalized
+                per-block features before scoring. It receives a
+                ``(num_allocated, feature_dim)`` float32 tensor and must
+                return ``(num_allocated, D)`` features in the same space
+                as ``feature_vector``.
+
+        Returns:
+            :class:`MatchedVoxels` containing the extracted voxels plus
+            parallel ``(K,)`` arrays of pool indices and cosine scores
+            sorted by score descending. ``K <= min(top_k, num_allocated)``;
+            ``K`` may be smaller (including zero) when ``minimum_score``
+            filters blocks.
+        """
+        if not self._tsdf.data.has_features:
+            raise RuntimeError("extract_matching_feature_voxels() requires feature_dim > 0")
+        if top_k <= 0:
+            raise ValueError(f"top_k must be positive, got {top_k}")
+
+        feature_vector = feature_vector.to(
+            device=self._tsdf.data.block_features.device, dtype=torch.float32
+        )
+        if feature_vector.ndim != 1:
+            raise ValueError(
+                f"feature_vector must be shape (D,), got {tuple(feature_vector.shape)}"
+            )
+        if feature_projector is None and feature_vector.shape[0] != self._tsdf.data.feature_dim:
+            raise ValueError(
+                "feature_vector must be shape "
+                f"({self._tsdf.data.feature_dim},), got {tuple(feature_vector.shape)}"
+            )
+
+        num_alloc = int(self._tsdf.data.num_allocated.item())
+        max_blocks = self._tsdf.config.max_blocks
+        device = self._tsdf.device
+
+        block_mask = torch.zeros(max_blocks, dtype=torch.uint8, device=device)
+
+        def _empty_result() -> MatchedVoxels:
+            voxels = extract_matching_voxels_block_sparse(
+                self._tsdf,
+                block_mask=block_mask,
+                surface_only=surface_only,
+                sdf_threshold=sdf_threshold,
+                minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+            )
+            return MatchedVoxels(
+                voxels=voxels,
+                block_pool_idx=torch.empty(0, dtype=torch.int32, device=device),
+                block_scores=torch.empty(0, dtype=torch.float32, device=device),
+            )
+
+        if num_alloc == 0:
+            return _empty_result()
+
+        active_pool_idx = torch.nonzero(
+            self._tsdf.data.block_to_hash_slot[:num_alloc] >= 0,
+            as_tuple=False,
+        ).flatten()
+        if active_pool_idx.numel() == 0:
+            return _empty_result()
+
+        # Accumulators are fp16; divide in fp32 to avoid compounding
+        # ulp loss on top of the post-frame rescale, and to match the
+        # fp32 query vector for the dot product. Recycled pool slots may
+        # retain stale storage, so score only active pool indices.
+        features = self._tsdf.data.block_features[active_pool_idx].float()
+        weight = self._tsdf.data.block_feature_weight[active_pool_idx].float().clamp(min=1e-6)
+        normalized = features / weight.unsqueeze(-1)
+
+        if feature_projector is not None:
+            with torch.inference_mode():
+                normalized = feature_projector(normalized)
+            if normalized.ndim != 2 or normalized.shape[0] != active_pool_idx.numel():
+                raise ValueError(
+                    "feature_projector must return shape "
+                    f"({active_pool_idx.numel()}, D), got {tuple(normalized.shape)}"
+                )
+            normalized = normalized.to(device=device, dtype=torch.float32)
+
+        if feature_vector.shape[0] != normalized.shape[1]:
+            raise ValueError(
+                "feature_vector must be shape "
+                f"({normalized.shape[1]},), got {tuple(feature_vector.shape)}"
+            )
+
+        query = torch.nn.functional.normalize(feature_vector, dim=0, eps=1e-6)
+        normalized = torch.nn.functional.normalize(normalized, dim=1, eps=1e-6)
+        scores = torch.nan_to_num(normalized @ query, nan=-float("inf"))
+
+        k_effective = min(top_k, active_pool_idx.numel())
+        # topk(..., sorted=True) is the default and gives descending order;
+        # both block_pool_idx and block_scores inherit it by construction,
+        # which preserves the parallel-arrays invariant for downstream
+        # consumers (slicing prefixes, scatter-gather in scores_per_voxel).
+        topk = torch.topk(scores, k_effective)
+        top = active_pool_idx[topk.indices].to(torch.int64)
+        top_scores = topk.values
+
+        if minimum_score is not None:
+            # Apply the threshold AFTER topk so the kept indices stay in
+            # descending-score order without a re-sort, and so we never
+            # waste topk on more blocks than necessary. The Warp
+            # extraction kernel below sees a strictly smaller mask, so
+            # the perf win is proportional to (k_effective - K_kept).
+            keep = top_scores >= minimum_score
+            if not bool(keep.any()):
+                return _empty_result()
+            top = top[keep]
+            top_scores = top_scores[keep]
+
+        block_mask.index_fill_(0, top, 1)
+
+        voxels = extract_matching_voxels_block_sparse(
+            self._tsdf,
+            block_mask=block_mask,
+            surface_only=surface_only,
+            sdf_threshold=sdf_threshold,
+            minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+        )
+        return MatchedVoxels(
+            voxels=voxels,
+            block_pool_idx=top.to(torch.int32),
+            block_scores=top_scores.float(),
+        )
+
+    def get_matching_feature_voxels(
+        self,
+        feature_vector: torch.Tensor,
+        top_k: int,
+        surface_only: bool = False,
+        sdf_threshold: Optional[float] = None,
+        minimum_score: Optional[float] = None,
+        feature_projector: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ) -> MatchedVoxels:
+        """Compatibility wrapper for :meth:`extract_matching_feature_voxels`."""
+        return self.extract_matching_feature_voxels(
+            feature_vector=feature_vector,
+            top_k=top_k,
+            surface_only=surface_only,
+            sdf_threshold=sdf_threshold,
+            minimum_score=minimum_score,
+            feature_projector=feature_projector,
         )
 
     # =========================================================================
@@ -481,9 +857,7 @@ class BlockSparseTSDFIntegrator:
             return
 
         if debug:
-            log_info(
-                f"[update_static_obstacles] num_allocated={tsdf.data.num_allocated.item()}"
-            )
+            log_info(f"[update_static_obstacles] num_allocated={tsdf.data.num_allocated.item()}")
 
         # Step 1: Clear static channel to +inf
         clear_static_channel(tsdf.data)

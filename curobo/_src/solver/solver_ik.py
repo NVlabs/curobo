@@ -19,7 +19,7 @@ import torch.autograd.profiler as profiler
 from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 
 # CuRobo
-from curobo._src.geom.collision import SceneCollision
+from curobo._src.geom.collision.collision_scene import SceneCollision
 from curobo._src.geom.types import SceneCfg
 from curobo._src.robot.kinematics.kinematics import KinematicsState
 from curobo._src.rollout.goal_registry import GoalRegistry
@@ -249,9 +249,6 @@ class IKSolver:
         return self.core.sample_configs(
             num_samples, rejection_ratio, self.config.optimizer_collision_activation_distance
         )
-
-    def update_pose_cost_metric(self, pose_cost_metric: Dict):
-        return self.core.update_pose_cost_metric(pose_cost_metric)
 
     def update_link_inertial(self, link_name, mass=None, com=None, inertia=None):
         return self.core.update_link_inertial(link_name, mass, com, inertia)

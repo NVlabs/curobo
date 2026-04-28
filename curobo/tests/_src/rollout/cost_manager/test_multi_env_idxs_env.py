@@ -14,7 +14,7 @@ import pytest
 import torch
 
 from curobo._src.cost.cost_scene_collision_cfg import SceneCollisionCostCfg
-from curobo._src.geom.collision import SceneCollisionCfg, create_collision_checker
+from curobo._src.geom.collision.collision_scene import SceneCollisionCfg, create_scene_collision
 from curobo._src.geom.types import Cuboid, SceneCfg
 from curobo._src.robot.kinematics.kinematics_state import KinematicsState
 from curobo._src.rollout.cost_manager.cost_manager_robot import RobotCostManager
@@ -76,7 +76,7 @@ class TestBatchEnvWorldIdx:
             scene_model=[env0_scene, env1_scene],
             cache={"primitive": 10},
         )
-        return create_collision_checker(world_cfg)
+        return create_scene_collision(world_cfg)
 
     def test_idxs_world_reaches_collision_checker(
         self, cuda_device_cfg, franka_transition_model, two_env_collision_checker,

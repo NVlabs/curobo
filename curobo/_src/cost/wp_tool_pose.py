@@ -9,7 +9,7 @@ import warp as wp
 
 # CuRobo
 from curobo._src.util.logging import log_and_raise
-from curobo._src.util.warp import get_warp_device_stream
+from curobo._src.util.warp import get_warp_device_stream, warp_kernel
 
 
 @wp.func
@@ -454,8 +454,7 @@ def create_goalset_pose_distance_kernel_with_constants(
     """
 
     # Kernel computes pose distance and gradient:
-    @wp.kernel
-    def goalset_pose_distance(
+    def _goalset_pose_distance_template(
         current_position: wp.array(dtype=wp.vec3),  # shape is [batch_size * horizon * nlinks, 3]
         current_quat: wp.array(dtype=wp.vec4),  # shape is [batch_size * horizon * nlinks, 4]
         goal_position: wp.array(dtype=wp.vec3),  # shape is [batch_goals, num_links, num_goalset, 3]
@@ -692,7 +691,8 @@ def create_goalset_pose_distance_kernel_with_constants(
             quaternion_rate_gradient[2],  # z
         )
 
-    return goalset_pose_distance
+    kernel_name = f"goalset_pose_distance_{num_goalset}_{rotation_method}"
+    return warp_kernel(kernel_name)(_goalset_pose_distance_template)
 
 
 class ToolPoseDistance(torch.autograd.Function):

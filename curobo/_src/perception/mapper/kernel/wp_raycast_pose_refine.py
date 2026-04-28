@@ -4,24 +4,38 @@
 
 """Block-sparse TSDF pose refinement kernels.
 
-Implements tiled kernel for ray-SDF alignment using block-sparse TSDF storage.
-Uses Warp tile operations for efficient block-level JtJ/Jtr accumulation.
+Implements a tiled kernel builder for ray-SDF alignment using
+block-sparse TSDF storage. Uses Warp tile operations for efficient
+block-level JtJ/Jtr accumulation.
 
 Key differences from dense version:
-- Uses hash table lookups instead of direct array indexing
-- Corner-origin convention (no grid center offset)
-- No fixed grid bounds (hash returns -1 for missing blocks)
+    - Uses hash table lookups instead of direct array indexing
+    - Corner-origin convention (no grid center offset)
+    - No fixed grid bounds (hash returns -1 for missing blocks)
+
+BS-sensitivity:
+    The tiled kernel calls ``compute_gradient`` and
+    ``sample_tsdf_trilinear`` from
+    :func:`~curobo._src.perception.mapper.kernel.builder.builder_raycast.make_raycast_kernels`.
+    Those helpers transitively depend on ``_sample_voxel_at_block_local``,
+    which closure-captures ``BS`` for voxel-index packing. The tiled
+    kernel is therefore NOT BS-agnostic and must bind the sampler
+    closures from the same :class:`BlockSparseKernels` specialization
+    as the TSDF it will be launched against. Pass ``kernels`` explicitly
+    when creating the tiled kernel (typically
+    ``kernels=tsdf.kernels``).
 """
 
 from typing import Callable
 
 import warp as wp
 
-from curobo._src.perception.mapper.kernel.warp_types import BlockSparseTSDFWarp
-from curobo._src.perception.mapper.kernel.wp_raycast_common import (
-    compute_gradient,
-    sample_tsdf_trilinear,
+from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
+    BlockSparseKernels,
+    make_block_sparse_kernels,
 )
+from curobo._src.perception.mapper.kernel.warp_types import BlockSparseTSDFWarp
+from curobo._src.util.warp import warp_kernel
 
 # =============================================================================
 # Helper Functions
@@ -45,21 +59,41 @@ def vec3_from_array(v: wp.array(dtype=wp.float32)) -> wp.vec3:
 # =============================================================================
 
 
-def create_ray_sdf_alignment_block_sparse_tiled_kernel(n_samples_per_ray: int = 5) -> Callable:
+def create_ray_sdf_alignment_block_sparse_tiled_kernel(
+    n_samples_per_ray: int = 5,
+    kernels=None,
+) -> Callable:
     """Create a tiled kernel for ray-SDF alignment with block-sparse TSDF.
 
     This kernel computes JtJ and Jtr directly using block reduction, avoiding
     storage of the full Jacobian matrix. Each block:
-    1. Each thread computes one sample's Jacobian (1x6) and residual
-    2. Block-level reduction via wp.tile_sum() accumulates JtJ (6x6) and Jtr (6)
-    3. One atomic add per block to global accumulators
+
+    1. Each thread computes one sample's Jacobian (1x6) and residual.
+    2. Block-level reduction via ``wp.tile_sum()`` accumulates JtJ (6x6) and Jtr (6).
+    3. One atomic add per block to global accumulators.
 
     Args:
         n_samples_per_ray: Number of SDF samples per ray (e.g., 5).
+        kernels: :class:`BlockSparseKernels` specialization whose
+            ``compute_gradient`` and ``sample_tsdf_trilinear`` closures
+            should be baked into this tiled kernel. Typically pass
+            ``tsdf.kernels`` from the owning integrator so the sampler
+            BS matches the TSDF the kernel will be launched against. If
+            ``None``, falls back to the default-BS builder, which is
+            only correct for BS=8 TSDFs.
 
     Returns:
-        Compiled Warp kernel for use with wp.launch(..., block_dim=TILE_SIZE).
+        Compiled Warp kernel for use with
+        ``wp.launch(..., block_dim=TILE_SIZE)``.
     """
+    if kernels is None:
+        kernels = make_block_sparse_kernels(block_size=8)
+
+    # Bind samplers from the caller's specialization into this closure
+    # so the generated kernel picks up the BS-matched versions.
+    compute_gradient = kernels.compute_gradient
+    sample_tsdf_trilinear = kernels.sample_tsdf_trilinear
+
     N_SAMPLES = wp.constant(n_samples_per_ray)
     HALF_SAMPLES = wp.constant(n_samples_per_ray // 2)
 
@@ -283,10 +317,6 @@ def create_ray_sdf_alignment_block_sparse_tiled_kernel(n_samples_per_ray: int = 
 
     # Generate unique name for this configuration
     kernel_name = f"ray_sdf_alignment_block_sparse_tiled_{n_samples_per_ray}"
-    _ray_sdf_alignment_block_sparse_tiled_kernel.__name__ = kernel_name
-    _ray_sdf_alignment_block_sparse_tiled_kernel.__qualname__ = kernel_name
-
-    return wp.kernel(enable_backward=False, module="unique")(
+    return warp_kernel(kernel_name, enable_backward=False)(
         _ray_sdf_alignment_block_sparse_tiled_kernel
     )
-

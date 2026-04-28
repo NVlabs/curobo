@@ -6,7 +6,7 @@
 import pytest
 
 # CuRobo
-from curobo._src.geom.sphere_fit import SphereFitType
+from curobo._src.geom.sphere_fit.types import SphereFitType
 from curobo._src.geom.types import SceneCfg
 from curobo._src.util_file import get_scene_configs_path, join_path, load_yaml
 

@@ -40,6 +40,19 @@ class CameraObservation:
     intrinsics: Optional[torch.Tensor] = None
     timestamp: Optional[torch.Tensor] = None
     depth_to_meter: float = 0.001
+    #: Optional neural feature grid. Shape
+    #: ``(num_cameras, feature_H, feature_W, feature_dim)`` float16,
+    #: channels-last with stride 1 on the channel dim. Dense per-pixel
+    #: features are represented by ``feature_H == image_H`` and
+    #: ``feature_W == image_W``. Consumed by the mapper's per-block feature
+    #: integration kernel when ``feature_dim > 0``.
+    #:
+    #: Magnitude convention: per-element values must be ``O(1)`` (e.g.
+    #: L2-normalized embeddings). The mapper stores per-block feature
+    #: accumulators as fp16 with a post-frame weight cap; inputs well
+    #: outside this range can overflow the per-thread footprint sum
+    #: within a single frame before the cap engages.
+    feature_grid: Optional[torch.Tensor] = None
 
     def filter_depth(self, distance: float = 0.01):
         if self.depth_image is None:
@@ -68,6 +81,8 @@ class CameraObservation:
             self.pose.copy_(new_data.pose)
         if self.timestamp is not None:
             self.timestamp.copy_(new_data.timestamp)
+        if self.feature_grid is not None and new_data.feature_grid is not None:
+            self.feature_grid.copy_(new_data.feature_grid)
         self.depth_to_meter = new_data.depth_to_meter
         self.resolution = new_data.resolution
 
@@ -88,6 +103,9 @@ class CameraObservation:
             ),
             projection_rays=(
                 self.projection_rays.clone() if self.projection_rays is not None else None
+            ),
+            feature_grid=(
+                self.feature_grid.clone() if self.feature_grid is not None else None
             ),
             name=self.name,
             depth_to_meter=self.depth_to_meter,
@@ -113,6 +131,9 @@ class CameraObservation:
         self.intrinsics = self.intrinsics.to(device=device) if self.intrinsics is not None else None
         self.timestamp = self.timestamp.to(device=device) if self.timestamp is not None else None
         self.pose = self.pose.to(device=device) if self.pose is not None else None
+        self.feature_grid = (
+            self.feature_grid.to(device=device) if self.feature_grid is not None else None
+        )
 
         return self
 

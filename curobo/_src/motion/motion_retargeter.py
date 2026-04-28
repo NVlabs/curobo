@@ -13,7 +13,7 @@ Example:
 .. code-block:: python
 
     from curobo.motion_retargeter import MotionRetargeter, MotionRetargeterCfg
-    from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
+    from curobo.types import ToolPoseCriteria
 
     cfg = MotionRetargeterCfg.create(
         robot="unitree_g1_29dof_retarget.yml",

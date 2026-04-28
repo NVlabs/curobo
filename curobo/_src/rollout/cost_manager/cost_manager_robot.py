@@ -19,7 +19,7 @@ from curobo._src.cost.cost_cspace_dist import CSpaceDistCost
 from curobo._src.cost.cost_scene_collision import SceneCollisionCost
 from curobo._src.cost.cost_self_collision import SelfCollisionCost
 from curobo._src.cost.cost_tool_pose import ToolPoseCost
-from curobo._src.geom.collision import SceneCollision
+from curobo._src.geom.collision.collision_scene import SceneCollision
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.metrics import CostCollection
 from curobo._src.state.state_robot import RobotState

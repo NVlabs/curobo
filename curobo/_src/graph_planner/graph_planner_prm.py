@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.autograd.profiler as profiler
 
-from curobo._src.geom.collision import SceneCollision, create_collision_checker
+from curobo._src.geom.collision.collision_scene import SceneCollision, create_scene_collision
 from curobo._src.graph_planner.graph.connector_linear import LinearConnector
 from curobo._src.graph_planner.graph.constructor import GraphConstructor
 from curobo._src.graph_planner.graph.node_distance import DistanceNeighborCalculator
@@ -54,7 +54,7 @@ class PRMGraphPlanner:
         # initialize world collision checker:
         if self.scene_collision_checker is None:
             if self.config.scene_collision_cfg is not None:
-                self.scene_collision_checker = create_collision_checker(
+                self.scene_collision_checker = create_scene_collision(
                     self.config.scene_collision_cfg
                 )
 

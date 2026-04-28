@@ -14,3 +14,4 @@ Getting Started
    humanoid_retargeting
    motion_planning
    volumetric_mapping
+   feature_mapping

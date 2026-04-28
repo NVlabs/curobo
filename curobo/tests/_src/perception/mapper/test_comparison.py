@@ -11,7 +11,7 @@ to the dense implementation while using less memory.
 import pytest
 import torch
 
-from curobo._src.perception.mapper import (
+from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
     BlockSparseTSDFIntegratorCfg,
 )
@@ -102,8 +102,7 @@ def mesh_coverage_overlap(
     # Voxelize both meshes
     def voxelize(v):
         return set(
-            tuple(((v[i] / voxel_size).round().int().cpu().tolist()))
-            for i in range(v.shape[0])
+            tuple(((v[i] / voxel_size).round().int().cpu().tolist())) for i in range(v.shape[0])
         )
 
     voxels1 = voxelize(vertices1)
@@ -132,10 +131,13 @@ class TestBlockSparseVsDense:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=voxel_size,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=5000,
             hash_capacity=10000,
             truncation_distance=0.05,
             device=device,
+            image_height=128,
+            image_width=128,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -163,9 +165,12 @@ class TestBlockSparseVsDense:
         for position in positions:
             # Generate depth for this view
             depth = create_sphere_depth(
-                img_H, img_W, intrinsics,
+                img_H,
+                img_W,
+                intrinsics,
                 sphere_center - position,  # Sphere in camera frame
-                sphere_radius, device,
+                sphere_radius,
+                device,
             )
 
             rgb = torch.full((img_H, img_W, 3), 180, dtype=torch.uint8, device=device)
@@ -203,10 +208,13 @@ class TestBlockSparseVsDense:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=voxel_size,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=1000,
             hash_capacity=2000,
             truncation_distance=0.05,
             device=device,
+            image_height=64,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -245,10 +253,13 @@ class TestBlockSparseVsDense:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=voxel_size,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=10000,
             hash_capacity=20000,
             truncation_distance=0.05,
             device=device,
+            image_height=64,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -286,10 +297,13 @@ class TestBlockSparseVsDense:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=voxel_size,
             origin=torch.tensor([-2.0, -2.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=5000,
             hash_capacity=10000,
             truncation_distance=0.05,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -328,10 +342,13 @@ class TestMeshQuality:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=voxel_size,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=2000,
             hash_capacity=4000,
             truncation_distance=0.05,
             device=device,
+            image_height=64,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -361,4 +378,3 @@ class TestMeshQuality:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

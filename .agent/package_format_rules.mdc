@@ -20,6 +20,17 @@ warnigs, errors
 - Avoid using deprecated functions
 - Follow PEP 563 (Postponed Evaluation of Annotations)
 
+# Package Initializers and Internal Imports
+- Treat `curobo/_src/**/__init__.py` as marker-only by default.
+- Internal implementation imports should target concrete modules instead of package barrels.
+- A `_src` package initializer may re-export symbols only when it is a deliberate aggregation
+  layer used to construct a public API module.
+- Public API modules under `curobo/` should curate user-facing imports.
+- Docs and examples should prefer public API modules and avoid importing from `curobo._src`
+  unless the example is explicitly internal or developer-facing.
+- Avoid convenience re-exports from `_src` packages; they hide dependencies, increase import-time
+  side effects, and make circular imports harder to reason about.
+
 # Writing Tests
 - tests should be src/curobo/tests folder.
 - Do not write unit tests for wp.kernel decorators.

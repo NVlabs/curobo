@@ -2,27 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Warp struct definitions for block-sparse TSDF kernel access.
+"""Warp struct definition for block-sparse TSDF kernel access.
 
-This module defines the BlockSparseTSDFWarp struct which is passed to Warp
-kernels. The corresponding Python dataclass (BlockSparseTSDFData) provides
-a to_warp() method for conversion.
+This module holds the :class:`BlockSparseTSDFWarp` dataclass that is
+passed to Warp kernels. Shared constants (``BLOCK_SIZE``, hash-table
+bit layout, pool-index sentinels) live in
+:mod:`curobo._src.perception.mapper.constants`.
 
-Hash Table Entry Layout (64 bits):
-    ┌────────────────────────────────────────────────────┬──────────────┐
-    │              Block Key (42 bits)                   │ Value (22)   │
-    │   X (14 bits)  |  Y (14 bits)  |  Z (14 bits)     │ pool_idx     │
-    └────────────────────────────────────────────────────┴──────────────┘
-
-    - Coordinates: ±8,192 per axis (14-bit signed range)
-    - Pool index: 0 to 4,194,303 (22 bits = 4M blocks max)
-    - Empty slot: -1 (all 1s)
-    - Tombstone: -2
-
-Range at different voxel sizes (block_size=8):
-    - 1mm voxel: ±65m per axis
-    - 2mm voxel: ±131m per axis
-    - 4mm voxel: ±262m per axis
+Memory layout and key ranges of the block-sparse TSDF are documented
+on :class:`BlockSparseTSDFWarp` below.
 """
 
 import warp as wp
@@ -32,54 +20,70 @@ import warp as wp
 class BlockSparseTSDFWarp:
     """Warp struct for block-sparse TSDF kernel access.
 
-    This struct is created from BlockSparseTSDFData.to_warp() and should
-    be cached for CUDA graph compatibility.
+    This struct is created from ``BlockSparseTSDFData.to_warp()`` and
+    should be cached for CUDA graph compatibility.
 
     Memory Layout:
         hash_table: (capacity,) int64
-            - Packed entries: key (42 bits) + pool_idx (22 bits)
-            - -1 = empty slot, -2 = tombstone
+            Packed entries: key (39 bits) + pool_idx (25 bits).
+            See :mod:`curobo._src.perception.mapper.constants` for the
+            bit layout. -1 = empty slot, -2 = tombstone.
 
-        block_data: (max_blocks, 512, 2) float16
-            - For each voxel: [sdf_weight, weight] (dynamic channel)
-            - Access: block_data[pool_idx, local_idx, 0/1]
-            - local_idx = lz * 64 + ly * 8 + lx
+        block_data: (max_blocks, BLOCK_SIZE**3, 2) float16
+            For each voxel: [sdf_weight, weight] (dynamic channel).
+            Access: ``block_data[pool_idx, local_idx, 0/1]``.
+            ``local_idx = lz * BLOCK_SIZE**2 + ly * BLOCK_SIZE + lx``.
 
-        static_block_data: (max_blocks, 512) float16
-            - For each voxel: sdf value (static channel, primitives)
-            - Access: static_block_data[pool_idx, local_idx]
-            - Initialized to +inf (no obstacle)
+        static_block_data: (max_blocks, BLOCK_SIZE**3) float16
+            For each voxel: sdf value (static channel, primitives).
+            Access: ``static_block_data[pool_idx, local_idx]``.
+            Initialized to +inf (no obstacle).
 
-        block_rgb: (max_blocks, 4) float32
-            - Per-block RGBW: [R×w, G×w, B×w, weight_sum]
-            - One color per block (not per voxel) - 512× memory savings
-            - Divide by channel 3 at read time for averaged color
-            - Access: block_rgb[pool_idx, 0/1/2/3]
+        block_rgb: (max_blocks, 4) float16
+            Per-block RGBW: [R*w, G*w, B*w, weight_sum]. One color per
+            block (not per voxel) - ``BLOCK_SIZE**3`` memory savings.
+            Integration pre-normalizes RGB to ``[0, 1]``; divide by
+            channel 3 at read time and multiply by 255 to get uint8 RGB.
+            A post-frame rescale kernel caps the weight at
+            ``config.accumulator_w_max`` so the fp16 accumulator stays
+            inside finite range and per-atomic ulp loss stays bounded.
+            Access: ``block_rgb[pool_idx, 0/1/2/3]``.
 
         block_coords: (max_blocks * 3,) int32
-            - Block world coordinates: [bx, by, bz] for each block
-            - Access: bx = block_coords[pool_idx * 3 + 0]
+            Signed centered hash block keys: [bx, by, bz] for each block.
+            Access: ``bx = block_coords[pool_idx * 3 + 0]``.
 
-    Note: 3D array is used for block_data to avoid exceeding Warp's
-    INT32_MAX limit on array dimensions when using large max_blocks values.
+    Note: a 3D array is used for ``block_data`` to avoid exceeding
+    Warp's ``INT32_MAX`` limit on array dimensions when using large
+    ``max_blocks`` values.
+
+    Default key ranges:
+        - Block coords: [-4096, 4095] per axis (13-bit signed range)
+        - Pool index: 0 to 33,554,430 (25 bits minus PENDING sentinel)
     """
 
     # Hash table (packed key+value in single int64)
     hash_table: wp.array(dtype=wp.int64)  # (capacity,)
 
     # Block pool - dynamic channel (depth integration)
-    block_data: wp.array3d(dtype=wp.float16)  # (max_blocks, 512, 2) or (1, 1, 2) dummy
-    block_rgb: wp.array2d(dtype=wp.float32)  # (max_blocks, 4) per-block [R×w, G×w, B×w, W]
+    block_data: wp.array3d(dtype=wp.float16)  # (max_blocks, BLOCK_SIZE**3, 2) or (1, 1, 2) dummy
+    block_rgb: wp.array2d(dtype=wp.float16)  # (max_blocks, 4) per-block [R*w, G*w, B*w, W]
+
+    # Per-block feature channel (fp16 weighted sums + dedicated weight)
+    block_features: wp.array2d(dtype=wp.float16)  # (max_blocks, feature_dim) or (1, 1) dummy
+    block_feature_weight: wp.array(dtype=wp.float16)  # (max_blocks,) or (1,) dummy
 
     # Block pool - static channel (primitive SDF)
-    static_block_data: wp.array2d(dtype=wp.float16)  # (max_blocks, 512) or (1, 1) dummy
+    static_block_data: wp.array2d(dtype=wp.float16)  # (max_blocks, BLOCK_SIZE**3) or (1, 1) dummy
 
     # Feature flags
     has_dynamic: wp.bool  # True if dynamic channel is enabled
     has_static: wp.bool  # True if static channel is enabled
+    has_features: wp.bool  # True if per-block feature channel is enabled
+    feature_dim: int  # 0 when the feature channel is disabled
 
     # Block metadata
-    block_coords: wp.array(dtype=wp.int32)  # (max_blocks * 3,) block world coords
+    block_coords: wp.array(dtype=wp.int32)  # (max_blocks * 3,) signed block keys
     block_to_hash_slot: wp.array(dtype=wp.int32)  # (max_blocks,) reverse mapping
 
     # Free list (stack)
@@ -108,62 +112,7 @@ class BlockSparseTSDFWarp:
     max_blocks: int  # Maximum allocatable blocks
     truncation_distance: float  # TSDF truncation distance
     block_size: int  # Voxels per block edge (typically 8)
-    # Grid shape for center-origin convention (0 = corner-origin)
+    # Bounded grid shape for center-origin convention.
     grid_W: int  # Grid width (nx)
     grid_H: int  # Grid height (ny)
     grid_D: int  # Grid depth (nz)
-
-
-# =============================================================================
-# Block Size Constant - Single source of truth
-# =============================================================================
-
-# Block size (voxels per edge). Must be 8 - kernels use hardcoded bit operations.
-# Changing this requires updating all kernels that use BLOCK_SIZE, BLOCK_SIZE_SQ, etc.
-BLOCK_SIZE: int = 8
-BLOCK_SIZE_SQ: int = BLOCK_SIZE * BLOCK_SIZE  # 64
-BLOCK_SIZE_CUBED: int = BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE  # 512
-
-
-# =============================================================================
-# Hash Table Constants - Python values (source of truth)
-# =============================================================================
-
-# Entry values
-PY_HASH_EMPTY: int = -1
-PY_HASH_TOMBSTONE: int = -2
-
-# Spatial hash primes (from Teschner et al.)
-PY_HASH_PRIME_X: int = 73856093
-PY_HASH_PRIME_Y: int = 19349663
-PY_HASH_PRIME_Z: int = 83492791
-
-# Value mask for pool_idx extraction (22 bits)
-PY_VALUE_MASK: int = 0x3FFFFF
-
-# Sign bit mask for ensuring positive hash (matches GPU behavior)
-PY_POSITIVE_MASK: int = 0x7FFFFFFFFFFFFFFF
-
-# Coordinate encoding
-PY_COORD_BITS: int = 14
-PY_COORD_OFFSET: int = 8192  # ±8192 range (14-bit signed)
-PY_COORD_MASK: int = 0x3FFF  # 14 bits
-
-
-# =============================================================================
-# Hash Table Constants - Warp constants (derived from Python values)
-# =============================================================================
-
-# Entry values
-HASH_EMPTY = wp.constant(wp.int64(PY_HASH_EMPTY))
-HASH_TOMBSTONE = wp.constant(wp.int64(PY_HASH_TOMBSTONE))
-
-# Spatial hash primes
-HASH_PRIME_X = wp.constant(wp.int64(PY_HASH_PRIME_X))
-HASH_PRIME_Y = wp.constant(wp.int64(PY_HASH_PRIME_Y))
-HASH_PRIME_Z = wp.constant(wp.int64(PY_HASH_PRIME_Z))
-
-# Coordinate encoding
-BLOCK_KEY_BITS = wp.constant(PY_COORD_BITS)
-BLOCK_KEY_OFFSET = wp.constant(wp.int64(PY_COORD_OFFSET))
-BLOCK_KEY_MASK = wp.constant(wp.int64(PY_COORD_MASK))

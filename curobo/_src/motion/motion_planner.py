@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Union
 import torch
 
 from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
-from curobo._src.geom.collision import create_collision_checker
+from curobo._src.geom.collision.collision_scene import create_scene_collision
 from curobo._src.geom.types import SceneCfg
 from curobo._src.graph_planner.graph_planner_prm import (
     PRMGraphPlanner,
@@ -56,7 +56,7 @@ class MotionPlanner:
 
     def _initialize_components(self):
         if self.config.scene_collision_cfg is not None:
-            self.scene_collision_checker = create_collision_checker(
+            self.scene_collision_checker = create_scene_collision(
                 self.config.scene_collision_cfg
             )
 

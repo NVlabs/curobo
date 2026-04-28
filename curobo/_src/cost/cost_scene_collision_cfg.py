@@ -12,7 +12,7 @@ import torch
 # CuRobo
 from curobo._src.cost.cost_base_cfg import BaseCostCfg
 from curobo._src.cost.cost_scene_collision import SceneCollisionCost
-from curobo._src.geom.collision import SceneCollision
+from curobo._src.geom.collision.collision_scene import SceneCollision
 from curobo._src.util.logging import log_and_raise
 
 

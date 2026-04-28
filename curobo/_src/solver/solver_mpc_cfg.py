@@ -25,6 +25,7 @@ from curobo._src.transition.robot_state_transition_cfg import (
 )
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
+from curobo._src.util.logging import log_and_raise
 
 
 @dataclass
@@ -201,6 +202,12 @@ class MPCSolverCfg:
         Returns:
             Configured MPCSolverCfg instance.
         """
+        if interpolation_steps != 4:
+            log_and_raise(
+                "Interpolation steps must be 4 for MPC. Other values lead to"
+                + "incorrect behavior. To change the command rate, instead set optimization_dt to a"
+                + "different value."
+            )
         # 1. Resolve YAML paths
         robot_config, optimizer_dicts, metrics_rollout_dict, transition_model_dict, scene_model_dict = (
             resolve_yaml_configs(

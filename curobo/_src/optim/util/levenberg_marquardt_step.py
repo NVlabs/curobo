@@ -8,7 +8,7 @@ import warp as wp
 
 from curobo._src.curobolib.cuda_ops.tensor_checks import check_float32_tensors
 from curobo._src.util.logging import log_and_raise
-from curobo._src.util.warp import get_warp_device_stream
+from curobo._src.util.warp import get_warp_device_stream, warp_kernel
 
 
 @dataclass
@@ -191,8 +191,9 @@ class LevenbergMarquardtStep:
             red = wp.tile_sum(prod)[0]
             pred_reduction_out[problem_idx] = 0.5 * red
 
-        _lm_step_template.__name__ = f"_lm_solve_tiled_{COORD}_{RES}"
-        _lm_step_template.__qualname__ = f"_lm_solve_tiled_{COORD}_{RES}"
-        lm_solve_tiled = wp.kernel(enable_backward=False, module="unique")(_lm_step_template)
+        lm_solve_tiled = warp_kernel(
+            f"_lm_solve_tiled_{COORD}_{RES}",
+            enable_backward=False,
+        )(_lm_step_template)
 
         return lm_solve_tiled

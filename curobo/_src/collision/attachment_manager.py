@@ -10,8 +10,8 @@ from typing import List, Optional
 import torch
 
 from curobo._src.geom.collision.collision_scene import SceneCollision
-from curobo._src.geom.sphere_fit import SphereFitType, fit_spheres_to_mesh
-from curobo._src.geom.sphere_fit.types import SphereFitResult
+from curobo._src.geom.sphere_fit.fit_spheres import fit_spheres_to_mesh
+from curobo._src.geom.sphere_fit.types import SphereFitResult, SphereFitType
 from curobo._src.geom.types import Obstacle
 from curobo._src.robot.kinematics.kinematics import Kinematics
 from curobo._src.robot.types.kinematics_params import KinematicsParams

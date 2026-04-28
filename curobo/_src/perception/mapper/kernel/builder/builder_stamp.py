@@ -1,0 +1,327 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+
+"""Obstacle-stamping kernels for one block size.
+
+``stamp_sdf_kernel`` uses the block-size-specialized coordinate helper for
+local voxel decoding. ``filter_blocks_by_sdf_kernel`` still passes
+``block_size`` to module-scope frustum/SDF helpers that are intentionally
+runtime-shaped for now.
+
+Two helper ``@wp.func``s (``block_center_to_world``, ``is_block_in_bounds``)
+and the obstacle-SDF overload registration remain at module scope in
+``kernel/wp_stamp_obstacles.py``. The stamp kernels in this builder call
+them via cross-module resolution (R1-verified).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import warp as wp
+
+# Overloaded SDF funcs live at module scope in wp_stamp_obstacles.py.
+# The overload registry is initialized at that module's import time; we
+# just reference the names from this side.
+from curobo._src.perception.mapper.kernel.wp_stamp_obstacles import (
+    block_center_to_world,
+    compute_local_sdf,
+    is_block_in_bounds,
+    is_obs_enabled,
+    load_obstacle_transform,
+)
+from curobo._src.util.warp import warp_kernel
+
+
+def make_stamp_kernels(
+    block_size: int,
+    *,
+    pack_key_only,
+    unpack_block_key,
+    block_local_to_world,
+    hash_lookup,
+    hash_table_insert_with_pool_idx,
+    free_list_pop,
+) -> dict[str, object]:
+    """Build obstacle-stamping kernels."""
+    BLOCK_SIZE = wp.constant(block_size)
+
+    # Cross-domain helpers are parameters so Warp sees them as local
+    # closure bindings when compiling the kernels below.
+
+    # =====================================================================
+    # Block Pre-allocation (Phase 5)
+    # =====================================================================
+
+    @warp_kernel(f"preallocate_unique_blocks_kernel_bs{block_size}")
+    def preallocate_unique_blocks_kernel(
+        unique_blocks: wp.array(dtype=wp.int64),
+        n_unique: wp.int32,
+        hash_table: wp.array(dtype=wp.int64),
+        hash_capacity: wp.int32,
+        block_coords: wp.array(dtype=wp.int32),
+        block_to_hash_slot: wp.array(dtype=wp.int32),
+        num_allocated: wp.array(dtype=wp.int32),
+        allocation_failures: wp.array(dtype=wp.int32),
+        max_blocks: wp.int32,
+        free_list: wp.array(dtype=wp.int32),
+        free_count: wp.array(dtype=wp.int32),
+        new_blocks: wp.array(dtype=wp.int32),
+        new_block_count: wp.array(dtype=wp.int32),
+        pool_indices: wp.array(dtype=wp.int32),
+    ):
+        """Pre-allocate unique blocks using CAS for collision handling.
+
+        Each thread handles exactly one unique block key. First
+        checks if block already exists, then allocates from free
+        list or pool if needed.
+        """
+        tid = wp.tid()
+        if tid >= n_unique:
+            return
+
+        key = unique_blocks[tid]
+        coords = unpack_block_key(key)
+        bx = coords[0]
+        by = coords[1]
+        bz = coords[2]
+
+        existing_pool_idx = hash_lookup(hash_table, bx, by, bz, hash_capacity)
+        if existing_pool_idx >= 0:
+            pool_indices[tid] = existing_pool_idx
+            return
+
+        pool_idx = free_list_pop(free_list, free_count)
+        if pool_idx < wp.int32(0):
+            pool_idx = wp.atomic_add(num_allocated, 0, wp.int32(1))
+            if pool_idx >= max_blocks:
+                wp.atomic_add(num_allocated, 0, wp.int32(-1))
+                wp.atomic_add(allocation_failures, 0, wp.int32(1))
+                pool_indices[tid] = wp.int32(-1)
+                return
+
+        result_pool_idx = hash_table_insert_with_pool_idx(
+            hash_table,
+            block_coords,
+            block_to_hash_slot,
+            new_blocks,
+            new_block_count,
+            bx,
+            by,
+            bz,
+            pool_idx,
+            hash_capacity,
+            max_blocks,
+        )
+        pool_indices[tid] = result_pool_idx
+
+    # =====================================================================
+    # Phase 2: Block Enumeration
+    # =====================================================================
+
+    @warp_kernel(f"enumerate_blocks_from_aabb_kernel_bs{block_size}")
+    def enumerate_blocks_from_aabb_kernel(
+        aabb_bmin: wp.array2d(dtype=wp.int32),
+        aabb_bmax: wp.array2d(dtype=wp.int32),
+        n_obs: wp.int32,
+        offsets: wp.array(dtype=wp.int32),
+        block_keys: wp.array(dtype=wp.int64),
+    ):
+        """Enumerate blocks from pre-computed AABB bounds."""
+        obs_idx = wp.tid()
+        if obs_idx >= n_obs:
+            return
+
+        bmin_x = aabb_bmin[obs_idx, 0]
+        bmin_y = aabb_bmin[obs_idx, 1]
+        bmin_z = aabb_bmin[obs_idx, 2]
+        bmax_x = aabb_bmax[obs_idx, 0]
+        bmax_y = aabb_bmax[obs_idx, 1]
+        bmax_z = aabb_bmax[obs_idx, 2]
+
+        write_base = offsets[obs_idx]
+        key_idx = wp.int32(0)
+
+        for bz in range(bmin_z, bmax_z + 1):
+            for by in range(bmin_y, bmax_y + 1):
+                for bx in range(bmin_x, bmax_x + 1):
+                    key = pack_key_only(bx, by, bz)
+                    block_keys[write_base + key_idx] = key
+                    key_idx = key_idx + 1
+
+    # =====================================================================
+    # Phase 3: Generic Filter by SDF
+    # =====================================================================
+
+    @warp_kernel(f"filter_blocks_by_sdf_kernel_bs{block_size}", enable_backward=False)
+    def filter_blocks_by_sdf_kernel(
+        candidate_blocks: wp.array(dtype=wp.int64),
+        n_candidates: wp.int32,
+        obs_set: Any,
+        env_idx: wp.int32,
+        origin: wp.vec3,
+        voxel_size: wp.float32,
+        block_size: wp.int32,
+        grid_W: wp.int32,
+        grid_H: wp.int32,
+        grid_D: wp.int32,
+        max_sdf_threshold: wp.float32,
+        filtered_blocks: wp.array(dtype=wp.int64),
+        filtered_count: wp.array(dtype=wp.int32),
+    ):
+        """Filter blocks by SDF at block center using generic compute_sdf_value.
+
+        Uses Warp function overloading: ``compute_local_sdf`` and
+        ``is_obs_enabled`` are dispatched based on the concrete type
+        of ``obs_set`` at kernel compile time.
+        """
+        tid = wp.tid()
+        if tid >= n_candidates:
+            return
+
+        key = candidate_blocks[tid]
+        coords = unpack_block_key(key)
+        bx = coords[0]
+        by = coords[1]
+        bz = coords[2]
+
+        if not is_block_in_bounds(bx, by, bz, block_size, grid_W, grid_H, grid_D):
+            return
+
+        block_center = block_center_to_world(
+            bx,
+            by,
+            bz,
+            origin,
+            voxel_size,
+            block_size,
+            grid_W,
+            grid_H,
+            grid_D,
+        )
+
+        min_sdf = wp.float32(1e10)
+        for i in range(obs_set.max_n):
+            if is_obs_enabled(obs_set, env_idx, i):
+                inv_t = load_obstacle_transform(obs_set, env_idx, i)
+                local_pt = wp.transform_point(inv_t, block_center)
+                sdf = compute_local_sdf(obs_set, env_idx, i, local_pt)
+                min_sdf = wp.min(min_sdf, sdf)
+
+        if wp.abs(min_sdf) <= max_sdf_threshold:
+            out_idx = wp.atomic_add(filtered_count, 0, wp.int32(1))
+            filtered_blocks[out_idx] = key
+
+    # =====================================================================
+    # Phase 6: Stamp SDF per voxel (BLOCK_SIZE-specialized)
+    # =====================================================================
+
+    @warp_kernel(f"stamp_sdf_kernel_bs{block_size}")
+    def stamp_sdf_kernel(
+        unique_blocks: wp.array(dtype=wp.int64),
+        pool_indices: wp.array(dtype=wp.int32),
+        n_unique: wp.int32,
+        obs_set: Any,
+        env_idx: wp.int32,
+        static_block_data: wp.array2d(dtype=wp.float16),
+        static_block_sums: wp.array(dtype=wp.int32),
+        origin: wp.vec3,
+        voxel_size: wp.float32,
+        truncation: wp.float32,
+        grid_W: wp.int32,
+        grid_H: wp.int32,
+        grid_D: wp.int32,
+    ):
+        """Stamp SDF values using generic ``compute_local_sdf``.
+
+        Uses read-min-write.
+
+        Launch with ``dim = (n_unique, BLOCK_SIZE ** 3)``; ``BLOCK_SIZE`` is
+        closure-captured so the voxel-per-block count stays
+        consistent with the specialized tensor shapes.
+        """
+        block_list_idx, local_idx = wp.tid()
+
+        if block_list_idx >= n_unique:
+            return
+        if local_idx >= BLOCK_SIZE * BLOCK_SIZE * BLOCK_SIZE:
+            return
+
+        pool_idx = pool_indices[block_list_idx]
+        if pool_idx < 0:
+            return
+
+        key = unique_blocks[block_list_idx]
+        coords = unpack_block_key(key)
+        bx = coords[0]
+        by = coords[1]
+        bz = coords[2]
+
+        voxel_pos = block_local_to_world(
+            bx,
+            by,
+            bz,
+            local_idx,
+            origin,
+            voxel_size,
+            grid_W,
+            grid_H,
+            grid_D,
+        )
+
+        min_sdf = wp.float32(1e10)
+        for i in range(obs_set.max_n):
+            if is_obs_enabled(obs_set, env_idx, i):
+                inv_t = load_obstacle_transform(obs_set, env_idx, i)
+                local_pt = wp.transform_point(inv_t, voxel_pos)
+                sdf = compute_local_sdf(obs_set, env_idx, i, local_pt)
+                min_sdf = wp.min(min_sdf, sdf)
+
+        if wp.abs(min_sdf) <= truncation:
+            existing = wp.float32(static_block_data[pool_idx, local_idx])
+            final_sdf = wp.min(existing, min_sdf)
+            clamped_sdf = wp.clamp(final_sdf, -truncation, truncation)
+            was_infinite = existing > 1e9
+            static_block_data[pool_idx, local_idx] = wp.float16(clamped_sdf)
+            if was_infinite:
+                wp.atomic_add(static_block_sums, pool_idx, wp.int32(1))
+
+    # =====================================================================
+    # Phase 7: Update Block Colors
+    # =====================================================================
+
+    @warp_kernel(f"update_block_rgb_kernel_bs{block_size}")
+    def update_block_rgb_kernel(
+        block_rgb: wp.array2d(dtype=wp.float16),
+        pool_indices: wp.array(dtype=wp.int32),
+        n_unique: wp.int32,
+        static_color: wp.vec3,
+    ):
+        """Update block RGB with constant static color for allocated blocks.
+
+        ``static_color`` must be pre-normalized to ``[0, 1]`` (the
+        launcher divides the uint8-style config value by 255) to
+        match the integration convention and keep the fp16-stored
+        weighted sums consistent with the dynamic-channel values.
+        """
+        tid = wp.tid()
+        if tid >= n_unique:
+            return
+
+        pool_idx = pool_indices[tid]
+        if pool_idx < 0:
+            return
+
+        block_rgb[pool_idx, 0] = wp.float16(static_color[0])
+        block_rgb[pool_idx, 1] = wp.float16(static_color[1])
+        block_rgb[pool_idx, 2] = wp.float16(static_color[2])
+        block_rgb[pool_idx, 3] = wp.float16(1.0)
+
+    return {
+        "preallocate_unique_blocks_kernel": preallocate_unique_blocks_kernel,
+        "enumerate_blocks_from_aabb_kernel": enumerate_blocks_from_aabb_kernel,
+        "filter_blocks_by_sdf_kernel": filter_blocks_by_sdf_kernel,
+        "stamp_sdf_kernel": stamp_sdf_kernel,
+        "update_block_rgb_kernel": update_block_rgb_kernel,
+    }

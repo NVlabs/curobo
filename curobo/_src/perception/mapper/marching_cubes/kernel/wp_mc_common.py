@@ -429,6 +429,33 @@ def binary_search_int32(
     return result
 
 
+@wp.func
+def binary_search_int64(
+    sorted_keys: wp.array(dtype=wp.int64),
+    n: wp.int32,
+    target: wp.int64,
+) -> wp.int32:
+    """Binary search for an int64 target in a sorted int64 array."""
+    left = wp.int32(0)
+    right = n - wp.int32(1)
+    result = wp.int32(-1)
+
+    # Covers up to the maximum int32-indexable surface array length.
+    for _ in range(32):
+        if left <= right:
+            mid = (left + right) // wp.int32(2)
+            val = sorted_keys[mid]
+            if val == target:
+                result = mid
+                left = right + wp.int32(1)
+            elif val < target:
+                left = mid + wp.int32(1)
+            else:
+                right = mid - wp.int32(1)
+
+    return result
+
+
 # =============================================================================
 # Warp Functions for Vertex Interpolation
 # =============================================================================

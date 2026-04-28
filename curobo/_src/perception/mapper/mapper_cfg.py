@@ -23,7 +23,11 @@ from typing import Optional, Tuple
 import torch
 
 from curobo._src.perception.mapper.block_allocation import calculate_tsdf_max_blocks
-from curobo._src.perception.mapper.kernel.warp_types import BLOCK_SIZE
+from curobo._src.perception.mapper.constants import (
+    _validate_feature_channels_per_thread,
+    _validate_feature_integration_kernel,
+)
+from curobo.logging import log_and_raise
 
 
 @dataclass
@@ -54,9 +58,10 @@ class MapperCfg:
         depth_maximum_distance: Maximum valid depth in meters.
         decay_factor: Weight decay applied to ALL voxels each frame (1.0 = no decay).
         frustum_decay_factor: Additional decay for in-view voxels.
-        rgb_scale: Downscale factor for RGB storage relative to TSDF.
-        block_size: Voxels per block edge (default 8).
-        block_fill_ratio: Expected fraction of blocks to be allocated.
+        block_size: Voxels per block edge. Supported values are 1 or
+            powers of 2 in [2, 32]
+            (default 8). Specializes the Warp kernel builder; two
+            Mappers with different block sizes can coexist.
         hash_load_factor: Target hash table load factor.
         device: CUDA device string.
     """
@@ -80,17 +85,19 @@ class MapperCfg:
     decay_factor: float = 1.0
     frustum_decay_factor: float = 1.0
 
-    # === RGB ===
-    rgb_scale: int = 1
-
     # === Block Storage ===
-    # Note: block_size is a module constant (BLOCK_SIZE=8 from warp_types.py)
-    block_fill_ratio: float = 1.0
+    #: Voxels per block edge. Supported values are 1 or powers of 2 in [2, 32]. See
+    #: :class:`~curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel.BlockSparseKernels`.
+    block_size: int = 4
+    # Target hash table active-entry fraction. 0.5 keeps probe chains short
+    # enough that the average lookup cost stays low even after tombstone
+    # accumulation from aggressive recycling. Lookup now probes the full
+    # capacity rather than a fixed 64-slot cap, so raising this further is
+    # safe from a correctness standpoint but costs probe time per lookup.
     hash_load_factor: float = 0.5
-    roughness: float = 4.0
+    roughness: float = 3.0
 
     # === Integration ===
-    integration_method: str = "voxel_project"  # "voxel_project" or "sort_filter"
     seeding_method: str = "gather"
     """ESDF surface seeding strategy: ``"scatter"`` or ``"gather"``.
 
@@ -118,6 +125,47 @@ class MapperCfg:
 
     # === Cameras ===
     num_cameras: int = 1
+    #: Camera image height in pixels. Required; used to pre-allocate the
+    #: voxel-project scratch buffer at Mapper construction (buffer size
+    #: ``num_cameras * image_height * image_width * num_samples``) so no
+    #: per-frame reallocation or D2H syncs occur.
+    image_height: Optional[int] = None
+    #: Camera image width in pixels. Required; see :attr:`image_height`.
+    image_width: Optional[int] = None
+
+    # === Per-block Features ===
+    #: Per-block feature channel dimensionality. 0 disables features.
+    feature_dim: int = 0
+    #: Maximum visible blocks one integration frame may process. Defaults
+    #: to :attr:`max_blocks` after that value is computed.
+    max_visible_blocks_per_integration: Optional[int] = None
+    #: Maximum support pixels stored per visible block per camera for RGB
+    #: and feature integration. Larger values use more scratch memory and
+    #: preserve more per-block color/feature evidence.
+    max_support_pixels_per_block_camera: int = 8
+    #: Number of adjacent feature channels accumulated by one feature-kernel
+    #: thread. Kept explicit so Python launch grouping and Warp kernel
+    #: decoding cannot drift apart.
+    feature_channels_per_thread: int = 8
+    #: Compile-time cap for feature channels accumulated by one tiled
+    #: feature-kernel CTA. The generated tile width is
+    #: ``min(feature_dim, max_feature_tile_channels)``.
+    max_feature_tile_channels: int = 4096
+    #: Feature integration launch policy: ``"auto"``, ``"grouped"``, or
+    #: ``"tiled"``. ``"auto"`` resolves to the tiled kernel only for feature
+    #: dimensions and support capacities where benchmarks showed a win.
+    feature_integration_kernel: str = "auto"
+    #: Record per-kernel integration timings into
+    #: ``Mapper.get_stats()["last_integration_kernel_timings_ms"]``.
+    #: Disabled by default to avoid profiling synchronizations in normal
+    #: integration.
+    profile_integration_kernel_timings: bool = False
+    #: Upper bound on per-block accumulator weight. Caps fp16
+    #: ``block_rgb`` / ``block_features`` magnitudes each frame and sets
+    #: the EMA decay rate for old observations (effective window
+    #: ``~W_max / mean_per_frame_weight``). Raise for longer memory,
+    #: lower for faster adaptation to dynamic scenes.
+    accumulator_w_max: float = 1000.0
 
     # === Device ===
     device: str = "cuda:0"
@@ -144,18 +192,55 @@ class MapperCfg:
             )
 
         # Validate decay factors
-        if not (0.0 < self.decay_factor <= 1.0):
+        if not (0.0 <= self.decay_factor <= 1.0):
             raise ValueError(f"decay_factor must be in (0, 1]: {self.decay_factor}")
-        if not (0.0 < self.frustum_decay_factor <= 1.0):
+        if not (0.0 <= self.frustum_decay_factor <= 1.0):
             raise ValueError(f"frustum_decay_factor must be in (0, 1]: {self.frustum_decay_factor}")
-
-        # Validate block_fill_ratio
-        if not (0.0 < self.block_fill_ratio <= 1.0):
-            raise ValueError(f"block_fill_ratio must be in (0, 1]: {self.block_fill_ratio}")
 
         # Validate hash_load_factor
         if not (0.0 < self.hash_load_factor <= 1.0):
             raise ValueError(f"hash_load_factor must be in (0, 1]: {self.hash_load_factor}")
+
+        if self.image_height is None or self.image_width is None:
+            log_and_raise(
+                "MapperCfg requires image_height and image_width to pre-allocate "
+                "the voxel-project scratch buffer. Got image_height="
+                f"{self.image_height}, image_width={self.image_width}."
+            )
+        if self.image_height <= 0 or self.image_width <= 0:
+            log_and_raise(
+                f"image_height and image_width must be positive, got "
+                f"image_height={self.image_height}, image_width={self.image_width}."
+            )
+        _validate_feature_channels_per_thread(self.feature_channels_per_thread)
+        if self.max_feature_tile_channels <= 0:
+            log_and_raise(
+                "max_feature_tile_channels must be positive, got "
+                f"{self.max_feature_tile_channels}."
+            )
+        if self.max_support_pixels_per_block_camera <= 0:
+            log_and_raise(
+                "max_support_pixels_per_block_camera must be positive: "
+                f"{self.max_support_pixels_per_block_camera}"
+            )
+        _validate_feature_integration_kernel(self.feature_integration_kernel)
+        if not isinstance(self.profile_integration_kernel_timings, bool):
+            log_and_raise(
+                "profile_integration_kernel_timings must be bool, got "
+                f"{type(self.profile_integration_kernel_timings).__name__}."
+            )
+        max_blocks = self.max_blocks
+        if self.max_visible_blocks_per_integration is None:
+            self.max_visible_blocks_per_integration = max_blocks
+        if (
+            self.max_visible_blocks_per_integration <= 0
+            or self.max_visible_blocks_per_integration > max_blocks
+        ):
+            log_and_raise(
+                "max_visible_blocks_per_integration must satisfy "
+                f"0 < C <= max_blocks ({max_blocks}), got "
+                f"{self.max_visible_blocks_per_integration}."
+            )
 
         # Set default grid_center
         if self.grid_center is None:
@@ -173,11 +258,6 @@ class MapperCfg:
         return (nz, ny, nx)
 
     @property
-    def block_size(self) -> int:
-        """Block size (voxels per edge). Fixed at BLOCK_SIZE=8."""
-        return BLOCK_SIZE
-
-    @property
     def max_blocks(self) -> int:
         """Compute max allocated blocks using surface area × thickness heuristic.
 
@@ -192,7 +272,7 @@ class MapperCfg:
         return calculate_tsdf_max_blocks(
             grid_shape=self.grid_shape,
             voxel_size=self.voxel_size,
-            block_dim=BLOCK_SIZE,
+            block_size=self.block_size,
             truncation_dist=self.truncation_distance,
             roughness=self.roughness,  # roughness scaled by fill ratio
         )
@@ -272,4 +352,3 @@ class MapperCfg:
         min_corner = (cx - half_extent_x, cy - half_extent_y, cz - half_extent_z)
         max_corner = (cx + half_extent_x, cy + half_extent_y, cz + half_extent_z)
         return (min_corner, max_corner)
-

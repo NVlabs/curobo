@@ -20,7 +20,7 @@ import torch.autograd.profiler as profiler
 from curobo._src.cost.cost_base import BaseCost
 
 # CuRobo
-from curobo._src.geom.collision import SceneCollision, create_collision_checker
+from curobo._src.geom.collision.collision_scene import SceneCollision, create_scene_collision
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.metrics import (
     CostCollection,
@@ -137,7 +137,7 @@ class RobotRollout:
         # Scene collision checker
         if self.scene_collision_checker is None:
             if self.config.scene_collision_cfg is not None:
-                self.scene_collision_checker = create_collision_checker(
+                self.scene_collision_checker = create_scene_collision(
                     self.config.scene_collision_cfg
                 )
 

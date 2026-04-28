@@ -346,6 +346,21 @@ def test():
         build_new_robot(build_args)
         assert Path(output).exists(), f"Output file not created: {output}"
 
+        # Roundtrip: load the saved YAML into Kinematics and run FK. Guards the
+        # full consumer path, catching regressions like fields that the builder
+        # writes but that RobotCfg.create re-injects as kwargs.
+        from curobo.kinematics import Kinematics, KinematicsCfg
+        from curobo.types import JointState
+
+        robot = Kinematics(KinematicsCfg.from_robot_yaml_file(output))
+        q = torch.zeros(1, robot.get_dof(), device="cuda", dtype=torch.float32)
+        state = robot.compute_kinematics(
+            JointState.from_position(q, joint_names=robot.joint_names)
+        )
+        ee_pose = state.tool_poses.get_link_pose(robot.tool_frames[0])
+        assert torch.isfinite(ee_pose.position).all(), "FK returned non-finite position"
+        assert torch.isfinite(ee_pose.quaternion).all(), "FK returned non-finite quaternion"
+
         # 2. Edit: refit a single link
         refit_output = str(Path(tmpdir) / "franka_refit.yml")
         builder = RobotBuilder.from_config(output)

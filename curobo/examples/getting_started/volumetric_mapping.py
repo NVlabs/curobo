@@ -319,12 +319,6 @@ def main():
     parser.add_argument("--output", type=str, default="output_mesh.ply", help="Output mesh")
     parser.add_argument("--visualize", action="store_true", help="Enable viser visualization")
     parser.add_argument("--num-cameras", type=int, default=1, help="Number of cameras")
-    parser.add_argument("--refine-pose", action="store_true", help="Refine pose using ICP")
-    parser.add_argument(
-        "--estimate-pose",
-        action="store_true",
-        help="Estimate pose from first frame (identity init)",
-    )
     args = parser.parse_args()
 
     print(f"Loading Sun3D dataset from {args.root}...")
@@ -338,19 +332,19 @@ def main():
         voxel_size=args.voxel_size,
         extent_meters_xyz=(11.0, 7.0, 5.0),
         truncation_distance=args.voxel_size * 6,
-        depth_maximum_distance=10.0,
+        depth_maximum_distance=6.0,
         depth_minimum_distance=0.05,
-        minimum_tsdf_weight=0.01,
-        rgb_scale=1,
+        minimum_tsdf_weight=2.0,
         decay_factor=1.0,
         frustum_decay_factor=1.0,
         # enable_static=True allocates a separate geometry channel for analytic
         # primitives (cuboids, meshes) that never decay with time.
         enable_static=True,
         static_obstacle_color=(0, 100, 100),
-        roughness=5.0,
+        roughness=3.0,
         num_cameras=args.num_cameras,
-        integration_method="voxel_project",
+        image_height=480,
+        image_width=640,
     )
     mapper = Mapper(config)
     print(f"Mapper initialized: {mapper.memory_usage_mb():.1f} MB")
@@ -403,10 +397,9 @@ def main():
         flying_pixel_threshold=0.5,
         bilateral_kernel_size=3,
     )
-    last_pose = None
-
     n_cams = args.num_cameras
     pbar = tqdm(range(0, max_frames, n_cams))
+    dt_s_list = []
     for batch_start in pbar:
         batch_end = min(batch_start + n_cams, max_frames)
         batch_obs = []
@@ -422,23 +415,6 @@ def main():
             filtered, _ = depth_filter(obs.depth_image.unsqueeze(0))
             obs.depth_image = filtered[0]
             t_filter += time.perf_counter() - t0
-
-            if args.refine_pose or args.estimate_pose:
-                if i < 5:
-                    last_pose = obs.pose
-                else:
-                    init_pose = last_pose if args.estimate_pose else obs.pose
-                    new_pose, error, iters = mapper.refine_pose(
-                        obs.depth_image, obs.intrinsics, init_pose
-                    )
-                    print("Pose refinement error(mm):", error * 1000.0)
-                    if error * 1000.0 < 2 * args.voxel_size * 1000.0:
-                        obs.pose = new_pose
-                        last_pose = new_pose
-                    else:
-                        print("Pose refinement failed. Ignoring frame.")
-                        last_pose = new_pose
-                        continue
 
             batch_obs.append(obs)
 
@@ -471,28 +447,39 @@ def main():
         timer = CudaEventTimer().start()
         mapper.integrate(batched)
         dt_s = timer.stop()
+
+        dt_s_list.append(dt_s)
         pbar.set_postfix(
             load_ms=f"{t_load * 1000:.0f}",
             filter_ms=f"{t_filter * 1000:.0f}",
-            integrate_ms=f"{dt_s * 1000:.1f}",
+            integrate_ms=f"{np.mean(dt_s_list) * 1000:.1f}",
             n_cams=n_cams,
         )
+        if len(dt_s_list) > 10:
+            dt_s_list = dt_s_list[-10:]
 
         if visualizer and (batch_end) % 20 < n_cams:
-            centers, colors = mapper.integrator.extract_occupied_voxels(surface_only=False)
-            if centers is not None:
+            voxels = mapper.integrator.extract_occupied_voxels(surface_only=False)
+            if len(voxels) > 0:
+                centers = voxels.centers
+                colors = voxels.colors_uint8()
                 if len(centers) > 100_000:
                     scale = int(len(centers) / 100_000)
                     if scale > 1:
                         centers = centers[::scale]
                         colors = colors[::scale]
 
+                points_np = centers.cpu().numpy()
+                colors_np = colors.cpu().numpy()
                 visualizer.add_point_cloud(
-                    pointcloud=centers.cpu().numpy(),
-                    colors=colors.cpu().numpy(),
+                    pointcloud=points_np,
+                    colors=colors_np,
                     point_size=args.voxel_size,
                     name="/reconstruction",
                 )
+                del centers, colors, points_np, colors_np
+            del voxels
+            torch.cuda.empty_cache()
 
             for cam_i, vis_obs in enumerate(batch_obs):
                 visualizer.add_frame(
@@ -520,20 +507,27 @@ def main():
     print("Static obstacles stamped into TSDF geometry channel")
 
     if visualizer:
-        centers, colors = mapper.integrator.extract_occupied_voxels(surface_only=False)
-        if centers is not None:
+        voxels = mapper.integrator.extract_occupied_voxels(surface_only=False)
+        if len(voxels) > 0:
+            centers = voxels.centers
+            colors = voxels.colors_uint8()
             print(f"Extracted {len(centers)} voxels (with static obstacles)")
             if len(centers) > 100_000:
                 scale = int(len(centers) / 100_000)
                 if scale > 1:
                     centers = centers[::scale]
                     colors = colors[::scale]
+            points_np = centers.cpu().numpy()
+            colors_np = colors.cpu().numpy()
             visualizer.add_point_cloud(
-                pointcloud=centers.cpu().numpy(),
-                colors=colors.cpu().numpy(),
+                pointcloud=points_np,
+                colors=colors_np,
                 point_size=args.voxel_size,
                 name="/reconstruction",
             )
+            del centers, colors, points_np, colors_np
+        del voxels
+        torch.cuda.empty_cache()
 
     # Render from first camera pose
     print("\nRendering from first camera pose. First call will take minutes to compile kernel.")

@@ -7,7 +7,7 @@
 import pytest
 import torch
 
-from curobo._src.perception.mapper import (
+from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
     BlockSparseTSDFIntegratorCfg,
 )
@@ -44,21 +44,129 @@ class TestBlockSparseTSDFIntegrator:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=100,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
         assert integrator.tsdf is not None
         assert integrator.memory_usage_mb() > 0
 
+    def test_visible_capacity_defaults_to_max_blocks(self, warp_init, device):
+        """Omitted per-frame visible capacity preserves prior max_blocks behavior."""
+        config = BlockSparseTSDFIntegratorCfg(
+            voxel_size=0.01,
+            origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
+            max_blocks=123,
+            device=device,
+            image_height=32,
+            image_width=32,
+        )
+        integrator = BlockSparseTSDFIntegrator(config)
+
+        assert config.max_visible_blocks_per_integration == 123
+        assert integrator._integrator.max_visible_blocks_per_integration == 123
+        assert integrator._integrator.pool_indices.shape == (123,)
+
+    @pytest.mark.parametrize("capacity", [0, -1, 101])
+    def test_visible_capacity_validation(self, warp_init, device, capacity):
+        """Visible capacity must be positive and no larger than max_blocks."""
+        with pytest.raises(ValueError, match="max_visible_blocks_per_integration"):
+            BlockSparseTSDFIntegratorCfg(
+                voxel_size=0.01,
+                origin=torch.tensor([0.0, 0.0, 0.0]),
+                grid_shape=(512, 512, 512),
+                max_blocks=100,
+                max_visible_blocks_per_integration=capacity,
+                device=device,
+                image_height=32,
+                image_width=32,
+            )
+
+    def test_support_capacity_validation(self, warp_init, device):
+        """Support capacity must be a positive construction-time value."""
+        with pytest.raises(ValueError, match="max_support_pixels_per_block_camera"):
+            BlockSparseTSDFIntegratorCfg(
+                voxel_size=0.01,
+                origin=torch.tensor([0.0, 0.0, 0.0]),
+                grid_shape=(512, 512, 512),
+                max_blocks=100,
+                max_support_pixels_per_block_camera=0,
+                device=device,
+                image_height=32,
+                image_width=32,
+            )
+
+    def test_visible_capacity_overflow_raises_loudly(self, warp_init, device):
+        """Frames that discover more than C visible blocks must not truncate."""
+        config = BlockSparseTSDFIntegratorCfg(
+            voxel_size=0.01,
+            origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
+            max_blocks=500,
+            max_visible_blocks_per_integration=1,
+            feature_dim=3,
+            device=device,
+            image_height=64,
+            image_width=64,
+        )
+        integrator = BlockSparseTSDFIntegrator(config)
+        integrator.tsdf.data.block_data.fill_(7.0)
+        integrator.tsdf.data.block_rgb.fill_(5.0)
+        integrator.tsdf.data.block_features.fill_(3.0)
+        integrator.tsdf.data.block_feature_weight.fill_(2.0)
+
+        img_H, img_W = 64, 64
+        depth = torch.full((img_H, img_W), 1.0, dtype=torch.float32, device=device)
+        rgb = torch.full((img_H, img_W, 3), 128, dtype=torch.uint8, device=device)
+        position = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, device=device)
+        quaternion = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=device)
+        intrinsics = torch.tensor(
+            [[500.0, 0.0, 32.0], [0.0, 500.0, 32.0], [0.0, 0.0, 1.0]],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                "num_visible_blocks=.* exceeds "
+                "max_visible_blocks_per_integration=1"
+            ),
+        ):
+            integrator.integrate(
+                make_observation(depth, rgb, position, quaternion, intrinsics)
+            )
+
+        n_allocated = int(integrator.tsdf.data.num_allocated.item())
+        assert n_allocated > 0
+        assert torch.count_nonzero(integrator.tsdf.data.block_data[:n_allocated]).item() == 0
+        assert torch.count_nonzero(integrator.tsdf.data.block_rgb[:n_allocated]).item() == 0
+        assert (
+            torch.count_nonzero(integrator.tsdf.data.block_features[:n_allocated]).item()
+            == 0
+        )
+        assert (
+            torch.count_nonzero(
+                integrator.tsdf.data.block_feature_weight[:n_allocated]
+            ).item()
+            == 0
+        )
+
     def test_integrate(self, warp_init, device):
         """Test depth integration via integrate method."""
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=500,
             device=device,
+            image_height=64,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -86,8 +194,11 @@ class TestBlockSparseTSDFIntegrator:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=500,
             device=device,
+            image_height=64,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -118,8 +229,11 @@ class TestBlockSparseTSDFIntegrator:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=500,
             device=device,
+            image_height=64,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -150,8 +264,11 @@ class TestBlockSparseTSDFIntegrator:
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=100,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -175,18 +292,21 @@ class TestBlockSparseTSDFIntegrator:
         assert integrator.get_stats()["num_allocated"] == 0
         assert integrator.get_stats()["frame_count"] == 0
 
-    def test_decay_graph_safe_functions(self, warp_init, device):
-        """Test CUDA graph safe decay functions."""
+    def test_decay_recycle_functions(self, warp_init, device):
+        """Test decay and recycle launch paths."""
         from curobo._src.perception.mapper.kernel.wp_decay import (
             decay_and_recycle,
-            recycle_graph_safe,
+            launch_recycle,
         )
 
         config = BlockSparseTSDFIntegratorCfg(
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             max_blocks=100,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
 
@@ -213,8 +333,8 @@ class TestBlockSparseTSDFIntegrator:
         recycled = decay_and_recycle(integrator._tsdf, 0.5)
         assert recycled >= 0
 
-        # Test recycle_graph_safe
-        recycle_graph_safe(integrator._tsdf)
+        # Test recycle-only launch path.
+        launch_recycle(integrator._tsdf)
 
         # Heavily decay to trigger recycling
         for _ in range(20):
@@ -227,4 +347,3 @@ class TestBlockSparseTSDFIntegrator:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

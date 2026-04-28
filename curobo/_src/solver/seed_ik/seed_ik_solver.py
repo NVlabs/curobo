@@ -29,7 +29,7 @@ from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise, log_info
-from curobo._src.util.sampling import SampleBuffer
+from curobo._src.util.sampling.sample_buffer import SampleBuffer
 from curobo._src.util.tensor_util import stable_topk, tensor_repeat_seeds
 from curobo._src.util.torch_util import get_torch_jit_decorator
 from curobo._src.util.warp import init_warp
@@ -822,4 +822,3 @@ class SeedIKSolver:
         if self._inner_iterations_executor is not None:
             self._inner_iterations_executor.reset()
             self._inner_iterations_executor = None
-

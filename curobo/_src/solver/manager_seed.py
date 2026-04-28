@@ -15,7 +15,7 @@ import torch
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise, log_warn
-from curobo._src.util.sampling import SampleBuffer
+from curobo._src.util.sampling.sample_buffer import SampleBuffer
 from curobo._src.util.trajectory_seed_generator import TrajectorySeedGenerator
 
 
@@ -282,4 +282,3 @@ class SeedManager:
     def reset_seed(self) -> None:
         """Reset the random seed generators."""
         self.action_sample_generator.reset()
-

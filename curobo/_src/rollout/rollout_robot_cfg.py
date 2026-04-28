@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Type, Union
 
 # CuRobo
-from curobo._src.geom.collision import SceneCollisionCfg
+from curobo._src.geom.collision.collision_scene import SceneCollisionCfg
 from curobo._src.rollout.cost_manager.cost_manager_robot_cfg import RobotCostManagerCfg
 from curobo._src.transition.robot_state_transition_cfg import RobotStateTransitionCfg
 from curobo._src.types.device_cfg import DeviceCfg

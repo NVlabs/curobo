@@ -16,7 +16,8 @@ import trimesh
 import trimesh.scene
 
 # CuRobo
-from curobo._src.geom.sphere_fit import SphereFitType, fit_spheres_to_mesh
+from curobo._src.geom.sphere_fit.fit_spheres import fit_spheres_to_mesh
+from curobo._src.geom.sphere_fit.types import SphereFitType
 from curobo._src.types.camera import CameraObservation
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose

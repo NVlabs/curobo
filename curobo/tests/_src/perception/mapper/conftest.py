@@ -4,10 +4,29 @@
 
 """Shared test utilities for block-sparse perception tests."""
 
+import pytest
 import torch
 
+from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
+    make_block_sparse_kernels,
+)
 from curobo._src.types.camera import CameraObservation
 from curobo._src.types.pose import Pose
+from curobo._src.util.warp import init_warp
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _prewarm_block_sparse_kernels():
+    """Build the default-BS kernel bundle once per session.
+
+    Warp still owns compiled-kernel reuse; the Python bundle itself is
+    intentionally not cached.
+    """
+    if not torch.cuda.is_available():
+        return
+
+    init_warp()
+    make_block_sparse_kernels(block_size=8)
 
 
 def make_observation(

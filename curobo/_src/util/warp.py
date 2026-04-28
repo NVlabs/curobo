@@ -5,7 +5,8 @@
 # Standard Library
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union
+from collections.abc import Callable
+from typing import Any, Optional, Tuple, Union
 
 # Third Party
 import torch
@@ -17,6 +18,30 @@ from curobo._src.runtime import debug_cuda_compile as cuda_debug_compile
 # CuRobo
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_debug, log_info
+
+
+def _set_warp_name(func: Callable[..., Any], name: str) -> Callable[..., Any]:
+    func.__name__ = name
+    func.__qualname__ = name
+    return func
+
+
+def warp_func(name: str) -> Callable[[Callable[..., Any]], Any]:
+    """Return a decorator that names a template before ``wp.func`` sees it."""
+
+    def _decorate(func: Callable[..., Any]) -> Any:
+        return wp.func(module="unique")(_set_warp_name(func, name))
+
+    return _decorate
+
+
+def warp_kernel(name: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Any]:
+    """Return a decorator that names a template before ``wp.kernel`` sees it."""
+
+    def _decorate(func: Callable[..., Any]) -> Any:
+        return wp.kernel(module="unique", **kwargs)(_set_warp_name(func, name))
+
+    return _decorate
 
 
 def init_warp(
@@ -34,6 +59,8 @@ def init_warp(
     wp.config.print_launches = print_launches
     wp.config.mode = "release" if not cuda_debug_compile else "debug"
     wp.config.verify_cuda = cuda_debug_compile
+    # wp.config.max_unroll = 8
+    # wp.config.optimization_level = 2
 
 
     wp.init()

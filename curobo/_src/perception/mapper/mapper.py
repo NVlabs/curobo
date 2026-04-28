@@ -7,7 +7,8 @@ This module provides the Mapper class, a high-level facade for volumetric
 mapping using block-sparse TSDF storage with ESDF generation.
 
 Example:
-    from curobo._src.perception.mapper import Mapper, MapperCfg
+    from curobo._src.perception.mapper.mapper import Mapper
+    from curobo._src.perception.mapper.mapper_cfg import MapperCfg
 
     config = MapperCfg(
         extent_meters_xyz=(2.0, 2.0, 2.0),
@@ -25,28 +26,34 @@ Example:
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Optional, Tuple
 
 import torch
 
-from curobo._src.geom.data import SceneData
+from curobo._src.geom.data.data_scene import SceneData
 from curobo._src.geom.types import Mesh, VoxelGrid
 from curobo._src.perception.mapper.integrator_esdf import (
     BlockSparseESDFIntegrator,
     BlockSparseESDFIntegratorCfg,
 )
 from curobo._src.perception.mapper.mapper_cfg import MapperCfg
-from curobo._src.perception.mapper.pose_refiner import (
-    BlockSparseRaycastPoseRefiner,
-    BlockSparseRaycastRefinerCfg,
-)
 from curobo._src.perception.mapper.storage import (
     BlockSparseTSDF,
+    MatchedVoxels,
+    OccupiedVoxels,
 )
 from curobo._src.types.pose import Pose
 
 if TYPE_CHECKING:
     from curobo._src.types.camera import CameraObservation
+
+
+# Per-element magnitude limit for CameraObservation.feature_grid. The
+# integration kernel atomic-adds into fp16 ``block_features``; inputs
+# well outside ``O(1)`` can overflow the per-thread footprint sum
+# (``~support_capacity · max_per_pixel_value``) within a single frame
+# before the post-integration rescale kicks in.
+_FEATURE_MAGNITUDE_LIMIT: float = 10.0
 
 
 class Mapper:
@@ -94,7 +101,6 @@ class Mapper:
             truncation_distance=config.truncation_distance,
             max_blocks=config.max_blocks,
             hash_capacity=config.hash_capacity,
-            block_size=config.block_size,
             depth_minimum_distance=config.depth_minimum_distance,
             depth_maximum_distance=config.depth_maximum_distance,
             frustum_decay=config.frustum_decay_factor,
@@ -103,11 +109,22 @@ class Mapper:
             grid_shape=config.grid_shape,
             enable_static=config.enable_static,
             static_obstacle_color=config.static_obstacle_color,
-            integration_method=config.integration_method,
             seeding_method=config.seeding_method,
             edt_solver=config.edt_solver,
             num_cameras=config.num_cameras,
+            image_height=config.image_height,
+            image_width=config.image_width,
             device=config.device,
+            block_size=config.block_size,
+            roughness=config.roughness,
+            feature_dim=config.feature_dim,
+            max_visible_blocks_per_integration=config.max_visible_blocks_per_integration,
+            max_support_pixels_per_block_camera=config.max_support_pixels_per_block_camera,
+            feature_channels_per_thread=config.feature_channels_per_thread,
+            max_feature_tile_channels=config.max_feature_tile_channels,
+            feature_integration_kernel=config.feature_integration_kernel,
+            profile_integration_kernel_timings=config.profile_integration_kernel_timings,
+            accumulator_w_max=config.accumulator_w_max,
         )
 
         self._integrator = BlockSparseESDFIntegrator(integrator_config)
@@ -137,6 +154,25 @@ class Mapper:
             observation: Batched camera observation.
         """
         self._integrator.integrate(observation)
+        self._last_voxel_grid = None
+
+    def clear_region(self, bounds_min, bounds_max) -> int:
+        """Clear dynamic map contents inside a conservative world-space AABB.
+
+        Blocks remain allocated. The cached ESDF voxel grid is invalidated and
+        must be recomputed with :meth:`compute_esdf`.
+        """
+        n_clear = self._integrator.clear_region(bounds_min, bounds_max)
+        if n_clear > 0:
+            self._last_voxel_grid = None
+        return n_clear
+
+    def clear_blocks(self, pool_indices) -> int:
+        """Clear dynamic map contents for explicit block-pool indices."""
+        n_clear = self._integrator.clear_blocks(pool_indices)
+        if n_clear > 0:
+            self._last_voxel_grid = None
+        return n_clear
 
     def compute_esdf(
         self,
@@ -165,7 +201,7 @@ class Mapper:
 
     def extract_mesh(
         self,
-        refine_iterations: int = 5,
+        refine_iterations: int = 2,
         surface_only: bool = True,
     ) -> Mesh:
         """Extract mesh using GPU marching cubes.
@@ -182,18 +218,115 @@ class Mapper:
             surface_only=surface_only,
         )
 
+    def extract_occupied_voxels(
+        self,
+        surface_only: bool = False,
+        sdf_threshold: Optional[float] = None,
+    ) -> OccupiedVoxels:
+        """Extract occupied voxel centers and per-voxel block indices.
+
+        Args:
+            surface_only: If True, only extract voxels near the TSDF
+                surface. If False, include inside voxels too.
+            sdf_threshold: Surface threshold. Defaults to the underlying
+                TSDF integrator's voxel size.
+
+        Returns:
+            :class:`OccupiedVoxels` with voxel centers, per-voxel block
+            pool indices, and a view over per-block storage.
+        """
+        return self._integrator.extract_occupied_voxels(
+            surface_only=surface_only,
+            sdf_threshold=sdf_threshold,
+        )
+
+    def extract_matching_feature_voxels(
+        self,
+        feature_vector: torch.Tensor,
+        top_k: int,
+        surface_only: bool = False,
+        sdf_threshold: Optional[float] = None,
+        minimum_score: Optional[float] = None,
+        feature_projector: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ) -> MatchedVoxels:
+        """Extract voxels from the top-k blocks most similar (cosine) to
+        ``feature_vector``. Requires :attr:`MapperCfg.feature_dim` > 0.
+
+        ``minimum_score`` (cosine in the query feature space) drops
+        matched blocks below the cut *after* the top-k selection, so the
+        voxel-extraction kernel skips work proportional to filtered
+        blocks. Pair a generous ``top_k`` with ``minimum_score`` to get
+        all matches above a quality threshold.
+
+        Returns a :class:`MatchedVoxels` carrying the extracted voxels
+        plus parallel ``(K,)`` ``block_pool_idx`` / ``block_scores``
+        tensors in descending score order. ``block_pool_idx`` can be
+        passed directly to :meth:`clear_blocks` to drop the matched
+        blocks from the map.
+
+        ``feature_projector`` optionally maps stored block features into
+        the query space before scoring. This keeps model-specific heads
+        (e.g. RADIO -> SigLIP) outside the mapper while still using the
+        mapper's all-allocated-block scoring and extraction path.
+        """
+        return self._integrator.extract_matching_feature_voxels(
+            feature_vector=feature_vector,
+            top_k=top_k,
+            surface_only=surface_only,
+            sdf_threshold=sdf_threshold,
+            minimum_score=minimum_score,
+            feature_projector=feature_projector,
+        )
+
+    def get_matching_feature_voxels(
+        self,
+        feature_vector: torch.Tensor,
+        top_k: int,
+        surface_only: bool = False,
+        sdf_threshold: Optional[float] = None,
+        minimum_score: Optional[float] = None,
+        feature_projector: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ) -> MatchedVoxels:
+        """Compatibility wrapper for :meth:`extract_matching_feature_voxels`."""
+        return self.extract_matching_feature_voxels(
+            feature_vector=feature_vector,
+            top_k=top_k,
+            surface_only=surface_only,
+            sdf_threshold=sdf_threshold,
+            minimum_score=minimum_score,
+            feature_projector=feature_projector,
+        )
+
     def reset(self) -> None:
         """Reset mapper for new scene."""
         self._integrator.reset()
         self._last_voxel_grid = None
 
-    def get_stats(self) -> dict:
+    def get_stats(
+        self,
+        scan_pool: bool = True,
+        scan_hash: bool = False,
+    ) -> dict:
         """Get mapper statistics.
 
+        Args:
+            scan_pool: Forwarded to the integrator's stats call. When
+                True (default) returns the ground-truth ``active_blocks``
+                and the ``holes`` invariant via an O(num_allocated) GPU
+                reduction. When False, falls back to the cheap
+                ``num_allocated - free_count`` approximation.
+            scan_hash: Forwarded to the integrator's stats call. When
+                True, adds hash table occupancy stats via an
+                O(hash_capacity) reduction. Periodic use only.
+
         Returns:
-            Dictionary with block usage, memory stats, and frame count.
+            Dictionary with block usage, memory stats, frame count, and
+            ``last_integration_kernel_timings_ms``. See
+            :meth:`BlockSparseTSDF.get_stats` for the full block-pool key list.
         """
-        return self._integrator.get_stats()
+        return self._integrator.get_stats(
+            scan_pool=scan_pool, scan_hash=scan_hash,
+        )
 
     def memory_usage_mb(self) -> float:
         """Get total GPU memory usage in megabytes."""
@@ -368,44 +501,3 @@ class Mapper:
             colormap: (H, W, 3) uint8 RGB colormap.
         """
         return self._get_renderer().render_normal_colormap(intrinsics, pose, image_shape)
-
-    # === Pose Refinement (lazy-initialized) ===
-
-    def refine_pose(
-        self,
-        depth_image: torch.Tensor,
-        intrinsics: torch.Tensor,
-        initial_pose: "Pose",
-        max_iterations: int = 100,
-        minimum_tsdf_weight: float = 0.01,
-        n_points: int = 10000,
-    ) -> Tuple["Pose", float, int]:
-        """Refine camera pose using ICP with TSDF raycasting.
-
-        Args:
-            depth_image: Input depth image (H, W).
-            intrinsics: Camera intrinsics (3, 3).
-            initial_pose: Initial pose estimate.
-            max_iterations: Maximum ICP iterations.
-
-        Returns:
-            Tuple of (refined_pose, final_error, iterations_used).
-        """
-        if not hasattr(self, "_pose_refiner"):
-            refiner_config = BlockSparseRaycastRefinerCfg(
-                n_points=n_points,
-                minimum_tsdf_weight=minimum_tsdf_weight,
-                depth_minimum_distance=self._integrator._tsdf_integrator.config.depth_minimum_distance,
-                depth_maximum_distance=self._integrator._tsdf_integrator.config.depth_maximum_distance,
-            )
-            self._pose_refiner = BlockSparseRaycastPoseRefiner(
-                self._integrator,
-                config=refiner_config,
-            )
-
-        return self._pose_refiner.refine_pose(
-            depth=depth_image,
-            intrinsics=intrinsics,
-            estimated_pose=initial_pose,
-        )
-

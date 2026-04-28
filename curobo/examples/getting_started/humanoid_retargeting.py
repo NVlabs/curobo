@@ -182,7 +182,7 @@ Both IK solvers use ``ik/lbfgs_retarget_ik.yml``, a specialized LBFGS optimizer 
 tuned for retargeting. The MPC solver uses ``mpc/lbfgs_retarget_mpc.yml``.
 
 **Per-link weighting**: each tool frame receives independent position and rotation
-weights via :class:`~curobo._src.cost.tool_pose_criteria.ToolPoseCriteria`, passed
+weights via :class:`~curobo.types.ToolPoseCriteria`, passed
 as a dict in ``MotionRetargeterCfg.tool_pose_criteria``.
 
 The same two-phase solver runs at three fidelity levels. Start with Level 1 to get
@@ -234,8 +234,8 @@ physical plausibility, or as a first pass to verify the link mapping.
         MotionRetargeter,
         MotionRetargeterCfg,
         SequenceGoalToolPose,
-        ToolPoseCriteria,
     )
+    from curobo.types import ToolPoseCriteria
 
     cfg = MotionRetargeterCfg.create(
         robot="unitree_g1_29dof_retarget.yml",
@@ -434,10 +434,9 @@ from curobo.motion_retargeter import (
     MotionRetargeterCfg,
     RetargetResult,
     SequenceGoalToolPose,
-    ToolPoseCriteria,
 )
 from curobo.scene import Sphere
-from curobo.types import DeviceCfg, JointState, Pose
+from curobo.types import DeviceCfg, JointState, Pose, ToolPoseCriteria
 
 
 def _build_tool_pose_criteria(ik_map: dict) -> Dict[str, ToolPoseCriteria]:

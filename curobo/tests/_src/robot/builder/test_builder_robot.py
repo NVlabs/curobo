@@ -10,7 +10,7 @@ from pathlib import Path
 # Third Party
 import pytest
 
-from curobo._src.geom.sphere_fit import SphereFitType
+from curobo._src.geom.sphere_fit.types import SphereFitType
 
 # CuRobo
 from curobo._src.robot.builder.builder_robot import RobotBuilder

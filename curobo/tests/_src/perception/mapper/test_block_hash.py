@@ -8,24 +8,37 @@ import pytest
 import torch
 import warp as wp
 
-from curobo._src.perception.mapper import (
+from curobo._src.perception.mapper.storage import (
     BlockSparseTSDF,
     BlockSparseTSDFCfg,
 )
-from curobo._src.perception.mapper.kernel.wp_coord import (
-    linear_to_local_coords,
-    local_to_linear_index,
-    world_to_block_coords,
+from curobo._src.perception.mapper.constants import (
+    DEFAULT_HASH_LAYOUT,
+    MAX_POOL_IDX,
+    PENDING_POOL_IDX,
+    PY_KEY_MASK,
+    validate_grid_shape_for_hash_layout,
 )
-from curobo._src.perception.mapper.kernel.wp_hash import (
-    clear_new_blocks_kernel,
-    find_or_insert_block,
-    hash_lookup,
-    pack_block_key,
-    spatial_hash,
-    unpack_block_key,
+from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
+    make_block_sparse_kernels,
 )
 from curobo._src.util.warp import init_warp
+
+# Resolve the default-BS builder specialization once at module load so
+# the @wp.kernel definitions below can close over the hash / coord
+# ``@wp.func`` objects by name. All tests in this module use the
+# default ``block_size=8``.
+_kernels = make_block_sparse_kernels(block_size=8)
+
+pack_block_key = _kernels.pack_block_key
+unpack_block_key = _kernels.unpack_block_key
+spatial_hash = _kernels.spatial_hash
+hash_lookup = _kernels.hash_lookup
+find_or_insert_block = _kernels.find_or_insert_block
+clear_new_blocks_kernel = _kernels.clear_new_blocks_kernel
+linear_to_local_coords = _kernels.linear_to_local_coords
+local_to_linear_index = _kernels.local_to_linear_index
+world_to_block_coords = _kernels.world_to_block_coords
 
 # =============================================================================
 # Test Kernels
@@ -126,7 +139,6 @@ def _kernel_world_to_block(
     world_positions: wp.array2d(dtype=wp.float32),
     origin: wp.vec3,
     voxel_size: float,
-    block_size: wp.int32,
     grid_W: wp.int32,
     grid_H: wp.int32,
     grid_D: wp.int32,
@@ -135,7 +147,7 @@ def _kernel_world_to_block(
     """Test world to block coordinate conversion."""
     tid = wp.tid()
     pos = wp.vec3(world_positions[tid, 0], world_positions[tid, 1], world_positions[tid, 2])
-    coords = world_to_block_coords(pos, origin, voxel_size, block_size, grid_W, grid_H, grid_D)
+    coords = world_to_block_coords(pos, origin, voxel_size, grid_W, grid_H, grid_D)
     block_coords[tid, 0] = coords[0]
     block_coords[tid, 1] = coords[1]
     block_coords[tid, 2] = coords[2]
@@ -156,7 +168,7 @@ def _kernel_local_index(
     linear = local_to_linear_index(lx, ly, lz)
     linear_indices[tid] = linear
 
-    recovered = linear_to_local_coords(linear, 8)  # block_size = 8
+    recovered = linear_to_local_coords(linear)
     coords_out[tid, 0] = recovered[0]
     coords_out[tid, 1] = recovered[1]
     coords_out[tid, 2] = recovered[2]
@@ -189,6 +201,7 @@ def block_sparse_tsdf(device):
         voxel_size=0.002,
         origin=torch.tensor([0.0, 0.0, 0.0]),
         device=device,
+        grid_shape=(128, 128, 128),
     )
     return BlockSparseTSDF(config)
 
@@ -200,6 +213,18 @@ def block_sparse_tsdf(device):
 
 class TestBlockKeyEncoding:
     """Tests for pack_block_key and unpack_block_key."""
+
+    def test_default_hash_layout_contract(self):
+        """Lock in the final 13/13/13/25 hash layout."""
+        layout = DEFAULT_HASH_LAYOUT
+        assert layout.name == "x13y13z13v25"
+        assert layout.value_bits == 25
+        assert layout.coord_bits_xyz == (13, 13, 13)
+        assert layout.coord_min_xyz == (-4096, -4096, -4096)
+        assert layout.coord_max_xyz == (4095, 4095, 4095)
+        assert PENDING_POOL_IDX == 0x1FFFFFF
+        assert MAX_POOL_IDX == 33_554_430
+        assert PY_KEY_MASK == 0xFFFFFFFFFE000000
 
     def test_roundtrip_positive_coords(self, warp_init, device):
         """Test pack/unpack roundtrip with positive coordinates."""
@@ -222,12 +247,10 @@ class TestBlockKeyEncoding:
             ],
         )
 
-
         assert torch.equal(coords, coords_out), "Pack/unpack roundtrip failed for positive coords"
 
     def test_roundtrip_negative_coords(self, warp_init, device):
         """Test pack/unpack roundtrip with negative coordinates."""
-        # Updated to use ±2048 range (12-bit signed in packed 64-bit format)
         coords = torch.tensor(
             [[-1, -1, -1], [-100, -200, -300], [-2000, -1500, -1000]],
             dtype=torch.int32,
@@ -247,12 +270,10 @@ class TestBlockKeyEncoding:
             ],
         )
 
-
         assert torch.equal(coords, coords_out), "Pack/unpack roundtrip failed for negative coords"
 
     def test_roundtrip_mixed_coords(self, warp_init, device):
         """Test pack/unpack roundtrip with mixed coordinates."""
-        # Updated to use ±2048 range (12-bit signed in packed 64-bit format)
         coords = torch.tensor(
             [[-1, 0, 1], [100, -200, 300], [-2000, 2000, 0]],
             dtype=torch.int32,
@@ -272,8 +293,49 @@ class TestBlockKeyEncoding:
             ],
         )
 
-
         assert torch.equal(coords, coords_out), "Pack/unpack roundtrip failed for mixed coords"
+
+    def test_roundtrip_coord_limits(self, warp_init, device):
+        """Round-trip inclusive signed coordinate limits."""
+        coords = torch.tensor(
+            [[-4096, -4096, -4096], [4095, 4095, 4095]],
+            dtype=torch.int32,
+            device=device,
+        )
+        coords_out = torch.zeros_like(coords)
+        keys = torch.zeros(coords.shape[0], dtype=torch.int64, device=device)
+
+        wp.launch(
+            _kernel_pack_unpack,
+            dim=coords.shape[0],
+            inputs=[
+                wp.from_torch(coords, dtype=wp.int32),
+                wp.from_torch(coords_out, dtype=wp.int32),
+                wp.from_torch(keys, dtype=wp.int64),
+            ],
+        )
+
+        assert torch.equal(coords, coords_out)
+
+    def test_grid_shape_validation_rejects_too_many_blocks(self):
+        """A bounded grid cannot exceed the signed hash-key range."""
+        with pytest.raises(ValueError):
+            validate_grid_shape_for_hash_layout((8, 8, 8193 * 8), block_size=8)
+
+    def test_low_level_tsdf_cfg_requires_grid_shape(self, device):
+        """The low-level sparse TSDF API is bounded-only."""
+        with pytest.raises(ValueError):
+            BlockSparseTSDFCfg(max_blocks=100, hash_capacity=200, device=device)
+
+    def test_low_level_tsdf_cfg_rejects_pool_sentinel(self, device):
+        """The pending-pool sentinel cannot be a real pool index."""
+        with pytest.raises(ValueError):
+            BlockSparseTSDFCfg(
+                max_blocks=PENDING_POOL_IDX,
+                hash_capacity=PENDING_POOL_IDX * 2,
+                device=device,
+                grid_shape=(128, 128, 128),
+            )
 
     def test_unique_keys(self, warp_init, device):
         """Test that different coordinates produce different keys."""
@@ -295,7 +357,6 @@ class TestBlockKeyEncoding:
                 wp.from_torch(keys, dtype=wp.int64),
             ],
         )
-
 
         unique_keys = torch.unique(keys)
         assert len(unique_keys) == n, "Different coords should produce different keys"
@@ -325,7 +386,6 @@ class TestSpatialHash:
             ],
         )
 
-
         assert (slots >= 0).all(), "Hash values should be non-negative"
         assert (slots < capacity).all(), "Hash values should be less than capacity"
 
@@ -354,7 +414,6 @@ class TestSpatialHash:
                 wp.from_torch(slots2, dtype=wp.int32),
             ],
         )
-
 
         assert slots1[0] == slots2[0], "Hash should be deterministic"
 
@@ -438,6 +497,7 @@ class TestFindOrInsert:
             max_blocks=100,
             hash_capacity=200,
             device=device,
+            grid_shape=(128, 128, 128),
         )
         tsdf = BlockSparseTSDF(config)
 
@@ -464,7 +524,6 @@ class TestFindOrInsert:
             ],
         )
 
-
         # Should have allocated block 0
         assert results[0].item() == 0, f"Expected pool_idx 0, got {results[0].item()}"
         assert tsdf.data.num_allocated.item() == 1
@@ -476,6 +535,7 @@ class TestFindOrInsert:
             max_blocks=100,
             hash_capacity=200,
             device=device,
+            grid_shape=(128, 128, 128),
         )
         tsdf = BlockSparseTSDF(config)
 
@@ -505,7 +565,6 @@ class TestFindOrInsert:
                 ],
             )
 
-
         # Should return same pool_idx
         assert results1[0] == results2[0], "Same block should return same pool_idx"
         # Should only allocate once
@@ -517,6 +576,7 @@ class TestFindOrInsert:
             max_blocks=100,
             hash_capacity=200,
             device=device,
+            grid_shape=(128, 128, 128),
         )
         tsdf = BlockSparseTSDF(config)
 
@@ -548,7 +608,6 @@ class TestFindOrInsert:
             ],
         )
 
-
         # All should succeed (no -1)
         assert (results >= 0).all(), "All blocks should be allocated"
         # All should have unique pool indices
@@ -566,6 +625,7 @@ class TestHashLookup:
             max_blocks=100,
             hash_capacity=200,
             device=device,
+            grid_shape=(128, 128, 128),
         )
         tsdf = BlockSparseTSDF(config)
 
@@ -583,7 +643,6 @@ class TestHashLookup:
             ],
         )
 
-
         assert results[0].item() == -1, "Non-existent block should return -1"
 
     def test_lookup_after_insert(self, warp_init, device):
@@ -592,6 +651,7 @@ class TestHashLookup:
             max_blocks=100,
             hash_capacity=200,
             device=device,
+            grid_shape=(128, 128, 128),
         )
         tsdf = BlockSparseTSDF(config)
 
@@ -620,7 +680,6 @@ class TestHashLookup:
             ],
         )
 
-
         # Lookup
         wp.launch(
             _kernel_hash_lookup,
@@ -633,8 +692,9 @@ class TestHashLookup:
             ],
         )
 
-
-        assert insert_results[0] == lookup_results[0], "Lookup should return same pool_idx as insert"
+        assert insert_results[0] == lookup_results[0], (
+            "Lookup should return same pool_idx as insert"
+        )
 
 
 class TestCoordinateConversion:
@@ -673,7 +733,6 @@ class TestCoordinateConversion:
                 wp.from_torch(world_pos, dtype=wp.float32),
                 origin,
                 voxel_size,
-                block_size,
                 grid_W,
                 grid_H,
                 grid_D,
@@ -681,15 +740,13 @@ class TestCoordinateConversion:
             ],
         )
 
-        # With center-origin: grid center is at block (grid_W/block_size/2, ...)
-        # For grid 1024 with block_size 8: center block is 64
-        center_block = grid_W // block_size // 2
+        # Hash keys are centered: grid center block maps to key 0.
         expected = torch.tensor(
             [
-                [center_block, center_block, center_block],  # Center
-                [center_block, center_block, center_block],  # Still same block
-                [center_block + 1, center_block, center_block],  # +1 in X
-                [center_block - 1, center_block, center_block],  # -1 in X
+                [0, 0, 0],  # Center
+                [0, 0, 0],  # Still same block
+                [1, 0, 0],  # +1 in X
+                [-1, 0, 0],  # -1 in X
             ],
             dtype=torch.int32,
             device=device,
@@ -720,7 +777,6 @@ class TestCoordinateConversion:
             ],
         )
 
-
         # All indices should be unique and in [0, 512)
         assert (linear_indices >= 0).all()
         assert (linear_indices < 512).all()
@@ -739,6 +795,7 @@ class TestClearNewBlocks:
             max_blocks=100,
             hash_capacity=200,
             device=device,
+            grid_shape=(128, 128, 128),
         )
         tsdf = BlockSparseTSDF(config)
 
@@ -758,16 +815,15 @@ class TestClearNewBlocks:
         # Run clear kernel
         wp.launch(
             clear_new_blocks_kernel,
-            dim=config.max_blocks * 512,
+            dim=(config.max_blocks, config.block_size**3),
             inputs=[
                 wp.from_torch(tsdf.data.block_data, dtype=wp.float16),
-                wp.from_torch(tsdf.data.block_rgb, dtype=wp.float32),
+                wp.from_torch(tsdf.data.block_rgb, dtype=wp.float16),
                 wp.from_torch(tsdf.data.new_blocks, dtype=wp.int32),
                 wp.from_torch(tsdf.data.new_block_count, dtype=wp.int32),
                 config.max_blocks,
             ],
         )
-
 
         # Block 0 should be cleared
         assert (tsdf.data.block_data[0, :, :] == 0).all()

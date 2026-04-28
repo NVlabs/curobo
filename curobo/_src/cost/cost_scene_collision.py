@@ -11,7 +11,7 @@ import torch
 
 # CuRobo
 from curobo._src.cost.cost_base import BaseCost
-from curobo._src.geom.collision import CollisionBuffer
+from curobo._src.geom.collision.buffer_collision import CollisionBuffer
 from curobo._src.util.logging import log_and_raise, log_info
 from curobo._src.util.torch_util import get_torch_jit_decorator
 

@@ -139,14 +139,24 @@ class TestMPCSolverCfgCreate:
         assert config.optimization_dt == 0.05
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_create_sets_interpolation_steps(self, cuda_device_cfg):
-        """Test create sets interpolation_steps."""
+    def test_create_sets_supported_interpolation_steps(self, cuda_device_cfg):
+        """Test create accepts the supported interpolation_steps value."""
         config = MPCSolverCfg.create(
             robot="franka.yml",
             device_cfg=cuda_device_cfg,
-            interpolation_steps=8,
+            interpolation_steps=4,
         )
-        assert config.interpolation_steps == 8
+        assert config.interpolation_steps == 4
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_rejects_unsupported_interpolation_steps(self, cuda_device_cfg):
+        """Test create rejects unsupported interpolation_steps values."""
+        with pytest.raises(ValueError, match="Interpolation steps must be 4 for MPC"):
+            MPCSolverCfg.create(
+                robot="franka.yml",
+                device_cfg=cuda_device_cfg,
+                interpolation_steps=8,
+            )
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_sets_use_deceleration(self, cuda_device_cfg):

@@ -18,8 +18,8 @@ import trimesh
 
 from curobo._src.cost.cost_self_collision import SelfCollisionCost
 from curobo._src.cost.cost_self_collision_cfg import SelfCollisionCostCfg
-from curobo._src.geom.sphere_fit import SphereFitType, fit_spheres_to_mesh
-from curobo._src.geom.sphere_fit.types import SphereFitMetrics
+from curobo._src.geom.sphere_fit.fit_spheres import fit_spheres_to_mesh
+from curobo._src.geom.sphere_fit.types import SphereFitMetrics, SphereFitType
 from curobo._src.robot.kinematics.kinematics import Kinematics
 from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
 from curobo._src.state.state_joint import JointState
@@ -657,9 +657,11 @@ class RobotBuilder:
                 except Exception as e:
                     log_warn(f"Could not generate cspace configuration: {e}")
 
-        # Clean up non-serializable fields
-        if "device_cfg" in data_dict["kinematics"]:
-            del data_dict["kinematics"]["device_cfg"]
+        # Clean up non-serializable fields and runtime-only parameters that
+        # RobotCfg.create passes explicitly (serializing them would duplicate
+        # the kwarg when the config is reloaded).
+        for k in ("device_cfg", "load_collision_spheres", "num_envs"):
+            data_dict["kinematics"].pop(k, None)
 
         # Create output directory if needed
         output_path_obj = Path(output_path)
@@ -1168,4 +1170,3 @@ class RobotBuilder:
                 self._self_collision_ignore[link_name1].append(link_name2)
 
         return len(never_colliding_link_pairs_cpu)
-

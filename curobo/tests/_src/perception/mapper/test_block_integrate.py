@@ -7,7 +7,7 @@
 import pytest
 import torch
 
-from curobo._src.perception.mapper import (
+from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
     BlockSparseTSDFIntegratorCfg,
 )
@@ -67,8 +67,11 @@ class TestIntegration:
             max_blocks=1000,
             voxel_size=0.01,  # 1cm voxels
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,  # 5cm truncation
             device=device,
+            image_height=48,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -100,8 +103,11 @@ class TestIntegration:
             max_blocks=1000,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=48,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -120,14 +126,64 @@ class TestIntegration:
         num_allocated = tsdf.data.num_allocated.item()
         assert num_allocated > 0, "Should have allocated blocks"
 
+    def test_block_rgb_matches_constant_input_color(
+        self, warp_init, device, simple_intrinsics, identity_pose
+    ):
+        """Per-block RGB averages should preserve a uniform input color."""
+        config = BlockSparseTSDFIntegratorCfg(
+            max_blocks=1000,
+            voxel_size=0.01,
+            origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
+            truncation_distance=0.05,
+            device=device,
+            image_height=48,
+            image_width=64,
+        )
+        integrator = BlockSparseTSDFIntegrator(config)
+        tsdf = integrator.tsdf
+
+        img_H, img_W = 48, 64
+        depth = torch.full((img_H, img_W), 1.0, dtype=torch.float32, device=device)
+        rgb = torch.empty((img_H, img_W, 3), dtype=torch.uint8, device=device)
+        rgb[..., 0] = 64
+        rgb[..., 1] = 128
+        rgb[..., 2] = 192
+
+        position, quaternion = identity_pose
+        integrator.integrate(make_observation(depth, rgb, position, quaternion, simple_intrinsics))
+
+        n = tsdf.data.num_allocated.item()
+        assert n > 0
+
+        block_rgb = tsdf.data.block_rgb[:n].float()
+        active = block_rgb[:, 3] > 0
+        assert active.any(), "Expected at least one block with RGB observations"
+
+        normalized = block_rgb[active, :3] / block_rgb[active, 3:4]
+        expected = torch.tensor(
+            [64.0 / 255.0, 128.0 / 255.0, 192.0 / 255.0],
+            dtype=torch.float32,
+            device=device,
+        ).view(1, 3)
+        torch.testing.assert_close(
+            normalized,
+            expected.expand_as(normalized),
+            atol=2e-2,
+            rtol=2e-2,
+        )
+
     def test_integrate_sphere_depth(self, warp_init, device, simple_intrinsics, identity_pose):
         """Test integrating a spherical depth pattern."""
         config = BlockSparseTSDFIntegratorCfg(
             max_blocks=5000,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=100,
+            image_width=100,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -174,9 +230,12 @@ class TestIntegration:
             max_blocks=100,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             depth_maximum_distance=5.0,
             device=device,
+            image_height=48,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -197,8 +256,11 @@ class TestIntegration:
             max_blocks=2000,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=48,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -211,7 +273,9 @@ class TestIntegration:
         position1 = torch.tensor([0.5, 0.0, 0.0], dtype=torch.float32, device=device)
         quaternion1 = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=device)
 
-        integrator.integrate(make_observation(depth, rgb, position1, quaternion1, simple_intrinsics))
+        integrator.integrate(
+            make_observation(depth, rgb, position1, quaternion1, simple_intrinsics)
+        )
 
         blocks_after_first = tsdf.data.num_allocated.item()
 
@@ -219,7 +283,9 @@ class TestIntegration:
         position2 = torch.tensor([-0.5, 0.0, 0.0], dtype=torch.float32, device=device)
         quaternion2 = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=device)
 
-        integrator.integrate(make_observation(depth, rgb, position2, quaternion2, simple_intrinsics))
+        integrator.integrate(
+            make_observation(depth, rgb, position2, quaternion2, simple_intrinsics)
+        )
 
         blocks_after_second = tsdf.data.num_allocated.item()
 
@@ -237,8 +303,11 @@ class TestBlockAllocation:
             max_blocks=100,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -269,8 +338,11 @@ class TestBlockAllocation:
             max_blocks=5,  # Very limited
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.1,  # Larger truncation = more blocks needed
             device=device,
+            image_height=200,
+            image_width=200,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -286,8 +358,14 @@ class TestBlockAllocation:
         stats = tsdf.get_stats()
         # Pool should be exhausted
         assert stats["num_allocated"] == 5
-        # Should have recorded failures
-        assert stats["allocation_failures"] <= 0
+        # Should have recorded failures. The allocation kernels increment
+        # ``allocation_failures`` each time a thread hits the pool cap;
+        # with a 200x200 image at voxel_size=0.01 this is guaranteed to
+        # far exceed max_blocks=5.
+        assert stats["allocation_failures"] > 0, (
+            f"Expected allocation_failures > 0 after pool exhaustion, "
+            f"got {stats['allocation_failures']}"
+        )
 
 
 if __name__ == "__main__":

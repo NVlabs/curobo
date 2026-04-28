@@ -45,7 +45,8 @@ class, no inheritance) that wires together four concerns:
   :py:class:`~curobo._src.rollout.cost_manager.cost_manager_robot.RobotCostManager` instances
   that evaluate every cost and constraint term used during optimization and metrics
   computation.
-- A :py:class:`~curobo._src.geom.collision.SceneCollision` checker for world-collision queries
+- A :py:class:`~curobo._src.geom.collision.collision_scene.SceneCollision` checker for
+  world-collision queries
   that is shared across the cost managers.
 - A :py:class:`~curobo._src.util.sampling.sample_buffer.SampleBuffer` Halton sampler that
   produces initial action seeds.
@@ -134,7 +135,7 @@ dataclass. That dataclass has one optional field per cost *kind*:
 
 - ``self_collision_cfg`` -- self-collision on the robot's sphere approximation.
 - ``scene_collision_cfg`` -- world collision against the
-  :py:class:`~curobo._src.geom.collision.SceneCollision` checker.
+  :py:class:`~curobo._src.geom.collision.collision_scene.SceneCollision` checker.
 - ``cspace_cfg`` -- joint-space regularization (reaching a target configuration).
 - ``start_cspace_dist_cfg`` / ``target_cspace_dist_cfg`` -- c-space distance to the start or
   target state.
@@ -222,15 +223,16 @@ Constructing and using the rollout
 ----------------------------------
 
 Once you have a :py:class:`~curobo._src.rollout.rollout_robot_cfg.RobotRolloutCfg` and a
-:py:class:`~curobo._src.geom.collision.SceneCollision` checker, constructing the rollout is a
+:py:class:`~curobo._src.geom.collision.collision_scene.SceneCollision` checker, constructing
+the rollout is a
 two-line operation:
 
 .. code-block:: python
 
-   from curobo._src.geom.collision import create_collision_checker
+   from curobo._src.geom.collision.collision_scene import create_scene_collision
    from curobo._src.rollout.rollout_robot import RobotRollout
 
-   scene_collision_checker = create_collision_checker(core_cfg.scene_collision_cfg)
+   scene_collision_checker = create_scene_collision(core_cfg.scene_collision_cfg)
 
    # Pick one of the optimizer rollout configs (or the metrics config).
    rollout_cfg = core_cfg.optimizer_rollout_configs[0]
@@ -392,7 +394,8 @@ In this tutorial we:
    the components of :py:class:`~curobo._src.rollout.rollout_robot.RobotRollout` -- a
    transition model, a set of
    :py:class:`~curobo._src.rollout.cost_manager.cost_manager_robot.RobotCostManager` instances,
-   and a shared :py:class:`~curobo._src.geom.collision.SceneCollision` checker.
+   and a shared
+   :py:class:`~curobo._src.geom.collision.collision_scene.SceneCollision` checker.
 2. Walked through the two-step YAML-to-``SolverCoreCfg`` factory pipeline
    (:py:func:`~curobo._src.solver.solver_core_cfg.resolve_yaml_configs` then
    :py:func:`~curobo._src.solver.solver_core_cfg.create_solver_core_cfg`), and the alternative

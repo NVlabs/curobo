@@ -27,7 +27,7 @@ from curobo._src.geom.collision.wp_collision_kernel import sphere_obstacle_colli
 from curobo._src.geom.collision.wp_sweep_collision_kernel import (
     swept_sphere_obstacle_collision_kernel,
 )
-from curobo._src.geom.data import OBSTACLE_SDF_MODULES
+from curobo._src.geom.data.registry import OBSTACLE_SDF_MODULES
 from curobo._src.geom.data.data_voxel import VoxelData
 from curobo._src.geom.types import SceneCfg, VoxelGrid
 from curobo._src.types.device_cfg import DeviceCfg

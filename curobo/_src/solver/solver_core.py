@@ -20,12 +20,11 @@ import torch
 import torch.autograd.profiler as profiler
 
 import curobo._src.runtime as curobo_runtime
-from curobo._src.cost.cost_pose_metric import PoseCostMetric
 from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.collision.attachment_manager import AttachmentManager
-from curobo._src.geom.collision import (
+from curobo._src.geom.collision.collision_scene import (
     SceneCollision,
-    create_collision_checker,
+    create_scene_collision,
 )
 from curobo._src.optim.multi_stage_optimizer import MultiStageOptimizer
 from curobo._src.optim.optimizer_protocol import Optimizer
@@ -108,7 +107,7 @@ class SolverCore:
         # 1. Collision checker
         if self.scene_collision_checker is None:
             if self.config.scene_collision_cfg is not None:
-                self.scene_collision_checker = create_collision_checker(
+                self.scene_collision_checker = create_scene_collision(
                     self.config.scene_collision_cfg
                 )
 
@@ -428,23 +427,8 @@ class SolverCore:
                     target_cspace_cost.enable_cost()
 
     # -----------------------------------------------------------------------
-    # Pose cost / criteria updates
+    # Pose criteria updates
     # -----------------------------------------------------------------------
-
-    @profiler.record_function("solver_core/update_pose_cost_metric")
-    def update_pose_cost_metric(self, pose_cost_metric: Dict[str, PoseCostMetric]):
-        """Update pose cost metric weights/parameters for all rollouts."""
-        for link_name in pose_cost_metric.keys():
-            if link_name not in self.tool_frames:
-                log_and_raise(
-                    f"Link '{link_name}' not found in target link names: {self.tool_frames}"
-                )
-        self.metrics_rollout.update_params_cost_managers(pose_cost_metric=pose_cost_metric)
-        for rollout in self.additional_metrics_rollouts.values():
-            rollout.update_params_cost_managers(pose_cost_metric=pose_cost_metric)
-        for rollout in self.optimizer_rollouts:
-            rollout.update_params_cost_managers(pose_cost_metric=pose_cost_metric)
-        self.auxiliary_rollout.update_params_cost_managers(pose_cost_metric=pose_cost_metric)
 
     def update_tool_pose_criteria(self, tool_pose_criteria: Dict[str, ToolPoseCriteria]):
         """Update tool pose criteria for all rollouts."""

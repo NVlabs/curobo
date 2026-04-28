@@ -12,7 +12,7 @@ import torch
 
 # CuRobo
 from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
-from curobo._src.geom.collision import SceneCollision
+from curobo._src.geom.collision.collision_scene import SceneCollision
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.metrics import RolloutMetrics
 from curobo._src.solver.solve_mode import SolveMode
@@ -162,9 +162,6 @@ class MPCSolver:
         return self.core.sample_configs(
             num_samples, rejection_ratio, self.config.optimizer_collision_activation_distance
         )
-
-    def update_pose_cost_metric(self, pose_cost_metric):
-        return self.core.update_pose_cost_metric(pose_cost_metric)
 
     def update_link_inertial(self, link_name, mass=None, com=None, inertia=None):
         return self.core.update_link_inertial(link_name, mass, com, inertia)

@@ -7,7 +7,7 @@
 import pytest
 import torch
 
-from curobo._src.perception.mapper import (
+from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
     BlockSparseTSDFIntegratorCfg,
 )
@@ -65,7 +65,10 @@ class TestMarchingCubes:
             max_blocks=100,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -76,17 +79,18 @@ class TestMarchingCubes:
         assert triangles.shape == (0, 3)
         assert colors.shape == (0, 3)
 
-    def test_flat_plane_creates_mesh(
-        self, warp_init, device, simple_intrinsics, identity_pose
-    ):
+    def test_flat_plane_creates_mesh(self, warp_init, device, simple_intrinsics, identity_pose):
         """Test that a flat depth plane creates a mesh."""
         # Use larger voxels and truncation to ensure dense sampling
         config = BlockSparseTSDFIntegratorCfg(
             max_blocks=2000,
             voxel_size=0.02,  # Larger voxels = more samples per voxel
             origin=torch.tensor([-0.5, -0.5, 0.0]),  # Center the origin
+            grid_shape=(512, 512, 512),
             truncation_distance=0.1,  # Larger truncation = more voxels filled
             device=device,
+            image_height=200,
+            image_width=200,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -117,16 +121,17 @@ class TestMarchingCubes:
         assert triangles.min() >= 0
         assert triangles.max() < vertices.shape[0]
 
-    def test_mesh_vertices_near_surface(
-        self, warp_init, device, simple_intrinsics, identity_pose
-    ):
+    def test_mesh_vertices_near_surface(self, warp_init, device, simple_intrinsics, identity_pose):
         """Test that mesh vertices are near the depth surface."""
         config = BlockSparseTSDFIntegratorCfg(
             max_blocks=1000,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=100,
+            image_width=100,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -151,16 +156,17 @@ class TestMarchingCubes:
             assert z_coords.min() > 0.5, "Vertices should be near depth surface"
             assert z_coords.max() < 1.5, "Vertices should be near depth surface"
 
-    def test_colors_from_rgb_image(
-        self, warp_init, device, simple_intrinsics, identity_pose
-    ):
+    def test_colors_from_rgb_image(self, warp_init, device, simple_intrinsics, identity_pose):
         """Test that mesh colors come from integrated RGB."""
         config = BlockSparseTSDFIntegratorCfg(
             max_blocks=1000,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=100,
+            image_width=100,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -189,17 +195,18 @@ class TestMarchingCubes:
             assert avg_r > avg_g, "Red channel should dominate"
             assert avg_r > avg_b, "Red channel should dominate"
 
-    def test_multiple_views_builds_mesh(
-        self, warp_init, device, simple_intrinsics
-    ):
+    def test_multiple_views_builds_mesh(self, warp_init, device, simple_intrinsics):
         """Test that multiple camera views build a more complete mesh."""
         # Use larger voxels for denser coverage
         config = BlockSparseTSDFIntegratorCfg(
             max_blocks=5000,
             voxel_size=0.02,  # Larger voxels
             origin=torch.tensor([-0.5, -0.5, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.1,  # Larger truncation
             device=device,
+            image_height=128,
+            image_width=128,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -229,16 +236,17 @@ class TestMarchingCubes:
 class TestMeshQuality:
     """Tests for mesh quality."""
 
-    def test_no_degenerate_triangles(
-        self, warp_init, device, simple_intrinsics, identity_pose
-    ):
+    def test_no_degenerate_triangles(self, warp_init, device, simple_intrinsics, identity_pose):
         """Test that mesh has no degenerate (zero-area) triangles."""
         config = BlockSparseTSDFIntegratorCfg(
             max_blocks=1000,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=100,
+            image_width=100,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -271,9 +279,10 @@ class TestMeshQuality:
             degenerate_ratio = n_degenerate / triangles.shape[0]
 
             # Allow some degenerate triangles (numerical precision), but not many
-            assert degenerate_ratio < 0.1, f"Too many degenerate triangles: {degenerate_ratio*100:.1f}%"
+            assert degenerate_ratio < 0.1, (
+                f"Too many degenerate triangles: {degenerate_ratio * 100:.1f}%"
+            )
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

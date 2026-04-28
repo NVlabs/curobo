@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 # CuRobo
-from curobo._src.geom.collision import SceneCollisionCfg
+from curobo._src.geom.collision.collision_scene import SceneCollisionCfg
 from curobo._src.optim.optim_factory import create_optimization_config
 from curobo._src.rollout.cost_manager.cost_manager_robot_cfg import RobotCostManagerCfg
 from curobo._src.rollout.rollout_robot_cfg import RobotRolloutCfg

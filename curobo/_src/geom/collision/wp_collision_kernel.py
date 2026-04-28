@@ -24,7 +24,7 @@ Kernels:
 # =============================================================================
 #
 # Registers SDF function overloads from all obstacle data modules.
-# Module list is centralized in curobo._src.geom.data.OBSTACLE_SDF_MODULES.
+# Module list is centralized in curobo._src.geom.data.registry.OBSTACLE_SDF_MODULES.
 #
 # How it works:
 # - wp.func uses scope_locals.get(func.func.__name__) to find existing Functions
@@ -41,7 +41,7 @@ from curobo._src.geom.collision.wp_collision_common import (
     apply_collision_activation,
     load_sphere_query,
 )
-from curobo._src.geom.data import OBSTACLE_SDF_MODULES
+from curobo._src.geom.data.registry import OBSTACLE_SDF_MODULES
 
 # Initialize to None - will be set by first iteration
 is_obs_enabled = None

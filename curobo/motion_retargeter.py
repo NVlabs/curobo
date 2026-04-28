@@ -10,9 +10,8 @@ Example:
 
 .. code-block:: python
 
-    from curobo.motion_retargeter import (
-        MotionRetargeter, MotionRetargeterCfg, ToolPoseCriteria,
-    )
+    from curobo.motion_retargeter import MotionRetargeter, MotionRetargeterCfg
+    from curobo.types import ToolPoseCriteria
 
     cfg = MotionRetargeterCfg.create(
         robot="unitree_g1_29dof_retarget.yml",
@@ -32,7 +31,6 @@ Example:
     result = retargeter.solve_frame(goal_tool_pose)
 """
 
-from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.motion.motion_retargeter import MotionRetargeter
 from curobo._src.motion.motion_retargeter_cfg import MotionRetargeterCfg
 from curobo._src.motion.motion_retargeter_result import RetargetResult
@@ -45,5 +43,4 @@ __all__ = [
     "MotionRetargeterCfg",
     "RetargetResult",
     "SequenceGoalToolPose",
-    "ToolPoseCriteria",
 ]

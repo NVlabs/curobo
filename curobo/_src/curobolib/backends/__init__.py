@@ -30,24 +30,12 @@ _backend_name: Optional[str] = None
 def _try_load_cuda_core_backend() -> Optional[dict]:
     """Try to load cuda.core runtime compilation backend"""
     try:
-        from curobo._src.curobolib.backends.cuda_core_backend import (
-            dynamics as cc_dyn,
-        )
-        from curobo._src.curobolib.backends.cuda_core_backend import (
-            geometry as cc_geo,
-        )
-        from curobo._src.curobolib.backends.cuda_core_backend import (
-            kinematics as cc_kin,
-        )
-        from curobo._src.curobolib.backends.cuda_core_backend import (
-            optimization as cc_opt,
-        )
-        from curobo._src.curobolib.backends.cuda_core_backend import (
-            pba as cc_pba,
-        )
-        from curobo._src.curobolib.backends.cuda_core_backend import (
-            trajectory as cc_traj,
-        )
+        import curobo._src.curobolib.backends.cuda_core_backend.dynamics as cc_dyn
+        import curobo._src.curobolib.backends.cuda_core_backend.geometry as cc_geo
+        import curobo._src.curobolib.backends.cuda_core_backend.kinematics as cc_kin
+        import curobo._src.curobolib.backends.cuda_core_backend.optimization as cc_opt
+        import curobo._src.curobolib.backends.cuda_core_backend.pba as cc_pba
+        import curobo._src.curobolib.backends.cuda_core_backend.trajectory as cc_traj
 
         return {
             "kinematics": cc_kin,

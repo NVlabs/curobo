@@ -9,11 +9,12 @@ import numpy as np
 import pytest
 
 # CuRobo
-from curobo._src.geom.sphere_fit import SphereFitType, fit_spheres_to_mesh
+from curobo._src.geom.sphere_fit.fit_spheres import fit_spheres_to_mesh
 from curobo._src.geom.sphere_fit.fit_voxel import (
     sample_even_fit_mesh,
     voxel_fit_mesh,
 )
+from curobo._src.geom.sphere_fit.types import SphereFitType
 from curobo._src.geom.types import Cuboid, Cylinder, Sphere
 
 
@@ -502,5 +503,4 @@ class TestSphereFitIntegration:
             assert result.centers is not None, f"Failed for {shape.name}"
             assert result.num_spheres > 0, f"No points for {shape.name}"
             assert len(result.radii) == result.num_spheres, f"Mismatch for {shape.name}"
-
 

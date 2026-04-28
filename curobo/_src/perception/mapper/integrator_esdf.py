@@ -31,6 +31,7 @@ Usage:
     integrator = BlockSparseESDFIntegrator(
         voxel_size=0.005,
         origin=torch.tensor([0.0, 0.0, 0.0]),
+        grid_shape=(400, 400, 400),
         max_blocks=100_000,
     )
 
@@ -42,31 +43,47 @@ Usage:
     mesh = integrator.extract_mesh()
 """
 
+import math
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 
-from curobo._src.geom.data import SceneData
+from curobo._src.geom.data.data_scene import SceneData
 from curobo._src.geom.types import Mesh, VoxelGrid
+from curobo._src.perception.mapper.block_allocation import (
+    calculate_tsdf_max_blocks,
+)
+from curobo._src.perception.mapper.constants import (
+    DEFAULT_HASH_LAYOUT,
+    _validate_feature_channels_per_thread,
+    _validate_feature_integration_kernel,
+    _validate_block_size,
+    validate_grid_shape_for_hash_layout,
+)
 from curobo._src.perception.mapper.esdf.edt_jump_flooding import JumpFloodingEDT
 from curobo._src.perception.mapper.esdf.edt_parallel_banding import ParallelBandingEDT
-from curobo._src.perception.mapper.esdf.kernel.wp_resample import (
+from curobo._src.perception.mapper.esdf.kernel.wp_esdf_distance import (
     compute_esdf_from_min_tsdf_warp,
+)
+from curobo._src.perception.mapper.esdf.kernel.wp_esdf_seed import (
+    seed_esdf_sites_from_block_sparse_warp,
+    seed_esdf_sites_gather_warp,
 )
 from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
     BlockSparseTSDFIntegratorCfg,
 )
-from curobo._src.perception.mapper.kernel.wp_esdf_seed import (
-    seed_esdf_sites_from_block_sparse_warp,
-    seed_esdf_sites_gather_warp,
+from curobo._src.perception.mapper.storage import (
+    BlockSparseTSDF,
+    MatchedVoxels,
+    OccupiedVoxels,
 )
-from curobo._src.perception.mapper.storage import BlockSparseTSDF
 from curobo._src.types.camera import CameraObservation
 from curobo._src.util.cuda_graph_util import GraphExecutor
 from curobo._src.util.logging import log_info
 from curobo._src.util.torch_util import profile_class_methods
+from curobo.logging import log_and_raise
 
 
 @dataclass
@@ -82,7 +99,6 @@ class BlockSparseESDFIntegratorCfg:
         truncation_distance: TSDF truncation distance in meters.
         max_blocks: Maximum allocatable blocks for TSDF.
         hash_capacity: Hash table size (should be ~2× max_blocks).
-        block_size: Voxels per block edge (default 8).
         depth_minimum_distance: Minimum valid depth in meters.
         depth_maximum_distance: Maximum valid depth in meters.
         frustum_decay: Decay for in-view voxels (0.5=quick adapt, 1.0=no extra decay).
@@ -94,15 +110,12 @@ class BlockSparseESDFIntegratorCfg:
         blend_esdf: Blend TSDF with EDT for smoother ESDF near surfaces.
             Uses truncation_distance as the blend boundary since TSDF is only
             accurate within truncation distance.
-        use_cuda_graph: Use CUDA graphs for acceleration.
-            When integration_method="voxel_project", CUDA graph is automatically
-            disabled for the integrate step (variable launch dims) but kept for
-            ESDF computation.
-        integration_method: TSDF integration backend. "voxel_project" (default)
-            uses voxel-centric projection with zero atomic contention on TSDF data.
-            "sort_filter" uses the original sort-and-filter pipeline (CUDA graph
-            compatible for all phases).
-        grid_shape: Optional grid dimensions (nz, ny, nx) for TSDF bounds checking.
+        use_cuda_graph: Use CUDA graphs for acceleration. The integrate
+            step is never graph-captured (voxel-project Phase 4 has a
+            data-dependent 2D launch dim); only the ESDF computation pipeline
+            is captured, gated on ``seeding_method`` (``"gather"`` is
+            CUDA-graph safe, ``"scatter"`` is not).
+        grid_shape: Required grid dimensions (nz, ny, nx) for bounded TSDF mapping.
         image_height: Image height for buffer pre-allocation.
         image_width: Image width for buffer pre-allocation.
         device: CUDA device.
@@ -114,9 +127,12 @@ class BlockSparseESDFIntegratorCfg:
     esdf_voxel_size: Optional[float] = None
     esdf_grid_shape: Tuple[int, int, int] = (128, 128, 128)
     truncation_distance: float = 0.04
-    max_blocks: int = 100_000
-    hash_capacity: int = 200_000
-    block_size: int = 8
+    # Auto-computed in __post_init__ when left as None so the scratch pool
+    # scales with block_size. Hardcoding 100_000 (the historical default at
+    # block_size=8) silently under-allocates at smaller block_size and causes
+    # whole regions of the scene to drop out once the pool saturates.
+    max_blocks: Optional[int] = None
+    hash_capacity: Optional[int] = None
     depth_minimum_distance: float = 0.1
     depth_maximum_distance: float = 5.0
     frustum_decay: float = 0.5
@@ -124,7 +140,7 @@ class BlockSparseESDFIntegratorCfg:
     minimum_tsdf_weight: float = 0.1
     blend_esdf: bool = False
     use_cuda_graph: bool = True
-    grid_shape: Optional[Tuple[int, int, int]] = None
+    grid_shape: Tuple[int, int, int] = None
     image_height: Optional[int] = None  # For buffer pre-allocation
     image_width: Optional[int] = None  # For buffer pre-allocation
     enable_static: bool = False  # Enable static obstacle integration
@@ -134,11 +150,34 @@ class BlockSparseESDFIntegratorCfg:
     # Adjacent skip steps for ESDF sign determination.
     # Looks N voxels from site towards query for sign. Set to 0.0 to disable.
     adjacent_skip_steps: float = 1.0
-    integration_method: str = "voxel_project"  # "voxel_project" or "sort_filter"
     seeding_method: str = "gather"  # "gather" (CUDA graph safe) or "scatter" (accurate, no graph)
     edt_solver: str = "pba"  # "jfa" (Jump Flooding) or "pba" (Parallel Banding, exact)
     roughness: float = 3.0
     num_cameras: int = 1
+    #: Voxels per block edge. Supported values are 1 or powers of 2 in [2, 32].
+    block_size: int = 8
+    #: Per-block feature channel dimensionality. 0 disables features.
+    feature_dim: int = 0
+    #: Maximum visible blocks one integration frame may process. Defaults
+    #: to ``max_blocks`` after auto-calculation.
+    max_visible_blocks_per_integration: Optional[int] = None
+    #: Maximum support pixels stored per visible block per camera for RGB
+    #: and feature integration.
+    max_support_pixels_per_block_camera: int = 32
+    #: Number of adjacent feature channels accumulated per feature-kernel
+    #: thread (see BlockSparseTSDFIntegratorCfg).
+    feature_channels_per_thread: int = 4
+    #: Compile-time cap for feature channels accumulated by one tiled
+    #: feature-kernel CTA.
+    max_feature_tile_channels: int = 4096
+    #: Feature integration launch policy: ``"auto"``, ``"grouped"``, or
+    #: ``"tiled"``. Resolved by the TSDF integrator to the low-level launch bool.
+    feature_integration_kernel: str = "auto"
+    #: Record per-kernel integration timings into
+    #: ``get_stats()["last_integration_kernel_timings_ms"]``.
+    profile_integration_kernel_timings: bool = False
+    #: Per-block accumulator weight cap (see BlockSparseTSDFIntegratorCfg).
+    accumulator_w_max: float = 1000.0
 
     def __post_init__(self):
         if self.origin is None:
@@ -147,6 +186,59 @@ class BlockSparseESDFIntegratorCfg:
             self.origin = torch.tensor(self.origin, dtype=torch.float32)
         if self.esdf_voxel_size is None:
             self.esdf_voxel_size = self.voxel_size
+        _validate_block_size(self.block_size)
+        self.grid_shape = validate_grid_shape_for_hash_layout(
+            self.grid_shape,
+            self.block_size,
+            field_name="BlockSparseESDFIntegratorCfg.grid_shape",
+        )
+
+        # Auto-scale max_blocks / hash_capacity by block_size so that reducing
+        # block_size below 8 does not silently shrink the allocation pool.
+        if self.max_blocks is None:
+            self.max_blocks = calculate_tsdf_max_blocks(
+                grid_shape=self.grid_shape,
+                voxel_size=self.voxel_size,
+                block_size=self.block_size,
+                truncation_dist=self.truncation_distance,
+                roughness=self.roughness,
+            )
+        if self.max_blocks > DEFAULT_HASH_LAYOUT.max_pool_idx:
+            raise ValueError(
+                f"max_blocks={self.max_blocks:,} exceeds the "
+                f"{DEFAULT_HASH_LAYOUT.name} pool limit of "
+                f"{DEFAULT_HASH_LAYOUT.max_pool_idx:,}."
+            )
+        if self.hash_capacity is None:
+            self.hash_capacity = int(math.ceil(self.max_blocks * 2.0))
+        if self.max_visible_blocks_per_integration is None:
+            self.max_visible_blocks_per_integration = self.max_blocks
+        if (
+            self.max_visible_blocks_per_integration <= 0
+            or self.max_visible_blocks_per_integration > self.max_blocks
+        ):
+            log_and_raise(
+                "max_visible_blocks_per_integration must satisfy "
+                f"0 < C <= max_blocks ({self.max_blocks}), got "
+                f"{self.max_visible_blocks_per_integration}."
+            )
+        _validate_feature_channels_per_thread(self.feature_channels_per_thread)
+        if self.max_feature_tile_channels <= 0:
+            log_and_raise(
+                "max_feature_tile_channels must be positive: "
+                f"{self.max_feature_tile_channels}"
+            )
+        if self.max_support_pixels_per_block_camera <= 0:
+            log_and_raise(
+                "max_support_pixels_per_block_camera must be positive: "
+                f"{self.max_support_pixels_per_block_camera}"
+            )
+        _validate_feature_integration_kernel(self.feature_integration_kernel)
+        if not isinstance(self.profile_integration_kernel_timings, bool):
+            log_and_raise(
+                "profile_integration_kernel_timings must be bool, got "
+                f"{type(self.profile_integration_kernel_timings).__name__}."
+            )
 
 
 @profile_class_methods
@@ -179,9 +271,7 @@ class BlockSparseESDFIntegrator:
     def __init__(self, config: BlockSparseESDFIntegratorCfg):
         """Initialize BlockSparseESDFIntegrator."""
         self.config = config
-        self.device = torch.device(
-            config.device if torch.cuda.is_available() else "cpu"
-        )
+        self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.dtype = config.dtype
         self.use_cuda_graph = config.use_cuda_graph
 
@@ -217,9 +307,18 @@ class BlockSparseESDFIntegrator:
             image_width=config.image_width,
             enable_static=config.enable_static,
             static_obstacle_color=config.static_obstacle_color,
-            integration_method=config.integration_method,
+            seeding_method=config.seeding_method,
             num_cameras=config.num_cameras,
             device=config.device,
+            block_size=config.block_size,
+            feature_dim=config.feature_dim,
+            max_visible_blocks_per_integration=config.max_visible_blocks_per_integration,
+            max_support_pixels_per_block_camera=config.max_support_pixels_per_block_camera,
+            feature_channels_per_thread=config.feature_channels_per_thread,
+            max_feature_tile_channels=config.max_feature_tile_channels,
+            feature_integration_kernel=config.feature_integration_kernel,
+            profile_integration_kernel_timings=config.profile_integration_kernel_timings,
+            accumulator_w_max=config.accumulator_w_max,
         )
         self._tsdf_integrator = BlockSparseTSDFIntegrator(tsdf_integrator_config)
         self._tsdf = self._tsdf_integrator.tsdf
@@ -264,39 +363,21 @@ class BlockSparseESDFIntegrator:
         # Frame counter
         self._frame_count = 0
 
-        # --- CUDA Graph Executors ---
-        self._integrate_graph: Optional[GraphExecutor] = None
+        # --- CUDA Graph Executor for the ESDF compute pipeline ---
+        # The integrate step is never graph-captured: voxel-project Phase 4
+        # has a data-dependent 2D launch dim (`n_unique, block_size**3`)
+        # and requires a D2H sync on `n_unique`. Scatter seeding is
+        # similarly launch-dim-variable, so ESDF graph capture is gated
+        # on ``seeding_method != "scatter"``.
         self._compute_esdf_graph: Optional[GraphExecutor] = None
 
-        # voxel_project uses variable launch dims in Phase 4, which breaks
-        # CUDA graph capture for the integrate step.
-        _graph_safe_integrate = (
-            self.use_cuda_graph
-            and config.integration_method != "voxel_project"
-        )
-
-        # Scatter seeding uses variable launch dim (num_allocated × 512),
-        # which breaks CUDA graph capture for the ESDF pipeline.
-        _graph_safe_esdf = (
-            self.use_cuda_graph
-            and config.seeding_method != "scatter"
-        )
-
-        if self.use_cuda_graph:
-            if _graph_safe_integrate:
-                self._integrate_graph = GraphExecutor(
-                    capture_fn=self._integrate_impl,
-                    device=self.device,
-                    use_cuda_graph=True,
-                    clone_outputs=False,
-                )
-            if _graph_safe_esdf:
-                self._compute_esdf_graph = GraphExecutor(
-                    capture_fn=self._compute_esdf_impl,
-                    device=self.device,
-                    use_cuda_graph=True,
-                    clone_outputs=False,
-                )
+        if self.use_cuda_graph and config.seeding_method != "scatter":
+            self._compute_esdf_graph = GraphExecutor(
+                capture_fn=self._compute_esdf_impl,
+                device=self.device,
+                use_cuda_graph=True,
+                clone_outputs=False,
+            )
 
         # Print summary
         # self._print_config()
@@ -307,8 +388,12 @@ class BlockSparseESDFIntegrator:
         log_info(f"  TSDF: block-sparse @ {self.config.voxel_size:.4f}m")
         log_info(f"  TSDF memory: ~{self._tsdf_integrator.tsdf.memory_usage_mb():.1f} MB")
         log_info(f"  ESDF: {self._esdf_grid_shape} @ {self._esdf_voxel_size.item():.4f}m")
-        frustum_info = "disabled" if self.config.frustum_decay >= 1.0 else f"{self.config.frustum_decay:.2f}"
-        time_info = "disabled" if self.config.time_decay >= 1.0 else f"{self.config.time_decay:.2f}"
+        frustum_info = (
+            "disabled" if self.config.frustum_decay >= 1.0 else f"{self.config.frustum_decay:.2f}"
+        )
+        time_info = (
+            "disabled" if self.config.time_decay >= 1.0 else f"{self.config.time_decay:.2f}"
+        )
         log_info(f"  Frustum decay: {frustum_info} (in-view voxels)")
         log_info(f"  Time decay: {time_info} (all voxels)")
         log_info(f"  CUDA graph: {self.use_cuda_graph}")
@@ -348,8 +433,8 @@ class BlockSparseESDFIntegrator:
         return self.config.truncation_distance
 
     @property
-    def grid_shape(self) -> Optional[Tuple[int, int, int]]:
-        """Virtual grid shape for bounds checking (if configured)."""
+    def grid_shape(self) -> Tuple[int, int, int]:
+        """Bounded TSDF grid shape."""
         return self.config.grid_shape
 
     @property
@@ -377,24 +462,34 @@ class BlockSparseESDFIntegrator:
 
         The observation must have a leading camera dimension matching
         ``config.num_cameras``. See ``BlockSparseTSDFIntegrator.integrate``
-        for the expected tensor shapes.
+        for the expected tensor shapes. The integrate step is not
+        graph-captured (see ``use_cuda_graph`` in the cfg docstring).
 
         Args:
             observation: Batched camera observation.
         """
-        if self._integrate_graph is not None:
-            self._integrate_graph(observation)
-        else:
-            self._integrate_impl(observation)
-
+        self._tsdf_integrator.integrate(observation)
         self._frame_count += 1
 
-    def _integrate_impl(self, observation: CameraObservation) -> None:
-        """Integration implementation for CUDA graph capture.
+    def clear_region(self, bounds_min, bounds_max) -> int:
+        """Clear dynamic TSDF contents for blocks intersecting a world AABB.
 
-        Delegates to BlockSparseTSDFIntegrator for Sort & Filter integration.
+        Cached ESDF buffers are invalidated because the TSDF source data has
+        changed. Call :meth:`compute_esdf` again before using the ESDF.
         """
-        self._tsdf_integrator.integrate(observation)
+        n_clear = self._tsdf_integrator.clear_region(bounds_min, bounds_max)
+        if n_clear > 0:
+            self._site_index.fill_(-1)
+            self._dist_field.zero_()
+        return n_clear
+
+    def clear_blocks(self, pool_indices) -> int:
+        """Clear dynamic TSDF contents for explicit block-pool indices."""
+        n_clear = self._tsdf_integrator.clear_blocks(pool_indices)
+        if n_clear > 0:
+            self._site_index.fill_(-1)
+            self._dist_field.zero_()
+        return n_clear
 
     def compute_esdf(
         self,
@@ -523,25 +618,24 @@ class BlockSparseESDFIntegrator:
     # =========================================================================
     def extract_mesh(
         self,
-        level: float = 0.0,
         refine_iterations: int = 2,
         surface_only: bool = True,
+        level: float = 0.0,
     ) -> Mesh:
         """Extract mesh using GPU marching cubes.
 
         Args:
-            use_esdf: If True, extract from ESDF. If False (default), from TSDF.
-            level: Isosurface level (typically 0.0).
             refine_iterations: Newton-Raphson iterations for vertex refinement.
             surface_only: Only extract mesh near surface (|sdf| < truncation).
+            level: Isosurface level (typically 0.0).
 
         Returns:
             Mesh object with vertices, faces, and colors.
         """
         mesh = self._tsdf_integrator.extract_mesh(
             level=level,
-            surface_only=surface_only,
             refine_iterations=refine_iterations,
+            surface_only=surface_only,
         )
 
         return mesh
@@ -549,21 +643,68 @@ class BlockSparseESDFIntegrator:
     def extract_occupied_voxels(
         self,
         surface_only: bool = False,
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """Extract occupied voxel centers and colors.
+        sdf_threshold: Optional[float] = None,
+    ) -> OccupiedVoxels:
+        """Extract occupied voxel centers and per-voxel block indices.
 
         Args:
-            use_esdf: If True, use ESDF for surface detection.
             surface_only: If True, only extract surface voxels.
+            sdf_threshold: Surface threshold. Defaults to the TSDF
+                integrator's voxel size.
 
         Returns:
-            Tuple of (centers, colors) or (None, None) if empty.
+            :class:`OccupiedVoxels`; see
+            :meth:`BlockSparseTSDFIntegrator.extract_occupied_voxels`.
         """
-        centers, colors = self._tsdf_integrator.extract_occupied_voxels(
+        return self._tsdf_integrator.extract_occupied_voxels(
             surface_only=surface_only,
+            sdf_threshold=sdf_threshold,
         )
 
-        return centers, colors
+    def extract_matching_feature_voxels(
+        self,
+        feature_vector: torch.Tensor,
+        top_k: int,
+        surface_only: bool = False,
+        sdf_threshold: Optional[float] = None,
+        minimum_score: Optional[float] = None,
+        feature_projector: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ) -> MatchedVoxels:
+        """Forward to :meth:`BlockSparseTSDFIntegrator.extract_matching_feature_voxels`.
+
+        Returns a :class:`MatchedVoxels` with the extracted voxels plus
+        per-block ``pool_idx`` and cosine scores in descending order.
+        ``minimum_score`` (if set) prunes blocks below that cosine score
+        before voxel extraction. ``feature_projector`` can map stored
+        features to the query feature space before cosine scoring.
+        """
+        return self._tsdf_integrator.extract_matching_feature_voxels(
+            feature_vector=feature_vector,
+            top_k=top_k,
+            surface_only=surface_only,
+            sdf_threshold=sdf_threshold,
+            minimum_score=minimum_score,
+            feature_projector=feature_projector,
+        )
+
+    def get_matching_feature_voxels(
+        self,
+        feature_vector: torch.Tensor,
+        top_k: int,
+        surface_only: bool = False,
+        sdf_threshold: Optional[float] = None,
+        minimum_score: Optional[float] = None,
+        feature_projector: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ) -> MatchedVoxels:
+        """Compatibility wrapper for :meth:`extract_matching_feature_voxels`."""
+        return self.extract_matching_feature_voxels(
+            feature_vector=feature_vector,
+            top_k=top_k,
+            surface_only=surface_only,
+            sdf_threshold=sdf_threshold,
+            minimum_score=minimum_score,
+            feature_projector=feature_projector,
+        )
 
     def get_voxel_grid(self) -> VoxelGrid:
         """Get ESDF as a VoxelGrid for use in collision checking.
@@ -595,27 +736,41 @@ class BlockSparseESDFIntegrator:
             feature_dtype=self.dtype,
         )
 
-    def get_stats(self) -> Dict[str, float]:
+    def get_stats(
+        self,
+        scan_pool: bool = True,
+        scan_hash: bool = False,
+    ) -> Dict[str, Any]:
         """Get integrator statistics.
 
+        Args:
+            scan_pool: Forwarded to ``BlockSparseTSDF.get_stats``.
+            scan_hash: Forwarded to ``BlockSparseTSDF.get_stats``.
+
         Returns:
-            Dictionary with block usage and allocation stats.
+            Dictionary with block usage, allocation stats, and ESDF
+            memory accounting. See :meth:`BlockSparseTSDF.get_stats`
+            for the full block-pool key list.
         """
-        stats = self._tsdf_integrator.tsdf.get_stats()
+        stats = self._tsdf_integrator.get_stats(
+            scan_pool=scan_pool,
+            scan_hash=scan_hash,
+        )
+        tsdf_frame_count = stats.get("frame_count", self._frame_count)
+        tsdf_memory_mb = stats.pop("memory_mb", self._tsdf_integrator.tsdf.memory_usage_mb())
         stats["frame_count"] = self._frame_count
-        stats["tsdf_memory_mb"] = self._tsdf_integrator.tsdf.memory_usage_mb()
-        stats["esdf_memory_mb"] = (
-            self._site_index.numel() * 4 + self._dist_field.numel() * 2
-        ) / (1024 * 1024)
+        stats["tsdf_frame_count"] = tsdf_frame_count
+        stats["tsdf_memory_mb"] = tsdf_memory_mb
+        stats["esdf_memory_mb"] = (self._site_index.numel() * 4 + self._dist_field.numel() * 2) / (
+            1024 * 1024
+        )
         stats["total_memory_mb"] = stats["tsdf_memory_mb"] + stats["esdf_memory_mb"]
         return stats
 
     def memory_usage_mb(self) -> float:
         """Get total GPU memory usage in megabytes."""
         tsdf_mem = self._tsdf_integrator.tsdf.memory_usage_mb()
-        esdf_mem = (
-            self._site_index.numel() * 4 + self._dist_field.numel() * 2
-        ) / (1024 * 1024)
+        esdf_mem = (self._site_index.numel() * 4 + self._dist_field.numel() * 2) / (1024 * 1024)
         return tsdf_mem + esdf_mem
 
     # =========================================================================

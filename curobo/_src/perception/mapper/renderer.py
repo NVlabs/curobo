@@ -14,10 +14,8 @@ Features:
 - Shaded visualization with Lambertian lighting
 
 Usage:
-    from curobo._src.perception.mapper import (
-        BlockSparseESDFIntegrator,
-        BlockSparseTSDFRenderer,
-    )
+    from curobo._src.perception.mapper.integrator_esdf import BlockSparseESDFIntegrator
+    from curobo._src.perception.mapper.renderer import BlockSparseTSDFRenderer
 
     integrator = BlockSparseESDFIntegrator(config)
     renderer = BlockSparseTSDFRenderer(integrator)
@@ -35,12 +33,6 @@ from typing import Optional, Tuple
 import torch
 import warp as wp
 
-from curobo._src.perception.mapper.kernel.wp_raycast import (
-    raycast_block_sparse_accelerated_color_kernel,
-    raycast_block_sparse_accelerated_kernel,
-    raycast_block_sparse_color_kernel,
-    raycast_block_sparse_kernel,
-)
 from curobo._src.types.pose import Pose
 
 
@@ -179,15 +171,16 @@ class BlockSparseTSDFRenderer:
         self._extract_pose(pose)
         self._extract_intrinsics(intrinsics)
 
-        # Get block-sparse TSDF data
+        # Get block-sparse TSDF data and per-instance kernel specialization.
         tsdf = self.integrator._tsdf
         warp_data = tsdf.get_warp_data()
+        kernels = tsdf.kernels
 
         # Select kernel based on acceleration setting
         kernel = (
-            raycast_block_sparse_accelerated_kernel
+            kernels.raycast_block_sparse_accelerated_kernel
             if self.config.use_block_acceleration
-            else raycast_block_sparse_kernel
+            else kernels.raycast_block_sparse_kernel
         )
 
         # Launch raycast kernel with struct-based API
@@ -245,15 +238,16 @@ class BlockSparseTSDFRenderer:
         self._extract_pose(pose)
         self._extract_intrinsics(intrinsics)
 
-        # Get block-sparse TSDF data
+        # Get block-sparse TSDF data and per-instance kernel specialization.
         tsdf = self.integrator._tsdf
         warp_data = tsdf.get_warp_data()
+        kernels = tsdf.kernels
 
         # Select kernel based on acceleration setting
         kernel = (
-            raycast_block_sparse_accelerated_color_kernel
+            kernels.raycast_block_sparse_accelerated_color_kernel
             if self.config.use_block_acceleration
-            else raycast_block_sparse_color_kernel
+            else kernels.raycast_block_sparse_color_kernel
         )
 
         # Launch color raycast kernel with struct-based API
@@ -513,4 +507,3 @@ def normals_to_colormap(
     color = ((normals + 1.0) * 0.5 * 255).to(torch.uint8)
     color[~valid_mask] = 128  # Gray for invalid
     return color
-

@@ -11,7 +11,7 @@ import torch
 # CuRobo
 from curobo._src.cost.cost_scene_collision import SceneCollisionCost
 from curobo._src.cost.cost_scene_collision_cfg import SceneCollisionCostCfg
-from curobo._src.geom.collision import SceneCollisionCfg, create_collision_checker
+from curobo._src.geom.collision.collision_scene import SceneCollisionCfg, create_scene_collision
 from curobo._src.geom.types import Cuboid, SceneCfg
 from curobo._src.robot.kinematics.kinematics import Kinematics
 from curobo._src.state.state_joint import JointState
@@ -73,7 +73,7 @@ def scene_collision_checker(device_cfg, simple_scene_cfg):
         max_distance=1.0,
         num_envs=1,
     )
-    return create_collision_checker(scene_collision_cfg)
+    return create_scene_collision(scene_collision_cfg)
 
 
 class TestSceneCollisionCostCfg:
@@ -272,7 +272,7 @@ class TestSceneCollisionCostWithDifferentScenes:
             max_distance=1.0,
             num_envs=1,
         )
-        scene_collision_checker = create_collision_checker(scene_collision_cfg)
+        scene_collision_checker = create_scene_collision(scene_collision_cfg)
 
         cfg = SceneCollisionCostCfg(weight=1.0, device_cfg=device_cfg)
         cfg.scene_collision_checker = scene_collision_checker
@@ -322,7 +322,7 @@ class TestSceneCollisionCostWithDifferentScenes:
             max_distance=1.0,
             num_envs=1,
         )
-        scene_collision_checker = create_collision_checker(scene_collision_cfg)
+        scene_collision_checker = create_scene_collision(scene_collision_cfg)
 
         cfg = SceneCollisionCostCfg(weight=1.0, device_cfg=device_cfg)
         cfg.scene_collision_checker = scene_collision_checker
@@ -435,7 +435,7 @@ class TestSceneCollisionCostGradients:
             max_distance=1.0,
             num_envs=1,
         )
-        collision_checker = create_collision_checker(scene_collision_cfg)
+        collision_checker = create_scene_collision(scene_collision_cfg)
 
         cfg = SceneCollisionCostCfg(
             weight=1.0,
@@ -515,4 +515,3 @@ class TestSceneCollisionCostGradients:
 
         # Verify result is a tensor
         assert isinstance(result, torch.Tensor)
-

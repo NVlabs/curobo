@@ -241,7 +241,7 @@ cuRobo ships two rollout classes, both of which satisfy the
        Composes a
        :py:class:`~curobo._src.transition.robot_state_transition.RobotStateTransition` model,
        a :py:class:`~curobo._src.rollout.cost_manager.cost_manager_robot.RobotCostManager`,
-       and a :py:class:`~curobo._src.geom.collision.SceneCollision` checker.
+       and a :py:class:`~curobo._src.geom.collision.collision_scene.SceneCollision` checker.
 
 To create your own rollout class and optimize it using cuRobo, see
 :ref:`tut_user_rollout_optimization`.

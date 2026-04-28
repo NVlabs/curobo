@@ -7,7 +7,7 @@
 import pytest
 import torch
 
-from curobo._src.perception.mapper import (
+from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
     BlockSparseTSDFIntegratorCfg,
 )
@@ -65,8 +65,11 @@ class TestDecay:
             max_blocks=500,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=48,
+            image_width=64,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -100,8 +103,11 @@ class TestDecay:
             max_blocks=500,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -122,7 +128,7 @@ class TestDecay:
             decay_and_recycle(tsdf, decay_factor)
 
             current_sum = tsdf.data.block_data.float().sum().item()
-            assert current_sum < previous_sum, f"Decay {i+1} should reduce weights"
+            assert current_sum < previous_sum, f"Decay {i + 1} should reduce weights"
             previous_sum = current_sum
 
 
@@ -135,8 +141,11 @@ class TestRecycling:
             max_blocks=500,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -175,8 +184,11 @@ class TestRecycling:
             max_blocks=20,  # Small pool to force reuse
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -199,7 +211,9 @@ class TestRecycling:
 
         # Second integration at different location
         position2 = torch.tensor([2.0, 0.0, 0.0], dtype=torch.float32, device=device)
-        integrator.integrate(make_observation(depth, rgb, position2, quaternion, simple_intrinsics))
+        integrator.integrate(
+            make_observation(depth, rgb, position2, quaternion, simple_intrinsics)
+        )
 
         # num_allocated should stay same or grow minimally if reusing free list
         final_allocated = tsdf.data.num_allocated.item()
@@ -220,8 +234,11 @@ class TestDecayAndRecycleIntegration:
             max_blocks=1000,
             voxel_size=0.02,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
+            image_height=32,
+            image_width=32,
         )
         integrator = BlockSparseTSDFIntegrator(config)
         tsdf = integrator.tsdf
@@ -233,20 +250,23 @@ class TestDecayAndRecycleIntegration:
 
         # Simulate 10 frames of integration + decay
         for frame in range(10):
-
             # Integrate
-            integrator.integrate(make_observation(depth, rgb, position, quaternion, simple_intrinsics))
+            integrator.integrate(
+                make_observation(depth, rgb, position, quaternion, simple_intrinsics)
+            )
 
             # Decay (mild)
             decay_and_recycle(tsdf, 0.95)
 
-
-
         stats = tsdf.get_stats()
         assert stats["num_allocated"] > 0
-        assert stats["allocation_failures"] <= 0
+        # With max_blocks=1000 and a 32x32 image, the pool is never
+        # exhausted across 10 frames, so we expect zero failures.
+        assert stats["allocation_failures"] == 0, (
+            f"Expected no allocation_failures during normal 10-frame run, "
+            f"got {stats['allocation_failures']}"
+        )
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

@@ -14,7 +14,7 @@ import math
 import pytest
 import torch
 
-from curobo._src.perception.mapper import (
+from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
     BlockSparseTSDFIntegratorCfg,
 )
@@ -59,16 +59,18 @@ def intrinsics_b(device):
     )
 
 
-def _make_integrator(device, method="voxel_project", num_cameras=1):
+def _make_integrator(device, num_cameras=1):
     return BlockSparseTSDFIntegrator(
         BlockSparseTSDFIntegratorCfg(
             max_blocks=2000,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
-            integration_method=method,
             num_cameras=num_cameras,
+            image_height=48,
+            image_width=64,
         )
     )
 
@@ -146,15 +148,10 @@ class TestMultiCameraForLoop:
         depth = torch.full(
             (self.IMG_H, self.IMG_W), depth_value, dtype=torch.float32, device=device
         )
-        rgb = torch.full(
-            (self.IMG_H, self.IMG_W, 3), 128, dtype=torch.uint8, device=device
-        )
+        rgb = torch.full((self.IMG_H, self.IMG_W, 3), 128, dtype=torch.uint8, device=device)
         return depth, rgb
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
-    def test_two_cameras_same_pose_doubles_weight(
-        self, warp_init, device, intrinsics_a, method
-    ):
+    def test_two_cameras_same_pose_doubles_weight(self, warp_init, device, intrinsics_a):
         """Two cameras at the same pose should roughly double TSDF weights
         compared to a single camera."""
         depth, rgb = self._make_depth_rgb(device)
@@ -163,12 +160,12 @@ class TestMultiCameraForLoop:
         obs = make_observation(depth, rgb, pos, quat, intrinsics_a)
 
         # Single camera
-        integ_single = _make_integrator(device, method)
+        integ_single = _make_integrator(device)
         integ_single.integrate(obs)
         snap_single = _snapshot_tsdf(integ_single)
 
         # Two cameras (same pose) via for-loop
-        integ_multi = _make_integrator(device, method)
+        integ_multi = _make_integrator(device)
         for _ in range(2):
             integ_multi.integrate(obs)
         snap_multi = _snapshot_tsdf(integ_multi)
@@ -176,7 +173,8 @@ class TestMultiCameraForLoop:
         assert snap_single["num_allocated"] == snap_multi["num_allocated"]
         # Both snapshots are now sorted by block coords, so they align.
         torch.testing.assert_close(
-            snap_single["block_coords"], snap_multi["block_coords"],
+            snap_single["block_coords"],
+            snap_multi["block_coords"],
         )
 
         # Total weight across all voxels should roughly double.
@@ -184,13 +182,10 @@ class TestMultiCameraForLoop:
         total_w_multi = snap_multi["block_data"][:, :, 1].float().sum()
         assert total_w_single > 0
         ratio = (total_w_multi / total_w_single).item()
-        assert 1.8 < ratio < 2.2, (
-            f"Expected ~2x total weight ({method}), got {ratio:.4f}"
-        )
+        assert 1.8 < ratio < 2.2, f"Expected ~2x total weight, got {ratio:.4f}"
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
     def test_two_cameras_different_poses_allocates_more_blocks(
-        self, warp_init, device, intrinsics_a, method
+        self, warp_init, device, intrinsics_a
     ):
         """Cameras at different positions should cover more volume (more blocks)."""
         depth, rgb = self._make_depth_rgb(device)
@@ -203,25 +198,23 @@ class TestMultiCameraForLoop:
         obs_b = make_observation(depth, rgb, pos_b, quat, intrinsics_a)
 
         # Single camera
-        integ_single = _make_integrator(device, method)
+        integ_single = _make_integrator(device)
         integ_single.integrate(obs_a)
         n_single = integ_single.tsdf.data.num_allocated.item()
 
         # Two cameras
-        integ_multi = _make_integrator(device, method)
+        integ_multi = _make_integrator(device)
         integ_multi.integrate(obs_a)
         integ_multi.integrate(obs_b)
         n_multi = integ_multi.tsdf.data.num_allocated.item()
 
         assert n_single > 0
         assert n_multi >= n_single, (
-            f"Two views should cover at least as much as one: "
-            f"{n_multi} vs {n_single}"
+            f"Two views should cover at least as much as one: {n_multi} vs {n_single}"
         )
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
     def test_two_cameras_per_camera_intrinsics(
-        self, warp_init, device, intrinsics_a, intrinsics_b, method
+        self, warp_init, device, intrinsics_a, intrinsics_b
     ):
         """Two cameras with different intrinsics should both contribute blocks."""
         depth, rgb = self._make_depth_rgb(device)
@@ -231,7 +224,7 @@ class TestMultiCameraForLoop:
         obs_a = make_observation(depth, rgb, pos, quat, intrinsics_a)
         obs_b = make_observation(depth, rgb, pos, quat, intrinsics_b)
 
-        integ = _make_integrator(device, method)
+        integ = _make_integrator(device)
         integ.integrate(obs_a)
         n_after_a = integ.tsdf.data.num_allocated.item()
 
@@ -242,29 +235,20 @@ class TestMultiCameraForLoop:
         # Camera B has wider FOV (smaller focal length) so may add blocks
         assert n_after_both >= n_after_a
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
-    def test_three_cameras_convergent_views(
-        self, warp_init, device, intrinsics_a, method
-    ):
+    def test_three_cameras_convergent_views(self, warp_init, device, intrinsics_a):
         """Three cameras looking at the same region from different angles.
 
         The overlapping region should accumulate higher weight than single-view.
         """
         depth, rgb = self._make_depth_rgb(device, depth_value=1.0)
-        quat_identity = torch.tensor(
-            [1.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=device
-        )
+        quat_identity = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=device)
 
         observations = []
         for x_offset in [-0.2, 0.0, 0.2]:
-            pos = torch.tensor(
-                [x_offset, 0.0, 0.0], dtype=torch.float32, device=device
-            )
-            observations.append(
-                make_observation(depth, rgb, pos, quat_identity, intrinsics_a)
-            )
+            pos = torch.tensor([x_offset, 0.0, 0.0], dtype=torch.float32, device=device)
+            observations.append(make_observation(depth, rgb, pos, quat_identity, intrinsics_a))
 
-        integ = _make_integrator(device, method)
+        integ = _make_integrator(device)
         for obs in observations:
             integ.integrate(obs)
 
@@ -275,6 +259,38 @@ class TestMultiCameraForLoop:
         w = snap["block_data"][:, :, 1].float()
         nonzero = w > 0
         assert nonzero.any(), "Should have observed voxels"
+
+    def test_same_pose_rgb_averages_across_cameras(self, warp_init, device, intrinsics_a):
+        """Same-pose cameras with different constant colors should average per block."""
+        depth = torch.full((self.IMG_H, self.IMG_W), 1.0, dtype=torch.float32, device=device)
+        rgb_red = torch.zeros((self.IMG_H, self.IMG_W, 3), dtype=torch.uint8, device=device)
+        rgb_blue = torch.zeros_like(rgb_red)
+        rgb_red[..., 0] = 255
+        rgb_blue[..., 2] = 255
+
+        pos = torch.zeros(3, dtype=torch.float32, device=device)
+        quat = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=device)
+
+        obs_red = make_observation(depth, rgb_red, pos, quat, intrinsics_a)
+        obs_blue = make_observation(depth, rgb_blue, pos, quat, intrinsics_a)
+
+        integ = _make_integrator(device, num_cameras=2)
+        integ.integrate(_stack_observations(obs_red, obs_blue))
+
+        snap = _snapshot_tsdf(integ)
+        active = snap["block_rgb"][:, 3].float() > 0
+        assert active.any()
+
+        normalized = snap["block_rgb"][active, :3].float() / snap["block_rgb"][
+            active, 3:4
+        ].float().clamp(min=1e-6)
+        expected = torch.tensor([0.5, 0.0, 0.5], dtype=torch.float32, device=device).view(1, 3)
+        torch.testing.assert_close(
+            normalized,
+            expected.expand_as(normalized),
+            atol=5e-2,
+            rtol=5e-2,
+        )
 
 
 # =============================================================================
@@ -295,13 +311,10 @@ class TestMultiCameraBatchEquivalence:
         depth = torch.full(
             (self.IMG_H, self.IMG_W), depth_value, dtype=torch.float32, device=device
         )
-        rgb = torch.full(
-            (self.IMG_H, self.IMG_W, 3), 128, dtype=torch.uint8, device=device
-        )
+        rgb = torch.full((self.IMG_H, self.IMG_W, 3), 128, dtype=torch.uint8, device=device)
         return depth, rgb
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
-    def test_same_pose_equivalence(self, warp_init, device, intrinsics_a, method):
+    def test_same_pose_equivalence(self, warp_init, device, intrinsics_a):
         """Batched 2-camera integrate == two sequential single-camera integrates."""
         depth, rgb = self._make_depth_rgb(device)
         pos = torch.zeros(3, dtype=torch.float32, device=device)
@@ -309,13 +322,13 @@ class TestMultiCameraBatchEquivalence:
         obs = make_observation(depth, rgb, pos, quat, intrinsics_a)
 
         # Reference: for-loop (num_cameras=1, called twice)
-        ref = _make_integrator(device, method, num_cameras=1)
+        ref = _make_integrator(device, num_cameras=1)
         ref.integrate(obs)
         ref.integrate(obs)
         snap_ref = _snapshot_tsdf(ref)
 
         # Batched (num_cameras=2, called once)
-        bat = _make_integrator(device, method, num_cameras=2)
+        bat = _make_integrator(device, num_cameras=2)
         bat.integrate(_stack_observations(obs, obs))
         snap_bat = _snapshot_tsdf(bat)
 
@@ -326,11 +339,14 @@ class TestMultiCameraBatchEquivalence:
             atol=1e-2,
             rtol=1e-2,
         )
+        torch.testing.assert_close(
+            snap_bat["block_rgb"].float(),
+            snap_ref["block_rgb"].float(),
+            atol=1e-2,
+            rtol=1e-2,
+        )
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
-    def test_different_poses_equivalence(
-        self, warp_init, device, intrinsics_a, method
-    ):
+    def test_different_poses_equivalence(self, warp_init, device, intrinsics_a):
         """Batched 2-camera integrate == two sequential single-camera integrates."""
         depth, rgb = self._make_depth_rgb(device)
         quat = torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=torch.float32, device=device)
@@ -342,13 +358,13 @@ class TestMultiCameraBatchEquivalence:
         obs_b = make_observation(depth, rgb, pos_b, quat, intrinsics_a)
 
         # Reference: for-loop
-        ref = _make_integrator(device, method, num_cameras=1)
+        ref = _make_integrator(device, num_cameras=1)
         ref.integrate(obs_a)
         ref.integrate(obs_b)
         snap_ref = _snapshot_tsdf(ref)
 
         # Batched
-        bat = _make_integrator(device, method, num_cameras=2)
+        bat = _make_integrator(device, num_cameras=2)
         bat.integrate(_stack_observations(obs_a, obs_b))
         snap_bat = _snapshot_tsdf(bat)
 
@@ -360,10 +376,7 @@ class TestMultiCameraBatchEquivalence:
             rtol=1e-2,
         )
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
-    def test_different_intrinsics_equivalence(
-        self, warp_init, device, intrinsics_a, intrinsics_b, method
-    ):
+    def test_different_intrinsics_equivalence(self, warp_init, device, intrinsics_a, intrinsics_b):
         """Batched 2-camera with per-camera intrinsics matches sequential.
 
         For voxel_project the batched path may produce *more* data than the
@@ -384,13 +397,13 @@ class TestMultiCameraBatchEquivalence:
         obs_b = make_observation(depth, rgb, pos, quat, intrinsics_b)
 
         # Reference: for-loop
-        ref = _make_integrator(device, method, num_cameras=1)
+        ref = _make_integrator(device, num_cameras=1)
         ref.integrate(obs_a)
         ref.integrate(obs_b)
         snap_ref = _snapshot_tsdf(ref)
 
         # Batched
-        bat = _make_integrator(device, method, num_cameras=2)
+        bat = _make_integrator(device, num_cameras=2)
         bat.integrate(_stack_observations(obs_a, obs_b))
         snap_bat = _snapshot_tsdf(bat)
 
@@ -416,18 +429,20 @@ class TestMultiCameraBatchEquivalence:
 # =============================================================================
 
 
-def _make_integrator_with_decay(device, method="voxel_project", num_cameras=1):
+def _make_integrator_with_decay(device, num_cameras=1):
     return BlockSparseTSDFIntegrator(
         BlockSparseTSDFIntegratorCfg(
             max_blocks=2000,
             voxel_size=0.01,
             origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
             truncation_distance=0.05,
             device=device,
-            integration_method=method,
             num_cameras=num_cameras,
             time_decay=0.99,
             frustum_decay=0.5,
+            image_height=48,
+            image_width=64,
         )
     )
 
@@ -441,15 +456,10 @@ class TestMultiCameraDecay:
         depth = torch.full(
             (self.IMG_H, self.IMG_W), depth_value, dtype=torch.float32, device=device
         )
-        rgb = torch.full(
-            (self.IMG_H, self.IMG_W, 3), 128, dtype=torch.uint8, device=device
-        )
+        rgb = torch.full((self.IMG_H, self.IMG_W, 3), 128, dtype=torch.uint8, device=device)
         return depth, rgb
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
-    def test_decay_preserves_in_frustum_blocks(
-        self, warp_init, device, intrinsics_a, method
-    ):
+    def test_decay_preserves_in_frustum_blocks(self, warp_init, device, intrinsics_a):
         """Blocks visible in any camera should decay at frustum rate, not time-only rate.
 
         Camera A sees right half, camera B sees left half.  After integration
@@ -465,20 +475,24 @@ class TestMultiCameraDecay:
         obs_a = make_observation(depth, rgb, pos_a, quat, intrinsics_a)
         obs_b = make_observation(depth, rgb, pos_b, quat, intrinsics_a)
 
-        integ = _make_integrator_with_decay(device, method, num_cameras=2)
+        integ = _make_integrator_with_decay(device, num_cameras=2)
         batched = _stack_observations(obs_a, obs_b)
 
         # First frame: integrate + decay
         integ.integrate(batched)
-        w_after_first = integ.tsdf.data.block_data[
-            : integ.tsdf.data.num_allocated.item(), :, 1
-        ].float().clone()
+        w_after_first = (
+            integ.tsdf.data.block_data[: integ.tsdf.data.num_allocated.item(), :, 1]
+            .float()
+            .clone()
+        )
 
         # Second frame: integrate + decay again
         integ.integrate(batched)
-        w_after_second = integ.tsdf.data.block_data[
-            : integ.tsdf.data.num_allocated.item(), :, 1
-        ].float().clone()
+        w_after_second = (
+            integ.tsdf.data.block_data[: integ.tsdf.data.num_allocated.item(), :, 1]
+            .float()
+            .clone()
+        )
 
         # Weights should decrease due to decay
         nonzero = w_after_first > 0
@@ -487,10 +501,7 @@ class TestMultiCameraDecay:
         # are decayed.  The total weight should still be positive.
         assert (w_after_second[nonzero] > 0).all()
 
-    @pytest.mark.parametrize("method", ["voxel_project", "sort_filter"])
-    def test_decay_union_vs_single_camera(
-        self, warp_init, device, intrinsics_a, method
-    ):
+    def test_decay_union_vs_single_camera(self, warp_init, device, intrinsics_a):
         """Multi-camera decay should mark more blocks in-frustum than single camera.
 
         Camera at center sees a subset of what two offset cameras see combined.
@@ -502,7 +513,7 @@ class TestMultiCameraDecay:
 
         # Single camera at center
         obs_center = make_observation(depth, rgb, pos_center, quat, intrinsics_a)
-        integ_single = _make_integrator_with_decay(device, method, num_cameras=1)
+        integ_single = _make_integrator_with_decay(device, num_cameras=1)
         integ_single.integrate(obs_center)
         n_single = integ_single.tsdf.data.num_allocated.item()
 
@@ -512,7 +523,7 @@ class TestMultiCameraDecay:
         obs_a = make_observation(depth, rgb, pos_a, quat, intrinsics_a)
         obs_b = make_observation(depth, rgb, pos_b, quat, intrinsics_a)
 
-        integ_multi = _make_integrator_with_decay(device, method, num_cameras=2)
+        integ_multi = _make_integrator_with_decay(device, num_cameras=2)
         integ_multi.integrate(_stack_observations(obs_a, obs_b))
         n_multi = integ_multi.tsdf.data.num_allocated.item()
 

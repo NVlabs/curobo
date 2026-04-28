@@ -22,7 +22,7 @@ from curobo._src.types.device_cfg import DeviceCfg
 
 if TYPE_CHECKING:
     # CuRobo
-    from curobo._src.geom.collision import SceneCollision
+    from curobo._src.geom.collision.collision_scene import SceneCollision
 
 
 @dataclass
