@@ -30,6 +30,7 @@
   example at `curobo/examples/getting_started/feature_mapping.py`.
 
 ### Bug Fixes & Misc.
+- Fix inverse_kinematics differential example.
 - Fix `RobotBuilder.save()` emitting runtime-only fields
   (`load_collision_spheres`, `num_envs`) that caused duplicate-kwarg
   `TypeError` when the saved YAML was reloaded via `RobotCfg.create`.

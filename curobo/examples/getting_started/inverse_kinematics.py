@@ -420,7 +420,6 @@ def interactive_ik_example(robot_file="franka.yml", port=8080):
                 ),
                 current_state=active_js.squeeze(1).clone(),
                 return_seeds=1,
-                run_optimizer=True,
             )
             if result.success:
                 pose_changed = False
@@ -501,7 +500,6 @@ def differential_ik_example(robot_file="franka.yml", port=8080):
         ),
         current_state=current_state,
         return_seeds=1,
-        run_optimizer=False,
     )
 
     print(f"\nDifferential IK running at http://localhost:{port}")
@@ -549,7 +547,6 @@ def differential_ik_example(robot_file="franka.yml", port=8080):
             ),
             current_state=active_js.squeeze(1),
             return_seeds=1,
-            run_optimizer=False,
         )
         if result.success.any():
             current_state = result.js_solution.clone()
