@@ -575,6 +575,7 @@ def reachability_example(robot_file="franka.yml", port=8080):
     BATCH_TARGET = 500
     n_per_axis = int(BATCH_TARGET ** 0.5)
     actual_batch = n_per_axis * n_per_axis
+    total_batch = actual_batch + 1
 
     viser_viz = ViserVisualizer(
         content_path=ContentPath(robot_config_file=robot_file),
@@ -591,6 +592,7 @@ def reachability_example(robot_file="franka.yml", port=8080):
         #num_seeds=12,
         self_collision_check=True,
         scene_model="collision_test.yml",
+        max_batch_size=total_batch,
         #seed_solver_num_seeds=12,
     )
     scene_cfg = config.scene_collision_cfg.scene_model
@@ -721,8 +723,6 @@ def reachability_example(robot_file="franka.yml", port=8080):
             dim=-1,
         )
         grid_world_pts = (pose_t @ local_pts.T).T[:, :3]
-
-        total_batch = actual_batch + 1
 
         primary_pos_np, primary_quat_np = cur_tool_poses[primary_link]
         primary_quat = torch.tensor(
