@@ -56,6 +56,7 @@ class VoxelProjectIntegrator:
         use_hash_dedup: bool = True,
         feature_channels_per_thread: int = 4,
         use_tiled_feature_kernel: bool = True,
+        feature_grid_shape: tuple[int, int] | None = None,
         profile_kernel_timings: bool = False,
     ):
         """Allocate integration scratch buffers and record launch parameters."""
@@ -146,6 +147,7 @@ class VoxelProjectIntegrator:
         _validate_feature_channels_per_thread(feature_channels_per_thread)
         self.feature_channels_per_thread = int(feature_channels_per_thread)
         self.use_tiled_feature_kernel = use_tiled_feature_kernel
+        self.feature_grid_shape = feature_grid_shape
         self.profile_kernel_timings = profile_kernel_timings
         self.last_kernel_timings_ms: dict[str, float] = {}
         self.last_integration_stats: dict[str, int] = {}
@@ -231,10 +233,6 @@ class VoxelProjectIntegrator:
                 data.hash_table,
                 tsdf.config.hash_capacity,
                 tsdf.config.max_blocks,
-                self.num_samples,
-                self.image_height,
-                self.image_width,
-                self.num_cameras,
                 wp.from_torch(self.visible_epoch),
                 frame_epoch,
                 wp.from_torch(self.pool_to_visible_slot),
@@ -276,13 +274,12 @@ class VoxelProjectIntegrator:
                 inputs=[
                     data.block_features,
                     data.block_feature_weight,
-                    data.new_blocks,
-                    data.new_block_count,
-                    tsdf.config.max_blocks,
-                    feature_dim_cfg,
-                ],
-                device=device,
-                stream=stream,
+                data.new_blocks,
+                data.new_block_count,
+                tsdf.config.max_blocks,
+            ],
+            device=device,
+            stream=stream,
             )
             self._timer_stop("clear_new_block_features_kernel")
 
@@ -450,7 +447,6 @@ class VoxelProjectIntegrator:
                     wp.from_torch(self.clear_count),
                     data.block_features,
                     data.block_feature_weight,
-                    feature_dim,
                     tsdf.config.max_blocks,
                 ],
                 device=device,
@@ -473,9 +469,9 @@ class VoxelProjectIntegrator:
             count_x,
             count_y,
             count_z,
-            grid_W_dim,
-            grid_H_dim,
-            grid_D,
+            _grid_W_dim,
+            _grid_H_dim,
+            _grid_D,
         ) = self._world_aabb_to_block_bounds(tsdf, bounds_min, bounds_max)
         if count_x <= 0 or count_y <= 0 or count_z <= 0:
             return 0
@@ -489,9 +485,6 @@ class VoxelProjectIntegrator:
             kernels.collect_blocks_in_aabb_kernel,
             dim=(count_x, count_y, count_z),
             inputs=[
-                grid_W_dim,
-                grid_H_dim,
-                grid_D,
                 data.hash_table,
                 tsdf.config.hash_capacity,
                 min_bx,
@@ -553,6 +546,53 @@ class VoxelProjectIntegrator:
         self.last_kernel_timings_ms = {}
         self.last_integration_stats = {}
         kernels = tsdf.kernels
+        if kernels.num_cameras != self.num_cameras:
+            log_and_raise(
+                f"kernels.num_cameras={kernels.num_cameras} does not match "
+                f"VoxelProjectIntegrator.num_cameras={self.num_cameras}."
+            )
+        if kernels.image_height != self.image_height or kernels.image_width != self.image_width:
+            log_and_raise(
+                "kernel image shape mismatch: expected "
+                f"({self.image_height}, {self.image_width}), got "
+                f"({kernels.image_height}, {kernels.image_width})."
+            )
+        if kernels.num_samples != self.num_samples:
+            log_and_raise(
+                f"kernels.num_samples={kernels.num_samples} does not match "
+                f"VoxelProjectIntegrator.num_samples={self.num_samples}."
+            )
+        if kernels.grid_shape != tuple(int(v) for v in tsdf.config.grid_shape):
+            log_and_raise(
+                f"kernels.grid_shape={kernels.grid_shape} does not match "
+                f"tsdf.config.grid_shape={tsdf.config.grid_shape}."
+            )
+        if not math.isclose(
+            kernels.voxel_size,
+            float(tsdf.config.voxel_size),
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            log_and_raise(
+                f"kernels.voxel_size={kernels.voxel_size} does not match "
+                f"tsdf.config.voxel_size={tsdf.config.voxel_size}."
+            )
+        if not math.isclose(
+            kernels.truncation_distance,
+            float(tsdf.config.truncation_distance),
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            log_and_raise(
+                "kernels.truncation_distance="
+                f"{kernels.truncation_distance} does not match "
+                f"tsdf.config.truncation_distance={tsdf.config.truncation_distance}."
+            )
+        if kernels.feature_grid_shape != self.feature_grid_shape:
+            log_and_raise(
+                f"kernels.feature_grid_shape={kernels.feature_grid_shape} does not match "
+                f"VoxelProjectIntegrator.feature_grid_shape={self.feature_grid_shape}."
+            )
         if self.feature_channels_per_thread != tsdf.config.feature_channels_per_thread:
             log_and_raise(
                 "VoxelProjectIntegrator.feature_channels_per_thread="
@@ -603,13 +643,16 @@ class VoxelProjectIntegrator:
         n_cameras = self.num_cameras
         image_height = self.image_height
         image_width = self.image_width
-        num_samples = self.num_samples
-        safe_step = self.safe_step
         num_block_key_candidates = self.num_block_key_candidates
 
         if grid_size is None:
             grid_size = tsdf.config.grid_shape
-        grid_D, grid_H_dim, grid_W_dim = grid_size
+        grid_size = tuple(int(v) for v in grid_size)
+        if grid_size != kernels.grid_shape:
+            log_and_raise(
+                f"grid_size={grid_size} does not match compiled "
+                f"kernel grid_shape={kernels.grid_shape}."
+            )
 
         data = tsdf.get_warp_data()
         device, stream = get_warp_device_stream(depth_images)
@@ -623,19 +666,8 @@ class VoxelProjectIntegrator:
                 wp.from_torch(cam_positions, dtype=wp.float32),
                 wp.from_torch(cam_quaternions, dtype=wp.float32),
                 wp.from_torch(depth_images, dtype=wp.float32),
-                wp.from_torch(tsdf.data.origin, dtype=wp.float32),
-                tsdf.config.voxel_size,
-                tsdf.config.truncation_distance,
-                safe_step,
                 depth_min,
                 depth_max,
-                num_samples,
-                image_height,
-                image_width,
-                grid_W_dim,
-                grid_H_dim,
-                grid_D,
-                n_cameras,
                 wp.from_torch(self.block_keys[:num_block_key_candidates]),
             ],
             device=device,
@@ -687,17 +719,8 @@ class VoxelProjectIntegrator:
                 wp.from_torch(cam_positions, dtype=wp.float32),
                 wp.from_torch(cam_quaternions, dtype=wp.float32),
                 wp.from_torch(depth_images, dtype=wp.float32),
-                n_cameras,
-                image_height,
-                image_width,
-                wp.from_torch(tsdf.data.origin, dtype=wp.float32),
-                tsdf.config.voxel_size,
-                tsdf.config.truncation_distance,
                 depth_min,
                 depth_max,
-                grid_W_dim,
-                grid_H_dim,
-                grid_D,
                 data.block_coords,
                 data.block_data,
             ],
@@ -716,8 +739,6 @@ class VoxelProjectIntegrator:
                 wp.from_torch(self.support_counts),
                 wp.from_torch(self.support_pixels),
                 wp.from_torch(rgb_flat, dtype=wp.uint8),
-                image_height,
-                image_width,
                 data.block_rgb,
             ],
             device=device,
@@ -751,6 +772,18 @@ class VoxelProjectIntegrator:
                     "feature_grid feature_H and feature_W must be positive, got "
                     f"shape {tuple(feature_grid.shape)}."
                 )
+            if kernels.feature_grid_shape is not None:
+                expected_feature_height, expected_feature_width = kernels.feature_grid_shape
+                if (
+                    feature_height != expected_feature_height
+                    or feature_width != expected_feature_width
+                ):
+                    log_and_raise(
+                        "feature_grid shape mismatch: expected "
+                        f"feature_H={expected_feature_height}, "
+                        f"feature_W={expected_feature_width}, got "
+                        f"{tuple(feature_grid.shape)}."
+                    )
             if feature_grid.shape[-1] != feature_dim_cfg:
                 log_and_raise(
                     f"feature_grid feature_dim={feature_grid.shape[-1]} does not match "
@@ -776,11 +809,6 @@ class VoxelProjectIntegrator:
                 wp.from_torch(self.support_counts),
                 wp.from_torch(self.support_pixels),
                 wp.from_torch(feature_grid, dtype=wp.float16),
-                image_height,
-                image_width,
-                feature_height,
-                feature_width,
-                feature_dim_cfg,
                 data.block_features,
                 data.block_feature_weight,
             ]
@@ -817,23 +845,20 @@ class VoxelProjectIntegrator:
 
         # Cap per-block weights so fp16 accumulators stay in finite range.
         # Runs every frame on the blocks we just touched; features are
-        # rescaled only if the feature channel is enabled (the kernel
-        # guards on feature_dim > 0).
+        # rescaled only if the compiled feature channel is enabled.
         # One thread per (block, channel): RGB uses ch < 3 (with ch == 0
         # also writing the capped weight), features use ch < feature_dim.
         # ``n_channels = max(3, feature_dim)`` keeps RGB live even when
         # features are disabled.
         if True:
             self._timer_start()
-            n_channels = max(3, feature_dim_cfg)
+            n_channels = max(3, kernels.feature_dim)
             wp.launch(
                 kernels.rescale_block_accumulators_kernel,
                 dim=(num_visible_blocks, n_channels),
                 inputs=[
                     wp.from_torch(self.pool_indices),
                     num_visible_blocks,
-                    n_channels,
-                    feature_dim_cfg,
                     float(tsdf.config.accumulator_w_max),
                     data.block_features,
                     data.block_feature_weight,

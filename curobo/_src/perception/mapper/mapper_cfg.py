@@ -25,6 +25,7 @@ import torch
 from curobo._src.perception.mapper.block_allocation import calculate_tsdf_max_blocks
 from curobo._src.perception.mapper.constants import (
     _validate_feature_channels_per_thread,
+    _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
 )
 from curobo.logging import log_and_raise
@@ -136,6 +137,12 @@ class MapperCfg:
     # === Per-block Features ===
     #: Per-block feature channel dimensionality. 0 disables features.
     feature_dim: int = 0
+    #: Compile-time feature-grid height. Required when ``feature_dim > 0``;
+    #: must be ``None`` when features are disabled.
+    feature_grid_height: Optional[int] = None
+    #: Compile-time feature-grid width. Required when ``feature_dim > 0``;
+    #: must be ``None`` when features are disabled.
+    feature_grid_width: Optional[int] = None
     #: Maximum visible blocks one integration frame may process. Defaults
     #: to :attr:`max_blocks` after that value is computed.
     max_visible_blocks_per_integration: Optional[int] = None
@@ -213,6 +220,11 @@ class MapperCfg:
                 f"image_height={self.image_height}, image_width={self.image_width}."
             )
         _validate_feature_channels_per_thread(self.feature_channels_per_thread)
+        _validate_feature_grid_shape(
+            self.feature_dim,
+            self.feature_grid_height,
+            self.feature_grid_width,
+        )
         if self.max_feature_tile_channels <= 0:
             log_and_raise(
                 "max_feature_tile_channels must be positive, got "

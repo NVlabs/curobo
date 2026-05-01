@@ -128,6 +128,54 @@ def _validate_feature_channels_per_thread(feature_channels_per_thread: int) -> N
         )
 
 
+def _validate_feature_grid_shape(
+    feature_dim: int,
+    feature_grid_height: int | None,
+    feature_grid_width: int | None,
+) -> None:
+    """Validate the compile-time feature-grid shape contract.
+
+    The feature kernels specialize on feature-grid height/width. When
+    features are enabled, callers must provide both dimensions explicitly;
+    when features are disabled, both dimensions must be omitted.
+    """
+    if feature_dim < 0:
+        log_and_raise(f"feature_dim must be >= 0, got {feature_dim}.")
+
+    has_height = feature_grid_height is not None
+    has_width = feature_grid_width is not None
+    if has_height != has_width:
+        log_and_raise(
+            "feature_grid_height and feature_grid_width must be specified together."
+        )
+    if feature_dim == 0:
+        if has_height:
+            log_and_raise(
+                "feature_grid_height/feature_grid_width require feature_dim > 0."
+            )
+        return
+
+    if not has_height:
+        log_and_raise(
+            "feature_dim > 0 requires feature_grid_height and feature_grid_width."
+        )
+    if not isinstance(feature_grid_height, int) or isinstance(feature_grid_height, bool):
+        log_and_raise(
+            "feature_grid_height must be a plain int, got "
+            f"{type(feature_grid_height).__name__} ({feature_grid_height!r})."
+        )
+    if not isinstance(feature_grid_width, int) or isinstance(feature_grid_width, bool):
+        log_and_raise(
+            "feature_grid_width must be a plain int, got "
+            f"{type(feature_grid_width).__name__} ({feature_grid_width!r})."
+        )
+    if feature_grid_height <= 0 or feature_grid_width <= 0:
+        log_and_raise(
+            "feature_grid_height and feature_grid_width must be positive, got "
+            f"{feature_grid_height}x{feature_grid_width}."
+        )
+
+
 FEATURE_INTEGRATION_KERNEL_MODES: tuple[str, str, str] = ("auto", "grouped", "tiled")
 
 

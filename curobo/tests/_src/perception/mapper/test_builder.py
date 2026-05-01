@@ -100,7 +100,6 @@ class TestKernelBuilderConstruction:
             )
 
     def test_prebuilt_kernel_grouping_must_match_tsdf_config(self, warp_init, device):
-        kernels = make_block_sparse_kernels(block_size=8, feature_channels_per_thread=4)
         cfg = BlockSparseTSDFCfg(
             voxel_size=0.01,
             max_blocks=100,
@@ -108,8 +107,39 @@ class TestKernelBuilderConstruction:
             grid_shape=(128, 128, 128),
             feature_channels_per_thread=3,
         )
+        kernels = make_block_sparse_kernels(cfg, feature_channels_per_thread=4)
 
         with pytest.raises(AssertionError, match="feature_channels_per_thread"):
+            BlockSparseTSDF(cfg, kernels=kernels)
+
+    @pytest.mark.parametrize(
+        ("field", "value", "match"),
+        [
+            ("grid_shape", (64, 128, 128), "grid_shape"),
+            ("origin", torch.tensor([-0.5, -1.0, 0.0]), "origin_xyz"),
+            ("voxel_size", 0.02, "voxel_size"),
+            ("truncation_distance", 0.08, "truncation_distance"),
+        ],
+    )
+    def test_prebuilt_kernel_geometry_must_match_tsdf_config(
+        self, warp_init, device, field, value, match
+    ):
+        base_kwargs = {
+            "voxel_size": 0.01,
+            "origin": torch.tensor([-1.0, -1.0, 0.0]),
+            "truncation_distance": 0.04,
+            "max_blocks": 100,
+            "device": device,
+            "grid_shape": (128, 128, 128),
+        }
+        kernel_cfg = BlockSparseTSDFCfg(**base_kwargs)
+        kernels = make_block_sparse_kernels(kernel_cfg)
+
+        mismatch_kwargs = dict(base_kwargs)
+        mismatch_kwargs[field] = value
+        cfg = BlockSparseTSDFCfg(**mismatch_kwargs)
+
+        with pytest.raises(AssertionError, match=match):
             BlockSparseTSDF(cfg, kernels=kernels)
 
     def test_seeding_method_is_python_policy(self, warp_init):
@@ -121,8 +151,10 @@ class TestKernelBuilderConstruction:
         assert hasattr(k_s, "seed_esdf_sites_gather_kernel")
         assert hasattr(k_s, "seed_esdf_sites_from_block_sparse_kernel")
 
-    def test_voxel_size_does_not_affect_block_size(self, warp_init, device):
-        """``voxel_size`` is still runtime state, not a builder input."""
+    def test_voxel_size_specializes_geometry_without_affecting_block_size(
+        self, warp_init, device
+    ):
+        """``voxel_size`` specializes geometry while preserving block size."""
         cfg_a = BlockSparseTSDFCfg(
             voxel_size=0.01,
             max_blocks=100,
@@ -138,6 +170,9 @@ class TestKernelBuilderConstruction:
         t_a = BlockSparseTSDF(cfg_a)
         t_b = BlockSparseTSDF(cfg_b)
         assert t_a.kernels is not t_b.kernels
+        assert t_a.kernels.block_size == t_b.kernels.block_size == 8
+        assert t_a.kernels.voxel_size == 0.01
+        assert t_b.kernels.voxel_size == 0.02
         assert t_a.kernels.block_size == t_b.kernels.block_size == 8
 
 

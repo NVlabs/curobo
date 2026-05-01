@@ -54,6 +54,12 @@ def _make_integrator(
     max_blocks: int = 256,
     voxel_size: float = 0.02,
 ) -> BlockSparseTSDFIntegrator:
+    feature_grid_kwargs = {}
+    if feature_dim > 0:
+        feature_grid_kwargs = {
+            "feature_grid_height": 1,
+            "feature_grid_width": 1,
+        }
     config = BlockSparseTSDFIntegratorCfg(
         voxel_size=voxel_size,
         origin=torch.tensor([0.0, 0.0, 0.0]),
@@ -63,6 +69,7 @@ def _make_integrator(
         image_height=64,
         image_width=64,
         feature_dim=feature_dim,
+        **feature_grid_kwargs,
     )
     return BlockSparseTSDFIntegrator(config)
 

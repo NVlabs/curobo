@@ -110,6 +110,8 @@ class TestBlockSparseTSDFIntegrator:
             max_blocks=500,
             max_visible_blocks_per_integration=1,
             feature_dim=3,
+            feature_grid_height=1,
+            feature_grid_width=1,
             device=device,
             image_height=64,
             image_width=64,

@@ -35,6 +35,7 @@ and scales the weighted-sum channels proportionally, preserving the
 weighted mean while keeping magnitudes inside fp16's finite range.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -51,6 +52,7 @@ from curobo._src.perception.mapper.constants import (
     PY_POSITIVE_MASK,
     PY_VALUE_MASK,
     _validate_feature_channels_per_thread,
+    _validate_feature_grid_shape,
     _validate_block_size,
     validate_grid_shape_for_hash_layout,
 )
@@ -107,6 +109,14 @@ class BlockSparseTSDFCfg:
     #: Per-block feature channel dimensionality. 0 disables the channel
     #: (dummy tensors are allocated for Warp compatibility).
     feature_dim: int = 0
+    #: Compile-time feature-grid height used when this storage builds its
+    #: own kernel bundle. Required when ``feature_dim > 0``; must be
+    #: ``None`` when features are disabled.
+    feature_grid_height: Optional[int] = None
+    #: Compile-time feature-grid width used when this storage builds its
+    #: own kernel bundle. Required when ``feature_dim > 0``; must be
+    #: ``None`` when features are disabled.
+    feature_grid_width: Optional[int] = None
     #: Number of adjacent feature channels accumulated per feature-kernel
     #: thread. Must match the voxel-project integrator launch grouping.
     feature_channels_per_thread: int = 4
@@ -140,6 +150,11 @@ class BlockSparseTSDFCfg:
             field_name="BlockSparseTSDFCfg.grid_shape",
         )
         _validate_feature_channels_per_thread(self.feature_channels_per_thread)
+        _validate_feature_grid_shape(
+            self.feature_dim,
+            self.feature_grid_height,
+            self.feature_grid_width,
+        )
         if self.max_feature_tile_channels <= 0:
             raise ValueError(
                 "max_feature_tile_channels must be positive, got "
@@ -524,6 +539,45 @@ class BlockSparseTSDF:
         assert kernels.feature_dim == config.feature_dim, (
             f"kernels.feature_dim={kernels.feature_dim} does not match "
             f"config.feature_dim={config.feature_dim}"
+        )
+        expected_feature_grid_shape = (
+            (config.feature_grid_height, config.feature_grid_width)
+            if config.feature_grid_height is not None
+            else None
+        )
+        assert kernels.feature_grid_shape == expected_feature_grid_shape, (
+            f"kernels.feature_grid_shape={kernels.feature_grid_shape} does not match "
+            f"config feature grid shape={expected_feature_grid_shape}"
+        )
+        assert kernels.grid_shape == config.grid_shape, (
+            f"kernels.grid_shape={kernels.grid_shape} does not match "
+            f"config.grid_shape={config.grid_shape}"
+        )
+        config_origin = tuple(
+            float(v) for v in config.origin.detach().to(device="cpu").flatten().tolist()
+        )
+        assert all(
+            math.isclose(a, b, rel_tol=0.0, abs_tol=1.0e-6)
+            for a, b in zip(kernels.origin_xyz, config_origin)
+        ), (
+            f"kernels.origin_xyz={kernels.origin_xyz} does not match "
+            f"config.origin={config_origin}"
+        )
+        assert math.isclose(
+            kernels.voxel_size, config.voxel_size, rel_tol=0.0, abs_tol=1.0e-12
+        ), (
+            f"kernels.voxel_size={kernels.voxel_size} does not match "
+            f"config.voxel_size={config.voxel_size}"
+        )
+        assert math.isclose(
+            kernels.truncation_distance,
+            config.truncation_distance,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ), (
+            "kernels.truncation_distance="
+            f"{kernels.truncation_distance} does not match "
+            f"config.truncation_distance={config.truncation_distance}"
         )
         assert kernels.feature_channels_per_thread == config.feature_channels_per_thread, (
             "kernels.feature_channels_per_thread="

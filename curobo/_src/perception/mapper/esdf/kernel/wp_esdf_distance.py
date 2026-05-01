@@ -19,6 +19,7 @@ import warp as wp
 
 from curobo._src.perception.mapper.storage import BlockSparseTSDF
 from curobo._src.util.warp import get_warp_device_stream
+from curobo.logging import log_and_raise
 
 
 def compute_esdf_from_min_tsdf_warp(
@@ -30,7 +31,6 @@ def compute_esdf_from_min_tsdf_warp(
     esdf_origin: torch.Tensor,
     adjacent_skip_steps: float = 0.0,
     minimum_tsdf_weight: float = 0.1,
-    grid_shape=None,
 ) -> None:
     """Compute ESDF distances with sign from direct TSDF hash lookup."""
     esdf_D, esdf_H, esdf_W = esdf_grid_shape
@@ -39,13 +39,20 @@ def compute_esdf_from_min_tsdf_warp(
     _, stream = get_warp_device_stream(esdf_site_index)
 
     warp_data = tsdf.get_warp_data()
-    data = tsdf.data
 
-    if grid_shape is None:
-        grid_shape = tsdf.config.grid_shape
-    grid_D = grid_shape[0]
-    grid_H = grid_shape[1]
-    grid_W = grid_shape[2]
+    esdf_shape = tuple(int(v) for v in esdf_grid_shape)
+    if esdf_shape != tsdf.kernels.esdf_grid_shape:
+        log_and_raise(
+            f"esdf_grid_shape={esdf_shape} does not match compiled "
+            f"kernel esdf_grid_shape={tsdf.kernels.esdf_grid_shape}."
+        )
+    grid_shape = tsdf.config.grid_shape
+    grid_shape = tuple(int(v) for v in grid_shape)
+    if grid_shape != tsdf.kernels.grid_shape:
+        log_and_raise(
+            f"grid_shape={grid_shape} does not match compiled "
+            f"kernel grid_shape={tsdf.kernels.grid_shape}."
+        )
 
     kernels = tsdf.kernels
 
@@ -55,19 +62,10 @@ def compute_esdf_from_min_tsdf_warp(
         inputs=[
             wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
             wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
-            wp.int32(esdf_D),
-            wp.int32(esdf_H),
-            wp.int32(esdf_W),
             wp.from_torch(esdf_dist_field.view(-1), dtype=wp.float16),
             warp_data,
-            wp.from_torch(data.origin.view(-1), dtype=wp.float32),
-            wp.float32(data.voxel_size),
             wp.float32(minimum_tsdf_weight),
             wp.from_torch(esdf_origin, dtype=wp.float32),
-            wp.int32(1),
-            wp.int32(grid_W),
-            wp.int32(grid_H),
-            wp.int32(grid_D),
             wp.float32(adjacent_skip_steps),
         ],
         device=wp.device_from_torch(device),

@@ -35,12 +35,14 @@ from curobo._src.perception.mapper.block_allocation import (
 from curobo._src.perception.mapper.constants import (
     DEFAULT_HASH_LAYOUT,
     _validate_feature_channels_per_thread,
+    _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
     _validate_block_size,
     resolve_feature_integration_kernel,
     validate_grid_shape_for_hash_layout,
 )
 from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
+    BlockSparseKernels,
     make_block_sparse_kernels,
 )
 from curobo._src.perception.mapper.kernel.wp_decay import (
@@ -130,6 +132,12 @@ class BlockSparseTSDFIntegratorCfg:
     block_size: int = 8
     #: Per-block feature channel dimensionality. 0 disables features.
     feature_dim: int = 0
+    #: Compile-time feature-grid height. Required when ``feature_dim > 0``;
+    #: must be ``None`` when features are disabled.
+    feature_grid_height: Optional[int] = None
+    #: Compile-time feature-grid width. Required when ``feature_dim > 0``;
+    #: must be ``None`` when features are disabled.
+    feature_grid_width: Optional[int] = None
     #: Maximum visible blocks one integration frame may process. Defaults
     #: to ``max_blocks`` after auto-calculation.
     max_visible_blocks_per_integration: Optional[int] = None
@@ -218,6 +226,11 @@ class BlockSparseTSDFIntegratorCfg:
         if self.num_cameras <= 0:
             log_and_raise(f"num_cameras must be positive, got num_cameras={self.num_cameras}.")
         _validate_feature_channels_per_thread(self.feature_channels_per_thread)
+        _validate_feature_grid_shape(
+            self.feature_dim,
+            self.feature_grid_height,
+            self.feature_grid_width,
+        )
         if self.max_feature_tile_channels <= 0:
             log_and_raise(
                 "max_feature_tile_channels must be positive, got "
@@ -266,11 +279,18 @@ class BlockSparseTSDFIntegrator:
         mesh = integrator.extract_mesh()
     """
 
-    def __init__(self, config: BlockSparseTSDFIntegratorCfg):
+    def __init__(
+        self,
+        config: BlockSparseTSDFIntegratorCfg,
+        kernels: Optional[BlockSparseKernels] = None,
+    ):
         """Initialize the integrator.
 
         Args:
             config: Configuration dataclass.
+            kernels: Optional prebuilt kernel bundle. ESDF integrators pass
+                a bundle built from the richer ESDF config so ESDF-specific
+                compile-time constants stay owned by the ESDF layer.
         """
         self.config = config
 
@@ -292,15 +312,16 @@ class BlockSparseTSDFIntegrator:
             static_obstacle_color=config.static_obstacle_color,
             block_size=config.block_size,
             feature_dim=config.feature_dim,
+            feature_grid_height=config.feature_grid_height,
+            feature_grid_width=config.feature_grid_width,
             feature_channels_per_thread=config.feature_channels_per_thread,
             max_feature_tile_channels=config.max_feature_tile_channels,
             max_support_pixels_per_block_camera=config.max_support_pixels_per_block_camera,
             accumulator_w_max=config.accumulator_w_max,
         )
-        self._tsdf = BlockSparseTSDF(
-            tsdf_config,
-            kernels=make_block_sparse_kernels(config),
-        )
+        if kernels is None:
+            kernels = make_block_sparse_kernels(config)
+        self._tsdf = BlockSparseTSDF(tsdf_config, kernels=kernels)
 
         # Frame counter for periodic operations
         self._frame_count = 0
@@ -318,6 +339,11 @@ class BlockSparseTSDFIntegrator:
             device=config.device,
             feature_channels_per_thread=config.feature_channels_per_thread,
             use_tiled_feature_kernel=use_tiled_feature_kernel,
+            feature_grid_shape=(
+                (config.feature_grid_height, config.feature_grid_width)
+                if config.feature_grid_height is not None
+                else None
+            ),
             profile_kernel_timings=config.profile_integration_kernel_timings,
         )
 
@@ -397,6 +423,20 @@ class BlockSparseTSDFIntegrator:
                     f"feature_grid feature_dim={feature_grid.shape[-1]} does not match "
                     f"configured feature_dim={self._tsdf.data.feature_dim}."
                 )
+            if self._tsdf.kernels.feature_grid_shape is not None:
+                expected_feature_height, expected_feature_width = (
+                    self._tsdf.kernels.feature_grid_shape
+                )
+                if (
+                    int(feature_grid.shape[1]) != expected_feature_height
+                    or int(feature_grid.shape[2]) != expected_feature_width
+                ):
+                    log_and_raise(
+                        "feature_grid shape mismatch: expected "
+                        f"feature_H={expected_feature_height}, "
+                        f"feature_W={expected_feature_width}, got "
+                        f"{tuple(feature_grid.shape)}."
+                    )
             if feature_grid.dtype != torch.float16:
                 log_and_raise(
                     f"feature_grid dtype must be torch.float16, got {feature_grid.dtype}."

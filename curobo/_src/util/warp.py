@@ -5,6 +5,7 @@
 # Standard Library
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from typing import Any, Optional, Tuple, Union
 
@@ -42,6 +43,17 @@ def warp_kernel(name: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Any]
         return wp.kernel(module="unique", **kwargs)(_set_warp_name(func, name))
 
     return _decorate
+
+
+def warp_constant_suffix(*values: object) -> str:
+    """Hash compile-time constants into a stable Warp symbol suffix.
+
+    Warp function/kernel names must change when their closed-over
+    compile-time constants change, otherwise generated modules can collide.
+    Callers should pass resolved primitive constants or tuples/lists of
+    primitive constants, not tensors or mutable runtime objects.
+    """
+    return hashlib.sha1(repr(values).encode("ascii")).hexdigest()[:12]
 
 
 def init_warp(

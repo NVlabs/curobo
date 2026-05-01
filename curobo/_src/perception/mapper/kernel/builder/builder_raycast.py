@@ -96,14 +96,7 @@ def make_raycast_kernels(
         minimum_tsdf_weight: float,
     ) -> wp.vec2:
         """Sample combined SDF from TSDF struct (nearest-neighbor)."""
-        coords = world_to_block_and_local(
-            world_pos,
-            tsdf.origin,
-            tsdf.voxel_size,
-            tsdf.grid_W,
-            tsdf.grid_H,
-            tsdf.grid_D,
-        )
+        coords = world_to_block_and_local(world_pos)
         bx = coords[0]
         by = coords[1]
         bz = coords[2]
@@ -181,14 +174,7 @@ def make_raycast_kernels(
         """Sample combined SDF with trilinear interpolation."""
         block_size_f = wp.float32(tsdf.block_size)
 
-        voxel_f = world_to_continuous_voxel(
-            world_pos,
-            tsdf.origin,
-            tsdf.voxel_size,
-            tsdf.grid_W,
-            tsdf.grid_H,
-            tsdf.grid_D,
-        )
+        voxel_f = world_to_continuous_voxel(world_pos)
         vx = voxel_f[0]
         vy = voxel_f[1]
         vz = voxel_f[2]
@@ -209,14 +195,7 @@ def make_raycast_kernels(
         ty = lyf - wp.float32(ly0)
         tz = lzf - wp.float32(lz0)
 
-        key = block_grid_to_key_coords(
-            bx_grid,
-            by_grid,
-            bz_grid,
-            tsdf.grid_W,
-            tsdf.grid_H,
-            tsdf.grid_D,
-        )
+        key = block_grid_to_key_coords(bx_grid, by_grid, bz_grid)
 
         c000 = _sample_voxel_at_block_local(
             tsdf, key[0], key[1], key[2], lx0, ly0, lz0, minimum_tsdf_weight
@@ -284,14 +263,7 @@ def make_raycast_kernels(
         world_pos: wp.vec3,
     ) -> wp.vec3:
         """Sample RGB color from TSDF struct (per-block average)."""
-        coords = world_to_block_and_local(
-            world_pos,
-            tsdf.origin,
-            tsdf.voxel_size,
-            tsdf.grid_W,
-            tsdf.grid_H,
-            tsdf.grid_D,
-        )
+        coords = world_to_block_and_local(world_pos)
         bx = coords[0]
         by = coords[1]
         bz = coords[2]
@@ -456,33 +428,20 @@ def make_raycast_kernels(
         bx: int,
         by: int,
         bz: int,
-        origin: wp.vec3,
-        voxel_size: float,
-        block_size: int,
-        grid_W: int,
-        grid_H: int,
-        grid_D: int,
     ) -> float:
         """Compute t parameter where ray exits a block (slab method)."""
-        block_world_size = wp.float32(block_size) * voxel_size
-
-        voxel_min = block_key_to_voxel_base(bx, by, bz, grid_W, grid_H, grid_D)
-        block_min = voxel_to_world_corner(
-            voxel_min,
-            origin,
-            voxel_size,
-            grid_W,
-            grid_H,
-            grid_D,
-        )
+        voxel_min = block_key_to_voxel_base(bx, by, bz)
+        voxel_max = wp.vec3i(voxel_min[0] + BS, voxel_min[1] + BS, voxel_min[2] + BS)
+        block_min = voxel_to_world_corner(voxel_min)
+        block_max = voxel_to_world_corner(voxel_max)
 
         block_min_x = block_min[0]
         block_min_y = block_min[1]
         block_min_z = block_min[2]
 
-        block_max_x = block_min_x + block_world_size
-        block_max_y = block_min_y + block_world_size
-        block_max_z = block_min_z + block_world_size
+        block_max_x = block_max[0]
+        block_max_y = block_max[1]
+        block_max_z = block_max[2]
 
         inv_dir_x = 1.0 / ray_dir[0] if wp.abs(ray_dir[0]) > 1e-8 else 1e10 * wp.sign(ray_dir[0])
         inv_dir_y = 1.0 / ray_dir[1] if wp.abs(ray_dir[1]) > 1e-8 else 1e10 * wp.sign(ray_dir[1])
@@ -800,14 +759,7 @@ def make_raycast_kernels(
 
             pos = cam_pos + ray_world * t
 
-            block_coords = world_to_block_coords(
-                pos,
-                tsdf.origin,
-                tsdf.voxel_size,
-                tsdf.grid_W,
-                tsdf.grid_H,
-                tsdf.grid_D,
-            )
+            block_coords = world_to_block_coords(pos)
             bx = block_coords[0]
             by = block_coords[1]
             bz = block_coords[2]
@@ -832,12 +784,6 @@ def make_raycast_kernels(
                     bx,
                     by,
                     bz,
-                    tsdf.origin,
-                    tsdf.voxel_size,
-                    tsdf.block_size,
-                    tsdf.grid_W,
-                    tsdf.grid_H,
-                    tsdf.grid_D,
                 )
 
             if not curr_block_allocated:
@@ -963,14 +909,7 @@ def make_raycast_kernels(
 
             pos = cam_pos + ray_world * t
 
-            block_coords = world_to_block_coords(
-                pos,
-                tsdf.origin,
-                tsdf.voxel_size,
-                tsdf.grid_W,
-                tsdf.grid_H,
-                tsdf.grid_D,
-            )
+            block_coords = world_to_block_coords(pos)
             bx = block_coords[0]
             by = block_coords[1]
             bz = block_coords[2]
@@ -995,12 +934,6 @@ def make_raycast_kernels(
                     bx,
                     by,
                     bz,
-                    tsdf.origin,
-                    tsdf.voxel_size,
-                    tsdf.block_size,
-                    tsdf.grid_W,
-                    tsdf.grid_H,
-                    tsdf.grid_D,
                 )
 
             if not curr_block_allocated:
@@ -1151,21 +1084,12 @@ def make_raycast_kernels(
         ly = (local_idx // tsdf.block_size) % tsdf.block_size
         lz = local_idx // (tsdf.block_size * tsdf.block_size)
 
-        base = block_key_to_voxel_base(
-            bx, by, bz, tsdf.grid_W, tsdf.grid_H, tsdf.grid_D
-        )
+        base = block_key_to_voxel_base(bx, by, bz)
         vx = base[0] + lx
         vy = base[1] + ly
         vz = base[2] + lz
 
-        world_pos = voxel_to_world(
-            wp.vec3i(vx, vy, vz),
-            tsdf.origin,
-            tsdf.voxel_size,
-            tsdf.grid_W,
-            tsdf.grid_H,
-            tsdf.grid_D,
-        )
+        world_pos = voxel_to_world(wp.vec3i(vx, vy, vz))
 
         out_centers[slot, 0] = world_pos[0]
         out_centers[slot, 1] = world_pos[1]
@@ -1226,21 +1150,12 @@ def make_raycast_kernels(
         ly = (local_idx // tsdf.block_size) % tsdf.block_size
         lz = local_idx // (tsdf.block_size * tsdf.block_size)
 
-        base = block_key_to_voxel_base(
-            bx, by, bz, tsdf.grid_W, tsdf.grid_H, tsdf.grid_D
-        )
+        base = block_key_to_voxel_base(bx, by, bz)
         vx = base[0] + lx
         vy = base[1] + ly
         vz = base[2] + lz
 
-        world_pos = voxel_to_world(
-            wp.vec3i(vx, vy, vz),
-            tsdf.origin,
-            tsdf.voxel_size,
-            tsdf.grid_W,
-            tsdf.grid_H,
-            tsdf.grid_D,
-        )
+        world_pos = voxel_to_world(wp.vec3i(vx, vy, vz))
 
         out_centers[slot, 0] = world_pos[0]
         out_centers[slot, 1] = world_pos[1]
@@ -1317,21 +1232,12 @@ def make_raycast_kernels(
         ly = (local_idx // tsdf.block_size) % tsdf.block_size
         lz = local_idx // (tsdf.block_size * tsdf.block_size)
 
-        base = block_key_to_voxel_base(
-            bx, by, bz, tsdf.grid_W, tsdf.grid_H, tsdf.grid_D
-        )
+        base = block_key_to_voxel_base(bx, by, bz)
         vx = base[0] + lx
         vy = base[1] + ly
         vz = base[2] + lz
 
-        world_pos = voxel_to_world(
-            wp.vec3i(vx, vy, vz),
-            tsdf.origin,
-            tsdf.voxel_size,
-            tsdf.grid_W,
-            tsdf.grid_H,
-            tsdf.grid_D,
-        )
+        world_pos = voxel_to_world(wp.vec3i(vx, vy, vz))
 
         out_centers[slot, 0] = world_pos[0]
         out_centers[slot, 1] = world_pos[1]

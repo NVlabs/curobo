@@ -69,7 +69,16 @@ def _make_integrator(
     device: str,
     feature_dim: int,
     feature_channels_per_thread: int = 4,
+    feature_grid_shape: tuple[int, int] | None = None,
 ) -> BlockSparseTSDFIntegrator:
+    feature_grid_kwargs = {}
+    if feature_dim > 0:
+        if feature_grid_shape is None:
+            feature_grid_shape = (2, 2)
+        feature_grid_kwargs = {
+            "feature_grid_height": feature_grid_shape[0],
+            "feature_grid_width": feature_grid_shape[1],
+        }
     return BlockSparseTSDFIntegrator(
         BlockSparseTSDFIntegratorCfg(
             max_blocks=500,
@@ -83,8 +92,41 @@ def _make_integrator(
             feature_dim=feature_dim,
             feature_channels_per_thread=feature_channels_per_thread,
             max_support_pixels_per_block_camera=8,
+            **feature_grid_kwargs,
         )
     )
+
+
+def test_feature_grid_shape_required_when_features_enabled(cuda_device):
+    with pytest.raises(ValueError, match="feature_dim > 0 requires"):
+        BlockSparseTSDFIntegratorCfg(
+            max_blocks=500,
+            voxel_size=0.01,
+            origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
+            truncation_distance=0.05,
+            device=cuda_device,
+            image_height=16,
+            image_width=16,
+            feature_dim=3,
+        )
+
+
+def test_feature_grid_shape_rejected_when_features_disabled(cuda_device):
+    with pytest.raises(ValueError, match="require feature_dim > 0"):
+        BlockSparseTSDFIntegratorCfg(
+            max_blocks=500,
+            voxel_size=0.01,
+            origin=torch.tensor([0.0, 0.0, 0.0]),
+            grid_shape=(512, 512, 512),
+            truncation_distance=0.05,
+            device=cuda_device,
+            image_height=16,
+            image_width=16,
+            feature_dim=0,
+            feature_grid_height=2,
+            feature_grid_width=2,
+        )
 
 
 def test_feature_grid_with_disabled_features_raises(cuda_device):
@@ -150,6 +192,7 @@ def test_feature_grid_grouping_keeps_trailing_channels(cuda_device):
         cuda_device,
         feature_dim=7,
         feature_channels_per_thread=5,
+        feature_grid_shape=(4, 4),
     )
     channel_values = torch.tensor(
         [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
