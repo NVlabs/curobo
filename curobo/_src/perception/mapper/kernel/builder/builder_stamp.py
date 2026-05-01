@@ -4,15 +4,13 @@
 
 """Obstacle-stamping kernels for one block size.
 
-``stamp_sdf_kernel`` uses the block-size-specialized coordinate helper for
-local voxel decoding. ``filter_blocks_by_sdf_kernel`` still passes
-``block_size`` to module-scope frustum/SDF helpers that are intentionally
-runtime-shaped for now.
+``filter_blocks_by_sdf_kernel`` and ``stamp_sdf_kernel`` close over the
+fixed TSDF geometry and truncation distance. Runtime arguments are limited
+to obstacle data, allocation state, and output tensors.
 
-Two helper ``@wp.func``s (``block_center_to_world``, ``is_block_in_bounds``)
-and the obstacle-SDF overload registration remain at module scope in
+The obstacle-SDF overload registration remains at module scope in
 ``kernel/wp_stamp_obstacles.py``. The stamp kernels in this builder call
-them via cross-module resolution (R1-verified).
+those overloads via cross-module resolution.
 """
 
 from __future__ import annotations
@@ -25,18 +23,20 @@ import warp as wp
 # The overload registry is initialized at that module's import time; we
 # just reference the names from this side.
 from curobo._src.perception.mapper.kernel.wp_stamp_obstacles import (
-    block_center_to_world,
     compute_local_sdf,
-    is_block_in_bounds,
     is_obs_enabled,
     load_obstacle_transform,
 )
-from curobo._src.util.warp import warp_kernel
+from curobo._src.util.warp import warp_constant_suffix, warp_func, warp_kernel
 
 
 def make_stamp_kernels(
     block_size: int,
     *,
+    grid_shape: tuple[int, int, int],
+    origin_xyz: tuple[float, float, float],
+    voxel_size: float,
+    truncation_distance: float,
     pack_key_only,
     unpack_block_key,
     block_local_to_world,
@@ -45,10 +45,70 @@ def make_stamp_kernels(
     free_list_pop,
 ) -> dict[str, object]:
     """Build obstacle-stamping kernels."""
-    BLOCK_SIZE = wp.constant(block_size)
+    suffix = (
+        f"bs{block_size}_cfg"
+        f"{warp_constant_suffix(block_size, grid_shape, origin_xyz, voxel_size, truncation_distance)}"
+    )
+    BLOCK_SIZE = wp.constant(wp.int32(block_size))
+    GRID_D = wp.constant(wp.int32(grid_shape[0]))
+    GRID_H = wp.constant(wp.int32(grid_shape[1]))
+    GRID_W = wp.constant(wp.int32(grid_shape[2]))
+    ORIGIN_X = wp.constant(wp.float32(origin_xyz[0]))
+    ORIGIN_Y = wp.constant(wp.float32(origin_xyz[1]))
+    ORIGIN_Z = wp.constant(wp.float32(origin_xyz[2]))
+    VOXEL_SIZE = wp.constant(wp.float32(voxel_size))
+    TRUNCATION_DIST = wp.constant(wp.float32(truncation_distance))
+    max_sdf_threshold = truncation_distance + (3.0**0.5) * block_size * voxel_size * 0.5
+    MAX_SDF_THRESHOLD = wp.constant(wp.float32(max_sdf_threshold))
 
     # Cross-domain helpers are parameters so Warp sees them as local
     # closure bindings when compiling the kernels below.
+
+    @warp_func(f"stamp_is_block_in_bounds_{suffix}")
+    def _is_block_in_bounds(
+        bx_key: wp.int32,
+        by_key: wp.int32,
+        bz_key: wp.int32,
+    ) -> wp.bool:
+        blocks_W = (GRID_W + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        blocks_H = (GRID_H + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        blocks_D = (GRID_D + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        bx = bx_key + blocks_W // wp.int32(2)
+        by = by_key + blocks_H // wp.int32(2)
+        bz = bz_key + blocks_D // wp.int32(2)
+
+        if bx < 0 or bx >= blocks_W:
+            return False
+        if by < 0 or by >= blocks_H:
+            return False
+        if bz < 0 or bz >= blocks_D:
+            return False
+        return True
+
+    @warp_func(f"stamp_block_center_to_world_{suffix}")
+    def _block_center_to_world(
+        bx_key: wp.int32,
+        by_key: wp.int32,
+        bz_key: wp.int32,
+    ) -> wp.vec3:
+        block_size_f = wp.float32(BLOCK_SIZE)
+        half_block = block_size_f * 0.5
+        blocks_W = (GRID_W + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        blocks_H = (GRID_H + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        blocks_D = (GRID_D + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        bx = bx_key + blocks_W // wp.int32(2)
+        by = by_key + blocks_H // wp.int32(2)
+        bz = bz_key + blocks_D // wp.int32(2)
+
+        vx = wp.float32(bx) * block_size_f + half_block
+        vy = wp.float32(by) * block_size_f + half_block
+        vz = wp.float32(bz) * block_size_f + half_block
+
+        wx = (vx - wp.float32(GRID_W) * 0.5) * VOXEL_SIZE + ORIGIN_X
+        wy = (vy - wp.float32(GRID_H) * 0.5) * VOXEL_SIZE + ORIGIN_Y
+        wz = (vz - wp.float32(GRID_D) * 0.5) * VOXEL_SIZE + ORIGIN_Z
+
+        return wp.vec3(wx, wy, wz)
 
     # =====================================================================
     # Block Pre-allocation (Phase 5)
@@ -154,19 +214,12 @@ def make_stamp_kernels(
     # Phase 3: Generic Filter by SDF
     # =====================================================================
 
-    @warp_kernel(f"filter_blocks_by_sdf_kernel_bs{block_size}", enable_backward=False)
+    @warp_kernel(f"filter_blocks_by_sdf_kernel_{suffix}", enable_backward=False)
     def filter_blocks_by_sdf_kernel(
         candidate_blocks: wp.array(dtype=wp.int64),
         n_candidates: wp.int32,
         obs_set: Any,
         env_idx: wp.int32,
-        origin: wp.vec3,
-        voxel_size: wp.float32,
-        block_size: wp.int32,
-        grid_W: wp.int32,
-        grid_H: wp.int32,
-        grid_D: wp.int32,
-        max_sdf_threshold: wp.float32,
         filtered_blocks: wp.array(dtype=wp.int64),
         filtered_count: wp.array(dtype=wp.int32),
     ):
@@ -186,20 +239,10 @@ def make_stamp_kernels(
         by = coords[1]
         bz = coords[2]
 
-        if not is_block_in_bounds(bx, by, bz, block_size, grid_W, grid_H, grid_D):
+        if not _is_block_in_bounds(bx, by, bz):
             return
 
-        block_center = block_center_to_world(
-            bx,
-            by,
-            bz,
-            origin,
-            voxel_size,
-            block_size,
-            grid_W,
-            grid_H,
-            grid_D,
-        )
+        block_center = _block_center_to_world(bx, by, bz)
 
         min_sdf = wp.float32(1e10)
         for i in range(obs_set.max_n):
@@ -209,7 +252,7 @@ def make_stamp_kernels(
                 sdf = compute_local_sdf(obs_set, env_idx, i, local_pt)
                 min_sdf = wp.min(min_sdf, sdf)
 
-        if wp.abs(min_sdf) <= max_sdf_threshold:
+        if wp.abs(min_sdf) <= MAX_SDF_THRESHOLD:
             out_idx = wp.atomic_add(filtered_count, 0, wp.int32(1))
             filtered_blocks[out_idx] = key
 
@@ -217,7 +260,7 @@ def make_stamp_kernels(
     # Phase 6: Stamp SDF per voxel (BLOCK_SIZE-specialized)
     # =====================================================================
 
-    @warp_kernel(f"stamp_sdf_kernel_bs{block_size}")
+    @warp_kernel(f"stamp_sdf_kernel_{suffix}")
     def stamp_sdf_kernel(
         unique_blocks: wp.array(dtype=wp.int64),
         pool_indices: wp.array(dtype=wp.int32),
@@ -226,12 +269,6 @@ def make_stamp_kernels(
         env_idx: wp.int32,
         static_block_data: wp.array2d(dtype=wp.float16),
         static_block_sums: wp.array(dtype=wp.int32),
-        origin: wp.vec3,
-        voxel_size: wp.float32,
-        truncation: wp.float32,
-        grid_W: wp.int32,
-        grid_H: wp.int32,
-        grid_D: wp.int32,
     ):
         """Stamp SDF values using generic ``compute_local_sdf``.
 
@@ -258,17 +295,7 @@ def make_stamp_kernels(
         by = coords[1]
         bz = coords[2]
 
-        voxel_pos = block_local_to_world(
-            bx,
-            by,
-            bz,
-            local_idx,
-            origin,
-            voxel_size,
-            grid_W,
-            grid_H,
-            grid_D,
-        )
+        voxel_pos = block_local_to_world(bx, by, bz, local_idx)
 
         min_sdf = wp.float32(1e10)
         for i in range(obs_set.max_n):
@@ -278,10 +305,10 @@ def make_stamp_kernels(
                 sdf = compute_local_sdf(obs_set, env_idx, i, local_pt)
                 min_sdf = wp.min(min_sdf, sdf)
 
-        if wp.abs(min_sdf) <= truncation:
+        if wp.abs(min_sdf) <= TRUNCATION_DIST:
             existing = wp.float32(static_block_data[pool_idx, local_idx])
             final_sdf = wp.min(existing, min_sdf)
-            clamped_sdf = wp.clamp(final_sdf, -truncation, truncation)
+            clamped_sdf = wp.clamp(final_sdf, -TRUNCATION_DIST, TRUNCATION_DIST)
             was_infinite = existing > 1e9
             static_block_data[pool_idx, local_idx] = wp.float16(clamped_sdf)
             if was_infinite:

@@ -77,6 +77,12 @@ def _make_mapper(
     frustum_decay_factor: float = 1.0,
     profile_kernel_timings: bool = False,
 ) -> Mapper:
+    feature_grid_kwargs = {}
+    if feature_dim > 0:
+        feature_grid_kwargs = {
+            "feature_grid_height": 7,
+            "feature_grid_width": 11,
+        }
     return Mapper(
         MapperCfg(
             extent_meters_xyz=(1.0, 0.8, 0.8),
@@ -95,6 +101,7 @@ def _make_mapper(
             block_size=2,
             max_support_pixels_per_block_camera=support_capacity,
             feature_dim=feature_dim,
+            **feature_grid_kwargs,
             feature_channels_per_thread=feature_channels_per_thread,
             feature_integration_kernel=feature_integration_kernel,
             profile_integration_kernel_timings=profile_kernel_timings,

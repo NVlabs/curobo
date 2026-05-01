@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, TypeAlias
 
@@ -13,6 +14,7 @@ from curobo._src.perception.mapper.constants import (
     DEFAULT_HASH_LAYOUT,
     HashLayout,
     _validate_feature_channels_per_thread,
+    _validate_feature_grid_shape,
     _validate_block_size,
 )
 from curobo._src.perception.mapper.kernel.builder.builder_coord import make_coord_kernels
@@ -42,6 +44,16 @@ class BlockSparseKernels:
 
     block_size: int
     feature_dim: int
+    num_cameras: int
+    image_height: int
+    image_width: int
+    num_samples: int
+    grid_shape: tuple[int, int, int]
+    origin_xyz: tuple[float, float, float]
+    voxel_size: float
+    truncation_distance: float
+    feature_grid_shape: tuple[int, int] | None
+    esdf_grid_shape: tuple[int, int, int]
     feature_channels_per_thread: int
     max_feature_tile_channels: int
     max_support_pixels_per_block_camera: int
@@ -173,6 +185,96 @@ def _resolve_max_support_pixels_per_block_camera(cfg: Any | None) -> int:
     return int(getattr(cfg, "max_support_pixels_per_block_camera", 32))
 
 
+def _resolve_positive_int_attr(cfg: Any | None, name: str, default: int) -> int:
+    if cfg is None or isinstance(cfg, int):
+        return default
+    value = getattr(cfg, name, default)
+    if value is None:
+        return default
+    return int(value)
+
+
+def _resolve_optional_positive_int_attr(cfg: Any | None, name: str) -> int | None:
+    if cfg is None or isinstance(cfg, int):
+        return None
+    value = getattr(cfg, name, None)
+    if value is None:
+        return None
+    return int(value)
+
+
+def _resolve_float_attr(cfg: Any | None, name: str, default: float) -> float:
+    if cfg is None or isinstance(cfg, int):
+        return default
+    return float(getattr(cfg, name, default))
+
+
+def _resolve_grid_shape(cfg: Any | None) -> tuple[int, int, int]:
+    if cfg is None or isinstance(cfg, int):
+        return (1, 1, 1)
+    grid_shape = getattr(cfg, "grid_shape", None)
+    if grid_shape is None:
+        return (1, 1, 1)
+    if len(grid_shape) != 3:
+        log_and_raise(f"grid_shape must be a 3-tuple, got {grid_shape!r}.")
+    return tuple(int(v) for v in grid_shape)
+
+
+def _resolve_esdf_grid_shape(cfg: Any | None) -> tuple[int, int, int]:
+    if cfg is None or isinstance(cfg, int):
+        return (1, 1, 1)
+    esdf_grid_shape = getattr(cfg, "esdf_grid_shape", None)
+    if esdf_grid_shape is None:
+        return (1, 1, 1)
+    if len(esdf_grid_shape) != 3:
+        log_and_raise(f"esdf_grid_shape must be a 3-tuple, got {esdf_grid_shape!r}.")
+    return tuple(int(v) for v in esdf_grid_shape)
+
+
+def _resolve_origin_xyz(cfg: Any | None) -> tuple[float, float, float]:
+    if cfg is None or isinstance(cfg, int):
+        return (0.0, 0.0, 0.0)
+    origin = getattr(cfg, "origin", None)
+    if origin is None:
+        return (0.0, 0.0, 0.0)
+    if hasattr(origin, "detach"):
+        values = origin.detach().flatten().to(device="cpu").tolist()
+    else:
+        values = list(origin)
+    if len(values) != 3:
+        log_and_raise(f"origin must contain 3 values, got {origin!r}.")
+    return (float(values[0]), float(values[1]), float(values[2]))
+
+
+def _resolve_num_samples(
+    cfg: Any | None,
+    *,
+    block_size: int,
+    voxel_size: float,
+    truncation_distance: float,
+) -> int:
+    if cfg is not None and not isinstance(cfg, int):
+        explicit = getattr(cfg, "num_samples", None)
+        if explicit is not None:
+            return int(explicit)
+    safe_step = (float(block_size) * voxel_size) / 1.42
+    if safe_step <= 0.0:
+        return 1
+    return int(math.ceil(2.0 * truncation_distance / safe_step) + 1)
+
+
+def _resolve_feature_grid_shape(cfg: Any | None) -> tuple[int, int] | None:
+    height = _resolve_optional_positive_int_attr(cfg, "feature_grid_height")
+    width = _resolve_optional_positive_int_attr(cfg, "feature_grid_width")
+    if height is None and width is None:
+        return None
+    if height is None or width is None:
+        log_and_raise(
+            "feature_grid_height and feature_grid_width must be specified together."
+        )
+    return (height, width)
+
+
 def _validate_seeding_method(cfg: Any | None, seeding_method: str | None) -> None:
     selected = seeding_method
     if selected is None and cfg is not None and not isinstance(cfg, int):
@@ -195,12 +297,54 @@ def make_block_sparse_kernels(
     resolved_max_support_pixels_per_block_camera = (
         _resolve_max_support_pixels_per_block_camera(cfg)
     )
+    resolved_num_cameras = _resolve_positive_int_attr(cfg, "num_cameras", 1)
+    resolved_image_height = _resolve_positive_int_attr(cfg, "image_height", 1)
+    resolved_image_width = _resolve_positive_int_attr(cfg, "image_width", 1)
+    resolved_grid_shape = _resolve_grid_shape(cfg)
+    resolved_esdf_grid_shape = _resolve_esdf_grid_shape(cfg)
+    resolved_origin_xyz = _resolve_origin_xyz(cfg)
+    resolved_voxel_size = _resolve_float_attr(cfg, "voxel_size", 1.0)
+    resolved_truncation_distance = _resolve_float_attr(cfg, "truncation_distance", 0.0)
+    resolved_num_samples = _resolve_num_samples(
+        cfg,
+        block_size=resolved_block_size,
+        voxel_size=resolved_voxel_size,
+        truncation_distance=resolved_truncation_distance,
+    )
+    resolved_feature_grid_shape = _resolve_feature_grid_shape(cfg)
     if feature_channels_per_thread is None:
         feature_channels_per_thread = getattr(cfg, "feature_channels_per_thread", 4)
     _validate_block_size(resolved_block_size)
     _validate_feature_channels_per_thread(feature_channels_per_thread)
+    if resolved_num_cameras <= 0:
+        log_and_raise(f"num_cameras must be > 0, got {resolved_num_cameras}.")
+    if resolved_image_height <= 0 or resolved_image_width <= 0:
+        log_and_raise(
+            "image_height and image_width must be > 0, got "
+            f"{resolved_image_height}x{resolved_image_width}."
+        )
+    if resolved_num_samples <= 0:
+        log_and_raise(f"num_samples must be > 0, got {resolved_num_samples}.")
+    if resolved_voxel_size <= 0.0:
+        log_and_raise(f"voxel_size must be > 0, got {resolved_voxel_size}.")
+    if resolved_truncation_distance < 0.0:
+        log_and_raise(
+            "truncation_distance must be >= 0, got "
+            f"{resolved_truncation_distance}."
+        )
+    if any(v <= 0 for v in resolved_grid_shape):
+        log_and_raise(f"grid_shape values must be > 0, got {resolved_grid_shape}.")
+    if any(v <= 0 for v in resolved_esdf_grid_shape):
+        log_and_raise(
+            f"esdf_grid_shape values must be > 0, got {resolved_esdf_grid_shape}."
+        )
     if resolved_feature_dim < 0:
         log_and_raise(f"feature_dim must be >= 0, got {resolved_feature_dim}.")
+    _validate_feature_grid_shape(
+        resolved_feature_dim,
+        None if resolved_feature_grid_shape is None else resolved_feature_grid_shape[0],
+        None if resolved_feature_grid_shape is None else resolved_feature_grid_shape[1],
+    )
     if resolved_max_feature_tile_channels <= 0:
         log_and_raise(
             "max_feature_tile_channels must be > 0, "
@@ -215,13 +359,28 @@ def make_block_sparse_kernels(
 
     hash_layout = DEFAULT_HASH_LAYOUT
     hash_exports = make_hash_kernels(resolved_block_size, hash_layout)
-    coord_exports = make_coord_kernels(resolved_block_size)
+    coord_exports = make_coord_kernels(
+        resolved_block_size,
+        grid_shape=resolved_grid_shape,
+        origin_xyz=resolved_origin_xyz,
+        voxel_size=resolved_voxel_size,
+    )
     decay_exports = make_decay_kernels(
         resolved_block_size,
+        grid_shape=resolved_grid_shape,
+        origin_xyz=resolved_origin_xyz,
+        voxel_size=resolved_voxel_size,
+        num_cameras=resolved_num_cameras,
+        image_height=resolved_image_height,
+        image_width=resolved_image_width,
         free_list_push=hash_exports["free_list_push"],
     )
     stamp_exports = make_stamp_kernels(
         resolved_block_size,
+        grid_shape=resolved_grid_shape,
+        origin_xyz=resolved_origin_xyz,
+        voxel_size=resolved_voxel_size,
+        truncation_distance=resolved_truncation_distance,
         pack_key_only=hash_exports["pack_key_only"],
         unpack_block_key=hash_exports["unpack_block_key"],
         block_local_to_world=coord_exports["block_local_to_world"],
@@ -253,10 +412,22 @@ def make_block_sparse_kernels(
         block_grid_to_key_coords=coord_exports["block_grid_to_key_coords"],
         block_key_to_voxel_base=coord_exports["block_key_to_voxel_base"],
     )
-    rescale_exports = make_rescale_kernels(resolved_block_size)
+    rescale_exports = make_rescale_kernels(
+        resolved_block_size,
+        feature_dim=resolved_feature_dim,
+    )
     integrate_exports = make_integrate_kernels(
         resolved_block_size,
         feature_dim=resolved_feature_dim,
+        num_cameras=resolved_num_cameras,
+        image_height=resolved_image_height,
+        image_width=resolved_image_width,
+        num_samples=resolved_num_samples,
+        grid_shape=resolved_grid_shape,
+        origin_xyz=resolved_origin_xyz,
+        voxel_size=resolved_voxel_size,
+        truncation_distance=resolved_truncation_distance,
+        feature_grid_shape=resolved_feature_grid_shape,
         feature_channels_per_thread=feature_channels_per_thread,
         max_feature_tile_channels=resolved_max_feature_tile_channels,
         max_support_pixels_per_block_camera=resolved_max_support_pixels_per_block_camera,
@@ -273,6 +444,11 @@ def make_block_sparse_kernels(
     )
     esdf_exports = make_esdf_kernels(
         resolved_block_size,
+        grid_shape=resolved_grid_shape,
+        esdf_grid_shape=resolved_esdf_grid_shape,
+        origin_xyz=resolved_origin_xyz,
+        voxel_size=resolved_voxel_size,
+        truncation_distance=resolved_truncation_distance,
         hash_lookup=hash_exports["hash_lookup"],
         block_grid_to_key_coords=coord_exports["block_grid_to_key_coords"],
         block_key_to_voxel_base=coord_exports["block_key_to_voxel_base"],
@@ -281,6 +457,16 @@ def make_block_sparse_kernels(
     return BlockSparseKernels(
         block_size=resolved_block_size,
         feature_dim=resolved_feature_dim,
+        num_cameras=resolved_num_cameras,
+        image_height=resolved_image_height,
+        image_width=resolved_image_width,
+        num_samples=resolved_num_samples,
+        grid_shape=resolved_grid_shape,
+        origin_xyz=resolved_origin_xyz,
+        voxel_size=resolved_voxel_size,
+        truncation_distance=resolved_truncation_distance,
+        feature_grid_shape=resolved_feature_grid_shape,
+        esdf_grid_shape=resolved_esdf_grid_shape,
         feature_channels_per_thread=feature_channels_per_thread,
         max_feature_tile_channels=resolved_max_feature_tile_channels,
         max_support_pixels_per_block_camera=resolved_max_support_pixels_per_block_camera,

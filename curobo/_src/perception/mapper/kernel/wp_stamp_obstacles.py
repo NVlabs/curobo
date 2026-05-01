@@ -15,8 +15,6 @@ here:
   overload set is computed by iterating
   :data:`curobo._src.geom.data.registry.OBSTACLE_SDF_MODULES` at import time.
   The stamp kernels call them via cross-module ``@wp.func`` resolution.
-- Two runtime block-size ``@wp.func`` helpers
-  (:func:`block_center_to_world`, :func:`is_block_in_bounds`).
 - The public Python API (:func:`stamp_scene_obstacles`,
   :func:`stamp_obstacles`, :func:`clear_static_channel`,
   :func:`compute_aabb_block_bounds`) used by the integrator.
@@ -81,74 +79,6 @@ for _module_path in OBSTACLE_SDF_MODULES:
     compute_local_sdf = wp.func(_sdf_fn, module=__name__)
 
 del _module_path, _data_module, _obs_fn, _transform_fn, _sdf_fn
-
-
-# =============================================================================
-# Runtime Block-Size Helpers
-# =============================================================================
-# These take ``block_size`` as a runtime argument and don't reference any
-# closure-captured constant, so they stay at module scope. Stamp kernels
-# call them via cross-module resolution.
-
-
-@wp.func
-def block_center_to_world(
-    bx_key: wp.int32,
-    by_key: wp.int32,
-    bz_key: wp.int32,
-    origin: wp.vec3,
-    voxel_size: wp.float32,
-    block_size: wp.int32,
-    grid_W: wp.int32,
-    grid_H: wp.int32,
-    grid_D: wp.int32,
-) -> wp.vec3:
-    """Compute world position of block center."""
-    block_size_f = wp.float32(block_size)
-    half_block = block_size_f * 0.5
-    blocks_W = (grid_W + block_size - wp.int32(1)) // block_size
-    blocks_H = (grid_H + block_size - wp.int32(1)) // block_size
-    blocks_D = (grid_D + block_size - wp.int32(1)) // block_size
-    bx = bx_key + blocks_W // wp.int32(2)
-    by = by_key + blocks_H // wp.int32(2)
-    bz = bz_key + blocks_D // wp.int32(2)
-
-    vx = wp.float32(bx) * block_size_f + half_block
-    vy = wp.float32(by) * block_size_f + half_block
-    vz = wp.float32(bz) * block_size_f + half_block
-
-    wx = (vx - wp.float32(grid_W) * 0.5) * voxel_size + origin[0]
-    wy = (vy - wp.float32(grid_H) * 0.5) * voxel_size + origin[1]
-    wz = (vz - wp.float32(grid_D) * 0.5) * voxel_size + origin[2]
-
-    return wp.vec3(wx, wy, wz)
-
-
-@wp.func
-def is_block_in_bounds(
-    bx_key: wp.int32,
-    by_key: wp.int32,
-    bz_key: wp.int32,
-    block_size: wp.int32,
-    grid_W: wp.int32,
-    grid_H: wp.int32,
-    grid_D: wp.int32,
-) -> wp.bool:
-    """Check if signed block keys are within valid grid bounds."""
-    blocks_W = (grid_W + block_size - wp.int32(1)) // block_size
-    blocks_H = (grid_H + block_size - wp.int32(1)) // block_size
-    blocks_D = (grid_D + block_size - wp.int32(1)) // block_size
-    bx = bx_key + blocks_W // wp.int32(2)
-    by = by_key + blocks_H // wp.int32(2)
-    bz = bz_key + blocks_D // wp.int32(2)
-
-    if bx < 0 or bx >= blocks_W:
-        return False
-    if by < 0 or by >= blocks_H:
-        return False
-    if bz < 0 or bz >= blocks_D:
-        return False
-    return True
 
 
 # =============================================================================
@@ -375,13 +305,6 @@ def stamp_obstacles(
             total_blocks,
             obs_wp,
             env_idx,
-            warp_tsdf.origin,
-            voxel_size,
-            block_size,
-            warp_tsdf.grid_W,
-            warp_tsdf.grid_H,
-            warp_tsdf.grid_D,
-            max_sdf_threshold,
             wp.from_torch(filtered_blocks, dtype=wp.int64),
             wp.from_torch(filtered_count, dtype=wp.int32),
         ],
@@ -443,12 +366,6 @@ def stamp_obstacles(
             env_idx,
             wp.from_torch(tsdf.data.static_block_data, dtype=wp.float16),
             wp.from_torch(tsdf.data.static_block_sums, dtype=wp.int32),
-            warp_tsdf.origin,
-            warp_tsdf.voxel_size,
-            truncation,
-            warp_tsdf.grid_W,
-            warp_tsdf.grid_H,
-            warp_tsdf.grid_D,
         ],
         stream=stream,
     )

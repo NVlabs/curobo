@@ -118,6 +118,8 @@ class Mapper:
             block_size=config.block_size,
             roughness=config.roughness,
             feature_dim=config.feature_dim,
+            feature_grid_height=config.feature_grid_height,
+            feature_grid_width=config.feature_grid_width,
             max_visible_blocks_per_integration=config.max_visible_blocks_per_integration,
             max_support_pixels_per_block_camera=config.max_support_pixels_per_block_camera,
             feature_channels_per_thread=config.feature_channels_per_thread,

@@ -57,6 +57,7 @@ from curobo._src.perception.mapper.block_allocation import (
 from curobo._src.perception.mapper.constants import (
     DEFAULT_HASH_LAYOUT,
     _validate_feature_channels_per_thread,
+    _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
     _validate_block_size,
     validate_grid_shape_for_hash_layout,
@@ -69,6 +70,9 @@ from curobo._src.perception.mapper.esdf.kernel.wp_esdf_distance import (
 from curobo._src.perception.mapper.esdf.kernel.wp_esdf_seed import (
     seed_esdf_sites_from_block_sparse_warp,
     seed_esdf_sites_gather_warp,
+)
+from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
+    make_block_sparse_kernels,
 )
 from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
@@ -158,6 +162,12 @@ class BlockSparseESDFIntegratorCfg:
     block_size: int = 8
     #: Per-block feature channel dimensionality. 0 disables features.
     feature_dim: int = 0
+    #: Compile-time feature-grid height. Required when ``feature_dim > 0``;
+    #: must be ``None`` when features are disabled.
+    feature_grid_height: Optional[int] = None
+    #: Compile-time feature-grid width. Required when ``feature_dim > 0``;
+    #: must be ``None`` when features are disabled.
+    feature_grid_width: Optional[int] = None
     #: Maximum visible blocks one integration frame may process. Defaults
     #: to ``max_blocks`` after auto-calculation.
     max_visible_blocks_per_integration: Optional[int] = None
@@ -223,6 +233,11 @@ class BlockSparseESDFIntegratorCfg:
                 f"{self.max_visible_blocks_per_integration}."
             )
         _validate_feature_channels_per_thread(self.feature_channels_per_thread)
+        _validate_feature_grid_shape(
+            self.feature_dim,
+            self.feature_grid_height,
+            self.feature_grid_width,
+        )
         if self.max_feature_tile_channels <= 0:
             log_and_raise(
                 "max_feature_tile_channels must be positive: "
@@ -312,6 +327,8 @@ class BlockSparseESDFIntegrator:
             device=config.device,
             block_size=config.block_size,
             feature_dim=config.feature_dim,
+            feature_grid_height=config.feature_grid_height,
+            feature_grid_width=config.feature_grid_width,
             max_visible_blocks_per_integration=config.max_visible_blocks_per_integration,
             max_support_pixels_per_block_camera=config.max_support_pixels_per_block_camera,
             feature_channels_per_thread=config.feature_channels_per_thread,
@@ -320,7 +337,10 @@ class BlockSparseESDFIntegrator:
             profile_integration_kernel_timings=config.profile_integration_kernel_timings,
             accumulator_w_max=config.accumulator_w_max,
         )
-        self._tsdf_integrator = BlockSparseTSDFIntegrator(tsdf_integrator_config)
+        self._tsdf_integrator = BlockSparseTSDFIntegrator(
+            tsdf_integrator_config,
+            kernels=make_block_sparse_kernels(config),
+        )
         self._tsdf = self._tsdf_integrator.tsdf
 
         # --- Create Dense ESDF Buffers ---
@@ -559,8 +579,6 @@ class BlockSparseESDFIntegrator:
                 esdf_voxel_size,
                 self._esdf_grid_shape,
                 minimum_tsdf_weight=self.config.minimum_tsdf_weight,
-                truncation_distance=self.config.truncation_distance,
-                grid_shape=self.config.grid_shape,
             )
         else:
             # Clear once with a dedicated tensor fill; gather kernel writes only hits.
@@ -571,8 +589,6 @@ class BlockSparseESDFIntegrator:
                 esdf_voxel_size,
                 self._esdf_grid_shape,
                 minimum_tsdf_weight=self.config.minimum_tsdf_weight,
-                truncation_distance=self.config.truncation_distance,
-                grid_shape=self.config.grid_shape,
             )
 
     def _propagate_and_distance_impl(
@@ -596,7 +612,6 @@ class BlockSparseESDFIntegrator:
             esdf_origin,
             adjacent_skip_steps=self.config.adjacent_skip_steps,
             minimum_tsdf_weight=self.config.minimum_tsdf_weight,
-            grid_shape=self.config.grid_shape,
         )
 
         return self._dist_field

@@ -17,6 +17,7 @@ import torch
 import warp as wp
 
 from curobo._src.curobolib.cuda_ops.tensor_checks import check_float32_tensors
+from curobo._src.util.logging import log_and_raise
 from curobo._src.util.warp import get_warp_device_stream
 
 # =============================================================================
@@ -142,7 +143,6 @@ def decay_frustum_aware_multi_camera(
     if n is None:
         n = int(tsdf.data.num_allocated.item())
     n = min(int(n), max_blocks)
-    n_cameras = intrinsics.shape[0]
     if n <= 0:
         launch_recycle(tsdf, num_blocks=0)
         return
@@ -163,9 +163,18 @@ def decay_frustum_aware_multi_camera(
     device, stream = get_warp_device_stream(tsdf.data.block_data)
     kernels = tsdf.kernels
 
-    img_H, img_W = img_shape
-
-    grid_D, grid_H_dim, grid_W_dim = tsdf.config.grid_shape
+    n_cameras = int(intrinsics.shape[0])
+    img_H, img_W = (int(img_shape[0]), int(img_shape[1]))
+    if n_cameras != kernels.num_cameras:
+        log_and_raise(
+            f"intrinsics num_cameras={n_cameras} does not match compiled "
+            f"kernel num_cameras={kernels.num_cameras}."
+        )
+    if img_H != kernels.image_height or img_W != kernels.image_width:
+        log_and_raise(
+            f"img_shape={(img_H, img_W)} does not match compiled kernel "
+            f"image shape={(kernels.image_height, kernels.image_width)}."
+        )
 
     frustum_flags = tsdf.data.frustum_flags
     frustum_flags.zero_()
@@ -183,18 +192,9 @@ def decay_frustum_aware_multi_camera(
             data.block_coords,
             data.block_to_hash_slot,
             data.num_allocated,
-            wp.from_torch(tsdf.config.origin, dtype=wp.float32),
-            tsdf.config.voxel_size,
-            tsdf.block_size,
-            grid_W_dim,
-            grid_H_dim,
-            grid_D,
             wp.from_torch(intrinsics, dtype=wp.float32),
             wp.from_torch(cam_positions, dtype=wp.float32),
             wp.from_torch(cam_quaternions, dtype=wp.float32),
-            n_cameras,
-            img_H,
-            img_W,
             depth_minimum_distance,
             depth_maximum_distance,
             wp.from_torch(frustum_flags, dtype=wp.int32),

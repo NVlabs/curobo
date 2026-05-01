@@ -465,9 +465,7 @@ def make_mesh_kernels(
             cx, cy, cz + 1, bx, by, bz, block_idx, tsdf, level, minimum_tsdf_weight
         )
 
-        base = block_key_to_voxel_base(
-            bx, by, bz, tsdf.grid_W, tsdf.grid_H, tsdf.grid_D
-        )
+        base = block_key_to_voxel_base(bx, by, bz)
         gx = base[0] + cx
         gy = base[1] + cy
         gz = base[2] + cz
@@ -779,9 +777,7 @@ def make_mesh_kernels(
         by = wp.int32(wp.floor(vy / block_size_f))
         bz = wp.int32(wp.floor(vz / block_size_f))
 
-        key = block_grid_to_key_coords(
-            bx, by, bz, tsdf.grid_W, tsdf.grid_H, tsdf.grid_D
-        )
+        key = block_grid_to_key_coords(bx, by, bz)
         pool_idx = hash_lookup(tsdf.hash_table, key[0], key[1], key[2], tsdf.hash_capacity)
 
         if pool_idx < 0:

@@ -504,7 +504,6 @@ def make_hash_kernels(
         new_blocks: wp.array(dtype=wp.int32),
         new_block_count: wp.array(dtype=wp.int32),
         max_blocks: wp.int32,
-        feature_dim: wp.int32,
     ):
         """Zero the per-block feature accumulator for freshly allocated blocks.
 

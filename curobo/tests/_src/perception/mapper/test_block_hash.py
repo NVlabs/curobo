@@ -30,6 +30,17 @@ from curobo._src.util.warp import init_warp
 # default ``block_size=8``.
 _kernels = make_block_sparse_kernels(block_size=8)
 
+
+class _CoordinateKernelCfg:
+    block_size = 8
+    grid_shape = (1024, 1024, 1024)
+    origin = (0.0, 0.0, 0.0)
+    voxel_size = 0.002
+    truncation_distance = 0.04
+
+
+_coord_kernels = make_block_sparse_kernels(_CoordinateKernelCfg)
+
 pack_block_key = _kernels.pack_block_key
 unpack_block_key = _kernels.unpack_block_key
 spatial_hash = _kernels.spatial_hash
@@ -38,7 +49,7 @@ find_or_insert_block = _kernels.find_or_insert_block
 clear_new_blocks_kernel = _kernels.clear_new_blocks_kernel
 linear_to_local_coords = _kernels.linear_to_local_coords
 local_to_linear_index = _kernels.local_to_linear_index
-world_to_block_coords = _kernels.world_to_block_coords
+world_to_block_coords = _coord_kernels.world_to_block_coords
 
 # =============================================================================
 # Test Kernels
@@ -137,17 +148,12 @@ def _kernel_find_or_insert(
 @wp.kernel
 def _kernel_world_to_block(
     world_positions: wp.array2d(dtype=wp.float32),
-    origin: wp.vec3,
-    voxel_size: float,
-    grid_W: wp.int32,
-    grid_H: wp.int32,
-    grid_D: wp.int32,
     block_coords: wp.array2d(dtype=wp.int32),
 ):
     """Test world to block coordinate conversion."""
     tid = wp.tid()
     pos = wp.vec3(world_positions[tid, 0], world_positions[tid, 1], world_positions[tid, 2])
-    coords = world_to_block_coords(pos, origin, voxel_size, grid_W, grid_H, grid_D)
+    coords = world_to_block_coords(pos)
     block_coords[tid, 0] = coords[0]
     block_coords[tid, 1] = coords[1]
     block_coords[tid, 2] = coords[2]
@@ -704,12 +710,6 @@ class TestCoordinateConversion:
         """Test world to block coordinate conversion."""
         voxel_size = 0.002  # 2mm
         block_size = 8
-        origin = wp.vec3(0.0, 0.0, 0.0)
-        # Grid dimensions (large enough to cover test positions)
-        grid_W = 1024
-        grid_H = 1024
-        grid_D = 1024
-
         # World positions that should map to specific blocks
         # Block size in world units = 8 * 0.002 = 0.016m
         # With center-origin convention, (0,0,0) world maps to center of grid
@@ -731,11 +731,6 @@ class TestCoordinateConversion:
             dim=n,
             inputs=[
                 wp.from_torch(world_pos, dtype=wp.float32),
-                origin,
-                voxel_size,
-                grid_W,
-                grid_H,
-                grid_D,
                 wp.from_torch(block_coords, dtype=wp.int32),
             ],
         )

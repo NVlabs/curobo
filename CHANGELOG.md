@@ -30,6 +30,7 @@
   example at `curobo/examples/getting_started/feature_mapping.py`.
 
 ### Bug Fixes & Misc.
+- Make num_cameras, feature_grid, grid_size as compile time constants in mapper kernels.
 - Fix inverse_kinematics differential example.
 - Fix `RobotBuilder.save()` emitting runtime-only fields
   (`load_collision_spheres`, `num_envs`) that caused duplicate-kwarg

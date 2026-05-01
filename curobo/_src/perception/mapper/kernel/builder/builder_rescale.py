@@ -31,15 +31,14 @@ import warp as wp
 from curobo._src.util.warp import warp_kernel
 
 
-def make_rescale_kernels(block_size: int) -> dict[str, object]:
+def make_rescale_kernels(block_size: int, *, feature_dim: int) -> dict[str, object]:
     """Build per-block accumulator rescale kernels."""
+    FEATURE_DIM = wp.constant(wp.int32(feature_dim))
 
-    @warp_kernel(f"rescale_block_accumulators_kernel_bs{block_size}")
+    @warp_kernel(f"rescale_block_accumulators_kernel_bs{block_size}_fd{feature_dim}")
     def rescale_block_accumulators_kernel(
         visible_pool_indices: wp.array(dtype=wp.int32),
         n_visible: wp.int32,
-        n_channels: wp.int32,
-        feature_dim: wp.int32,
         w_max: wp.float32,
         block_features: wp.array2d(dtype=wp.float16),
         block_feature_weight: wp.array(dtype=wp.float16),
@@ -67,7 +66,7 @@ def make_rescale_kernels(block_size: int) -> dict[str, object]:
         pool_idx = visible_pool_indices[vis_idx]
         if pool_idx < 0:
             return
-        if feature_dim > 0 and ch < feature_dim:
+        if FEATURE_DIM > 0 and ch < FEATURE_DIM:
             w_f = wp.float32(block_feature_weight[pool_idx])
             if w_f > w_max:
                 s_f = w_max / w_f
