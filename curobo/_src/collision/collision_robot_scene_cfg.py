@@ -150,6 +150,7 @@ class RobotSceneCollisionCfg:
                 device_cfg=device_cfg,
                 use_grad_input=False,
                 activation_distance=collision_activation_distance,
+                num_spheres=kinematics.total_spheres,
                 _scene_collision_checker=scene_collision_checker,
             )
             scene_collision_cost = SceneCollisionCost(collision_cost_config)
@@ -158,6 +159,7 @@ class RobotSceneCollisionCfg:
                 device_cfg=device_cfg,
                 use_grad_input=True,
                 activation_distance=0.0,
+                num_spheres=kinematics.total_spheres,
             )
             collision_constraint_config.scene_collision_checker = scene_collision_checker
             scene_collision_constraint = SceneCollisionCost(collision_constraint_config)

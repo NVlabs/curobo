@@ -86,6 +86,22 @@ class TestRobotSceneCollision:
         with pytest.raises(Exception):
             collision_checker.get_kinematics(q)
 
+    def test_get_kinematics_2d_raises(self, collision_checker):
+        """Test that [batch, dof] input raises error."""
+        batch_size = 5
+        dof = collision_checker.kinematics.get_dof()
+        q = torch.zeros((batch_size, dof), device=collision_checker.device_cfg.device)
+        with pytest.raises(Exception):
+            collision_checker.get_kinematics(q)
+
+    def test_scene_self_collision_from_2d_joints_raises(self, collision_checker):
+        """Test that collision queries reject [batch, dof] input."""
+        batch_size = 5
+        dof = collision_checker.kinematics.get_dof()
+        q = torch.zeros((batch_size, dof), device=collision_checker.device_cfg.device)
+        with pytest.raises(Exception):
+            collision_checker.get_scene_self_collision_distance_from_joints(q)
+
     def test_get_self_collision_distance(self, collision_checker):
         """Test self-collision distance computation."""
         batch_size = 5
@@ -99,6 +115,33 @@ class TestRobotSceneCollision:
         d_self = collision_checker.get_self_collision_distance(spheres)
         assert d_self is not None
         assert d_self.shape[0] == batch_size
+
+    def test_scene_collision_query_from_loaded_scene(self, cuda_device_cfg):
+        """Test scene collision queries with a loaded collision scene."""
+        cfg = RobotSceneCollisionCfg.load_from_config(
+            robot_config="franka.yml",
+            scene_model="collision_table.yml",
+            device_cfg=cuda_device_cfg,
+        )
+        checker = RobotSceneCollision(cfg)
+
+        batch_size = 2
+        horizon = 3
+        dof = checker.kinematics.get_dof()
+        q = checker.kinematics.default_joint_position.view(1, 1, dof).repeat(
+            batch_size, horizon, 1
+        )
+
+        d_world, d_self = checker.get_scene_self_collision_distance_from_joints(q)
+
+        assert d_world.shape == (batch_size, horizon, checker.kinematics.total_spheres)
+        assert d_self.shape == (batch_size, horizon, 1)
+        assert torch.isfinite(d_world).all()
+        assert torch.isfinite(d_self).all()
+
+        mask = checker.validate(q)
+        assert mask.shape == (batch_size, horizon)
+        assert mask.dtype == torch.bool
 
     def test_get_bound(self, collision_checker):
         """Test joint bound violation computation."""
@@ -134,5 +177,3 @@ class TestRobotSceneCollision:
         tool_frames = collision_checker.tool_frames
         assert tool_frames is not None
         assert len(tool_frames) > 0
-
-

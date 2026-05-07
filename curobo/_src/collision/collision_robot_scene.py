@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 # Standard Library
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 # Third Party
 import torch
@@ -40,7 +40,7 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
         checker = RobotCollisionChecker(cfg)
 
         # Check collision at joint configurations
-        joint_positions = torch.rand((10, 7))
+        joint_positions = torch.rand((10, 1, 7))
         scene_dist, self_dist = checker.get_scene_self_collision_distance_from_joints(
             joint_positions
         )
@@ -61,9 +61,12 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
         if self.self_collision_cost is not None:
             self.self_collision_cost.setup_batch_tensors(batch_size, horizon)
         if self.collision_cost is not None:
+            self.collision_cost.config.update_num_spheres(self.kinematics.total_spheres)
             self.collision_cost.setup_batch_tensors(batch_size, horizon)
         if self.collision_constraint is not None:
+            self.collision_constraint.config.update_num_spheres(self.kinematics.total_spheres)
             self.collision_constraint.setup_batch_tensors(batch_size, horizon)
+
     def get_kinematics(self, joint_position: torch.Tensor) -> KinematicsState:
         """Compute forward kinematics for joint positions.
 
@@ -74,9 +77,13 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
             Robot state including link poses and collision spheres.
 
         Raises:
-            ValueError: If joint_position is not 2D tensor.
+            ValueError: If joint_position does not have shape [batch, horizon, dof].
         """
-        batch, horizon, dof = joint_position.shape
+        if joint_position.ndim != 3:
+            log_and_raise(
+                "joint_position must have shape [batch, horizon, dof], "
+                f"got {tuple(joint_position.shape)}"
+            )
 
         state = self.kinematics.compute_kinematics(
             JointState.from_position(joint_position, joint_names=self.kinematics.joint_names)
@@ -96,33 +103,71 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
         self.scene_model.clear_cache()
 
     def get_collision_distance(
-        self, x_sph: torch.Tensor, env_query_idx: Optional[torch.Tensor] = None
+        self,
+        x_sph: Union[torch.Tensor, KinematicsState],
+        env_query_idx: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Get scene collision distance for robot spheres.
 
         Args:
-            x_sph: Robot collision spheres [batch, horizon, num_spheres, 4].
+            x_sph: Robot collision spheres [batch, horizon, num_spheres, 4] or a
+                KinematicsState with robot_spheres.
             env_query_idx: Optional environment indices for batched environments.
 
         Returns:
             Collision distance tensor.
         """
-        d = self.collision_cost.forward(x_sph, idxs_env_query=env_query_idx)
+        state = (
+            x_sph
+            if isinstance(x_sph, KinematicsState)
+            else KinematicsState(robot_spheres=x_sph)
+        )
+        robot_spheres = state.robot_spheres
+        if self.collision_cost is None:
+            return torch.zeros(
+                robot_spheres.shape[:-1],
+                device=robot_spheres.device,
+                dtype=robot_spheres.dtype,
+            )
+        self.collision_cost.config.update_num_spheres(robot_spheres.shape[2])
+        self.collision_cost.setup_batch_tensors(
+            robot_spheres.shape[0], robot_spheres.shape[1]
+        )
+        d = self.collision_cost.forward(state, idxs_env_query=env_query_idx)
         return d
 
     def get_collision_constraint(
-        self, x_sph: torch.Tensor, env_query_idx: Optional[torch.Tensor] = None
+        self,
+        x_sph: Union[torch.Tensor, KinematicsState],
+        env_query_idx: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Get scene collision constraint value for robot spheres.
 
         Args:
-            x_sph: Robot collision spheres [batch, horizon, num_spheres, 4].
+            x_sph: Robot collision spheres [batch, horizon, num_spheres, 4] or a
+                KinematicsState with robot_spheres.
             env_query_idx: Optional environment indices for batched environments.
 
         Returns:
             Collision constraint tensor.
         """
-        d = self.collision_constraint.forward(x_sph, idxs_env_query=env_query_idx)
+        state = (
+            x_sph
+            if isinstance(x_sph, KinematicsState)
+            else KinematicsState(robot_spheres=x_sph)
+        )
+        robot_spheres = state.robot_spheres
+        if self.collision_constraint is None:
+            return torch.zeros(
+                robot_spheres.shape[:-1],
+                device=robot_spheres.device,
+                dtype=robot_spheres.dtype,
+            )
+        self.collision_constraint.config.update_num_spheres(robot_spheres.shape[2])
+        self.collision_constraint.setup_batch_tensors(
+            robot_spheres.shape[0], robot_spheres.shape[1]
+        )
+        d = self.collision_constraint.forward(state, idxs_env_query=env_query_idx)
         return d
 
     def get_self_collision_distance(self, x_sph: torch.Tensor) -> torch.Tensor:
@@ -145,29 +190,58 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
         Returns:
             Self-collision cost tensor.
         """
+        if self.self_collision_cost is None:
+            return torch.zeros(
+                x_sph.shape[:2] + (1,),
+                device=x_sph.device,
+                dtype=x_sph.dtype,
+            )
+        self.self_collision_cost.setup_batch_tensors(x_sph.shape[0], x_sph.shape[1])
         d = self.self_collision_cost.forward(x_sph)
         return d
 
     def get_collision_vector(
-        self, x_sph: torch.Tensor, env_query_idx: Optional[torch.Tensor] = None
+        self,
+        x_sph: Union[torch.Tensor, KinematicsState],
+        env_query_idx: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get collision distance and gradient vector.
 
         Note: This function is not differentiable.
 
         Args:
-            x_sph: Robot collision spheres.
-            env_query_idx: Optional environment indices.
+            x_sph: Robot collision spheres [batch, horizon, num_spheres, 4] or a
+                KinematicsState with robot_spheres.
+            env_query_idx: Optional environment indices [batch].
 
         Returns:
             Tuple of (collision distance, gradient vector).
         """
-        x_sph.requires_grad = True
-        d = self.collision_cost.forward(x_sph, idxs_env_query=env_query_idx)
+        state = (
+            x_sph
+            if isinstance(x_sph, KinematicsState)
+            else KinematicsState(robot_spheres=x_sph)
+        )
+        robot_spheres = state.robot_spheres
+        if self.collision_cost is None:
+            return (
+                torch.zeros(
+                    robot_spheres.shape[:-1],
+                    device=robot_spheres.device,
+                    dtype=robot_spheres.dtype,
+                ),
+                torch.zeros_like(robot_spheres),
+            )
+        self.collision_cost.config.update_num_spheres(robot_spheres.shape[2])
+        self.collision_cost.setup_batch_tensors(
+            robot_spheres.shape[0], robot_spheres.shape[1]
+        )
+        robot_spheres.requires_grad = True
+        d = self.collision_cost.forward(state, idxs_env_query=env_query_idx)
         vec = self.collision_cost.get_gradient_buffer()
         d = d.detach()
-        x_sph.requires_grad = False
-        x_sph.grad = None
+        robot_spheres.requires_grad = False
+        robot_spheres.grad = None
         return d, vec
 
     def get_scene_self_collision_distance_from_joints(
@@ -178,16 +252,14 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
         """Get scene and self-collision distances from joint positions.
 
         Args:
-            q: Joint positions [batch, dof].
-            env_query_idx: Optional environment indices.
+            q: Joint positions [batch, horizon, dof].
+            env_query_idx: Optional environment indices [batch].
 
         Returns:
             Tuple of (scene collision distance, self-collision distance).
         """
         state = self.get_kinematics(q)
-        d_world = self.get_collision_distance(
-            state.robot_spheres, env_query_idx=env_query_idx
-        )
+        d_world = self.get_collision_distance(state, env_query_idx=env_query_idx)
         d_self = self.get_self_collision_distance(state.robot_spheres)
         return d_world, d_self
 
@@ -200,16 +272,14 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
 
         Args:
             q: Joint trajectory [batch, horizon, dof].
-            env_query_idx: Optional environment indices.
+            env_query_idx: Optional environment indices [batch].
 
         Returns:
             Tuple of (scene collision distance, self-collision distance).
         """
-        b, h, dof = q.shape
-        state = self.get_kinematics(q.view(b * h, dof))
-        x_sph = state.robot_spheres.view(b, h, -1, 4)
-        d_world = self.get_collision_distance(x_sph, env_query_idx=env_query_idx)
-        d_self = self.get_self_collision_distance(x_sph)
+        state = self.get_kinematics(q)
+        d_world = self.get_collision_distance(state, env_query_idx=env_query_idx)
+        d_self = self.get_self_collision_distance(state.robot_spheres)
         return d_world, d_self
 
     def get_bound(
@@ -218,14 +288,24 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
         """Get joint bound violation cost.
 
         Args:
-            q: Joint positions. [batch, horizon, dof]
-            q_tau: Optional joint torques. [batch, horizon, dof]
+            q: Joint positions [batch, horizon, dof].
+            q_tau: Optional joint torques [batch, horizon, dof].
 
         Returns:
-            Bound violation cost. [batch, horizon]
+            Bound violation cost [batch, horizon, dof].
         """
+        if q.ndim != 3:
+            log_and_raise(
+                "q must have shape [batch, horizon, dof], "
+                f"got {tuple(q.shape)}"
+            )
         if q_tau is None:
             q_tau = q.clone() * 0.0
+        elif q_tau.ndim != 3:
+            log_and_raise(
+                "q_tau must have shape [batch, horizon, dof], "
+                f"got {tuple(q_tau.shape)}"
+            )
         batch, horizon, dof = q.shape
         self.cspace_cost.setup_batch_tensors(batch, horizon)
         d = self.cspace_cost.forward(JointState(position=q), joint_torque=q_tau)
@@ -244,7 +324,7 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
         Args:
             n: Number of samples to generate.
             mask_valid: Whether to filter for valid configurations.
-            env_query_idx: Optional environment indices.
+            env_query_idx: Optional environment indices [batch].
 
         Returns:
             Sampled joint configurations [n, dof].
@@ -254,8 +334,8 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
             n_samples = n * self.rejection_ratio
         q = self.sampler.get_samples(n_samples, bounded=True)
         if mask_valid:
-            q_mask = self.validate(q, env_query_idx)
-            q = q[q_mask][:n]
+            q_mask = self.validate(q.unsqueeze(1), env_query_idx)
+            q = q[q_mask.view(-1)][:n]
         return q
 
     def validate(
@@ -263,30 +343,33 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
     ) -> torch.Tensor:
         """Validate joint configurations for collisions.
 
-        Note: This does not support batched environments, use validate_trajectory instead.
-
         Args:
-            q: Joint positions [batch, dof].
-            env_query_idx: Optional environment indices.
+            q: Joint positions [batch, horizon, dof].
+            env_query_idx: Optional environment indices [batch].
 
         Returns:
-            Boolean mask of valid configurations.
+            Boolean mask of valid configurations [batch, horizon].
         """
+        if q.ndim != 3:
+            log_and_raise(
+                "q must have shape [batch, horizon, dof], "
+                f"got {tuple(q.shape)}"
+            )
         b, h, dof = q.shape
         self.setup_batch_tensors(b, h)
         kin_state = self.get_kinematics(q)
-        spheres = kin_state.robot_spheres.view(b, 1, -1, 4)
-        d_bound = self.get_bound(q.view(b, 1, dof))
+        spheres = kin_state.robot_spheres
+        d_bound = self.get_bound(q)
 
-        sum_list = [d_bound.sum(dim=-1,keepdim=True)]
+        sum_list = [d_bound.sum(dim=-1, keepdim=True)]
         if self.self_collision_cost is not None:
             d_self = self.get_self_collision(spheres)
-            sum_list.append(d_self.view(b,h, 1))
+            sum_list.append(d_self.sum(dim=-1, keepdim=True))
         if self.collision_constraint is not None:
-            d_world = self.get_collision_constraint(spheres, env_query_idx)
-            sum_list.append(d_world.view(b,h, 1))
-        d_mask = torch.sum(torch.stack(sum_list, dim=-1), dim=-1) == 0.0
-        return d_mask.view(b, h)
+            d_world = self.get_collision_constraint(kin_state, env_query_idx)
+            sum_list.append(d_world.sum(dim=-1, keepdim=True))
+        d_mask = torch.sum(torch.cat(sum_list, dim=-1), dim=-1) == 0.0
+        return d_mask
 
     def sample_trajectory(
         self,
@@ -301,16 +384,17 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
             batch: Number of trajectories to sample.
             horizon: Length of each trajectory.
             mask_valid: Whether to filter for valid configurations.
-            env_query_idx: Optional environment indices.
+            env_query_idx: Optional environment indices [batch].
 
         Returns:
             Sampled trajectories [batch, horizon, dof].
         """
-        n_samples = batch * horizon
+        sample_horizon = horizon
         if mask_valid:
-            n_samples = batch * horizon * self.rejection_ratio
+            sample_horizon = horizon * self.rejection_ratio
+        n_samples = batch * sample_horizon
         q = self.sampler.get_samples(n_samples, bounded=True)
-        q = q.reshape(batch, horizon * self.rejection_ratio, -1)
+        q = q.reshape(batch, sample_horizon, -1)
         if mask_valid:
             q_mask = self.validate_trajectory(q, env_query_idx)
             q = [q[i][q_mask[i, :], :][:horizon, :].unsqueeze(0) for i in range(batch)]
@@ -324,20 +408,12 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
 
         Args:
             q: Joint trajectory [batch, horizon, dof].
-            env_query_idx: Optional environment indices [batch, 1].
+            env_query_idx: Optional environment indices [batch].
 
         Returns:
-            Boolean mask of valid configurations.
+            Boolean mask of valid configurations [batch, horizon].
         """
-        b, h, dof = q.shape
-        q = q.view(b * h, dof)
-        kin_state = self.get_kinematics(q)
-        spheres = kin_state.robot_spheres.view(b, h, -1, 4)
-        d_self = self.get_self_collision(spheres)
-        d_world = self.get_collision_constraint(spheres, env_query_idx)
-        d_bound = self.get_bound(q.view(b, h, dof))
-        d_mask = _mask(d_self, d_world, d_bound)
-        return d_mask
+        return self.validate(q, env_query_idx)
 
     def pose_distance(
         self, x_des: Pose, x_current: Pose, resize: bool = False
@@ -436,14 +512,6 @@ class RobotSceneCollision(RobotSceneCollisionCfg):
         """Get robot link names."""
         return self.kinematics.tool_frames
 
-
-
-@get_torch_jit_decorator()
-def _mask(d1: torch.Tensor, d2: torch.Tensor, d3: torch.Tensor) -> torch.Tensor:
-    """Sum costs and return validity mask."""
-    d_total = d1 + d2 + d3
-    d_mask = d_total == 0.0
-    return d_mask
 
 
 @get_torch_jit_decorator()
