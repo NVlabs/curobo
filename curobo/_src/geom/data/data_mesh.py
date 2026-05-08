@@ -133,7 +133,7 @@ class MeshData:
         """Initialize Warp device after dataclass creation."""
         if self._wp_device is None:
             object.__setattr__(
-                self, "_wp_device", wp.torch.device_from_torch(self.device_cfg.device)
+                self, "_wp_device", wp.device_from_torch(self.device_cfg.device)
             )
 
     # -------------------------------------------------------------------------

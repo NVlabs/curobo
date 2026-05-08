@@ -72,7 +72,7 @@ def extract_mesh_block_sparse(
 
     # Step 1a: Count surface cubes.
     surface_count = torch.zeros(1, dtype=torch.int32, device=device)
-    _, stream = get_warp_device_stream(surface_count)
+    wp_device, stream = get_warp_device_stream(surface_count)
 
     wp.launch(
         kernels.count_surface_cubes_kernel,
@@ -84,7 +84,7 @@ def extract_mesh_block_sparse(
             minimum_tsdf_weight,
             wp.from_torch(surface_count, dtype=wp.int32),
         ],
-        device=wp.torch.device_from_torch(device),
+        device=wp_device,
         stream=stream,
         adjoint=False,
     )
@@ -111,7 +111,7 @@ def extract_mesh_block_sparse(
             wp.from_torch(surface_block_idx, dtype=wp.int32),
             wp.from_torch(surface_cube_idx, dtype=wp.int32),
         ],
-        device=wp.torch.device_from_torch(device),
+        device=wp_device,
         stream=stream,
     )
 
@@ -129,7 +129,7 @@ def extract_mesh_block_sparse(
             n_surfaces,
             wp.from_torch(edge_counts, dtype=wp.int32),
         ],
-        device=wp.torch.device_from_torch(device),
+        device=wp_device,
         stream=stream,
     )
 
@@ -163,7 +163,7 @@ def extract_mesh_block_sparse(
             wp.from_torch(normals, dtype=wp.vec3),
             wp.from_torch(edge_vertex_indices, dtype=wp.int32),
         ],
-        device=wp.torch.device_from_torch(device),
+        device=wp_device,
         stream=stream,
     )
 
@@ -189,7 +189,7 @@ def extract_mesh_block_sparse(
             mc_tables.num_tris_table,
             wp.from_torch(tri_counts, dtype=wp.int32),
         ],
-        device=wp.torch.device_from_torch(device),
+        device=wp_device,
         stream=stream,
     )
 
@@ -230,7 +230,7 @@ def extract_mesh_block_sparse(
             wp.from_torch(edge_vertex_indices, dtype=wp.int32),
             wp.from_torch(triangles_flat, dtype=wp.int32),
         ],
-        device=wp.torch.device_from_torch(device),
+        device=wp_device,
         stream=stream,
     )
 
@@ -263,7 +263,7 @@ def extract_mesh_block_sparse(
             warp_data,
             wp.from_torch(colors, dtype=wp.vec3ub),
         ],
-        device=wp.torch.device_from_torch(device),
+        device=wp_device,
         stream=stream,
     )
 
