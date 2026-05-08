@@ -24,7 +24,7 @@ Example:
     checker = RobotCollisionChecker(config)
 
     # Query collision at joint configurations
-    joint_positions = torch.rand((10, 7))  # 10 configurations
+    joint_positions = torch.rand((10, 1, 7))  # 10 configurations, horizon 1
     scene_distance, self_distance = checker.get_scene_self_collision_distance_from_joints(
         joint_positions
     )

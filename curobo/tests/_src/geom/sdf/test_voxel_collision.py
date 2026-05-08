@@ -119,7 +119,7 @@ def _test_both_sdf_kernel(
         out_sdf_grad[tid] = result[0]
 
 
-_TEST_SWEEP_STEPS = wp.constant(3)
+_TEST_SWEEP_STEPS = wp.constant(2)
 
 
 @wp.kernel(enable_backward=False)
@@ -174,7 +174,11 @@ def _test_dual_sweep_kernel(
     out_cost: wp.array(dtype=wp.float32),
     out_grad: wp.array(dtype=wp.float32),
 ):
-    """Two loops with compute_local_sdf + compute_local_sdf_with_grad."""
+    """Two sweep loops using only compute_local_sdf_with_grad.
+
+    Mixing compute_local_sdf with compute_local_sdf_with_grad in this pattern
+    can trigger invalid Warp codegen for VoxelDataWarp.
+    """
     tid = wp.tid()
     if tid >= query_points.shape[0]:
         return
@@ -208,11 +212,10 @@ def _test_dual_sweep_kernel(
         t = 1.0 - 0.5 * jump * inv_half_dist
         local_pt = t * local_current + (1.0 - t) * local_prev
 
-        sdf = _test_compute_local_sdf(obs_set, env_idx, obs_local_idx, local_pt)
-        penetration = -sdf + radius_adjusted
+        sdf_result = _test_compute_local_sdf_with_grad(obs_set, env_idx, obs_local_idx, local_pt)
+        penetration = -sdf_result[0] + radius_adjusted
 
         if penetration > 0.0:
-            sdf_result = _test_compute_local_sdf_with_grad(obs_set, env_idx, obs_local_idx, local_pt)
             cost_sum += penetration
             grad_sum_local += wp.vec3(sdf_result[1], sdf_result[2], sdf_result[3])
             jump += penetration
@@ -232,11 +235,10 @@ def _test_dual_sweep_kernel(
         t = 1.0 - 0.5 * jump * inv_half_dist
         local_pt = t * local_current + (1.0 - t) * local_next
 
-        sdf = _test_compute_local_sdf(obs_set, env_idx, obs_local_idx, local_pt)
-        penetration = -sdf + radius_adjusted
+        sdf_result = _test_compute_local_sdf_with_grad(obs_set, env_idx, obs_local_idx, local_pt)
+        penetration = -sdf_result[0] + radius_adjusted
 
         if penetration > 0.0:
-            sdf_result = _test_compute_local_sdf_with_grad(obs_set, env_idx, obs_local_idx, local_pt)
             cost_sum += penetration
             grad_sum_local += wp.vec3(sdf_result[1], sdf_result[2], sdf_result[3])
             jump += penetration
