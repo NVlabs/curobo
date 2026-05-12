@@ -29,7 +29,10 @@ namespace curobo{
             *(float4 *)&fixedTransform[col_idx * stride];
         }
         //__syncthreads();
-        __syncwarp((0xF << ((threadIdx.x / 4) * 4)) & 0xFFFFFFFF);
+        const unsigned lane = threadIdx.x & 31u;
+        const unsigned mask = 0xFu << (lane & ~3u);
+        __syncwarp(mask);
+        //__syncwarp((0xF << ((threadIdx.x / 4) * 4)) & 0xFFFFFFFF);
       }
 
       // Helper function to apply joint transformation to cumulative matrix

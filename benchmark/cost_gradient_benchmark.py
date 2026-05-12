@@ -9,6 +9,8 @@ Measures per-call time and memory for:
 4. Above + scene (world) collision cost.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import tabulate
@@ -25,7 +27,7 @@ from curobo._src.cost.cost_self_collision import SelfCollisionCost
 from curobo._src.cost.cost_self_collision_cfg import SelfCollisionCostCfg
 from curobo._src.cost.cost_tool_pose import ToolPoseCost
 from curobo._src.cost.cost_tool_pose_cfg import ToolPoseCostCfg
-from curobo._src.geom.collision import SceneCollision, SceneCollisionCfg
+from curobo._src.geom.collision.collision_scene import SceneCollision, SceneCollisionCfg
 from curobo._src.geom.types import SceneCfg
 from curobo._src.robot.kinematics.kinematics import Kinematics, KinematicsCfg
 from curobo._src.state.state_joint import JointState
@@ -37,6 +39,13 @@ from curobo.content import get_robot_configs_path
 
 
 DEFAULT_ROBOTS = ["franka.yml", "dual_ur10e.yml", "unitree_g1.yml"]
+
+
+def _write_results_yaml(results: dict, file_name: str):
+    """Write benchmark results under benchmark/log, creating the directory if needed."""
+    out_path = join_path("benchmark/log", file_name)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    write_yaml(results, out_path)
 
 
 def _load_kinematics(robot_file_name: str, keep_collision: bool) -> Kinematics:
@@ -136,11 +145,9 @@ def run_forward_kinematics_benchmark(
     df = pd.DataFrame(results)
     print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
     suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
-    write_yaml(
+    _write_results_yaml(
         results,
-        join_path(
-            "benchmark/log", prefix + "forward_kinematics_benchmark_curobo" + suffix + ".yml"
-        ),
+        prefix + "forward_kinematics_benchmark_curobo" + suffix + ".yml",
     )
 
 
@@ -247,11 +254,9 @@ def run_kinematics_pose_gradient_benchmark(
     df = pd.DataFrame(results)
     print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
     suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
-    write_yaml(
+    _write_results_yaml(
         results,
-        join_path(
-            "benchmark/log", prefix + "kinematics_pose_gradient_benchmark_curobo" + suffix + ".yml"
-        ),
+        prefix + "kinematics_pose_gradient_benchmark_curobo" + suffix + ".yml",
     )
 
 
@@ -352,12 +357,9 @@ def run_kinematics_pose_gradient_self_collision_benchmark(
     df = pd.DataFrame(results)
     print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
     suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
-    write_yaml(
+    _write_results_yaml(
         results,
-        join_path(
-            "benchmark/log",
-            prefix + "kinematics_pose_gradient_self_collision_benchmark_curobo" + suffix + ".yml",
-        ),
+        prefix + "kinematics_pose_gradient_self_collision_benchmark_curobo" + suffix + ".yml",
     )
 
 
@@ -492,15 +494,12 @@ def run_kinematics_pose_gradient_self_collision_world_collision_benchmark(
     df = pd.DataFrame(results)
     print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
     suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
-    write_yaml(
+    _write_results_yaml(
         results,
-        join_path(
-            "benchmark/log",
-            prefix
-            + "kinematics_pose_gradient_self_collision_world_collision_benchmark_curobo"
-            + suffix
-            + ".yml",
-        ),
+        prefix
+        + "kinematics_pose_gradient_self_collision_world_collision_benchmark_curobo"
+        + suffix
+        + ".yml",
     )
 
 
@@ -508,21 +507,22 @@ def main(
     b_list: list[int] | None = None, use_cuda_graph: bool = True, prefix: str = "curobov2"
 ):
     if b_list is None:
-        b_list = [1000]
+        b_list = [100, 1000]
 
     _ = torch.zeros((10, 10), device="cuda")
     run_forward_kinematics_benchmark(
         b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
     )
-    run_kinematics_pose_gradient_benchmark(
-        b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
-    )
-    run_kinematics_pose_gradient_self_collision_benchmark(
-        b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
-    )
-    run_kinematics_pose_gradient_self_collision_world_collision_benchmark(
-        b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
-    )
+    if False:
+        run_kinematics_pose_gradient_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
+        )
+        run_kinematics_pose_gradient_self_collision_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
+        )
+        run_kinematics_pose_gradient_self_collision_world_collision_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
+        )
 
 
 if __name__ == "__main__":
