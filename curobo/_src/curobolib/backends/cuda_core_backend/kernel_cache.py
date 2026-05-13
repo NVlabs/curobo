@@ -189,12 +189,15 @@ class CudaCoreKernelCache:
         # Setup include paths following common.py pattern
         include_paths = [str(inc) for inc in include_dirs]
 
-        # Add CUDA system includes
-        cuda_include = pathfinder.find_nvidia_header_directory("nvrtc")
-        if os.path.isdir(cuda_include):
-            include_paths.append(cuda_include)
-        else:
-            log_and_raise("CUDA include directory not found, compilation may fail for system headers")
+        # Add CUDA system includes. cooperative_groups.h depends on CCCL
+        # headers such as <nv/target>, so include the CCCL root explicitly.
+        for libname in ("cudart", "cccl", "nvrtc"):
+            cuda_include = pathfinder.find_nvidia_header_directory(libname)
+            if cuda_include is not None and os.path.isdir(cuda_include):
+                include_paths.append(cuda_include)
+
+        if not any(os.path.exists(os.path.join(path, "nvrtc.h")) for path in include_paths):
+            log_and_raise("CUDA NVRTC include directory not found, compilation may fail")
 
 
 

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #pragma once
+#include <cooperative_groups.h>
+
 #include "kinematics_constants.h"
 
 
@@ -44,35 +46,37 @@ namespace kinematics {
     {
       extern __shared__ __align__(16) float cumul_mat[];
 
-      int t           = blockDim.x * blockIdx.x + threadIdx.x;
-      const int batch = t / 4;
+      auto block = cooperative_groups::this_thread_block();
+      auto tile4 = cooperative_groups::tiled_partition<4>(block);
+      const int num_batches_per_block = blockDim.x / 4;
+      const int local_batch = tile4.meta_group_rank();
+      const int batch = blockIdx.x * num_batches_per_block + local_batch;
 
       if (batch >= batchSize)
         return;
 
 
-      int col_idx           = threadIdx.x % 4;
-      const int local_batch = threadIdx.x / 4;
+      const int col_idx = tile4.thread_rank();
       const int matAddrBase = local_batch * nlinks * 12;
 
       // read all fixed transforms to local cache:
 
       // copy base link transform:
-      initialize_base_link_transform(cumul_mat, fixedTransform, matAddrBase, col_idx, 4);
+      initialize_base_link_transform(cumul_mat, fixedTransform, matAddrBase, tile4, col_idx, 4);
 
       // Compute joint transformations for all links
       compute_joint_transformations<N_LINKS>(cumul_mat, q, fixedTransform, jointMapType,
                                   jointMap, linkMap, jointOffset, batch,
-                                  njoints, nlinks, matAddrBase, col_idx);
+                                  njoints, nlinks, matAddrBase, tile4, col_idx);
       __syncthreads();
 
       write_cumul_to_global_mem<12>(global_cumul_mat,
       cumul_mat,
-      blockIdx.x * (blockDim.x / 4),
+      blockIdx.x * num_batches_per_block,
       threadIdx.x,
       nlinks,
       batchSize,
-      blockDim.x / 4,
+      num_batches_per_block,
       4);
 
       // write out link:
@@ -133,34 +137,36 @@ namespace kinematics {
     {
       extern __shared__ __align__(16) float cumul_mat[];
 
-      int t           = blockDim.x * blockIdx.x + threadIdx.x;
-      const int batch = t / 4;
+      auto block = cooperative_groups::this_thread_block();
+      auto tile4 = cooperative_groups::tiled_partition<4>(block);
+      const int num_batches_per_block = blockDim.x / 4;
+      const int local_batch = tile4.meta_group_rank();
+      const int batch = blockIdx.x * num_batches_per_block + local_batch;
 
       if (batch >= batchSize)
         return;
 
-      int col_idx           = threadIdx.x % 4;
-      const int local_batch = threadIdx.x / 4;
+      const int col_idx = tile4.thread_rank();
       const int matAddrBase = local_batch * nlinks * 12;
 
       // read all fixed transforms to local cache:
 
       // copy base link transform:
-      initialize_base_link_transform(cumul_mat, fixedTransform, matAddrBase, col_idx, 4);
+      initialize_base_link_transform(cumul_mat, fixedTransform, matAddrBase, tile4, col_idx, 4);
 
       // Compute joint transformations for all links
       compute_joint_transformations<N_LINKS>(cumul_mat, q, fixedTransform, jointMapType,
                                   jointMap, linkMap, jointOffset, batch,
-                                  njoints, nlinks, matAddrBase, col_idx);
+                                  njoints, nlinks, matAddrBase, tile4, col_idx);
       __syncthreads();
 
       write_cumul_to_global_mem<12>(global_cumul_mat,
       cumul_mat,
-      blockIdx.x * (blockDim.x / 4),
+      blockIdx.x * num_batches_per_block,
       threadIdx.x,
       nlinks,
       batchSize,
-      blockDim.x / 4,
+      num_batches_per_block,
       4);
 
       // write out link:
@@ -218,29 +224,30 @@ namespace kinematics {
     {
       extern __shared__ __align__(16) float cumul_mat[]; // shape is batches_per_block x nlinks x 3 x 4
 
-      int t           = blockDim.x * blockIdx.x + threadIdx.x;
-      const int batch = t / 4;
+      auto block = cooperative_groups::this_thread_block();
+      auto tile4 = cooperative_groups::tiled_partition<4>(block);
       const int num_batches_per_block = blockDim.x / 4;
       const int start_batch_index = blockIdx.x * num_batches_per_block;
+      const int local_batch = tile4.meta_group_rank();
+      const int batch = start_batch_index + local_batch;
 
 
       if (batch >= batchSize)
         return;
 
-      int col_idx           = threadIdx.x % 4; // range is 0, 1, 2, 3
-      const int local_batch = threadIdx.x / 4;
+      const int col_idx = tile4.thread_rank(); // range is 0, 1, 2, 3
       const int matAddrBase = local_batch * nlinks * 12;
 
       // read all fixed transforms to local cache:
 
       // copy base link transform:
-      initialize_base_link_transform(cumul_mat, fixedTransform, matAddrBase, col_idx, 4);
+      initialize_base_link_transform(cumul_mat, fixedTransform, matAddrBase, tile4, col_idx, 4);
 
 
       // Compute joint transformations for all links
       compute_joint_transformations<N_LINKS>(cumul_mat, q, fixedTransform, jointMapType,
                                   jointMap, linkMap, jointOffset, batch,
-                                  njoints, nlinks, matAddrBase, col_idx);
+                                  njoints, nlinks, matAddrBase, tile4, col_idx);
       __syncthreads();
       write_cumul_to_global_mem<12>(global_cumul_mat,
       cumul_mat,

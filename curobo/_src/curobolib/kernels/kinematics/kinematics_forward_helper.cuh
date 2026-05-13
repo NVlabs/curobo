@@ -17,10 +17,12 @@ namespace curobo{
     namespace kinematics{
 
       // Helper function to initialize base link transform
+      template<typename TileT>
       __forceinline__ __device__ void initialize_base_link_transform(
         float *cumul_mat,
         const float *fixedTransform,
         const int matAddrBase,
+        const TileT &tile,
         const int col_idx,
         const int stride = 4  // Default to M (4) for compatibility
       ) {
@@ -28,11 +30,7 @@ namespace curobo{
           *(float4 *)&cumul_mat[matAddrBase + col_idx * stride] =
             *(float4 *)&fixedTransform[col_idx * stride];
         }
-        //__syncthreads();
-        const unsigned lane = threadIdx.x & 31u;
-        const unsigned mask = 0xFu << (lane & ~3u);
-        __syncwarp(mask);
-        //__syncwarp((0xF << ((threadIdx.x / 4) * 4)) & 0xFFFFFFFF);
+        tile.sync();
       }
 
       // Helper function to apply joint transformation to cumulative matrix
@@ -57,6 +55,46 @@ namespace curobo{
         }
       }
 
+      template<typename TileT>
+      __forceinline__ __device__ void compute_single_joint_transformation(
+        float *cumul_mat,
+        const float *q,
+        const float *fixedTransform,
+        const int8_t *jointMapType,
+        const int16_t *jointMap,
+        const int16_t *linkMap,
+        const float *jointOffset,
+        const int batch,
+        const int njoints,
+        const int matAddrBase,
+        const TileT &tile,
+        const int link_idx,
+        const int col_idx
+      ) {
+        const int ftAddrStart = link_idx * 12;
+
+        // Check joint type and use one of the helper functions.
+        float __align__(16) JM[4];
+        const int j_type = jointMapType[link_idx];
+
+        if (j_type == FIXED) {
+          fixed_joint_fn(&fixedTransform[ftAddrStart + col_idx], col_idx, &JM[0]);
+        } else {
+          float angle = q[batch * njoints + jointMap[link_idx]];
+          float2 angle_offset = *(float2 *)&jointOffset[link_idx * 2];
+          update_axis_direction(angle, j_type, angle_offset);
+
+          if (j_type <= Z_PRISM) {
+            prism_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type);
+          } else {
+            xyz_rot_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type - X_ROT);
+          }
+        }
+
+        apply_joint_transform(cumul_mat, JM, linkMap, link_idx, matAddrBase, col_idx);
+        tile.sync();
+      }
+
       /**
        * Helper function to compute joint transformations for all links.
        * This function computes the cumulative transformation matrix for each link
@@ -75,7 +113,7 @@ namespace curobo{
        * @param matAddrBase Base address in cumulative matrix
        * @param col_idx Column index (0-3) for 4x4 matrix operations
        */
-       template<int N_LINKS=-1>
+       template<int N_LINKS, typename TileT>
       __forceinline__ __device__ void compute_joint_transformations(
         float *cumul_mat,
         const float *q,
@@ -88,66 +126,23 @@ namespace curobo{
         const int njoints,
         const int nlinks,
         const int matAddrBase,
+        const TileT &tile,
         const int col_idx
       ) {
 
         if constexpr (N_LINKS < 0) {
         for (int8_t l = 1; l < nlinks; l++) {
-          // Get one row of fixedTransform
-          int ftAddrStart  = l * 12;
-          // int inAddrStart  = matAddrBase + linkMap[l] * 12;
-          //int outAddrStart = matAddrBase + l * 12;
-
-          // Check joint type and use one of the helper functions:
-          float __align__(16) JM[4];
-          const int   j_type = jointMapType[l];
-
-          if (j_type == FIXED) {
-            fixed_joint_fn(&fixedTransform[ftAddrStart + col_idx], col_idx, &JM[0]);
-          } else {
-            float angle = q[batch * njoints + jointMap[l]];
-            float2 angle_offset = *(float2 *)&jointOffset[l*2];
-            update_axis_direction(angle, j_type, angle_offset);
-
-            if (j_type <= Z_PRISM) {
-              prism_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type);
-            } else {
-              xyz_rot_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type - X_ROT);
-            }
-          }
-
-          // Apply the transformation
-          apply_joint_transform(cumul_mat, JM, linkMap, l, matAddrBase, col_idx);
+          compute_single_joint_transformation(
+            cumul_mat, q, fixedTransform, jointMapType, jointMap, linkMap,
+            jointOffset, batch, njoints, matAddrBase, tile, l, col_idx);
         }
         }
         else {
           #pragma unroll 10
           for (int l = 1; l < N_LINKS; l++) {
-            // Get one row of fixedTransform
-            const int ftAddrStart  = l * 12;
-            // int inAddrStart  = matAddrBase + linkMap[l] * 12;
-            //int outAddrStart = matAddrBase + l * 12;
-
-            // Check joint type and use one of the helper functions:
-            float __align__(16) JM[4];
-            const int j_type = jointMapType[l];
-
-            if (j_type == FIXED) {
-              fixed_joint_fn(&fixedTransform[ftAddrStart + col_idx], col_idx, &JM[0]);
-            } else {
-              float angle = q[batch * njoints + jointMap[l]];
-              float2 angle_offset = *(float2 *)&jointOffset[l*2];
-              update_axis_direction(angle, j_type, angle_offset);
-
-              if (j_type <= Z_PRISM) {
-                prism_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type);
-              } else {
-                xyz_rot_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type - X_ROT);
-              }
-            }
-
-            // Apply the transformation
-            apply_joint_transform(cumul_mat, JM, linkMap, l, matAddrBase, col_idx);
+            compute_single_joint_transformation(
+              cumul_mat, q, fixedTransform, jointMapType, jointMap, linkMap,
+              jointOffset, batch, njoints, matAddrBase, tile, l, col_idx);
           }
         }
       }
