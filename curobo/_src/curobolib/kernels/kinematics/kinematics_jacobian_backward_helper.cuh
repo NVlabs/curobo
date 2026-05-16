@@ -20,7 +20,7 @@ namespace kinematics{
      * This version uses precomputed joint-link mapping and distributes joints across threads
      * to eliminate atomicAdd operations and improve performance.
      */
-     template<typename AccumulatorType>
+     template<typename AccumulatorType, bool Accumulate=false>
      __forceinline__ __device__ void compute_jacobian_derivatives(
        AccumulatorType *grad_joint,
        const float *grad_jacobian,  // [batch_size * n_tool_frames * 6 * njoints]
@@ -289,8 +289,12 @@ namespace kinematics{
            }
          }
 
-         // Store result directly without atomicAdd since each thread has exclusive access to its joints
-         grad_joint[joint_idx] = joint_grad_sum;
+         // Store result directly without atomicAdd since each thread has exclusive access to its joints.
+         if constexpr (Accumulate) {
+           grad_joint[joint_idx] += joint_grad_sum;
+         } else {
+           grad_joint[joint_idx] = joint_grad_sum;
+         }
        }
      }
 

@@ -153,37 +153,88 @@ class KinematicsFusedFunction(Function):
         )
         check_int32_tensors(device, env_query_idx=env_query_idx)
         kinematics_config.validate_shapes()
-        kinematics_cu.launch_kinematics_forward(
-            batch_link_position,
-            batch_link_quaternion,
-            batch_robot_spheres,
-            batch_com,
-            batch_jacobian,
-            batch_cumul_mat,
-            joint_seq,
-            kinematics_config.fixed_transforms,
-            kinematics_config.link_spheres,
-            kinematics_config.link_masses_com,
-            kinematics_config.link_map,
-            kinematics_config.joint_map,
-            kinematics_config.joint_map_type,
-            kinematics_config.tool_frame_map,
-            kinematics_config.link_sphere_idx_map,
-            kinematics_config.link_chain_data,
-            kinematics_config.link_chain_offsets,
-            kinematics_config.joint_links_data,
-            kinematics_config.joint_links_offsets,
-            kinematics_config.joint_affects_endeffector,
-            kinematics_config.joint_offset_map,
-            env_query_idx,
-            num_envs,
-            b_size,
-            horizon,
-            n_joints,
-            num_spheres,
-            compute_jacobian,
-            compute_com,
-        )
+        fixed_transform = kinematics_config.fixed_transforms
+        if fixed_transform is None:
+            log_and_raise("fixed_transforms is required for the forward kinematics kernel")
+        if compute_jacobian:
+            kinematics_cu.launch_kinematics_forward_spheres_jacobian(
+                batch_link_position,
+                batch_link_quaternion,
+                batch_robot_spheres,
+                batch_com,
+                batch_jacobian,
+                batch_cumul_mat,
+                joint_seq,
+                fixed_transform,
+                kinematics_config.link_spheres,
+                kinematics_config.link_masses_com,
+                kinematics_config.joint_map_type,
+                kinematics_config.joint_map,
+                kinematics_config.link_map,
+                kinematics_config.tool_frame_map,
+                kinematics_config.link_sphere_idx_map,
+                kinematics_config.link_chain_data,
+                kinematics_config.link_chain_offsets,
+                kinematics_config.joint_links_data,
+                kinematics_config.joint_links_offsets,
+                kinematics_config.joint_affects_endeffector,
+                kinematics_config.joint_offset_map,
+                env_query_idx,
+                num_envs,
+                b_size,
+                horizon,
+                n_joints,
+                num_spheres,
+                32,
+                write_global_cumul=True,
+                compute_com=compute_com,
+            )
+        elif num_spheres > 0:
+            kinematics_cu.launch_kinematics_forward_spheres(
+                batch_link_position,
+                batch_link_quaternion,
+                batch_robot_spheres,
+                batch_com,
+                batch_cumul_mat,
+                joint_seq,
+                fixed_transform,
+                kinematics_config.link_spheres,
+                kinematics_config.link_masses_com,
+                kinematics_config.joint_map_type,
+                kinematics_config.joint_map,
+                kinematics_config.link_map,
+                kinematics_config.tool_frame_map,
+                kinematics_config.link_sphere_idx_map,
+                kinematics_config.joint_offset_map,
+                env_query_idx,
+                num_envs,
+                b_size,
+                horizon,
+                n_joints,
+                num_spheres,
+                32,
+                write_global_cumul=True,
+                compute_com=compute_com,
+            )
+        else:
+            kinematics_cu.launch_kinematics_forward(
+                batch_link_position,
+                batch_link_quaternion,
+                batch_com,
+                batch_cumul_mat,
+                joint_seq,
+                fixed_transform,
+                kinematics_config.link_masses_com,
+                kinematics_config.joint_map_type,
+                kinematics_config.joint_map,
+                kinematics_config.link_map,
+                kinematics_config.tool_frame_map,
+                kinematics_config.joint_offset_map,
+                b_size,
+                horizon,
+                n_joints,
+                compute_com,
+            )
 
         ctx.mark_non_differentiable(
             batch_cumul_mat,
@@ -204,7 +255,6 @@ class KinematicsFusedFunction(Function):
             joint_seq,
             grad_out,
             batch_cumul_mat,
-            grad_out_q_jacobian,
             batch_com,
         )
         return (
@@ -231,7 +281,6 @@ class KinematicsFusedFunction(Function):
                 joint_seq,
                 grad_out,
                 batch_cumul_mat,
-                grad_out_q_jacobian,
                 batch_com,
             ) = ctx.saved_tensors
             kinematics_config = ctx.kinematics_config
@@ -263,61 +312,74 @@ class KinematicsFusedFunction(Function):
 
             b_size = joint_seq.shape[0] * joint_seq.shape[1]
             n_joints = joint_seq.shape[-1]
-            n_tool_frames = kinematics_config.tool_frame_map.shape[0]
             if grad_in_link_quat.data_ptr() % 16 != 0:
                 log_and_raise("grad_in_link_quat is not aligned to 16 bytes")
-            kinematics_cu.launch_kinematics_backward(
-                grad_out,
-                grad_in_link_pos,
-                grad_in_link_quat,
-                grad_in_spheres,
-                grad_in_com,
-                batch_com,
-                batch_cumul_mat,
-                joint_seq,
-                kinematics_config.fixed_transforms,
-                kinematics_config.link_spheres,
-                kinematics_config.link_masses_com,
-                kinematics_config.link_map,
-                kinematics_config.joint_map,
-                kinematics_config.joint_map_type,
-                kinematics_config.tool_frame_map,
-                kinematics_config.link_sphere_idx_map,
-                kinematics_config.link_chain_data,
-                kinematics_config.link_chain_offsets,
-                kinematics_config.joint_offset_map,
-                ctx.env_query_idx,
-                kinematics_config.num_envs,
-                b_size,
-                ctx.horizon,
-                n_joints,
-                num_spheres,
-                ctx.compute_com,
+            fused_jacobian_backward = (
+                ctx.compute_jacobian and grad_in_link_jacobian is not None
             )
-            grad_joint = grad_out
-
-            if ctx.compute_jacobian and grad_in_link_jacobian is not None:
+            if fused_jacobian_backward:
                 check_float32_tensors(device, grad_in_link_jacobian=grad_in_link_jacobian)
-
-                kinematics_cu.launch_kinematics_jacobian_backward(
-                    grad_out_q_jacobian,
+                kinematics_cu.launch_kinematics_backward_saved_cumul_optional_jacobian(
+                    grad_out,
+                    grad_in_link_pos,
+                    grad_in_link_quat,
+                    grad_in_spheres,
+                    grad_in_com,
+                    batch_com,
                     grad_in_link_jacobian,
                     batch_cumul_mat,
-                    kinematics_config.joint_map_type,
-                    kinematics_config.joint_map,
+                    kinematics_config.link_spheres,
+                    kinematics_config.link_masses_com,
                     kinematics_config.link_map,
+                    kinematics_config.joint_map,
+                    kinematics_config.joint_map_type,
+                    kinematics_config.tool_frame_map,
+                    kinematics_config.link_sphere_idx_map,
                     kinematics_config.link_chain_data,
                     kinematics_config.link_chain_offsets,
                     kinematics_config.joint_links_data,
                     kinematics_config.joint_links_offsets,
                     kinematics_config.joint_affects_endeffector,
-                    kinematics_config.tool_frame_map,
                     kinematics_config.joint_offset_map,
+                    ctx.env_query_idx,
+                    kinematics_config.num_envs,
                     b_size,
+                    ctx.horizon,
                     n_joints,
-                    n_tool_frames,
+                    num_spheres,
+                    ctx.compute_com,
+                    True,
                 )
-                grad_joint = grad_joint + grad_out_q_jacobian
+            else:
+                kinematics_cu.launch_kinematics_backward(
+                    grad_out,
+                    grad_in_link_pos,
+                    grad_in_link_quat,
+                    grad_in_spheres,
+                    grad_in_com,
+                    batch_com,
+                    batch_cumul_mat,
+                    joint_seq,
+                    kinematics_config.fixed_transforms,
+                    kinematics_config.link_spheres,
+                    kinematics_config.link_masses_com,
+                    kinematics_config.link_map,
+                    kinematics_config.joint_map,
+                    kinematics_config.joint_map_type,
+                    kinematics_config.tool_frame_map,
+                    kinematics_config.link_sphere_idx_map,
+                    kinematics_config.link_chain_data,
+                    kinematics_config.link_chain_offsets,
+                    kinematics_config.joint_offset_map,
+                    ctx.env_query_idx,
+                    kinematics_config.num_envs,
+                    b_size,
+                    ctx.horizon,
+                    n_joints,
+                    num_spheres,
+                    ctx.compute_com,
+                )
+            grad_joint = grad_out
 
         return (
             grad_joint,

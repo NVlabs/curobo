@@ -16,7 +16,7 @@
 #include "common/torch_cuda_utils.h"
 
 
-#include "kinematics_jacobian_backward_kernel.cuh"
+#include "kinematics/kinematics_jacobian_backward_kernel.cuh"
 
 namespace curobo{
 namespace kinematics{

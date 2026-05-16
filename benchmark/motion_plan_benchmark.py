@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 # CuRobo
 from curobo._src.geom.types import Mesh, SceneCfg
-from curobo._src.motion import MotionPlanner, MotionPlannerCfg
+from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.device_cfg import DeviceCfg
