@@ -287,8 +287,6 @@ def launch_kinematics_backward(
     grad_center_of_mass: torch.Tensor,
     batch_center_of_mass: torch.Tensor,
     global_cumul_mat: torch.Tensor,
-    joint_vec: torch.Tensor,
-    fixed_transform: torch.Tensor,
     robot_spheres: torch.Tensor,
     link_masses_com: torch.Tensor,
     link_map: torch.Tensor,
@@ -335,8 +333,6 @@ def launch_kinematics_backward(
         )
     )
 
-    # Build kernel name with template parameters
-    # kernel signature: kinematics_fused_backward_unified_kernel<float, float, MAX_JOINTS, use_warp_reduce>
     kernel_name = (
         f"curobo::kinematics::kinematics_fused_backward_unified_kernel<float, float, "
         f"{max_joints_template}, {str(use_warp_reduce).lower()}, {str(compute_com).lower()}>"
@@ -367,8 +363,6 @@ def launch_kinematics_backward(
         grad_center_of_mass.data_ptr(),
         batch_center_of_mass.data_ptr(),
         global_cumul_mat.data_ptr(),
-        joint_vec.data_ptr(),
-        fixed_transform.data_ptr(),
         robot_spheres.data_ptr(),
         link_masses_com.data_ptr(),
         joint_map_type.data_ptr(),

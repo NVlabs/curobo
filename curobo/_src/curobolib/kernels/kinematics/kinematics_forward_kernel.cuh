@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #pragma once
-#include <cooperative_groups.h>
 
 #include "kinematics_constants.h"
 

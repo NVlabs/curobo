@@ -3,9 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-
-#include <cooperative_groups.h>
-
 #include "common/math.cuh"
 #include "common/block_warp_reductions.cuh"
 #include "common/pose_util.cuh"
@@ -15,7 +12,6 @@
 #include "third_party/helper_math.h"
 #include "kinematics_joint_util.cuh"
 #include "kinematics_util.cuh"
-#include "kinematics_forward_helper.cuh"
 #include "kinematics_backward_helper.cuh"
 #include "kinematics_jacobian_backward_helper.cuh"
 
@@ -34,10 +30,7 @@ namespace kinematics{
       typename psum_t,
       int16_t MAX_JOINTS,
       bool USE_WARP_REDUCE,
-      bool COMPUTE_COM=false,
-      bool RECOMPUTE_CUMUL=false,
-      int N_LINKS=-1,
-      bool RECOMPUTE_PRECOMPUTE=false>
+      bool COMPUTE_COM=false>
     __global__ void kinematics_fused_backward_unified_kernel(
       float *grad_out_link_q,       // batchSize * njoints
       const float *grad_nlinks_pos, // batchSize * n_tool_frames * 16
@@ -46,8 +39,6 @@ namespace kinematics{
       const float *grad_center_of_mass, // [batch_size * 4] - xyz=pos grad, w=mass grad (ignored)
       const float *batch_center_of_mass, // [batch_size * 4] - xyz=global CoM, w=total mass (INPUT)
       const float *global_cumul_mat,
-      const float *q,               // batchSize * njoints
-      const float *fixedTransform,  // nlinks * 16
       const float *robotSpheres,    // batchSize * nspheres * 4
       const float *link_masses_com,   // [n_links * 4] - xyz=local CoM, w=mass
       const int8_t *jointMapType,      // nlinks
@@ -76,7 +67,7 @@ namespace kinematics{
       const int batch = t / threads_per_batch;
       const bool active_batch = batch < batch_size;
 
-      if (!active_batch && !(RECOMPUTE_CUMUL && RECOMPUTE_PRECOMPUTE))
+      if (!active_batch)
           return;
 
       const int elem_idx = threadIdx.x % threads_per_batch;
@@ -87,68 +78,10 @@ namespace kinematics{
       const int start_batch_index = blockIdx.x * (blockDim.x / threads_per_batch);
       const int batches_per_block = (blockDim.x + threads_per_batch - 1) / threads_per_batch;
 
-      if constexpr (RECOMPUTE_CUMUL && RECOMPUTE_PRECOMPUTE) {
-        float *local_mat = &cumul_mat[batches_per_block * nlinks * 12];
-
-        compute_local_link_transforms<N_LINKS>(
-          local_mat,
-          q,
-          fixedTransform,
-          jointMapType,
-          jointMap,
-          jointOffset,
-          start_batch_index,
-          batch_size,
-          nlinks,
-          njoints,
-          batches_per_block
-        );
-
-        const int actual_batches_per_block = min(batches_per_block, batch_size - start_batch_index);
-        const int active_phase2_threads = actual_batches_per_block * 16;
-
-        if (threadIdx.x < active_phase2_threads) {
-          const int phase2_local_batch = threadIdx.x >> 4;
-          const int phase2_lane_idx = threadIdx.x & 15;
-          const int phase2_matAddrBase = phase2_local_batch * nlinks * 12;
-          const unsigned int phase2_mask = (threadIdx.x & 16) == 0 ? 0x0000ffffu : 0xffff0000u;
-
-          load_base_transform_halfwarp(
-            cumul_mat, fixedTransform, nlinks, phase2_matAddrBase, phase2_lane_idx, phase2_mask);
-
-          compute_cumulative_transforms_halfwarp<N_LINKS>(
-            cumul_mat,
-            local_mat,
-            linkMap,
-            nlinks,
-            phase2_matAddrBase,
-            phase2_matAddrBase,
-            phase2_lane_idx,
-            phase2_mask
-          );
-        }
-        __syncthreads();
-        if (!active_batch) {
-          return;
-        }
-      } else if constexpr (RECOMPUTE_CUMUL) {
-        auto block = cooperative_groups::this_thread_block();
-        auto tile4 = cooperative_groups::tiled_partition<4>(block);
-
-        if (elem_idx < 4) {
-          const int col_idx = tile4.thread_rank();
-          load_base_transform_tile(cumul_mat, fixedTransform, matAddrBase, tile4, col_idx, 4);
-          compute_cumulative_transforms_tile<N_LINKS>(
-              cumul_mat, q, fixedTransform, jointMapType, jointMap, linkMap, jointOffset,
-              batch, njoints, nlinks, matAddrBase, tile4, col_idx);
-        }
-        __syncthreads();
-      } else {
-        // Load cumulative matrices to shared memory using unified function
-        read_cumul_to_shared_mem(cumul_mat, global_cumul_mat, start_batch_index,
-                                 threadIdx.x, nlinks,
-                                 batch_size, batches_per_block, threads_per_batch);
-      }
+      // Load cumulative matrices written by the forward kernel.
+      read_cumul_to_shared_mem(cumul_mat, global_cumul_mat, start_batch_index,
+                               threadIdx.x, nlinks,
+                               batch_size, batches_per_block, threads_per_batch);
 
       // Thread-local partial sum accumulators
       psum_t psum_grad[MAX_JOINTS];

@@ -359,8 +359,6 @@ class KinematicsFusedFunction(Function):
                     grad_in_com,
                     batch_com,
                     batch_cumul_mat,
-                    joint_seq,
-                    kinematics_config.fixed_transforms,
                     kinematics_config.link_spheres,
                     kinematics_config.link_masses_com,
                     kinematics_config.link_map,

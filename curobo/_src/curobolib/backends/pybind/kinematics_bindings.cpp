@@ -96,8 +96,6 @@ void launch_kinematics_backward(
   const torch::Tensor grad_center_of_mass,  // [batch_size, 4] - xyz=pos grad, w=mass grad (ignored)
   const torch::Tensor batch_center_of_mass, // [batch_size, 4] - xyz=global CoM, w=total mass (INPUT)
   const torch::Tensor global_cumul_mat,
-  const torch::Tensor joint_vec,
-  const torch::Tensor fixed_transform,
   const torch::Tensor robot_spheres,
   const torch::Tensor link_masses_com,      // [n_links, 4] - xyz=local CoM, w=mass
   const torch::Tensor link_map,
@@ -258,8 +256,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         py::arg("grad_center_of_mass"),
         py::arg("batch_center_of_mass"),
         py::arg("global_cumul_mat"),
-        py::arg("joint_vec"),
-        py::arg("fixed_transform"),
         py::arg("robot_spheres"),
         py::arg("link_masses_com"),
         py::arg("link_map"),

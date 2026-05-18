@@ -30,8 +30,7 @@
   example at `curobo/examples/getting_started/feature_mapping.py`.
 
 ### Bug Fixes & Misc.
-- Improve CUDA kinematics kernels with cooperative-group synchronization,
-  two-phase local/cumulative transform computation, and fused
+- Improve CUDA kinematics kernels two-phase local/cumulative transform computation, and fused
   Jacobian-gradient backward while preserving the saved cumulative-transform
   autograd contract.
 - Update ``wp.torch`` calls to ``wp.device_from_torch`` as warp has changed api in 1.13.

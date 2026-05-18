@@ -81,7 +81,7 @@ struct KinBwdLaunchConfig {
   // Helper function to select kernel
   typedef void (*KinBwdFunction)(
     float*, const float*, const float*, const float*, const float*, const float*,
-    const float*, const float*, const float*, const float*, const float*,
+    const float*, const float*, const float*,
     const int8_t*, const int16_t*, const int16_t*, const int16_t*, const int16_t*,
     const int32_t*, const int16_t*, const int16_t*, const float*,
     const int, const int, const int, const int, const int, const int, const int, const int);
@@ -176,7 +176,6 @@ else {
   }
 
   void launch_kinematics_backward_impl(
-  const torch::Tensor joint_vec,
   const torch::Tensor grad_out,
   const torch::Tensor grad_nlinks_pos,
   const torch::Tensor grad_nlinks_quat,
@@ -184,7 +183,6 @@ else {
   const torch::Tensor grad_center_of_mass,  // [batch_size, 4] - xyz=pos grad, w=mass grad (ignored)
   const torch::Tensor batch_center_of_mass, // [batch_size, 4] - xyz=global CoM, w=total mass (INPUT)
   const torch::Tensor global_cumul_mat,
-  const torch::Tensor fixed_transform,
   const torch::Tensor robot_spheres,
   const torch::Tensor link_masses_com,      // [n_links, 4] - xyz=local CoM, w=mass
   const torch::Tensor link_map,
@@ -203,7 +201,6 @@ else {
   const bool compute_com)
   {
 
-  curobo::common::validate_cuda_input(joint_vec, "joint_vec");
   curobo::common::validate_cuda_input(grad_out, "grad_out");
   curobo::common::validate_cuda_input(grad_nlinks_pos, "grad_nlinks_pos");
   curobo::common::validate_cuda_input(grad_nlinks_quat, "grad_nlinks_quat");
@@ -211,7 +208,6 @@ else {
   curobo::common::validate_cuda_input(grad_center_of_mass, "grad_center_of_mass");  // NEW
   curobo::common::validate_cuda_input(batch_center_of_mass, "batch_center_of_mass"); // NEW
   curobo::common::validate_cuda_input(global_cumul_mat, "global_cumul_mat");
-  curobo::common::validate_cuda_input(fixed_transform, "fixed_transform");
   curobo::common::validate_cuda_input(robot_spheres, "robot_spheres");
   curobo::common::validate_cuda_input(link_masses_com, "link_masses_com");      // NEW
   curobo::common::validate_cuda_input(link_map, "link_map");
@@ -250,8 +246,6 @@ else {
     grad_center_of_mass.data_ptr<float>(),  // ADD: gradient input for center of mass
     batch_center_of_mass.data_ptr<float>(), // ADD: pre-computed center of mass (for total mass)
     global_cumul_mat.data_ptr<float>(),
-    joint_vec.data_ptr<float>(),
-    fixed_transform.data_ptr<float>(),
     robot_spheres.data_ptr<float>(),
     link_masses_com.data_ptr<float>(),      // ADD: link masses and local CoM
     joint_map_type.data_ptr<int8_t>(),
@@ -279,8 +273,6 @@ else {
   const torch::Tensor grad_center_of_mass,  // [batch_size, 4] - xyz=pos grad, w=mass grad (ignored)
   const torch::Tensor batch_center_of_mass, // [batch_size, 4] - xyz=global CoM, w=total mass (INPUT)
   const torch::Tensor global_cumul_mat,
-  const torch::Tensor joint_vec,
-  const torch::Tensor fixed_transform,
   const torch::Tensor robot_spheres,
   const torch::Tensor link_masses_com,      // [n_links, 4] - xyz=local CoM, w=mass
   const torch::Tensor link_map, const torch::Tensor joint_map,
@@ -299,8 +291,8 @@ else {
   const bool compute_com)
   {
   launch_kinematics_backward_impl(
-    joint_vec, grad_out, grad_nlinks_pos, grad_nlinks_quat, grad_spheres,
-    grad_center_of_mass, batch_center_of_mass, global_cumul_mat, fixed_transform,
+    grad_out, grad_nlinks_pos, grad_nlinks_quat, grad_spheres,
+    grad_center_of_mass, batch_center_of_mass, global_cumul_mat,
     robot_spheres, link_masses_com, link_map, joint_map, joint_map_type,
     tool_frame_map, link_sphere_map, link_chain_data, link_chain_offsets,
     joint_offset_map, env_query_idx, num_envs, batch_size, horizon, n_joints, n_spheres, compute_com);

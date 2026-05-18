@@ -189,9 +189,9 @@ class CudaCoreKernelCache:
         # Setup include paths following common.py pattern
         include_paths = [str(inc) for inc in include_dirs]
 
-        # Add CUDA system includes. cooperative_groups.h depends on CCCL
-        # headers such as <nv/target>, so include the CCCL root explicitly.
-        for libname in ("cudart", "cccl", "nvrtc"):
+        # Add CUDA system includes. If kernels start including CCCL or
+        # cooperative_groups headers again, add "cccl" here.
+        for libname in ("cudart", "nvrtc"):
             cuda_include = pathfinder.find_nvidia_header_directory(libname)
             if cuda_include is not None and os.path.isdir(cuda_include):
                 include_paths.append(cuda_include)
