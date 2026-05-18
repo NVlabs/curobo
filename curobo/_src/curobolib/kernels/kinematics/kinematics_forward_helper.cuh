@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#pragma once
 
 #include "kinematics_constants.h"
 
@@ -10,144 +11,10 @@
 #include "common/math.cuh"
 #include "common/quaternion_util.cuh"
 #include "common/pose_util.cuh"
-#include "kinematics_joint_util.cuh"
 #include "kinematics_util.cuh"
 
 namespace curobo{
     namespace kinematics{
-
-      // Helper function to initialize base link transform
-      __forceinline__ __device__ void initialize_base_link_transform(
-        float *cumul_mat,
-        const float *fixedTransform,
-        const int matAddrBase,
-        const int col_idx,
-        const int stride = 4  // Default to M (4) for compatibility
-      ) {
-        if (col_idx < 3) {
-          *(float4 *)&cumul_mat[matAddrBase + col_idx * stride] =
-            *(float4 *)&fixedTransform[col_idx * stride];
-        }
-        //__syncthreads();
-        __syncwarp((0xF << ((threadIdx.x / 4) * 4)) & 0xFFFFFFFF);
-      }
-
-      // Helper function to apply joint transformation to cumulative matrix
-      __forceinline__ __device__ void apply_joint_transform(
-        float *cumul_mat,
-        const float *JM,
-        const int16_t *linkMap,
-        const int link_idx,
-        const int matAddrBase,
-        const int col_idx,
-        const int stride = 4  // Default stride for matrix rows
-      ) {
-        const int inAddrStart = matAddrBase + linkMap[link_idx] * (stride * 3);
-        const int outAddrStart = matAddrBase + link_idx * (stride * 3);
-
-        float4 jm_vec = *(float4 *)JM;
-
-        #pragma unroll 3
-        for (int i = 0; i < 3; i++) {
-          cumul_mat[outAddrStart + (i * stride) + col_idx] =
-            dot(*(float4 *)&cumul_mat[inAddrStart + (i * stride)], jm_vec);
-        }
-      }
-
-      /**
-       * Helper function to compute joint transformations for all links.
-       * This function computes the cumulative transformation matrix for each link
-       * by applying the appropriate joint transformation based on joint type.
-       *
-       * @param cumul_mat Cumulative transformation matrix buffer
-       * @param q Joint angles array
-       * @param fixedTransform Fixed transformation matrices for each link. Shape is nlinks x 3 x 4.
-       * @param jointMapType Joint type mapping (FIXED, X_PRISM, Y_PRISM, Z_PRISM, X_ROT, Y_ROT, Z_ROT)
-       * @param jointMap Joint index mapping
-       * @param linkMap Link parent mapping
-       * @param jointOffset Joint offset values
-       * @param batch Current batch index
-       * @param njoints Number of joints
-       * @param nlinks Number of links
-       * @param matAddrBase Base address in cumulative matrix
-       * @param col_idx Column index (0-3) for 4x4 matrix operations
-       */
-       template<int N_LINKS=-1>
-      __forceinline__ __device__ void compute_joint_transformations(
-        float *cumul_mat,
-        const float *q,
-        const float *fixedTransform,
-        const int8_t *jointMapType,
-        const int16_t *jointMap,
-        const int16_t *linkMap,
-        const float *jointOffset,
-        const int batch,
-        const int njoints,
-        const int nlinks,
-        const int matAddrBase,
-        const int col_idx
-      ) {
-
-        if constexpr (N_LINKS < 0) {
-        for (int8_t l = 1; l < nlinks; l++) {
-          // Get one row of fixedTransform
-          int ftAddrStart  = l * 12;
-          // int inAddrStart  = matAddrBase + linkMap[l] * 12;
-          //int outAddrStart = matAddrBase + l * 12;
-
-          // Check joint type and use one of the helper functions:
-          float __align__(16) JM[4];
-          const int   j_type = jointMapType[l];
-
-          if (j_type == FIXED) {
-            fixed_joint_fn(&fixedTransform[ftAddrStart + col_idx], col_idx, &JM[0]);
-          } else {
-            float angle = q[batch * njoints + jointMap[l]];
-            float2 angle_offset = *(float2 *)&jointOffset[l*2];
-            update_axis_direction(angle, j_type, angle_offset);
-
-            if (j_type <= Z_PRISM) {
-              prism_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type);
-            } else {
-              xyz_rot_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type - X_ROT);
-            }
-          }
-
-          // Apply the transformation
-          apply_joint_transform(cumul_mat, JM, linkMap, l, matAddrBase, col_idx);
-        }
-        }
-        else {
-          #pragma unroll 10
-          for (int l = 1; l < N_LINKS; l++) {
-            // Get one row of fixedTransform
-            const int ftAddrStart  = l * 12;
-            // int inAddrStart  = matAddrBase + linkMap[l] * 12;
-            //int outAddrStart = matAddrBase + l * 12;
-
-            // Check joint type and use one of the helper functions:
-            float __align__(16) JM[4];
-            const int j_type = jointMapType[l];
-
-            if (j_type == FIXED) {
-              fixed_joint_fn(&fixedTransform[ftAddrStart + col_idx], col_idx, &JM[0]);
-            } else {
-              float angle = q[batch * njoints + jointMap[l]];
-              float2 angle_offset = *(float2 *)&jointOffset[l*2];
-              update_axis_direction(angle, j_type, angle_offset);
-
-              if (j_type <= Z_PRISM) {
-                prism_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type);
-              } else {
-                xyz_rot_fn(&fixedTransform[ftAddrStart], angle, col_idx, &JM[0], j_type - X_ROT);
-              }
-            }
-
-            // Apply the transformation
-            apply_joint_transform(cumul_mat, JM, linkMap, l, matAddrBase, col_idx);
-          }
-        }
-      }
 
         /**
          * Optimized helper function to compute kinematic jacobian using precomputed joint-link mapping.
@@ -175,7 +42,7 @@ namespace curobo{
          * @param thread_index Current thread index within batch
          * @param threads_per_batch Number of threads per batch
          */
-        __forceinline__ __device__ void compute_kinematic_jacobian(
+        __forceinline__ __device__ void write_kinematic_jacobian(
           float *jacobian,
           const float *cumul_mat,
           const int8_t *jointMapType,
@@ -348,7 +215,7 @@ namespace curobo{
          * @param threads_per_batch Number of threads per batch
          * @param matAddrBase Base address in cumulative matrix for current batch
          */
-        __forceinline__ __device__ void process_robot_spheres(
+        __forceinline__ __device__ void transform_robot_spheres(
           float *b_robot_spheres,
           const float *cumul_mat,
           const float *robot_spheres,
@@ -400,7 +267,7 @@ namespace curobo{
        * @param threads_per_batch Number of threads per batch
        * @param matAddrBase Base address in cumulative matrix for current batch
        */
-      __forceinline__ __device__ void process_stored_links(
+      __forceinline__ __device__ void write_link_poses(
         float *link_pos,
         float *link_quat,
         const float *cumul_mat,
@@ -433,101 +300,297 @@ namespace curobo{
         }
       }
 
-      /**
-       * Helper function to compute center of mass in the forward pass.
-       * Uses dedicated shared memory for reduction (no reuse of existing shared memory).
-       * Supports multiple batches per thread block using general threading model.
-       *
-       * @param batch_center_of_mass Output buffer for center of mass [batch_size] - xyz=global CoM, w=total mass
-       * @param cumul_mat Cumulative transformation matrix buffer
-       * @param link_masses_com Input buffer [n_links] - xyz=local CoM, w=mass
-       * @param batch_index Current batch index
-       * @param n_links Number of links
-       * @param thread_in_batch Thread index within this batch (0 to threads_per_batch-1)
-       * @param threads_per_batch Number of threads processing this batch
-       * @param local_batch_start Starting index in shared memory for this batch
-       * @param matAddrBase Base address in cumulative matrix for current batch
-       */
-      __forceinline__ __device__ void process_center_of_mass(
-        float *batch_center_of_mass,      // [batch_size * 4] - xyz=global CoM, w=total mass
-        const float *cumul_mat,
-        const float *link_masses_com,     // [n_links * 4] - xyz=local CoM, w=mass
-        float4 *shared_com_data,           // Shared memory for reduction - passed from kernel
-        const int batch_index,
-        const int n_links,
-        const int thread_in_batch,
-        const int threads_per_batch,
-        const int local_batch_start,
-        const int matAddrBase
+      __forceinline__ __device__ void store_local_transform_column(
+        float *local_mat,
+        const int col_idx,
+        const float x,
+        const float y,
+        const float z
       ) {
-        // Shared memory for reduction across threads within this batch
-        // Note: Caller must ensure shared memory is large enough for all batches in block
+        const int addr = col_idx * 3;
+        local_mat[addr + 0] = x;
+        local_mat[addr + 1] = y;
+        local_mat[addr + 2] = z;
+      }
 
-        const int16_t links_per_thread = (n_links + threads_per_batch - 1) / threads_per_batch;
+      __forceinline__ __device__ void compute_local_link_transform(
+        float *local_mat,
+        const float *q,
+        const float *fixedTransform,
+        const int8_t *jointMapType,
+        const int16_t *jointMap,
+        const float *jointOffset,
+        const int batch,
+        const int link_idx,
+        const int nlinks,
+        const int njoints
+      ) {
+        const int ft_addr = link_idx * 12;
+        const float f0 = fixedTransform[ft_addr + 0];
+        const float f1 = fixedTransform[ft_addr + 1];
+        const float f2 = fixedTransform[ft_addr + 2];
+        const float f3 = fixedTransform[ft_addr + 3];
+        const float f4 = fixedTransform[ft_addr + 4];
+        const float f5 = fixedTransform[ft_addr + 5];
+        const float f6 = fixedTransform[ft_addr + 6];
+        const float f7 = fixedTransform[ft_addr + 7];
+        const float f8 = fixedTransform[ft_addr + 8];
+        const float f9 = fixedTransform[ft_addr + 9];
+        const float f10 = fixedTransform[ft_addr + 10];
+        const float f11 = fixedTransform[ft_addr + 11];
 
-        // Thread-local accumulation
-        float4 local_weighted_com = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        const int j_type = jointMapType[link_idx];
 
-        // Each thread processes a subset of links
-        for (int16_t i = 0; i < links_per_thread; i++) {
-          const int16_t link_idx = i * threads_per_batch + thread_in_batch;
-
-          if (link_idx >= n_links) {
-            break;
-          }
-
-          // Load link mass and local center of mass from float array (4 floats per link)
-          const int link_addr = link_idx * 4;
-          float4 mass_com = make_float4(
-            link_masses_com[link_addr + 0],  // x - local CoM x
-            link_masses_com[link_addr + 1],  // y - local CoM y
-            link_masses_com[link_addr + 2],  // z - local CoM z
-            link_masses_com[link_addr + 3]   // w - mass
-          );
-          float mass = mass_com.w;
-
-          if (mass <= 0.0f) {
-            continue;  // Skip massless links
-          }
-
-          // Transform local center of mass to world coordinates
-          // Reuse existing transform_sphere_float4 function!
-          float4 com_world;
-          transform_sphere_float4(&cumul_mat[matAddrBase + link_idx * 12], &mass_com, com_world);
-
-          // Accumulate mass-weighted position and total mass
-          local_weighted_com.x += mass * com_world.x;
-          local_weighted_com.y += mass * com_world.y;
-          local_weighted_com.z += mass * com_world.z;
-          local_weighted_com.w += mass;  // Total mass accumulation
+        if (j_type == FIXED) {
+          store_local_transform_column(local_mat, 0, f0, f4, f8);
+          store_local_transform_column(local_mat, 1, f1, f5, f9);
+          store_local_transform_column(local_mat, 2, f2, f6, f10);
+          store_local_transform_column(local_mat, 3, f3, f7, f11);
+          return;
         }
 
-        // Store thread results in shared memory with proper offset
-        shared_com_data[local_batch_start + thread_in_batch] = local_weighted_com;
+        float angle = q[batch * njoints + jointMap[link_idx]];
+        const float2 angle_offset = *(const float2 *)&jointOffset[link_idx * 2];
+        update_axis_direction(angle, j_type, angle_offset);
+
+        if (j_type <= Z_PRISM) {
+          store_local_transform_column(local_mat, 0, f0, f4, f8);
+          store_local_transform_column(local_mat, 1, f1, f5, f9);
+          store_local_transform_column(local_mat, 2, f2, f6, f10);
+          store_local_transform_column(
+            local_mat,
+            3,
+            f3 + (j_type == X_PRISM ? f0 : (j_type == Y_PRISM ? f1 : f2)) * angle,
+            f7 + (j_type == X_PRISM ? f4 : (j_type == Y_PRISM ? f5 : f6)) * angle,
+            f11 + (j_type == X_PRISM ? f8 : (j_type == Y_PRISM ? f9 : f10)) * angle
+          );
+          return;
+        }
+
+        float s = 0.0f;
+        float c = 0.0f;
+        sincosf(angle, &s, &c);
+
+        const int xyz = j_type - X_ROT;
+        const float is_x = xyz == 0 ? 1.0f : 0.0f;
+        const float is_y = xyz == 1 ? 1.0f : 0.0f;
+        const float is_z = xyz == 2 ? 1.0f : 0.0f;
+
+        const float col0_scale = is_x + c * (is_y + is_z);
+        const float col1_scale = is_y + c * (is_x + is_z);
+        const float col2_scale = is_z + c * (is_x + is_y);
+
+        local_mat[0] = f0 * col0_scale + s * (is_z * f1 - is_y * f2);
+        local_mat[1] = f4 * col0_scale + s * (is_z * f5 - is_y * f6);
+        local_mat[2] = f8 * col0_scale + s * (is_z * f9 - is_y * f10);
+        local_mat[3] = f1 * col1_scale + s * (is_x * f2 - is_z * f0);
+        local_mat[4] = f5 * col1_scale + s * (is_x * f6 - is_z * f4);
+        local_mat[5] = f9 * col1_scale + s * (is_x * f10 - is_z * f8);
+        local_mat[6] = f2 * col2_scale + s * (is_y * f0 - is_x * f1);
+        local_mat[7] = f6 * col2_scale + s * (is_y * f4 - is_x * f5);
+        local_mat[8] = f10 * col2_scale + s * (is_y * f8 - is_x * f9);
+        store_local_transform_column(local_mat, 3, f3, f7, f11);
+      }
+
+      template<int N_LINKS>
+      __forceinline__ __device__ void compute_local_link_transforms(
+        float *local_mat,
+        const float *q,
+        const float *fixedTransform,
+        const int8_t *jointMapType,
+        const int16_t *jointMap,
+        const float *jointOffset,
+        const int start_batch_index,
+        const int batchSize,
+        const int nlinks,
+        const int njoints,
+        const int num_batches_per_block
+      ) {
+        const int remaining_batches = batchSize - start_batch_index;
+        const int actual_batches_per_block = min(num_batches_per_block, remaining_batches);
+        const int link_count = (N_LINKS < 0) ? nlinks : N_LINKS;
+        const int total_links = actual_batches_per_block * link_count;
+
+        for (int element_idx = threadIdx.x; element_idx < total_links; element_idx += blockDim.x) {
+          const int local_batch = element_idx / link_count;
+          const int link_idx = element_idx - local_batch * link_count;
+          const int batch = start_batch_index + local_batch;
+          const int local_offset = local_batch * nlinks * 12 + link_idx * 12;
+
+          compute_local_link_transform(
+            &local_mat[local_offset],
+            q,
+            fixedTransform,
+            jointMapType,
+            jointMap,
+            jointOffset,
+            batch,
+            link_idx,
+            nlinks,
+            njoints
+          );
+        }
+
         __syncthreads();
+      }
 
-        // Reduction across threads (only thread 0 of this batch does the final computation)
-        if (thread_in_batch == 0) {
-          float4 total_weighted_com = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      __forceinline__ __device__ void compose_link_transform_halfwarp(
+        float *cumul_mat,
+        const float *local_mat,
+        const int16_t *linkMap,
+        const int link_idx,
+        const int matAddrBase,
+        const int localAddrBase,
+        const int lane_idx,
+        const int stride = 4
+      ) {
+        if (lane_idx >= 12) {
+          return;
+        }
 
-          // Sum contributions from all threads in this batch
-          for (int t = 0; t < threads_per_batch; t++) {
-            float4 thread_contribution = shared_com_data[local_batch_start + t];
-            total_weighted_com.x += thread_contribution.x;
-            total_weighted_com.y += thread_contribution.y;
-            total_weighted_com.z += thread_contribution.z;
-            total_weighted_com.w += thread_contribution.w;
+        const int row_idx = lane_idx / 4;
+        const int col_idx = lane_idx - row_idx * 4;
+        const int inAddrStart = matAddrBase + linkMap[link_idx] * (stride * 3);
+        const int outAddrStart = matAddrBase + link_idx * (stride * 3);
+        const float *local_col = &local_mat[localAddrBase + link_idx * 12 + col_idx * 3];
+        const float4 jm_vec = make_float4(
+          local_col[0],
+          local_col[1],
+          local_col[2],
+          col_idx == 3 ? 1.0f : 0.0f
+        );
+
+        cumul_mat[outAddrStart + row_idx * stride + col_idx] =
+          dot(*(float4 *)&cumul_mat[inAddrStart + row_idx * stride], jm_vec);
+      }
+
+      __forceinline__ __device__ void load_base_transform_halfwarp(
+        float *cumul_mat,
+        const float *fixedTransform,
+        const int nlinks,
+        const int matAddrBase,
+        const int lane_idx,
+        const unsigned int warp_mask
+      ) {
+        (void)nlinks;
+        if (lane_idx < 3) {
+          const int fixed_row = lane_idx * 4;
+          const int out_row = matAddrBase + lane_idx * 4;
+          cumul_mat[out_row + 0] = fixedTransform[fixed_row + 0];
+          cumul_mat[out_row + 1] = fixedTransform[fixed_row + 1];
+          cumul_mat[out_row + 2] = fixedTransform[fixed_row + 2];
+          cumul_mat[out_row + 3] = fixedTransform[fixed_row + 3];
+        }
+        __syncwarp(warp_mask);
+      }
+
+      template<int N_LINKS>
+      __forceinline__ __device__ void compute_cumulative_transforms_halfwarp(
+        float *cumul_mat,
+        const float *local_mat,
+        const int16_t *linkMap,
+        const int nlinks,
+        const int matAddrBase,
+        const int localAddrBase,
+        const int lane_idx,
+        const unsigned int warp_mask
+      ) {
+        if constexpr (N_LINKS < 0) {
+          for (int l = 1; l < nlinks; l++) {
+            compose_link_transform_halfwarp(
+              cumul_mat, local_mat, linkMap, l, matAddrBase, localAddrBase, lane_idx);
+            __syncwarp(warp_mask);
           }
+        } else {
+        #pragma unroll 10
+          for (int l = 1; l < N_LINKS; l++) {
+            compose_link_transform_halfwarp(
+              cumul_mat, local_mat, linkMap, l, matAddrBase, localAddrBase, lane_idx);
+            __syncwarp(warp_mask);
+          }
+        }
+      }
 
-          // Compute final center of mass and store result as 4 consecutive floats
+      __forceinline__ __device__ void write_cumulative_transforms_active(
+        float *global_cumul_mat,
+        const float *cumul_mat,
+        const int start_batch_index,
+        const int nlinks,
+        const int actual_batches_per_block,
+        const int active_threads
+      ) {
+        const int vec4_per_batch = nlinks * 3;
+        const int total_vec4 = actual_batches_per_block * vec4_per_batch;
+
+        for (int vec_idx = threadIdx.x; vec_idx < total_vec4; vec_idx += active_threads) {
+          const int local_batch = vec_idx / vec4_per_batch;
+          const int local_vec_idx = vec_idx - local_batch * vec4_per_batch;
+          const int link_idx = local_vec_idx / 3;
+          const int row_idx = local_vec_idx - link_idx * 3;
+          const int shared_offset = local_batch * nlinks * 12 + link_idx * 12 + row_idx * 4;
+          const int global_offset =
+            (start_batch_index + local_batch) * nlinks * 12 + link_idx * 12 + row_idx * 4;
+
+          *(float4 *)&global_cumul_mat[global_offset] = *(float4 *)&cumul_mat[shared_offset];
+        }
+      }
+
+      template<int TILE_WIDTH>
+      __forceinline__ __device__ void write_center_of_mass_tile(
+        float *batch_center_of_mass,
+        const float *cumul_mat,
+        const float *link_masses_com,
+        const int batch_index,
+        const int n_links,
+        const int thread_in_tile,
+        const unsigned int tile_mask,
+        const int matAddrBase
+      ) {
+        if (thread_in_tile < 0 || thread_in_tile >= TILE_WIDTH) {
+          return;
+        }
+
+        float4 local_weighted_com = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+        for (int16_t link_idx = thread_in_tile; link_idx < n_links; link_idx += TILE_WIDTH) {
+          const int link_addr = link_idx * 4;
+          const float4 mass_com = make_float4(
+            link_masses_com[link_addr + 0],
+            link_masses_com[link_addr + 1],
+            link_masses_com[link_addr + 2],
+            link_masses_com[link_addr + 3]);
+          const float mass = mass_com.w;
+
+          if (mass > 0.0f) {
+            float4 com_world;
+            transform_sphere_float4(&cumul_mat[matAddrBase + link_idx * 12], mass_com, com_world);
+            local_weighted_com.x += mass * com_world.x;
+            local_weighted_com.y += mass * com_world.y;
+            local_weighted_com.z += mass * com_world.z;
+            local_weighted_com.w += mass;
+          }
+        }
+
+        #pragma unroll
+        for (int offset = TILE_WIDTH >> 1; offset > 0; offset >>= 1) {
+          local_weighted_com.x +=
+            __shfl_down_sync(tile_mask, local_weighted_com.x, offset, TILE_WIDTH);
+          local_weighted_com.y +=
+            __shfl_down_sync(tile_mask, local_weighted_com.y, offset, TILE_WIDTH);
+          local_weighted_com.z +=
+            __shfl_down_sync(tile_mask, local_weighted_com.z, offset, TILE_WIDTH);
+          local_weighted_com.w +=
+            __shfl_down_sync(tile_mask, local_weighted_com.w, offset, TILE_WIDTH);
+        }
+
+        if (thread_in_tile == 0) {
           const int batch_addr = batch_index * 4;
-          if (total_weighted_com.w > 0.0f) {
-            batch_center_of_mass[batch_addr + 0] = total_weighted_com.x / total_weighted_com.w;  // CoM x
-            batch_center_of_mass[batch_addr + 1] = total_weighted_com.y / total_weighted_com.w;  // CoM y
-            batch_center_of_mass[batch_addr + 2] = total_weighted_com.z / total_weighted_com.w;  // CoM z
-            batch_center_of_mass[batch_addr + 3] = total_weighted_com.w;                        // Total mass
+          if (local_weighted_com.w > 0.0f) {
+            batch_center_of_mass[batch_addr + 0] = local_weighted_com.x / local_weighted_com.w;
+            batch_center_of_mass[batch_addr + 1] = local_weighted_com.y / local_weighted_com.w;
+            batch_center_of_mass[batch_addr + 2] = local_weighted_com.z / local_weighted_com.w;
+            batch_center_of_mass[batch_addr + 3] = local_weighted_com.w;
           } else {
-            // Handle edge case of massless robot
             batch_center_of_mass[batch_addr + 0] = 0.0f;
             batch_center_of_mass[batch_addr + 1] = 0.0f;
             batch_center_of_mass[batch_addr + 2] = 0.0f;

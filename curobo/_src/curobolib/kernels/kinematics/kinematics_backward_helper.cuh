@@ -10,61 +10,6 @@
 namespace curobo{
     namespace kinematics{
 
-// Singularity damping constants (hardcoded for prototyping)
-constexpr float SINGULARITY_THRESHOLD = 1.0f;  // ~8.5 degrees
-constexpr float MIN_DAMPING = 0.0f;
-
-/**
- * Compute singularity damping factor for a revolute joint.
- * Uses scale-invariant normalized column norm = sin(angle between axis and lever arm).
- *
- * @param cumul_mat_joint Pointer to joint's 3x4 transform matrix [12 floats]
- * @param point_pos World position of the point being affected
- * @param joint_type Joint type (X_ROT, Y_ROT, Z_ROT, or prismatic)
- * @return Damping factor in [MIN_DAMPING, 1.0]
- */
-__device__ __forceinline__ float compute_singularity_damping(
-    const float* cumul_mat_joint,
-    float3 point_pos,
-    int joint_type
-) {
-    return 1.0f;
-    // Prismatic joints don't have singularity issues
-    if (joint_type < X_ROT || joint_type > Z_ROT) {
-        return 1.0f;
-    }
-
-    // Extract joint position from transform (translation part)
-    float3 joint_pos = make_float3(
-        cumul_mat_joint[3],
-        cumul_mat_joint[7],
-        cumul_mat_joint[11]
-    );
-
-    int axis_idx = joint_type - X_ROT;
-    float3 axis = make_float3(
-        cumul_mat_joint[axis_idx],      // row 0
-        cumul_mat_joint[4 + axis_idx],  // row 1
-        cumul_mat_joint[8 + axis_idx]   // row 2
-    );
-
-    // Lever arm vector
-    float3 r = point_pos - joint_pos;
-    float r_len = length(r);
-    if (r_len < 1e-6f) return 1.0f;  // Point at joint, no damping needed
-
-    // Get joint axis from transform matrix (column corresponding to rotation axis)
-
-    // Normalized column norm = ||axis × r|| / ||r|| = sin(angle between axis and r)
-    float3 Jv = cross(axis, r);
-    float normalized_col_norm = length(Jv) / (r_len);// / r_len;
-
-    // Smoothstep ramp for C1 continuity
-    float x = fminf(normalized_col_norm / SINGULARITY_THRESHOLD, 1.0f);
-    return MIN_DAMPING + (1.0f - MIN_DAMPING) * (x * x * (3.0f - 2.0f * x));
-}
-
-
 // Device functions for common computations
 template<typename scalar_t, typename psum_t>
 __device__ void compute_sphere_gradients(
@@ -140,16 +85,12 @@ __device__ void compute_sphere_gradients(
                                                 result,
                                                 j_type - int(JointType::XRevolute),
                                                 axis_sign);
-                // Apply singularity damping
-                float sing_damp = compute_singularity_damping(
-                    &cumul_mat[matAddrBase + j * 12], sphere_position, j_type);
-                psum_grad[j_idx] += (psum_t)(result * sing_damp);
+                psum_grad[j_idx] += (psum_t)result;
             }
             else if ((j_type >= int(JointType::XPrismatic)) && (j_type <= int(JointType::ZPrismatic)))
             {
                 xyz_prism_backward(&cumul_mat[matAddrBase + j * 12],
                                    loc_grad_sphere, result, j_type, axis_sign);
-                // No damping for prismatic (singularity not applicable)
                 psum_grad[j_idx] += (psum_t)result;
             }
         }
@@ -227,17 +168,13 @@ __device__ void compute_link_gradients(
                 xyz_rot_backward(&cumul_mat[matAddrBase + (j) * 12], pose.position,
                                g_position, g_orientation,
                                 result, j_type - X_ROT, axis_sign);
-                // Apply singularity damping
-                float sing_damp = compute_singularity_damping(
-                    &cumul_mat[matAddrBase + j * 12], pose.position, j_type);
-                psum_grad[j_idx] += (psum_t)(result * sing_damp);
+                psum_grad[j_idx] += (psum_t)result;
             }
             else if (j_type >= X_PRISM && j_type <= Z_PRISM)
             {
                 xyz_prism_backward(&cumul_mat[matAddrBase + j * 12],
                                                g_position, result,
                                                j_type, axis_sign);
-                // No damping for prismatic (singularity not applicable)
                 psum_grad[j_idx] += (psum_t)result;
             }
 
@@ -336,10 +273,7 @@ __device__ void compute_center_of_mass_gradients(
                     j_type - X_ROT,                  // Axis index
                     axis_sign                        // Sign
                 );
-                // Apply singularity damping
-                float sing_damp = compute_singularity_damping(
-                    &cumul_mat[matAddrBase + j * 12], com_world_pos, j_type);
-                psum_grad[j_idx] += (psum_t)(result * sing_damp);
+                psum_grad[j_idx] += (psum_t)result;
             }
             else if (j_type >= X_PRISM && j_type <= Z_PRISM) {
                 // Use existing function directly!
@@ -350,7 +284,6 @@ __device__ void compute_center_of_mass_gradients(
                     j_type,               // Axis index
                     axis_sign                       // Sign
                 );
-                // No damping for prismatic (singularity not applicable)
                 psum_grad[j_idx] += (psum_t)result;
             }
         }

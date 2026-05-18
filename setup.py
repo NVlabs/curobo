@@ -53,7 +53,6 @@ if USE_PYBIND:
                     "curobo/_src/curobolib/backends/pybind/kinematics_bindings.cpp",
                     "curobo/_src/curobolib/backends/pybind/kinematics_forward_kernel_launch.cu",
                     "curobo/_src/curobolib/backends/pybind/kinematics_backward_kernel_launch.cu",
-                    "curobo/_src/curobolib/backends/pybind/kinematics_backward_jacobian_kernel_launch.cu",
                 ],
                 include_dirs=[str(source_dir / "curobo/_src/curobolib/kernels")],
                 extra_compile_args=extra_cuda_args,

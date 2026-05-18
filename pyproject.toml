@@ -43,22 +43,26 @@ dependencies = [
 
 cu12 = [
     "cuda-core[cu12]>=0.7",
+    # "nvidia-cuda-cccl-cu12>=12",  # Needed only for CCCL/cooperative_groups headers.
     "nvidia-cuda-runtime-cu12>=12",
 ]
 
 cu13 = [
     "cuda-core[cu13]>=0.7",
+    # "nvidia-cuda-cccl>=13",  # Needed only for CCCL/cooperative_groups headers.
     "nvidia-cuda-runtime>=13",
 ]
 
 cu12-torch = [
     "cuda-core[cu12]>=0.6",
+    # "nvidia-cuda-cccl-cu12>=12",  # Needed only for CCCL/cooperative_groups headers.
     "nvidia-cuda-runtime-cu12>=12",
     "torch>=2.5",
 ]
 
 cu13-torch = [
     "cuda-core[cu13]>=0.6",
+    # "nvidia-cuda-cccl>=13",  # Needed only for CCCL/cooperative_groups headers.
     "nvidia-cuda-runtime>=13",
     "torch>=2.9",
 ]

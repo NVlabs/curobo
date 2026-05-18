@@ -9,6 +9,9 @@ Measures per-call time and memory for:
 4. Above + scene (world) collision cost.
 """
 
+import argparse
+import os
+
 import numpy as np
 import pandas as pd
 import tabulate
@@ -25,7 +28,7 @@ from curobo._src.cost.cost_self_collision import SelfCollisionCost
 from curobo._src.cost.cost_self_collision_cfg import SelfCollisionCostCfg
 from curobo._src.cost.cost_tool_pose import ToolPoseCost
 from curobo._src.cost.cost_tool_pose_cfg import ToolPoseCostCfg
-from curobo._src.geom.collision import SceneCollision, SceneCollisionCfg
+from curobo._src.geom.collision.collision_scene import SceneCollision, SceneCollisionCfg
 from curobo._src.geom.types import SceneCfg
 from curobo._src.robot.kinematics.kinematics import Kinematics, KinematicsCfg
 from curobo._src.state.state_joint import JointState
@@ -37,6 +40,13 @@ from curobo.content import get_robot_configs_path
 
 
 DEFAULT_ROBOTS = ["franka.yml", "dual_ur10e.yml", "unitree_g1.yml"]
+
+
+def _write_results_yaml(results: dict, file_name: str):
+    """Write benchmark results under benchmark/log, creating the directory if needed."""
+    out_path = join_path("benchmark/log", file_name)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    write_yaml(results, out_path)
 
 
 def _load_kinematics(robot_file_name: str, keep_collision: bool) -> Kinematics:
@@ -60,12 +70,112 @@ def _forward_kinematics_fn(kin: Kinematics):
     return _run
 
 
+def _forward_kinematics_jacobian_fn(kin: Kinematics):
+    """Return a callable that takes a [batch, dof] tensor and runs FK+Jacobian."""
+
+    def _run(q_sample: torch.Tensor):
+        state = kin.compute_kinematics(JointState.from_position(q_sample))
+        return (
+            state.tool_poses.position,
+            state.tool_poses.quaternion,
+            state.tool_jacobians,
+            state.robot_spheres,
+        )
+
+    return _run
+
+
 def _make_q_test(batch_size: int, dof: int, device: torch.device) -> torch.Tensor:
     """Create 5 random joint configurations of shape (5, batch_size, dof)."""
     return (
         torch.rand((batch_size * 5, dof), device=device)
         .view(5, batch_size, dof)
         .contiguous()
+    )
+
+
+def run_forward_kinematics_jacobian_benchmark(
+    b_list: list[int],
+    use_cuda_graph: bool = False,
+    prefix: str = "",
+    keep_collision: bool = True,
+):
+    """Benchmark forward kinematics with Jacobian output, optionally with spheres."""
+    mode_name = "spheres" if keep_collision else "nospheres"
+    print(
+        "run_forward_kinematics_jacobian_benchmark "
+        f"({mode_name}) with use_cuda_graph: {use_cuda_graph}"
+    )
+    robot_list = DEFAULT_ROBOTS
+
+    results = {
+        "robot": [],
+        "b_size": [],
+        "time_ms": [],
+        "time_per_sample_ms": [],
+        "memory_mb": [],
+        "first_call_time_ms": [],
+    }
+    device = torch.device("cuda:0")
+
+    for robot in robot_list:
+        kin = _load_kinematics(robot, keep_collision=keep_collision)
+        kin.compute_jacobian = True
+        kin.compute_spheres = keep_collision
+        fk_fn = _forward_kinematics_jacobian_fn(kin)
+
+        for b_size in b_list:
+            torch.cuda.reset_peak_memory_stats(device=device)
+            q_test = _make_q_test(b_size, kin.get_dof(), device)
+
+            first_call_time = 0.0
+            for i in range(5):
+                timer = CudaEventTimer().start()
+                fk_fn(q_test[i])
+                if i == 0:
+                    first_call_time = 1000.0 * timer.stop()
+
+            if use_cuda_graph:
+                graph_timer = CudaEventTimer().start()
+                executor = create_graph_executor(
+                    capture_fn=fk_fn,
+                    device=device,
+                    use_cuda_graph=True,
+                    clone_outputs=False,
+                )
+                executor.warmup(q_test[0])
+                first_call_time += 1000.0 * graph_timer.stop()
+            else:
+                executor = None
+
+            results["first_call_time_ms"].append(first_call_time)
+
+            dt_list = []
+            for i in range(5):
+                timer = CudaEventTimer().start()
+                if executor is not None:
+                    executor(q_test[i])
+                else:
+                    fk_fn(q_test[i])
+                dt_list.append(timer.stop())
+
+            mean_memory = torch.cuda.max_memory_allocated(device=device) / 1024**2
+            mean_time = 1000.0 * float(np.mean(dt_list))
+            results["robot"].append(robot)
+            results["b_size"].append(b_size)
+            results["time_ms"].append(mean_time)
+            results["time_per_sample_ms"].append(mean_time / b_size)
+            results["memory_mb"].append(mean_memory)
+
+    df = pd.DataFrame(results)
+    print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
+    suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
+    _write_results_yaml(
+        results,
+        prefix
+        + f"forward_kinematics_jacobian_{mode_name}_benchmark_curobo"
+        + suffix
+        + ".yml",
     )
 
 
@@ -136,11 +246,9 @@ def run_forward_kinematics_benchmark(
     df = pd.DataFrame(results)
     print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
     suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
-    write_yaml(
+    _write_results_yaml(
         results,
-        join_path(
-            "benchmark/log", prefix + "forward_kinematics_benchmark_curobo" + suffix + ".yml"
-        ),
+        prefix + "forward_kinematics_benchmark_curobo" + suffix + ".yml",
     )
 
 
@@ -247,11 +355,9 @@ def run_kinematics_pose_gradient_benchmark(
     df = pd.DataFrame(results)
     print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
     suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
-    write_yaml(
+    _write_results_yaml(
         results,
-        join_path(
-            "benchmark/log", prefix + "kinematics_pose_gradient_benchmark_curobo" + suffix + ".yml"
-        ),
+        prefix + "kinematics_pose_gradient_benchmark_curobo" + suffix + ".yml",
     )
 
 
@@ -352,12 +458,9 @@ def run_kinematics_pose_gradient_self_collision_benchmark(
     df = pd.DataFrame(results)
     print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
     suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
-    write_yaml(
+    _write_results_yaml(
         results,
-        join_path(
-            "benchmark/log",
-            prefix + "kinematics_pose_gradient_self_collision_benchmark_curobo" + suffix + ".yml",
-        ),
+        prefix + "kinematics_pose_gradient_self_collision_benchmark_curobo" + suffix + ".yml",
     )
 
 
@@ -492,38 +595,81 @@ def run_kinematics_pose_gradient_self_collision_world_collision_benchmark(
     df = pd.DataFrame(results)
     print(tabulate.tabulate(df, headers="keys", tablefmt="grid"))
     suffix = "cuda_graph" if use_cuda_graph else "no_cuda_graph"
-    write_yaml(
+    _write_results_yaml(
         results,
-        join_path(
-            "benchmark/log",
-            prefix
-            + "kinematics_pose_gradient_self_collision_world_collision_benchmark_curobo"
-            + suffix
-            + ".yml",
-        ),
+        prefix
+        + "kinematics_pose_gradient_self_collision_world_collision_benchmark_curobo"
+        + suffix
+        + ".yml",
     )
 
 
 def main(
-    b_list: list[int] | None = None, use_cuda_graph: bool = True, prefix: str = "curobov2"
+    b_list: list[int] | None = None,
+    use_cuda_graph: bool = True,
+    prefix: str = "curobov2",
+    modes: list[str] | None = None,
 ):
     if b_list is None:
-        b_list = [1000]
+        b_list = [100, 1000]
+    if modes is None:
+        modes = ["fk"]
 
     _ = torch.zeros((10, 10), device="cuda")
-    run_forward_kinematics_benchmark(
-        b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
-    )
-    run_kinematics_pose_gradient_benchmark(
-        b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
-    )
-    run_kinematics_pose_gradient_self_collision_benchmark(
-        b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
-    )
-    run_kinematics_pose_gradient_self_collision_world_collision_benchmark(
-        b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
-    )
+    if "fk" in modes:
+        run_forward_kinematics_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
+        )
+    if "fk_jacobian_spheres" in modes:
+        run_forward_kinematics_jacobian_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix, keep_collision=True
+        )
+    if "fk_jacobian_nospheres" in modes:
+        run_forward_kinematics_jacobian_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix, keep_collision=False
+        )
+    if "pose_gradient" in modes:
+        run_kinematics_pose_gradient_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
+        )
+    if "pose_self" in modes:
+        run_kinematics_pose_gradient_self_collision_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
+        )
+    if "pose_self_world" in modes:
+        run_kinematics_pose_gradient_self_collision_world_collision_benchmark(
+            b_list=b_list, use_cuda_graph=use_cuda_graph, prefix=prefix
+        )
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch-sizes", type=int, nargs="+", default=None)
+    parser.add_argument("--no-cuda-graph", action="store_true")
+    parser.add_argument("--prefix", default="curobov2")
+    parser.add_argument(
+        "--modes",
+        nargs="+",
+        default=[
+            "fk",
+            "fk_jacobian_nospheres",
+            "pose_gradient",
+            "pose_self",
+        ],
+        choices=[
+            "fk",
+            "fk_jacobian_spheres",
+            "fk_jacobian_nospheres",
+            "pose_gradient",
+            "pose_self",
+            "pose_self_world",
+        ],
+    )
+    args = parser.parse_args()
+
+    main(
+        b_list=args.batch_sizes,
+        use_cuda_graph=not args.no_cuda_graph,
+        prefix=args.prefix,
+        modes=args.modes,
+    )

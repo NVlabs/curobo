@@ -6,7 +6,7 @@
 #include <torch/extension.h>
 #include "common/torch_cuda_utils.h"
 
-#include "kinematics_backward_kernel.cuh"
+#include "kinematics/kinematics_backward_kernel.cuh"
 
 
 
@@ -78,170 +78,74 @@ struct KinBwdLaunchConfig {
     return config;
   }
 
-  // Helper function to select kernel
   typedef void (*KinBwdFunction)(
     float*, const float*, const float*, const float*, const float*, const float*,
-    const float*, const float*, const float*, const float*, const float*,
+    const float*, const float*, const float*, const float*,
     const int8_t*, const int16_t*, const int16_t*, const int16_t*, const int16_t*,
-    const int16_t*, const int16_t*, const float*,
-    const int, const int, const int, const int, const int, const int, const int);
+    const int32_t*, const int16_t*, const int16_t*, const int16_t*, const int16_t*,
+    const bool*, const float*,
+    const int, const int, const int, const int, const int, const int, const int, const int);
 
-  KinBwdFunction select_bwd_kernel_function(bool use_warp_reduce, bool compute_com, int64_t n_joints) {
+  template<bool USE_WARP_REDUCE, bool COMPUTE_COM, bool COMPUTE_JACOBIAN_GRAD>
+  KinBwdFunction select_bwd_max_joints(int64_t n_joints) {
+    if (n_joints < 16) {
+      return kinematics_backward_kernel<
+        float, float, 16, USE_WARP_REDUCE, COMPUTE_COM, COMPUTE_JACOBIAN_GRAD>;
+    } else if (n_joints < 64) {
+      return kinematics_backward_kernel<
+        float, float, 64, USE_WARP_REDUCE, COMPUTE_COM, COMPUTE_JACOBIAN_GRAD>;
+    }
+    return kinematics_backward_kernel<
+      float, float, 128, USE_WARP_REDUCE, COMPUTE_COM, COMPUTE_JACOBIAN_GRAD>;
+  }
+
+  KinBwdFunction select_bwd_kernel_function(
+    bool use_warp_reduce,
+    bool compute_com,
+    bool compute_jacobian_grad,
+    int64_t n_joints) {
+    if (use_warp_reduce) {
+      if (compute_com) {
+        return compute_jacobian_grad
+          ? select_bwd_max_joints<true, true, true>(n_joints)
+          : select_bwd_max_joints<true, true, false>(n_joints);
+      }
+      return compute_jacobian_grad
+        ? select_bwd_max_joints<true, false, true>(n_joints)
+        : select_bwd_max_joints<true, false, false>(n_joints);
+    }
+
     if (compute_com) {
-    if (use_warp_reduce) {
-        if (n_joints < 16) {
-            return kinematics_fused_backward_unified_kernel<float, float, 16, true, true>;
-        } else if (n_joints < 64) {
-            return kinematics_fused_backward_unified_kernel<float, float, 64, true, true>;
-        } else {
-            return kinematics_fused_backward_unified_kernel<float, float, 128, true, true>;
-        }
-    } else {
-        if (n_joints < 16) {
-            return kinematics_fused_backward_unified_kernel<float, float, 16, false, true>;
-        } else if (n_joints < 64) {
-            return kinematics_fused_backward_unified_kernel<float, float, 64, false, true>;
-        } else {
-            return kinematics_fused_backward_unified_kernel<float, float, 128, false, true>;
-        }
+      return compute_jacobian_grad
+        ? select_bwd_max_joints<false, true, true>(n_joints)
+        : select_bwd_max_joints<false, true, false>(n_joints);
     }
-}
-else {
-
-    if (use_warp_reduce) {
-        if (n_joints < 16) {
-            return kinematics_fused_backward_unified_kernel<float, float, 16, true, false>;
-        } else if (n_joints < 64) {
-            return kinematics_fused_backward_unified_kernel<float, float, 64, true, false>;
-        } else {
-            return kinematics_fused_backward_unified_kernel<float, float, 128, true, false>;
-        }
-    } else {
-        if (n_joints < 16) {
-            return kinematics_fused_backward_unified_kernel<float, float, 16, false, false>;
-        } else if (n_joints < 64) {
-            return kinematics_fused_backward_unified_kernel<float, float, 64, false, false>;
-        } else {
-            return kinematics_fused_backward_unified_kernel<float, float, 128, false, false>;
-        }
-    }
-}
+    return compute_jacobian_grad
+      ? select_bwd_max_joints<false, false, true>(n_joints)
+      : select_bwd_max_joints<false, false, false>(n_joints);
   }
-
-  void launch_kinematics_backward_impl(
-  const torch::Tensor joint_vec,
-  const torch::Tensor grad_out,
-  const torch::Tensor grad_nlinks_pos,
-  const torch::Tensor grad_nlinks_quat,
-  const torch::Tensor grad_spheres,
-  const torch::Tensor grad_center_of_mass,  // [batch_size, 4] - xyz=pos grad, w=mass grad (ignored)
-  const torch::Tensor batch_center_of_mass, // [batch_size, 4] - xyz=global CoM, w=total mass (INPUT)
-  const torch::Tensor global_cumul_mat,
-  const torch::Tensor fixed_transform,
-  const torch::Tensor robot_spheres,
-  const torch::Tensor link_masses_com,      // [n_links, 4] - xyz=local CoM, w=mass
-  const torch::Tensor link_map,
-  const torch::Tensor joint_map,
-  const torch::Tensor joint_map_type,
-  const torch::Tensor tool_frame_map,
-  const torch::Tensor link_sphere_map,
-  const torch::Tensor link_chain_data,      // NEW
-  const torch::Tensor link_chain_offsets,   // NEW
-  const torch::Tensor joint_offset_map,
-  const torch::Tensor env_query_idx,
-  const int64_t num_envs,
-  const int64_t batch_size,
-  const int64_t horizon,
-  const int64_t n_joints, const int64_t n_spheres,
-  const bool compute_com)
-  {
-
-  curobo::common::validate_cuda_input(joint_vec, "joint_vec");
-  curobo::common::validate_cuda_input(grad_out, "grad_out");
-  curobo::common::validate_cuda_input(grad_nlinks_pos, "grad_nlinks_pos");
-  curobo::common::validate_cuda_input(grad_nlinks_quat, "grad_nlinks_quat");
-  curobo::common::validate_cuda_input(grad_spheres, "grad_spheres");
-  curobo::common::validate_cuda_input(grad_center_of_mass, "grad_center_of_mass");  // NEW
-  curobo::common::validate_cuda_input(batch_center_of_mass, "batch_center_of_mass"); // NEW
-  curobo::common::validate_cuda_input(global_cumul_mat, "global_cumul_mat");
-  curobo::common::validate_cuda_input(fixed_transform, "fixed_transform");
-  curobo::common::validate_cuda_input(robot_spheres, "robot_spheres");
-  curobo::common::validate_cuda_input(link_masses_com, "link_masses_com");      // NEW
-  curobo::common::validate_cuda_input(link_map, "link_map");
-  curobo::common::validate_cuda_input(joint_map, "joint_map");
-  curobo::common::validate_cuda_input(joint_map_type, "joint_map_type");
-  curobo::common::validate_cuda_input(tool_frame_map, "tool_frame_map");
-  curobo::common::validate_cuda_input(link_sphere_map, "link_sphere_map");
-  curobo::common::validate_cuda_input(link_chain_data, "link_chain_data");     // NEW
-  curobo::common::validate_cuda_input(link_chain_offsets, "link_chain_offsets");  // NEW
-  curobo::common::validate_cuda_input(joint_offset_map, "joint_offset_map");
-  curobo::common::validate_cuda_input(env_query_idx, "env_query_idx");
-
-  const int n_links       = link_map.size(0);
-  const int n_tool_frames = tool_frame_map.size(0);
-
-  assert(n_joints < 128); // for larger num. of joints, change kernel3's
-                          // MAX_JOINTS template value.
-
-  cudaStream_t stream = curobo::common::get_cuda_stream();
-
-  const int max_threads_per_block = 128;
-  // Calculate launch configuration based on workload size
-  KinBwdLaunchConfig config = calculate_kinematics_backward_launch_config(
-    batch_size, n_links, n_spheres, n_tool_frames, max_threads_per_block);
-
-  // Select kernel outside of launch logic
-  KinBwdFunction selected_kernel = select_bwd_kernel_function(config.use_warp_reduce, compute_com, n_joints);
-
-  // Single kernel launch
-  selected_kernel
-    << < config.blocksPerGrid, config.threadsPerBlock, config.sharedMemSize, stream >> > (
-    grad_out.data_ptr<float>(),
-    grad_nlinks_pos.data_ptr<float>(),
-    grad_nlinks_quat.data_ptr<float>(),
-    grad_spheres.data_ptr<float>(),
-    grad_center_of_mass.data_ptr<float>(),  // ADD: gradient input for center of mass
-    batch_center_of_mass.data_ptr<float>(), // ADD: pre-computed center of mass (for total mass)
-    global_cumul_mat.data_ptr<float>(),
-    joint_vec.data_ptr<float>(),
-    fixed_transform.data_ptr<float>(),
-    robot_spheres.data_ptr<float>(),
-    link_masses_com.data_ptr<float>(),      // ADD: link masses and local CoM
-    joint_map_type.data_ptr<int8_t>(),
-    joint_map.data_ptr<int16_t>(),
-    link_map.data_ptr<int16_t>(),
-    tool_frame_map.data_ptr<int16_t>(),
-    link_sphere_map.data_ptr<int16_t>(),
-    env_query_idx.data_ptr<int32_t>(),
-    link_chain_data.data_ptr<int16_t>(), // Pass new parameters
-    link_chain_offsets.data_ptr<int16_t>(), // Pass new parameters
-    joint_offset_map.data_ptr<float>(),
-    batch_size, horizon, n_spheres,
-    n_links, n_joints, n_tool_frames, num_envs, config.threads_per_batch);
-
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-  return ;
-  }
-
 
   void launch_kinematics_backward(
   torch::Tensor grad_out,
   const torch::Tensor grad_nlinks_pos,
   const torch::Tensor grad_nlinks_quat,
   const torch::Tensor grad_spheres,
-  const torch::Tensor grad_center_of_mass,  // [batch_size, 4] - xyz=pos grad, w=mass grad (ignored)
-  const torch::Tensor batch_center_of_mass, // [batch_size, 4] - xyz=global CoM, w=total mass (INPUT)
+  const torch::Tensor grad_center_of_mass,
+  const torch::Tensor batch_center_of_mass,
+  const torch::Tensor grad_jacobian,
   const torch::Tensor global_cumul_mat,
-  const torch::Tensor joint_vec,
-  const torch::Tensor fixed_transform,
   const torch::Tensor robot_spheres,
-  const torch::Tensor link_masses_com,      // [n_links, 4] - xyz=local CoM, w=mass
-  const torch::Tensor link_map, const torch::Tensor joint_map,
+  const torch::Tensor link_masses_com,
+  const torch::Tensor link_map,
+  const torch::Tensor joint_map,
   const torch::Tensor joint_map_type,
   const torch::Tensor tool_frame_map,
   const torch::Tensor link_sphere_map,
   const torch::Tensor link_chain_data,
   const torch::Tensor link_chain_offsets,
+  const torch::Tensor joint_links_data,
+  const torch::Tensor joint_links_offsets,
+  const torch::Tensor joint_affects_endeffector,
   const torch::Tensor joint_offset_map,
   const torch::Tensor env_query_idx,
   const int64_t num_envs,
@@ -249,14 +153,76 @@ else {
   const int64_t horizon,
   const int64_t n_joints,
   const int64_t n_spheres,
-  const bool compute_com)
+  const bool compute_com,
+  const bool compute_jacobian_grad)
   {
-  launch_kinematics_backward_impl(
-    joint_vec, grad_out, grad_nlinks_pos, grad_nlinks_quat, grad_spheres,
-    grad_center_of_mass, batch_center_of_mass, global_cumul_mat, fixed_transform,
-    robot_spheres, link_masses_com, link_map, joint_map, joint_map_type,
-    tool_frame_map, link_sphere_map, link_chain_data, link_chain_offsets,
-    joint_offset_map, env_query_idx, num_envs, batch_size, horizon, n_joints, n_spheres, compute_com);
+  curobo::common::validate_cuda_input(grad_out, "grad_out");
+  curobo::common::validate_cuda_input(grad_nlinks_pos, "grad_nlinks_pos");
+  curobo::common::validate_cuda_input(grad_nlinks_quat, "grad_nlinks_quat");
+  curobo::common::validate_cuda_input(grad_spheres, "grad_spheres");
+  curobo::common::validate_cuda_input(grad_center_of_mass, "grad_center_of_mass");
+  curobo::common::validate_cuda_input(batch_center_of_mass, "batch_center_of_mass");
+  curobo::common::validate_cuda_input(grad_jacobian, "grad_jacobian");
+  curobo::common::validate_cuda_input(global_cumul_mat, "global_cumul_mat");
+  curobo::common::validate_cuda_input(robot_spheres, "robot_spheres");
+  curobo::common::validate_cuda_input(link_masses_com, "link_masses_com");
+  curobo::common::validate_cuda_input(link_map, "link_map");
+  curobo::common::validate_cuda_input(joint_map, "joint_map");
+  curobo::common::validate_cuda_input(joint_map_type, "joint_map_type");
+  curobo::common::validate_cuda_input(tool_frame_map, "tool_frame_map");
+  curobo::common::validate_cuda_input(link_sphere_map, "link_sphere_map");
+  curobo::common::validate_cuda_input(link_chain_data, "link_chain_data");
+  curobo::common::validate_cuda_input(link_chain_offsets, "link_chain_offsets");
+  curobo::common::validate_cuda_input(joint_links_data, "joint_links_data");
+  curobo::common::validate_cuda_input(joint_links_offsets, "joint_links_offsets");
+  curobo::common::validate_cuda_input(joint_affects_endeffector, "joint_affects_endeffector");
+  curobo::common::validate_cuda_input(joint_offset_map, "joint_offset_map");
+  curobo::common::validate_cuda_input(env_query_idx, "env_query_idx");
+
+  const int n_links       = link_map.size(0);
+  const int n_tool_frames = tool_frame_map.size(0);
+
+  assert(n_joints < 128);
+  assert(joint_affects_endeffector.dtype() == torch::kBool);
+
+  cudaStream_t stream = curobo::common::get_cuda_stream();
+
+  const int max_threads_per_block = 128;
+  KinBwdLaunchConfig config = calculate_kinematics_backward_launch_config(
+    batch_size, n_links, n_spheres, n_tool_frames, max_threads_per_block);
+
+  KinBwdFunction selected_kernel = select_bwd_kernel_function(
+    config.use_warp_reduce, compute_com, compute_jacobian_grad, n_joints);
+
+  selected_kernel
+    << < config.blocksPerGrid, config.threadsPerBlock, config.sharedMemSize, stream >> > (
+    grad_out.data_ptr<float>(),
+    grad_nlinks_pos.data_ptr<float>(),
+    grad_nlinks_quat.data_ptr<float>(),
+    grad_spheres.data_ptr<float>(),
+    grad_center_of_mass.data_ptr<float>(),
+    batch_center_of_mass.data_ptr<float>(),
+    grad_jacobian.data_ptr<float>(),
+    global_cumul_mat.data_ptr<float>(),
+    robot_spheres.data_ptr<float>(),
+    link_masses_com.data_ptr<float>(),
+    joint_map_type.data_ptr<int8_t>(),
+    joint_map.data_ptr<int16_t>(),
+    link_map.data_ptr<int16_t>(),
+    tool_frame_map.data_ptr<int16_t>(),
+    link_sphere_map.data_ptr<int16_t>(),
+    env_query_idx.data_ptr<int32_t>(),
+    link_chain_data.data_ptr<int16_t>(),
+    link_chain_offsets.data_ptr<int16_t>(),
+    joint_links_data.data_ptr<int16_t>(),
+    joint_links_offsets.data_ptr<int16_t>(),
+    joint_affects_endeffector.data_ptr<bool>(),
+    joint_offset_map.data_ptr<float>(),
+    batch_size, horizon, n_spheres,
+    n_links, n_joints, n_tool_frames, num_envs, config.threads_per_batch);
+
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return;
   }
 }
 }

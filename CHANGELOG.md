@@ -30,6 +30,9 @@
   example at `curobo/examples/getting_started/feature_mapping.py`.
 
 ### Bug Fixes & Misc.
+- Improve CUDA kinematics kernels two-phase local/cumulative transform computation, and fused
+  Jacobian-gradient backward while preserving the saved cumulative-transform
+  autograd contract.
 - Update ``wp.torch`` calls to ``wp.device_from_torch`` as warp has changed api in 1.13.
 - Make num_cameras, feature_grid, grid_size as compile time constants in mapper kernels.
 - Fix inverse_kinematics differential example.
