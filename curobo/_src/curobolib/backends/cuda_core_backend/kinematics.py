@@ -286,115 +286,6 @@ def launch_kinematics_backward(
     grad_spheres: torch.Tensor,
     grad_center_of_mass: torch.Tensor,
     batch_center_of_mass: torch.Tensor,
-    global_cumul_mat: torch.Tensor,
-    robot_spheres: torch.Tensor,
-    link_masses_com: torch.Tensor,
-    link_map: torch.Tensor,
-    joint_map: torch.Tensor,
-    joint_map_type: torch.Tensor,
-    tool_frame_map: torch.Tensor,
-    link_sphere_map: torch.Tensor,
-    link_chain_data: torch.Tensor,
-    link_chain_offsets: torch.Tensor,
-    joint_offset_map: torch.Tensor,
-    env_query_idx: torch.Tensor,
-    num_envs: int,
-    batch_size: int,
-    horizon: int,
-    n_joints: int,
-    num_spheres: int,
-    compute_com: bool,
-):
-    """Launch kinematics backward kernel using cuda.core runtime compilation.
-
-    This function has the EXACT same signature as the PyBind11 version
-    to ensure seamless backend swapping.
-
-    Args:
-        All tensor arguments and parameters as expected by kinematics backward kernel
-
-    Note:
-        Modifies grad_out tensor in-place with joint gradients
-    """
-    runtime = get_runtime()
-
-    # Get cuda.core kernel cache
-    cache = runtime.get_cuda_core_cache()
-
-    # Get kernel configuration
-    kernel_config = KinematicsKernelCfg()
-
-    # Calculate launch configuration and get kernel template parameters
-    num_links = link_map.shape[0]
-    n_tool_frames = tool_frame_map.shape[0]
-    config, threads_per_batch, use_warp_reduce, max_joints_template = (
-        KinematicsLaunchCfg.calculate_backward_config(
-            batch_size, num_links, num_spheres, n_tool_frames, n_joints
-        )
-    )
-
-    kernel_name = (
-        f"curobo::kinematics::kinematics_fused_backward_unified_kernel<float, float, "
-        f"{max_joints_template}, {str(use_warp_reduce).lower()}, {str(compute_com).lower()}>"
-    )
-
-    # Get or compile kernel
-    kernel_files = [
-        kernel_config.kernel_dir / f for f in kernel_config.get_kernel_files("backward")
-    ]
-    kernel = cache.get_or_compile_kernel(
-        source_files=kernel_files,
-        kernel_name=kernel_name,
-        include_dirs=kernel_config.get_include_dirs(),
-        compile_flags=kernel_config.get_compile_flags(),
-    )
-
-    # Get stream wrapper from the tensor's device to ensure proper context
-    pt_stream = torch.cuda.current_stream(grad_out.device)
-    stream = cache.get_stream_wrapper(pt_stream)
-
-    # Prepare kernel arguments as data pointers
-    # Match the C++ kernel signature from lines 77-82 and 166-187 in kinematics_backward_kernel_launch.cu
-    kernel_args = (
-        grad_out.data_ptr(),
-        grad_nlinks_pos.data_ptr(),
-        grad_nlinks_quat.data_ptr(),
-        grad_spheres.data_ptr(),
-        grad_center_of_mass.data_ptr(),
-        batch_center_of_mass.data_ptr(),
-        global_cumul_mat.data_ptr(),
-        robot_spheres.data_ptr(),
-        link_masses_com.data_ptr(),
-        joint_map_type.data_ptr(),
-        joint_map.data_ptr(),
-        link_map.data_ptr(),
-        tool_frame_map.data_ptr(),
-        link_sphere_map.data_ptr(),
-        env_query_idx.data_ptr(),
-        link_chain_data.data_ptr(),
-        link_chain_offsets.data_ptr(),
-        joint_offset_map.data_ptr(),
-        batch_size,
-        horizon,
-        num_spheres,
-        num_links,
-        n_joints,
-        n_tool_frames,
-        num_envs,
-        threads_per_batch,
-    )
-
-    # Launch kernel
-    launch_kernel(kernel_name, stream, config, kernel, *kernel_args)
-
-
-def launch_kinematics_backward_saved_cumul_optional_jacobian(
-    grad_out: torch.Tensor,
-    grad_nlinks_pos: torch.Tensor,
-    grad_nlinks_quat: torch.Tensor,
-    grad_spheres: torch.Tensor,
-    grad_center_of_mass: torch.Tensor,
-    batch_center_of_mass: torch.Tensor,
     grad_jacobian: torch.Tensor,
     global_cumul_mat: torch.Tensor,
     robot_spheres: torch.Tensor,
@@ -434,7 +325,7 @@ def launch_kinematics_backward_saved_cumul_optional_jacobian(
 
     kernel_name = (
         f"curobo::kinematics::"
-        f"kinematics_fused_backward_saved_cumul_optional_jacobian_kernel"
+        f"kinematics_backward_kernel"
         f"<float, float, {max_joints_template}, {str(use_warp_reduce).lower()}, "
         f"{str(compute_com).lower()}, {str(compute_jacobian_grad).lower()}>"
     )

@@ -10,58 +10,12 @@
 namespace curobo{
     namespace kinematics{
 
-// Singularity damping constants (hardcoded for prototyping)
-constexpr float SINGULARITY_THRESHOLD = 1.0f;  // ~8.5 degrees
-constexpr float MIN_DAMPING = 0.0f;
-
-/**
- * Compute singularity damping factor for a revolute joint.
- * Uses scale-invariant normalized column norm = sin(angle between axis and lever arm).
- *
- * @param cumul_mat_joint Pointer to joint's 3x4 transform matrix [12 floats]
- * @param point_pos World position of the point being affected
- * @param joint_type Joint type (X_ROT, Y_ROT, Z_ROT, or prismatic)
- * @return Damping factor in [MIN_DAMPING, 1.0]
- */
 __device__ __forceinline__ float compute_singularity_damping(
-    const float* cumul_mat_joint,
-    float3 point_pos,
-    int joint_type
+    const float*,
+    float3,
+    int
 ) {
     return 1.0f;
-    // Prismatic joints don't have singularity issues
-    if (joint_type < X_ROT || joint_type > Z_ROT) {
-        return 1.0f;
-    }
-
-    // Extract joint position from transform (translation part)
-    float3 joint_pos = make_float3(
-        cumul_mat_joint[3],
-        cumul_mat_joint[7],
-        cumul_mat_joint[11]
-    );
-
-    int axis_idx = joint_type - X_ROT;
-    float3 axis = make_float3(
-        cumul_mat_joint[axis_idx],      // row 0
-        cumul_mat_joint[4 + axis_idx],  // row 1
-        cumul_mat_joint[8 + axis_idx]   // row 2
-    );
-
-    // Lever arm vector
-    float3 r = point_pos - joint_pos;
-    float r_len = length(r);
-    if (r_len < 1e-6f) return 1.0f;  // Point at joint, no damping needed
-
-    // Get joint axis from transform matrix (column corresponding to rotation axis)
-
-    // Normalized column norm = ||axis × r|| / ||r|| = sin(angle between axis and r)
-    float3 Jv = cross(axis, r);
-    float normalized_col_norm = length(Jv) / (r_len);// / r_len;
-
-    // Smoothstep ramp for C1 continuity
-    float x = fminf(normalized_col_norm / SINGULARITY_THRESHOLD, 1.0f);
-    return MIN_DAMPING + (1.0f - MIN_DAMPING) * (x * x * (3.0f - 2.0f * x));
 }
 
 

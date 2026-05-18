@@ -11,7 +11,6 @@
 #include "common/math.cuh"
 #include "common/quaternion_util.cuh"
 #include "common/pose_util.cuh"
-#include "kinematics_joint_util.cuh"
 #include "kinematics_util.cuh"
 #include "kinematics_forward_helper.cuh"
 

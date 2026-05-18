@@ -93,32 +93,6 @@ void launch_kinematics_backward(
   const torch::Tensor grad_nlinks_pos,
   const torch::Tensor grad_nlinks_quat,
   const torch::Tensor grad_spheres,
-  const torch::Tensor grad_center_of_mass,  // [batch_size, 4] - xyz=pos grad, w=mass grad (ignored)
-  const torch::Tensor batch_center_of_mass, // [batch_size, 4] - xyz=global CoM, w=total mass (INPUT)
-  const torch::Tensor global_cumul_mat,
-  const torch::Tensor robot_spheres,
-  const torch::Tensor link_masses_com,      // [n_links, 4] - xyz=local CoM, w=mass
-  const torch::Tensor link_map,
-  const torch::Tensor joint_map,
-  const torch::Tensor joint_map_type,
-  const torch::Tensor tool_frame_map,
-  const torch::Tensor link_sphere_map,
-  const torch::Tensor link_chain_data,      // NEW
-  const torch::Tensor link_chain_offsets,   // NEW
-  const torch::Tensor joint_offset_map,
-  const torch::Tensor env_query_idx,
-  const int64_t           num_envs,
-  const int64_t           batch_size,
-  const int64_t           horizon,
-  const int64_t           n_joints,
-  const int64_t           n_spheres,
-  const bool compute_com);
-
-void launch_kinematics_backward_saved_cumul_optional_jacobian(
-  torch::Tensor       grad_out,
-  const torch::Tensor grad_nlinks_pos,
-  const torch::Tensor grad_nlinks_quat,
-  const torch::Tensor grad_spheres,
   const torch::Tensor grad_center_of_mass,
   const torch::Tensor batch_center_of_mass,
   const torch::Tensor grad_jacobian,
@@ -144,25 +118,6 @@ void launch_kinematics_backward_saved_cumul_optional_jacobian(
   const int64_t       n_spheres,
   const bool          compute_com,
   const bool          compute_jacobian_grad);
-
-
-void launch_kinematics_jacobian_backward(
-  torch::Tensor       grad_joint, // [batch_size, n_joints]
-  const torch::Tensor grad_jacobian, // [batch_size, n_tool_frames, 6, n_joints]
-  const torch::Tensor global_cumul_mat, // [batch_size, n_links, 12]
-  const torch::Tensor joint_map_type, // [n_joints]
-  const torch::Tensor joint_map, // [n_joints]
-  const torch::Tensor link_map, // [n_links]
-  const torch::Tensor link_chain_data, // [chain_data_size]
-  const torch::Tensor link_chain_offsets, // [n_links + 1]
-  const torch::Tensor joint_links_data, // [joint_links_data_size]
-  const torch::Tensor joint_links_offsets, // [n_joints + 1]
-  const torch::Tensor joint_affects_endeffector, // [n_joints * n_tool_frames] - NEW
-  const torch::Tensor tool_frame_map, // [n_tool_frames]
-  const torch::Tensor joint_offset_map, // [n_joints]
-  const int64_t           batch_size,
-  const int64_t           n_joints,
-  const int64_t           n_tool_frames);
 
 }
 }
@@ -255,32 +210,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         py::arg("grad_spheres"),
         py::arg("grad_center_of_mass"),
         py::arg("batch_center_of_mass"),
-        py::arg("global_cumul_mat"),
-        py::arg("robot_spheres"),
-        py::arg("link_masses_com"),
-        py::arg("link_map"),
-        py::arg("joint_map"),
-        py::arg("joint_map_type"),
-        py::arg("tool_frame_map"),
-        py::arg("link_sphere_map"),
-        py::arg("link_chain_data"),
-        py::arg("link_chain_offsets"),
-        py::arg("joint_offset_map"),
-        py::arg("env_query_idx"),
-        py::arg("num_envs"),
-        py::arg("batch_size"),
-        py::arg("horizon"),
-        py::arg("n_joints"),
-        py::arg("n_spheres"),
-        py::arg("compute_com"));
-
-  m.def("launch_kinematics_backward_saved_cumul_optional_jacobian", &curobo::kinematics::launch_kinematics_backward_saved_cumul_optional_jacobian, "Kinematics backward with optional Jacobian gradient (CUDA)",
-        py::arg("grad_out"),
-        py::arg("grad_nlinks_pos"),
-        py::arg("grad_nlinks_quat"),
-        py::arg("grad_spheres"),
-        py::arg("grad_center_of_mass"),
-        py::arg("batch_center_of_mass"),
         py::arg("grad_jacobian"),
         py::arg("global_cumul_mat"),
         py::arg("robot_spheres"),
@@ -305,21 +234,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         py::arg("compute_com"),
         py::arg("compute_jacobian_grad"));
 
-  m.def("launch_kinematics_jacobian_backward", &curobo::kinematics::launch_kinematics_jacobian_backward, "Kinematics jacobian backward (CUDA)",
-        py::arg("grad_joint"),
-        py::arg("grad_jacobian"),
-        py::arg("global_cumul_mat"),
-        py::arg("joint_map_type"),
-        py::arg("joint_map"),
-        py::arg("link_map"),
-        py::arg("link_chain_data"),
-        py::arg("link_chain_offsets"),
-        py::arg("joint_links_data"),
-        py::arg("joint_links_offsets"),
-        py::arg("joint_affects_endeffector"),
-        py::arg("tool_frame_map"),
-        py::arg("joint_offset_map"),
-        py::arg("batch_size"),
-        py::arg("n_joints"),
-        py::arg("n_tool_frames"));
 }
