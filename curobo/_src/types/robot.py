@@ -81,13 +81,12 @@ class RobotCfg:
             data_dict_in = data_dict_in["robot_cfg"]
         data_dict = deepcopy(data_dict_in)
         if isinstance(data_dict["kinematics"], dict):
+            kinematics_dict = data_dict["kinematics"]
+            kinematics_dict["device_cfg"] = device_cfg
+            kinematics_dict["load_collision_spheres"] = load_collision_spheres
+            kinematics_dict["num_envs"] = num_envs
             data_dict["kinematics"] = KinematicsCfg.from_config(
-                KinematicsLoaderCfg(
-                    **data_dict_in["kinematics"],
-                    device_cfg=device_cfg,
-                    load_collision_spheres=load_collision_spheres,
-                    num_envs=num_envs,
-                )
+                KinematicsLoaderCfg(**kinematics_dict)
             )
 
         load_dynamics = data_dict.pop("load_dynamics", False)

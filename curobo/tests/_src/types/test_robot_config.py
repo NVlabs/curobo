@@ -5,6 +5,7 @@
 """Unit tests for robot configuration types."""
 
 # Standard Library
+from copy import deepcopy
 
 # Third Party
 import pytest
@@ -127,6 +128,25 @@ class TestRobotCfg:
 
         assert robot_cfg is not None
         assert robot_cfg.kinematics is not None
+
+    def test_robot_cfg_create_allows_loader_keys_in_yaml(self, robot_yaml_data):
+        """Robot YAML may include fields that RobotCfg.create also forwards."""
+        device_cfg = DeviceCfg()
+        data = deepcopy(robot_yaml_data)
+        data["robot_cfg"]["kinematics"]["device_cfg"] = DeviceCfg()
+        data["robot_cfg"]["kinematics"]["load_collision_spheres"] = False
+        data["robot_cfg"]["kinematics"]["num_envs"] = 8
+
+        robot_cfg = RobotCfg.create(
+            data,
+            device_cfg=device_cfg,
+            load_collision_spheres=True,
+            num_envs=2,
+        )
+
+        assert robot_cfg is not None
+        assert robot_cfg.kinematics.kinematics_config.num_envs == 2
+        assert robot_cfg.kinematics.kinematics_config.link_spheres.shape[0] == 2
 
     def test_robot_cfg_create_with_dynamics(self, robot_yaml_data):
         """Test RobotCfg.create with load_dynamics flag."""
