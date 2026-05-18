@@ -10,15 +10,6 @@
 namespace curobo{
     namespace kinematics{
 
-__device__ __forceinline__ float compute_singularity_damping(
-    const float*,
-    float3,
-    int
-) {
-    return 1.0f;
-}
-
-
 // Device functions for common computations
 template<typename scalar_t, typename psum_t>
 __device__ void compute_sphere_gradients(
@@ -94,16 +85,12 @@ __device__ void compute_sphere_gradients(
                                                 result,
                                                 j_type - int(JointType::XRevolute),
                                                 axis_sign);
-                // Apply singularity damping
-                float sing_damp = compute_singularity_damping(
-                    &cumul_mat[matAddrBase + j * 12], sphere_position, j_type);
-                psum_grad[j_idx] += (psum_t)(result * sing_damp);
+                psum_grad[j_idx] += (psum_t)result;
             }
             else if ((j_type >= int(JointType::XPrismatic)) && (j_type <= int(JointType::ZPrismatic)))
             {
                 xyz_prism_backward(&cumul_mat[matAddrBase + j * 12],
                                    loc_grad_sphere, result, j_type, axis_sign);
-                // No damping for prismatic (singularity not applicable)
                 psum_grad[j_idx] += (psum_t)result;
             }
         }
@@ -181,17 +168,13 @@ __device__ void compute_link_gradients(
                 xyz_rot_backward(&cumul_mat[matAddrBase + (j) * 12], pose.position,
                                g_position, g_orientation,
                                 result, j_type - X_ROT, axis_sign);
-                // Apply singularity damping
-                float sing_damp = compute_singularity_damping(
-                    &cumul_mat[matAddrBase + j * 12], pose.position, j_type);
-                psum_grad[j_idx] += (psum_t)(result * sing_damp);
+                psum_grad[j_idx] += (psum_t)result;
             }
             else if (j_type >= X_PRISM && j_type <= Z_PRISM)
             {
                 xyz_prism_backward(&cumul_mat[matAddrBase + j * 12],
                                                g_position, result,
                                                j_type, axis_sign);
-                // No damping for prismatic (singularity not applicable)
                 psum_grad[j_idx] += (psum_t)result;
             }
 
@@ -290,10 +273,7 @@ __device__ void compute_center_of_mass_gradients(
                     j_type - X_ROT,                  // Axis index
                     axis_sign                        // Sign
                 );
-                // Apply singularity damping
-                float sing_damp = compute_singularity_damping(
-                    &cumul_mat[matAddrBase + j * 12], com_world_pos, j_type);
-                psum_grad[j_idx] += (psum_t)(result * sing_damp);
+                psum_grad[j_idx] += (psum_t)result;
             }
             else if (j_type >= X_PRISM && j_type <= Z_PRISM) {
                 // Use existing function directly!
@@ -304,7 +284,6 @@ __device__ void compute_center_of_mass_gradients(
                     j_type,               // Axis index
                     axis_sign                       // Sign
                 );
-                // No damping for prismatic (singularity not applicable)
                 psum_grad[j_idx] += (psum_t)result;
             }
         }
