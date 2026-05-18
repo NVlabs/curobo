@@ -378,7 +378,10 @@ class UrdfRobotParser(RobotParser):
             elif geometry.mesh is not None:
                 local_path = geometry.mesh.filename
                 absolute_path = self._file_name_handler(local_path)
-                geometry_list.append(CuroboMesh(name=name, pose=origin, file_path=absolute_path))
+                mesh_scale = geometry.mesh.scale
+                if mesh_scale is not None:
+                    mesh_scale = np.ravel(np.asarray(mesh_scale, dtype=np.float64)).tolist()
+                geometry_list.append(CuroboMesh(name=name, pose=origin, file_path=absolute_path, scale=mesh_scale))
             else:
                 continue
         return geometry_list
