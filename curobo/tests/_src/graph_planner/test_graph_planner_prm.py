@@ -280,6 +280,66 @@ def test_find_path_with_validation():
     assert hasattr(result, 'success')
 
 
+def test_find_path_waypoints_are_feasible():
+    """Regression for steered graph nodes being added in scene collision."""
+    scene_model = {
+        "cuboid": {
+            "table": {
+                "dims": [1.4, 1.4, 0.05],
+                "pose": [0.0, 0.0, -0.05, 1.0, 0.0, 0.0, 0.0],
+            },
+            "box": {
+                "dims": [0.1, 0.1, 0.1],
+                "pose": [0.4, 0.0, 0.3, 1.0, 0.0, 0.0, 0.0],
+            },
+        },
+    }
+    config = PRMGraphPlannerCfg.create(
+        robot="franka.yml",
+        scene_model=scene_model,
+        use_cuda_graph_for_rollout=False,
+    )
+    planner = PRMGraphPlanner(config)
+
+    x_start = torch.as_tensor(
+        [[
+            -2.1305301189422607,
+            -0.08800399303436279,
+            2.164724588394165,
+            -1.3369704484939575,
+            -2.749307155609131,
+            0.6870545148849487,
+            0.3111684322357178,
+        ]],
+        device=planner.device_cfg.device,
+        dtype=planner.device_cfg.dtype,
+    )
+    x_goal = torch.as_tensor(
+        [[
+            -0.73280930519104,
+            -0.4233146905899048,
+            1.4285790920257568,
+            -1.8470979928970337,
+            2.2268221378326416,
+            1.4077645540237427,
+            2.3669369220733643,
+        ]],
+        device=planner.device_cfg.device,
+        dtype=planner.device_cfg.dtype,
+    )
+
+    result = planner.find_path(
+        x_start,
+        x_goal,
+        validate_interpolated_trajectory=False,
+        interpolation_steps=100,
+    )
+
+    assert result.success[0].item()
+    assert result.plan_waypoints[0] is not None
+    assert planner.check_samples_feasibility(result.plan_waypoints[0]).all()
+
+
 def test_find_path_batch_processing():
     """Test batch path finding (covers batch-related lines)."""
     planner = get_base_graph_planner()
@@ -689,4 +749,3 @@ def test_extend_roadmap_with_ellipsoidal_samples():
 
     # Should have added more nodes
     assert planner.n_nodes > 20
-
