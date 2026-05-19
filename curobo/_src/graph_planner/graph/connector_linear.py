@@ -46,6 +46,7 @@ class LinearConnector:
             device=self.config.device_cfg.device,
             dtype=self.config.device_cfg.dtype,
         )
+        self._preallocated_idx_buffer = None
         self._node_idx_padding_buffer = torch.as_tensor(
             [0.0], device=self.config.device_cfg.device, dtype=self.config.device_cfg.dtype
         )
@@ -55,6 +56,7 @@ class LinearConnector:
         action_dim: int,
         cspace_distance_weight: torch.Tensor,
         check_feasibility_fn,
+        preallocated_idx_buffer: torch.Tensor,
     ):
         """Set required dependencies from parent class.
 
@@ -62,10 +64,12 @@ class LinearConnector:
             action_dim: Dimensionality of the action space
             cspace_distance_weight: Weight vector for distance calculations in C-space
             check_feasibility_fn: Function to check feasibility of configurations
+            preallocated_idx_buffer: Shared index buffer for linear steering reductions
         """
         self.action_dim = action_dim
         self.cspace_distance_weight = cspace_distance_weight
         self._check_feasibility_fn = check_feasibility_fn
+        self._preallocated_idx_buffer = preallocated_idx_buffer
 
     # @profiler.record_function("linear_connector/steer_until_infeasible")
     def steer_until_infeasible(
@@ -162,24 +166,17 @@ class LinearConnector:
         Returns:
             last_feasible_nodes: (B, DOF+1) The last feasible configuration along each path
         """
-        # Pre-compute buffer values once
-        step_weights = self._preallocated_steer_buffer[:h] / h + 1.0
+        sample_idx = self._preallocated_idx_buffer[:h].view(1, h)
+        first_infeasible_idx = torch.where(mask == 0, sample_idx, h).min(dim=1).values
 
-        # Convert mask to proper format in fewer operations
-        mask = torch.where(
-            mask == 0.0,
-            -step_weights,  # If mask is 0, use negative values
-            step_weights,  # If mask is 1, use positive values
+        # Use the sample before the first collision. If there is no collision,
+        # use the requested endpoint.
+        idx = torch.where(
+            first_infeasible_idx < h,
+            first_infeasible_idx - 1,
+            h-1,
         )
-
-        # Invert negative values in a single operation
-        mask = torch.where(mask < 0.0, 1.0 / mask.abs(), mask)
-
-        # Find indices of first collision points
-        _, idx = torch.min(mask, dim=1)
-
-        # Adjust indices to get last feasible point before collision
-        idx = torch.where(idx > 0, idx - 1, h - 1)
+        idx = torch.clamp(idx, min=0)
 
         # Gather the feasible points efficiently
         batch_indices = torch.arange(line_vec.shape[0], device=line_vec.device)

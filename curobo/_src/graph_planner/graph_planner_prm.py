@@ -143,6 +143,7 @@ class PRMGraphPlanner:
             action_dim=self.action_dim,
             cspace_distance_weight=self.cspace_distance_weight,
             check_feasibility_fn=self.check_samples_feasibility,
+            preallocated_idx_buffer=self.node_manager._preallocated_idx_buffer,
         )
 
     def check_samples_feasibility(self, action_samples):  # call feasibility here:

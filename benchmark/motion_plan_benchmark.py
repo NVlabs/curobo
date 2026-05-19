@@ -259,10 +259,6 @@ def load_curobo(
 
     collision_activation_distance = 0.0025
 
-    if args.graph:
-        trajopt_seeds = 4
-        collision_activation_distance = 0.0
-        interpolation_steps = 100
 
     if mpinets:
         robot_cfg["kinematics"]["lock_joints"] = {
@@ -325,7 +321,6 @@ def benchmark_mb(
     write_plot=False,
     write_benchmark=False,
     override_tsteps: Optional[int] = None,
-    graph_mode=False,
     args=None,
     prefix: str = "",
     mg_init=None,
@@ -334,7 +329,6 @@ def benchmark_mb(
     random.seed(2)
     torch.manual_seed(2)
     # load dataset:
-    force_graph = False
 
     file_paths = [motion_benchmaker_raw, mpinets_raw][:]
     # args.demo = True
@@ -354,7 +348,6 @@ def benchmark_mb(
             mpinets_data = True
 
         for key, v in tqdm(problems.items()):
-            force_graph = False
             trajopt_seeds = og_trajopt_seeds
             ik_seeds = og_ik_seeds
             scene_problems = problems[key]  # [:2]#[1:4]
@@ -831,12 +824,7 @@ if __name__ == "__main__":
         default="curobov2_0kg",
         help="File name prefix to use to save benchmark results",
     )
-    parser.add_argument(
-        "--graph",
-        action="store_true",
-        help="When True, runs only geometric planner",
-        default=False,
-    )
+
     parser.add_argument(
         "--mesh",
         action="store_true",
@@ -908,7 +896,6 @@ if __name__ == "__main__":
             write_usd=args.save_usd,
             write_plot=args.save_plot,
             write_benchmark=args.write_benchmark,
-            graph_mode=args.graph,
             args=args,
             prefix="warmup",
             mg_init=mg,
@@ -921,7 +908,6 @@ if __name__ == "__main__":
             write_usd=args.save_usd,
             write_plot=args.save_plot,
             write_benchmark=args.write_benchmark,
-            graph_mode=args.graph,
             args=args,
             prefix=str(i),
             mg_init=mg,

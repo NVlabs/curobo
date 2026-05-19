@@ -3,14 +3,14 @@
 graph_planner:
   max_nodes: 20000 # node list
   steer_buffer_size: 5000 # for steering
-  cspace_similarity_threshold: 0.001
+  cspace_similarity_threshold: 0.005
 
   sample_rejection_ratio: 10
   neighbors_per_node: 10
   feasibility_buffer_size: 2000
   new_nodes_per_iteration: 20
 
-  max_path_finding_iterations: 4
+  max_path_finding_iterations: 10
   min_finetune_iterations: 2
   use_default_position_heuristic: True
 

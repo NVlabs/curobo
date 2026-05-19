@@ -30,6 +30,7 @@
   example at `curobo/examples/getting_started/feature_mapping.py`.
 
 ### Bug Fixes & Misc.
+- Fix bug in LinearConnector that caused colliding joint configurations to be added to PRM.
 - Improve CUDA kinematics kernels two-phase local/cumulative transform computation, and fused
   Jacobian-gradient backward while preserving the saved cumulative-transform
   autograd contract.
