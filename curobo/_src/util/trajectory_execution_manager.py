@@ -1,5 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Standard Library
+from typing import Optional
+
 # Third Party
 import torch
 
@@ -25,15 +28,27 @@ class TrajectoryExecutionManager:
 
     Args:
         interpolation_steps: Number of interpolation steps between two consecutive commands.
+        command_start_idx: First state trajectory index to expose as a command.
+        command_end_idx: End index for the command sequence. Defaults to two interpolation
+            windows, which preserves the existing non-offset behavior.
     """
 
-    def __init__(self, interpolation_steps: int):
+    def __init__(
+        self,
+        interpolation_steps: int,
+        command_start_idx: int = 0,
+        command_end_idx: Optional[int] = None,
+    ):
         self._current_robot_state_trajectory = None
         self._current_joint_state_trajectory = None
         self._current_action_trajectory = None
         self._current_metrics = None
         self._current_command_idx = 0
         self.interpolation_steps = interpolation_steps
+        self.command_start_idx = command_start_idx
+        self.command_end_idx = (
+            command_end_idx if command_end_idx is not None else interpolation_steps * 2
+        )
 
     def get_current_metrics(self) -> RolloutMetrics:
         return self._current_metrics
@@ -71,8 +86,9 @@ class TrajectoryExecutionManager:
         """
         if not self.has_valiaction_dim_buffer():
             log_and_raise("No valid action buffer, call update_action_trajectory first")
+        horizon_index = self.command_start_idx + self._current_command_idx
         next_command = get_joint_state_at_horizon_index(
-            self._current_joint_state_trajectory, self._current_command_idx
+            self._current_joint_state_trajectory, horizon_index
         )
         self._current_command_idx += 1
         return next_command
@@ -87,8 +103,8 @@ class TrajectoryExecutionManager:
             log_and_raise("No valid action buffer, call update_action_trajectory first")
         action_sequence = trim_joint_state_trajectory(
             self._current_joint_state_trajectory,
-            start_idx=0,  # self.interpolation_steps,
-            end_idx=self.interpolation_steps * 2,
+            start_idx=self.command_start_idx,
+            end_idx=self.command_end_idx,
         )
         return action_sequence
 

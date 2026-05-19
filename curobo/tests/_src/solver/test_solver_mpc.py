@@ -473,6 +473,14 @@ class TestMPCSolverTrajectoryExecutionManager:
             mpc_solver.config.interpolation_steps
         )
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_bspline_trajectory_execution_manager_uses_command_offset(self, mpc_solver):
+        """Test B-spline MPC skips the start-boundary support window."""
+        assert (
+            mpc_solver.trajectory_execution_manager.command_start_idx
+            == mpc_solver.config.interpolation_steps
+        )
+
 
 class TestMPCSolverTargetLinkNames:
     """Test MPCSolver target link names."""
