@@ -23,6 +23,7 @@ from curobo._src.solver.solver_ik_cfg import IKSolverCfg
 from curobo._src.solver.solver_mpc_cfg import MPCSolverCfg
 from curobo._src.solver.solver_mpc_result import MPCSolverResult
 from curobo._src.state.state_joint import JointState
+from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.logging import log_and_raise, log_info
@@ -41,8 +42,16 @@ class MPCSolver:
         self.core = SolverCore(config.core_cfg, scene_collision_checker)
 
         # Trajectory execution manager
+        command_start_idx = 0
+        transition_cfg = self.config.metrics_rollout_config.transition_model_cfg
+        if (
+            transition_cfg is not None
+            and transition_cfg.control_space in ControlSpace.bspline_types()
+        ):
+            command_start_idx = self.config.interpolation_steps
         self.trajectory_execution_manager = TrajectoryExecutionManager(
-            self.config.interpolation_steps
+            self.config.interpolation_steps,
+            command_start_idx=command_start_idx,
         )
 
         self._mpc_setup_complete = False

@@ -145,6 +145,37 @@ class TestTrajectoryExecutionManager:
         assert torch.allclose(next_command.position, state_trajectory.position[:, 1, :])
         assert execution_manager._current_command_idx == 2
 
+    def test_get_next_command_with_command_start_idx(self, batch_size, action_dim):
+        """Test getting commands from an offset state trajectory window."""
+        interpolation_steps = 4
+        command_start_idx = interpolation_steps
+        horizon = interpolation_steps * 3
+        execution_manager = TrajectoryExecutionManager(
+            interpolation_steps,
+            command_start_idx=command_start_idx,
+        )
+        positions = torch.arange(horizon, dtype=torch.float32).view(1, horizon, 1)
+        positions = positions.repeat(batch_size, 1, action_dim)
+        state_trajectory = JointState(
+            positions,
+            torch.zeros_like(positions),
+            torch.zeros_like(positions),
+        )
+        action_trajectory = torch.zeros(batch_size, 1, action_dim)
+        execution_manager.update_state_action_buffers(state_trajectory, action_trajectory)
+
+        next_command = execution_manager.get_next_command()
+        assert torch.allclose(
+            next_command.position,
+            state_trajectory.position[:, command_start_idx, :],
+        )
+
+        next_command = execution_manager.get_next_command()
+        assert torch.allclose(
+            next_command.position,
+            state_trajectory.position[:, command_start_idx + 1, :],
+        )
+
     def test_has_valid_next_command(
         self, execution_manager, state_trajectory, action_trajectory, interpolation_steps
     ):
@@ -286,6 +317,35 @@ class TestTrajectoryExecutionManager:
         assert sequence is not None
         # Should trim the trajectory - exact shape depends on interpolation_steps
         assert sequence.position.shape[1] <= execution_manager.interpolation_steps * 2
+
+    def test_get_command_sequence_with_command_start_idx(self, batch_size, action_dim):
+        """Test command sequence trimming from an offset state trajectory window."""
+        interpolation_steps = 4
+        command_start_idx = interpolation_steps
+        horizon = interpolation_steps * 3
+        execution_manager = TrajectoryExecutionManager(
+            interpolation_steps,
+            command_start_idx=command_start_idx,
+        )
+        positions = torch.arange(horizon, dtype=torch.float32).view(1, horizon, 1)
+        positions = positions.repeat(batch_size, 1, action_dim)
+        state_trajectory = JointState(
+            positions,
+            torch.zeros_like(positions),
+            torch.zeros_like(positions),
+        )
+        action_trajectory = torch.zeros(batch_size, 1, action_dim)
+        execution_manager.update_state_action_buffers(state_trajectory, action_trajectory)
+
+        sequence = execution_manager.get_command_sequence()
+
+        assert sequence.position.shape[1] == interpolation_steps
+        assert torch.allclose(
+            sequence.position,
+            state_trajectory.position[
+                :, command_start_idx : command_start_idx + interpolation_steps, :
+            ],
+        )
 
     def test_get_robot_state_sequence(self, execution_manager):
         """Test getting robot state sequence."""
