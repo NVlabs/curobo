@@ -227,7 +227,8 @@ class MotionRetargeter:
             goal_tool_poses=goal_tool_poses,
             return_seeds=1,
         )
-        sol = result.js_solution.position.view(self._num_envs, self._action_dim)
+        active_js = self._global_ik_solver.kinematics.get_active_js(result.js_solution)
+        sol = active_js.position.view(self._num_envs, self._action_dim)
         self._prev_solution = sol.clone()
 
         if self._config.use_mpc and self._mpc_solver is not None:
@@ -257,10 +258,12 @@ class MotionRetargeter:
             current_state=current_state,
             return_seeds=1,
         )
-        sol = result.js_solution.position.view(self._num_envs, self._action_dim)
-
-        if result.js_solution.velocity is not None:
-            self._prev_velocity = result.js_solution.velocity.view(
+        active_js = self._local_ik_solver.kinematics.get_active_js(result.js_solution)
+        sol = active_js.position.view(self._num_envs, self._action_dim)
+        # velocity is None unless current_state.dt is populated; the guard
+        # makes this branch correct without changing today's behavior.
+        if active_js.velocity is not None:
+            self._prev_velocity = active_js.velocity.view(
                 self._num_envs, self._action_dim
             )
         self._prev_solution = sol.clone()
