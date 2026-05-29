@@ -22,7 +22,7 @@ from curobo._src.types.sequence_tool_pose import SequenceGoalToolPose
 
 # simple_mimic_robot.yml ships with lock_joints={chain_1_active_joint_1: 0.2}
 # and cspace.joint_names=[chain_1_active_joint_1, active_joint_2]. The locked
-# joint is in cspace — exactly the shape that triggers Bug 1.
+# joint is in cspace, exactly the shape that can trigger any regression.
 ROBOT_CFG = "simple_mimic_robot.yml"
 TOOL_FRAMES = ["ee_link"]
 LOCKED_JOINT = "chain_1_active_joint_1"
