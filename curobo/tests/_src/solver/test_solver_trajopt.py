@@ -573,6 +573,36 @@ class TestTrajOptSolverSolveCspace:
         assert callable(trajopt_solver.solve_cspace)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_solve_cspace_uses_implicit_seed_goal(
+        self, trajopt_solver, sample_start_state, monkeypatch
+    ):
+        """solve_cspace should not populate goal_js; seed_goal_js pins the endpoint."""
+        goal_state = sample_start_state.clone()
+        goal_state.position[..., 0] += 0.1
+        captured = {}
+
+        def fake_solve_impl(**kwargs):
+            captured.update(kwargs)
+            solve_state = kwargs["solve_state"]
+            return TrajOptSolverResult(
+                success=torch.ones(
+                    (solve_state.batch_size, kwargs["return_seeds"]),
+                    device=sample_start_state.device,
+                    dtype=torch.bool,
+                )
+            )
+
+        monkeypatch.setattr(trajopt_solver, "_solve_impl", fake_solve_impl)
+
+        trajopt_solver.solve_cspace(
+            current_state=sample_start_state,
+            goal_state=goal_state,
+        )
+
+        assert captured["use_implicit_goal"] is True
+        assert "goal_state" not in captured
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_solve_cspace_returns_result(self, trajopt_solver, sample_start_state):
         """Test solve_cspace returns TrajOptSolverResult."""
         # Create goal state slightly different from start

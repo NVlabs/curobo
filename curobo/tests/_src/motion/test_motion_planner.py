@@ -939,6 +939,75 @@ class TestMotionPlannerGoalsetWarmupAndPlanning:
         assert r3 is None or isinstance(r3, TrajOptSolverResult)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_plan_pose_then_cspace_after_warmup(self, goalset_planner, cuda_device_cfg):
+        """Test warmup -> plan_pose -> plan_cspace with CUDA graphs enabled."""
+        planner = goalset_planner
+        start = JointState.from_position(
+            planner.default_joint_state.position.unsqueeze(0),
+            joint_names=planner.joint_names,
+        )
+        tool_frames = planner.trajopt_solver.kinematics.tool_frames
+
+        pose_goal = Pose(
+            position=torch.tensor([[0.4, 0.0, 0.4]], **cuda_device_cfg.as_torch_dict()),
+            quaternion=torch.tensor([[1.0, 0.0, 0.0, 0.0]], **cuda_device_cfg.as_torch_dict()),
+        )
+        goal_tool_poses = GoalToolPose.from_poses(
+            {tool_frames[0]: pose_goal},
+            ordered_tool_frames=tool_frames,
+        )
+
+        pose_result = planner.plan_pose(
+            current_state=start,
+            goal_tool_poses=goal_tool_poses,
+            max_attempts=1,
+        )
+        assert pose_result is None or isinstance(pose_result, TrajOptSolverResult)
+
+        cspace_goal = start.clone()
+        cspace_goal.position[..., 0] += 0.1
+        cspace_result = planner.plan_cspace(
+            current_state=start,
+            goal_state=cspace_goal,
+            max_attempts=1,
+        )
+        assert cspace_result is None or isinstance(cspace_result, TrajOptSolverResult)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_plan_cspace_then_pose_after_warmup(self, goalset_planner, cuda_device_cfg):
+        """Test warmup -> plan_cspace -> plan_pose with CUDA graphs enabled."""
+        planner = goalset_planner
+        start = JointState.from_position(
+            planner.default_joint_state.position.unsqueeze(0),
+            joint_names=planner.joint_names,
+        )
+        tool_frames = planner.trajopt_solver.kinematics.tool_frames
+
+        cspace_goal = start.clone()
+        cspace_goal.position[..., 0] += 0.1
+        cspace_result = planner.plan_cspace(
+            current_state=start,
+            goal_state=cspace_goal,
+            max_attempts=1,
+        )
+        assert cspace_result is None or isinstance(cspace_result, TrajOptSolverResult)
+
+        pose_goal = Pose(
+            position=torch.tensor([[0.4, 0.0, 0.4]], **cuda_device_cfg.as_torch_dict()),
+            quaternion=torch.tensor([[1.0, 0.0, 0.0, 0.0]], **cuda_device_cfg.as_torch_dict()),
+        )
+        goal_tool_poses = GoalToolPose.from_poses(
+            {tool_frames[0]: pose_goal},
+            ordered_tool_frames=tool_frames,
+        )
+        pose_result = planner.plan_pose(
+            current_state=start,
+            goal_tool_poses=goal_tool_poses,
+            max_attempts=1,
+        )
+        assert pose_result is None or isinstance(pose_result, TrajOptSolverResult)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_grasp_after_goalset_warmup(self, goalset_planner, cuda_device_cfg):
         """Test plan_grasp works after goalset warmup.
 
