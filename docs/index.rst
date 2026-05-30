@@ -4,10 +4,11 @@ cuRobo: CUDA Accelerated Robot Library
 
 [:ref:`API <api>`] [`GTC Talk <https://www.nvidia.com/gtc/session-catalog/?tab.allsessions=1700692987788001F1cG&search=S62122#/session/1694550714094001UhGc>`_] [`Code <https://github.com/nvlabs/curobo>`_] [:doc:`Paper <technical_reports>`]
 
-A unified, dynamics-aware GPU stack for safe, feasible, and reactive robot
-motion generation, scaling from single-arm manipulators to high-DoF humanoids.
-cuRobo provides trajectory optimization, GPU-native perception, and whole-body
-computation built on PyTorch, CUDA, and Warp.
+cuRobo is a CUDA-accelerated library for robot motion generation, built on
+PyTorch, CUDA, and Warp. It provides GPU-parallel algorithms for forward/inverse
+kinematics, collision checking, trajectory optimization, geometric planning,
+GPU-native perception, and whole-body motion generation, scaling from single-arm
+manipulators to high-DoF humanoids.
 
 .. raw:: html
 

@@ -10,7 +10,11 @@
 > cuRoboV2 is a significant rewrite and the public API has changed from cuRobo v1.
 > If you depend on the v1 API, pin to the [`v0.7.8`](https://github.com/NVlabs/curobo/tree/v0.7.8) tag.
 
-cuRobo is a CUDA-accelerated library for robot motion generation. It provides GPU-parallel algorithms for forward/inverse kinematics, collision checking, trajectory optimization, geometric planning, and motion generation, scaling from single-arm manipulators to high-DoF humanoids.
+cuRobo is a CUDA-accelerated library for robot motion generation, built on
+PyTorch, CUDA, and Warp. It provides GPU-parallel algorithms for
+forward/inverse kinematics, collision checking, trajectory optimization,
+geometric planning, GPU-native perception, and whole-body motion generation,
+scaling from single-arm manipulators to high-DoF humanoids.
 
 Key capabilities:
 - **Dynamics-aware trajectory optimization** with B-spline representation enforcing smoothness and torque limits

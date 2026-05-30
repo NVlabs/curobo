@@ -276,6 +276,9 @@ class RNEAForwardFunction(Function):
             grad_f_ext = ctx.grad_f_ext_buf[:batch_size]
             grad_f_ext.zero_()
 
+        if not grad_tau.is_contiguous():
+            grad_tau = grad_tau.contiguous()
+
         device = grad_tau.device
         check_float32_tensors(
             device,

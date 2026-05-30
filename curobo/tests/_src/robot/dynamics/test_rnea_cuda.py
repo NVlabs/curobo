@@ -304,6 +304,39 @@ class TestDynamicsInterface:
         assert tau.device == q.device
         assert torch.all(torch.isfinite(tau))
 
+    def test_sum_backward(self):
+        """tau.sum().backward() should work with PyTorch's expanded sum gradient."""
+        from curobo._src.robot.dynamics.dynamics import Dynamics
+        from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+        from curobo._src.state.state_joint import JointState
+
+        kp, device_cfg = _load_robot("franka.yml")
+        cfg = DynamicsCfg(kinematics_config=kp, device_cfg=device_cfg)
+        dynamics = Dynamics(cfg)
+        dynamics.setup_batch_size(batch_size=4)
+
+        num_dof = kp.num_dof
+        q = torch.randn(
+            4, num_dof, device=device_cfg.device, dtype=torch.float32, requires_grad=True
+        )
+        qd = torch.randn(
+            4, num_dof, device=device_cfg.device, dtype=torch.float32, requires_grad=True
+        )
+        qdd = torch.randn(
+            4, num_dof, device=device_cfg.device, dtype=torch.float32, requires_grad=True
+        )
+
+        joint_state = JointState(position=q, velocity=qd, acceleration=qdd)
+        tau = dynamics.compute_inverse_dynamics(joint_state)
+        tau.sum().backward()
+
+        assert q.grad is not None
+        assert qd.grad is not None
+        assert qdd.grad is not None
+        assert torch.all(torch.isfinite(q.grad))
+        assert torch.all(torch.isfinite(qd.grad))
+        assert torch.all(torch.isfinite(qdd.grad))
+
     def test_rebatch(self):
         """Can call setup_batch_size multiple times."""
         from curobo._src.robot.dynamics.dynamics import Dynamics

@@ -279,7 +279,8 @@ class MotionPlanner:
 
             trajopt_result = self.trajopt_solver.solve_pose(
                 goal_tool_poses, current_state,
-                seed_config=seed_config, seed_traj=seed_traj,
+                seed_config=seed_config,
+                seed_traj=seed_traj,
                 use_implicit_goal=True,
                 finetune_attempts=finetune_attempts,
                 finetune_dt_scale=finetune_dt_scale,
@@ -353,6 +354,8 @@ class MotionPlanner:
         for current_attempt in range(max_attempts):
             current_state = og_current_state.clone()
             seed_traj = None
+            finetune_attempts = 3
+            finetune_dt_scale = 0.75
 
             if current_attempt >= enable_graph_attempt and self.graph_planner is not None:
                 goal_configs = goal_state.position.view(1, 1, -1).repeat(1, num_seeds, 1)
@@ -362,9 +365,13 @@ class MotionPlanner:
                 if graph_seed is None:
                     continue
                 seed_traj = graph_seed
+                finetune_attempts = 3
+                finetune_dt_scale = 0.75
 
             trajopt_result = self.trajopt_solver.solve_cspace(
                 goal_state, current_state, seed_traj=seed_traj,
+                finetune_attempts=finetune_attempts,
+                finetune_dt_scale=finetune_dt_scale,
             )
             total_time += trajopt_result.total_time
             solve_time += trajopt_result.solve_time

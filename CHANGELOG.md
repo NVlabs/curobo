@@ -31,6 +31,8 @@
 
 ### Bug Fixes & Misc.
 - Fix B-spline MPC command extraction to skip the start-boundary support window.
+- Keep TrajOpt c-space solves on implicit seed goals to avoid changing goal-buffer
+  structure when alternating with pose planning under CUDA graphs.
 - Fix bug in LinearConnector that caused colliding joint configurations to be added to PRM.
 - Improve CUDA kinematics kernels two-phase local/cumulative transform computation, and fused
   Jacobian-gradient backward while preserving the saved cumulative-transform

@@ -458,6 +458,7 @@ class TrajOptSolver:
             if i == 0 and torch.count_nonzero(best_trajopt_result.success) == 0:
                 break
 
+        best_trajopt_result.process_metrics_and_rank_seeds()
         best_trajopt_result = self._get_best_result(best_trajopt_result, return_seeds)
         best_trajopt_result.solve_time = opt_time
         best_trajopt_result.total_time = total_timer.stop()
@@ -838,6 +839,7 @@ class TrajOptSolver:
         initial_iters: Optional[int] = None,
         time_optimal_iters: Optional[int] = None,
         finetune_iters: Optional[int] = None,
+        finetune_dt_scale: float = 0.55,
     ) -> TrajOptSolverResult:
         """Solve trajectory optimization in configuration space (joint-to-joint).
 
@@ -862,6 +864,8 @@ class TrajOptSolver:
                 ``[batch, num_seeds]`` overriding the automatically computed dt.
             finetune_attempts: Number of additional time-optimal refinement passes
                 after the initial solve.
+            finetune_dt_scale: Multiplicative factor applied to dt between finetune
+                passes. Defaults to ``0.55``.
             initial_iters: Override for the number of optimizer iterations on the
                 first pass. ``None`` keeps the config default.
             time_optimal_iters: Override for the number of optimizer iterations on
@@ -956,10 +960,10 @@ class TrajOptSolver:
             dt=dt,
             use_implicit_goal=True,
             finetune_attempts=finetune_attempts,
-            goal_state=goal_state,
             initial_iters=initial_iters,
             time_optimal_iters=time_optimal_iters,
             finetune_iters=finetune_iters,
+            finetune_dt_scale=finetune_dt_scale,
         )
         if needs_pad:
             from curobo._src.solver.solver_ik import _slice_batch_result
