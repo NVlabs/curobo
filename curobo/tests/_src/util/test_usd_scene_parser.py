@@ -248,6 +248,27 @@ class TestGeometryExtractors:
         assert extracted is not None
         assert extracted.radius == pytest.approx(0.25, abs=0.01)
 
+    def test_get_mesh_attrs_with_quad(self, tmp_path):
+        """Test extracting and triangulating a quad mesh."""
+        stage = create_stage(str(tmp_path / "quad_mesh.usd"))
+        mesh_path = "/world/quad_mesh"
+        mesh_geom = UsdGeom.Mesh.Define(stage, mesh_path)
+        mesh_geom.CreatePointsAttr([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]])
+        mesh_geom.CreateFaceVertexCountsAttr([4])
+        mesh_geom.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+
+        prim = stage.GetPrimAtPath(mesh_path)
+        set_prim_transform(prim, [0, 0, 0, 1, 0, 0, 0])
+
+        cache = UsdGeom.XformCache()
+        cache.SetTime(0)
+
+        extracted = get_mesh_attrs(prim, cache=cache)
+
+        assert extracted is not None
+        assert len(extracted.faces) == 2
+        assert extracted.faces == [[1, 3, 0], [1, 2, 3]]
+
     def test_get_cube_attrs_with_zero_dimension_raises(self, tmp_path):
         """Test that zero cube dimension raises ValueError."""
         stage = create_stage(str(tmp_path / "zero_cube.usd"))
@@ -338,4 +359,3 @@ class TestUsdSceneParserRoundTrip:
         assert len(scene.cuboid) == 1
         assert len(scene.sphere) == 1
         assert len(scene.cylinder) == 1
-

@@ -18,6 +18,7 @@ import trimesh.scene
 # CuRobo
 from curobo._src.geom.sphere_fit.fit_spheres import fit_spheres_to_mesh
 from curobo._src.geom.sphere_fit.types import SphereFitType
+from curobo._src.geom.mesh_triangulation import triangulate_mesh_faces
 from curobo._src.types.camera import CameraObservation
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
@@ -484,6 +485,52 @@ class Mesh(Obstacle):
         if self.scale is not None and self.vertices is not None:
             self.vertices = np.ravel(self.scale) * self.vertices
             self.scale = None
+
+    @classmethod
+    def from_polygon_faces(
+        cls,
+        name: str,
+        vertices: List[List[float]],
+        faces: List[int],
+        face_counts: List[int],
+        pose: Optional[List[float]] = None,
+        scale: Optional[List[float]] = None,
+        color: Optional[List[float]] = None,
+        device_cfg: DeviceCfg = DeviceCfg(),
+        **kwargs: Any,
+    ) -> "Mesh":
+        """Create a mesh from flat polygon face data.
+
+        Args:
+            name: Name of mesh.
+            vertices: Mesh vertices.
+            faces: Flat face index buffer.
+            face_counts: Number of vertices per face.
+            pose: Pose of mesh as [x y z qw qx qy qz].
+            scale: Scale to apply to mesh vertices.
+            color: Color of mesh for visualization.
+            device_cfg: Device configuration used for triangulation.
+            kwargs: Additional :class:`Mesh` fields.
+
+        Returns:
+            Mesh with triangle faces.
+        """
+        triangle_faces = triangulate_mesh_faces(
+            vertices=vertices,
+            faces=faces,
+            face_counts=face_counts,
+            device_cfg=device_cfg,
+        )
+        return cls(
+            name=name,
+            pose=pose,
+            scale=scale,
+            color=color,
+            vertices=vertices,
+            faces=triangle_faces,
+            device_cfg=device_cfg,
+            **kwargs,
+        )
 
     def get_trimesh_mesh(
         self, process: bool = True, process_color: bool = True, transform_with_pose: bool = False

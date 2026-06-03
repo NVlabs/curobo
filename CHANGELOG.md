@@ -28,6 +28,7 @@
   memory use and gives old observations EMA-like decay for dynamic scenes.
 - Add feature-mapping docs, videos, and an interactive getting-started
   example at `curobo/examples/getting_started/feature_mapping.py`.
+- Add polygon-face mesh construction with quad triangulation support.
 
 ### Bug Fixes & Misc.
 - Fix B-spline MPC command extraction to skip the start-boundary support window.

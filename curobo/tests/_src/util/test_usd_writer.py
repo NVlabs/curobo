@@ -1274,7 +1274,7 @@ class TestUsdWriterErrorHandling:
             get_sphere_attrs(prim, cache=helper._xform_cache)
 
     def test_mesh_with_mismatched_face_counts(self, tmp_path):
-        """Test that mesh with mismatched face counts returns None."""
+        """Test that mesh with mismatched face counts raises."""
         from curobo._src.util.usd_writer import get_mesh_attrs
 
         helper = UsdWriter()
@@ -1296,9 +1296,31 @@ class TestUsdWriterErrorHandling:
         set_prim_transform(prim, [0, 0, 0, 1, 0, 0, 0])
 
         helper._xform_cache.SetTime(0)
+        with pytest.raises(ValueError, match="Face index buffer length does not match face counts"):
+            get_mesh_attrs(prim, cache=helper._xform_cache)
+
+    def test_mesh_with_quad_faces(self, tmp_path):
+        """Test that quad mesh faces are triangulated."""
+        from curobo._src.util.usd_writer import get_mesh_attrs
+
+        helper = UsdWriter()
+        stage_path = tmp_path / "quad_mesh.usd"
+        helper.create_stage(str(stage_path))
+
+        mesh_path = "/world/quad_mesh"
+        mesh_geom = UsdGeom.Mesh.Define(helper.stage, mesh_path)
+        mesh_geom.CreatePointsAttr([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]])
+        mesh_geom.CreateFaceVertexCountsAttr([4])
+        mesh_geom.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+
+        prim = helper.stage.GetPrimAtPath(mesh_path)
+        from curobo._src.util.usd_writer import set_prim_transform
+        set_prim_transform(prim, [0, 0, 0, 1, 0, 0, 0])
+
+        helper._xform_cache.SetTime(0)
         result = get_mesh_attrs(prim, cache=helper._xform_cache)
-        # Should return None due to mismatch
-        assert result is None
+
+        assert result.faces == [[1, 3, 0], [1, 2, 3]]
 
 
 class TestUsdWriterGeometryWithTimestep:
@@ -2395,4 +2417,3 @@ class TestAnimationMissingLinkWarning:
         # Verify stage is still valid
         prim = helper.stage.GetPrimAtPath("/world/robot/sphere1")
         assert prim.IsValid()
-
