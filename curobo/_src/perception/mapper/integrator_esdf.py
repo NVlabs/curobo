@@ -474,6 +474,18 @@ class BlockSparseESDFIntegrator:
         self._last_esdf_origin.copy_(self._origin)
         self._frame_count = 0
 
+    def import_blocks(self, blocks: Dict[str, torch.Tensor]) -> int:
+        """Import compact TSDF blocks and clear derived ESDF buffers.
+
+        Returns:
+            Number of imported active blocks.
+        """
+        num_blocks = self._tsdf_integrator.import_blocks(blocks)
+        self._site_index.fill_(-1)
+        self._dist_field.zero_()
+        self._frame_count = 1 if num_blocks > 0 else 0
+        return num_blocks
+
     def integrate(
         self,
         observation: CameraObservation,

@@ -26,12 +26,20 @@ Example:
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Callable, Optional, Tuple
+from os import PathLike
+from typing import TYPE_CHECKING, Callable, Optional, Tuple, Union
 
 import torch
 
 from curobo._src.geom.data.data_scene import SceneData
 from curobo._src.geom.types import Mesh, VoxelGrid
+from curobo._src.perception.mapper.checkpoint_blocks import (
+    build_block_metadata,
+    load_block_checkpoint,
+    prepare_blocks_for_import,
+    save_block_checkpoint,
+    validate_block_metadata_for_target,
+)
 from curobo._src.perception.mapper.integrator_esdf import (
     BlockSparseESDFIntegrator,
     BlockSparseESDFIntegratorCfg,
@@ -303,6 +311,56 @@ class Mapper:
         """Reset mapper for new scene."""
         self._integrator.reset()
         self._last_voxel_grid = None
+
+    def save_blocks(self, file_path: Union[str, PathLike[str]]) -> None:
+        """Save active mapper TSDF blocks to a compact checkpoint."""
+        save_block_checkpoint(
+            file_path,
+            block_metadata=build_block_metadata(self.tsdf),
+            blocks=self.tsdf.export_blocks(),
+        )
+
+    @classmethod
+    def load_blocks(
+        cls,
+        file_path: Union[str, PathLike[str]],
+        target_cfg: MapperCfg,
+        import_weight: Optional[float] = None,
+    ) -> "Mapper":
+        """Construct a mapper from ``target_cfg`` and import block checkpoint data."""
+        mapper = cls(target_cfg)
+        mapper.import_blocks(file_path, import_weight=import_weight)
+        return mapper
+
+    def import_blocks(
+        self,
+        file_path: Union[str, PathLike[str]],
+        import_weight: Optional[float] = None,
+    ) -> int:
+        """Import active TSDF blocks from disk into this empty mapper.
+
+        Args:
+            file_path: Checkpoint written by :meth:`save_blocks`.
+            import_weight: Optional constant confidence to assign to imported
+                dynamic TSDF/RGB/feature accumulators. ``None`` preserves saved
+                weights.
+
+        Returns:
+            Number of imported active blocks.
+        """
+        checkpoint = load_block_checkpoint(file_path)
+        block_metadata = checkpoint["block_metadata"]
+        validate_block_metadata_for_target(block_metadata, self.tsdf)
+        blocks = prepare_blocks_for_import(
+            checkpoint["blocks"],
+            block_metadata,
+            import_weight=import_weight,
+            minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+            block_empty_threshold=float(self.tsdf.kernels.block_empty_threshold),
+        )
+        num_blocks = self._integrator.import_blocks(blocks)
+        self._last_voxel_grid = None
+        return num_blocks
 
     def get_stats(
         self,

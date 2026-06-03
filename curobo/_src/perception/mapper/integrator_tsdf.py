@@ -357,6 +357,17 @@ class BlockSparseTSDFIntegrator:
         self._tsdf.reset()
         self._frame_count = 0
 
+    def import_blocks(self, blocks: Dict[str, torch.Tensor]) -> int:
+        """Import compact block payloads into the underlying TSDF storage.
+
+        Returns:
+            Number of imported active blocks.
+        """
+        self._tsdf.import_blocks(blocks)
+        num_blocks = int(self._tsdf.data.num_allocated.item())
+        self._frame_count = 1 if num_blocks > 0 else 0
+        return num_blocks
+
     def integrate(
         self,
         observation: CameraObservation,
