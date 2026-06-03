@@ -425,16 +425,6 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Mesh:
     faces = list(prim.GetAttribute("faceVertexIndices").Get())
 
     face_count = list(prim.GetAttribute("faceVertexCounts").Get())
-    # assume faces are 3:
-    if len(faces) / 3 != len(face_count):
-        log_warn(
-            "Mesh faces "
-            + str(len(faces) / 3)
-            + " are not matching faceVertexCounts "
-            + str(len(face_count))
-        )
-        return None
-    faces = np.array(faces).reshape(len(face_count), 3).tolist()
     if prim.GetAttribute("xformOp:scale").IsValid():
         scale = list(prim.GetAttribute("xformOp:scale").Get())
     else:
@@ -459,11 +449,12 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Mesh:
 
     #
 
-    m = Mesh(
+    m = Mesh.from_polygon_faces(
         name=str(prim.GetPath()),
         pose=pose,
         vertices=points,
         faces=faces,
+        face_counts=face_count,
         scale=scale,
     )
     # print(len(m.vertices), max(m.faces))
@@ -1282,4 +1273,3 @@ class UsdWriter:
                 joint_prims[j].GetAttribute("drive:angular:physics:targetPosition").Set(
                     value=np.degrees(joint_state.position[..., j_idx].item())
                 )
-

@@ -25,7 +25,6 @@ from curobo._src.geom.types import (
     Sphere,
 )
 from curobo._src.types.pose import Pose
-from curobo._src.util.logging import log_warn
 from curobo._src.util.usd_util import get_prim_world_pose
 
 try:
@@ -179,16 +178,6 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Optional[Mesh]:
     faces = list(prim.GetAttribute("faceVertexIndices").Get())
 
     face_count = list(prim.GetAttribute("faceVertexCounts").Get())
-    # assume faces are 3:
-    if len(faces) / 3 != len(face_count):
-        log_warn(
-            "Mesh faces "
-            + str(len(faces) / 3)
-            + " are not matching faceVertexCounts "
-            + str(len(face_count))
-        )
-        return None
-    faces = np.array(faces).reshape(len(face_count), 3).tolist()
     if prim.GetAttribute("xformOp:scale").IsValid():
         scale = list(prim.GetAttribute("xformOp:scale").Get())
     else:
@@ -208,11 +197,12 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Optional[Mesh]:
     tensor_mat = torch.as_tensor(mat, device=torch.device("cuda", 0))
     pose = Pose.from_matrix(tensor_mat).tolist()
 
-    m = Mesh(
+    m = Mesh.from_polygon_faces(
         name=str(prim.GetPath()),
         pose=pose,
         vertices=points,
         faces=faces,
+        face_counts=face_count,
         scale=scale,
     )
 
@@ -349,4 +339,3 @@ class UsdSceneParser:
                 obstacles["capsule"].append(cap)
         scene_model = SceneCfg(**obstacles)
         return scene_model
-
