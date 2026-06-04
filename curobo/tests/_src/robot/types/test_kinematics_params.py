@@ -5,8 +5,10 @@
 """Integration tests for KinematicsParams using KinematicsLoader."""
 
 # Third Party
+import numpy as np
 import pytest
 import torch
+import yourdfpy
 
 from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
 
@@ -496,8 +498,6 @@ class TestExportToUrdfAxisSign:
 
     @pytest.mark.parametrize("axis", ["-1 0 0", "1 0 0", "0 -1 0", "0 0 -1"])
     def test_export_preserves_axis_sign_and_fk(self, axis, tmp_path, cuda_device_cfg):
-        import numpy as np
-        import yourdfpy
 
         src_path = tmp_path / "src.urdf"
         self._write_single_joint_urdf(src_path, axis)
