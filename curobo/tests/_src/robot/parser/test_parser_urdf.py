@@ -45,6 +45,14 @@ def franka_parser(franka_urdf_path, franka_asset_path):
     )
 
 
+@pytest.fixture(scope="module")
+def simple_mimic_urdf_path():
+    """Get path to the simple mimic robot URDF file."""
+    robot_data = load_yaml(join_path(get_robot_configs_path(), "simple_mimic_robot.yml"))
+    urdf_path = robot_data["robot_cfg"]["kinematics"]["urdf_path"]
+    return join_path(get_assets_path(), urdf_path)
+
+
 class TestUrdfRobotParserInitialization:
     """Test UrdfRobotParser initialization."""
 
@@ -378,6 +386,23 @@ class TestUrdfRobotParserMethods:
         assert isinstance(joint_names, list)
         assert len(joint_names) > 0
         assert all(isinstance(name, str) for name in joint_names)
+
+    def test_get_actuated_joint_names(self, simple_mimic_urdf_path):
+        """Test getting non-fixed, non-mimic joint names."""
+        parser = UrdfRobotParser(urdf_path=simple_mimic_urdf_path)
+
+        assert parser.get_actuated_joint_names() == [
+            "chain_1_active_joint_1",
+            "active_joint_2",
+        ]
+
+    def test_get_mimic_joint_map(self, simple_mimic_urdf_path):
+        """Test getting raw mimic joints mapped to their actuated joints."""
+        parser = UrdfRobotParser(urdf_path=simple_mimic_urdf_path)
+
+        assert parser.get_mimic_joint_map() == {
+            "chain_1_mimic_joint_2": "chain_1_active_joint_1"
+        }
 
     def test_add_absolute_path_to_link_meshes(self, franka_urdf_path):
         """Test adding absolute path to link meshes."""
@@ -776,4 +801,3 @@ endsolid box"""
             assert mesh.pose is not None
             assert isinstance(mesh.pose, list)
             assert len(mesh.pose) == 7  # x, y, z, qw, qx, qy, qz
-

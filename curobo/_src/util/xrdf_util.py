@@ -48,7 +48,7 @@ def convert_xrdf_to_curobo(
     kinematics_parser = UrdfRobotParser(
         urdf_path, mesh_root=content_path.robot_asset_absolute_path, build_scene_graph=True
     )
-    joint_names = kinematics_parser.get_controlled_joint_names()
+    joint_names = kinematics_parser.get_actuated_joint_names()
     base_link = kinematics_parser.root_link
 
     output_dict = {}

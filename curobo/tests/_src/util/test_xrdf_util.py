@@ -89,7 +89,7 @@ class TestConvertXrdfToCurobo:
     def mock_kinematics_parser(self):
         """Create a mock UrdfRobotParser."""
         parser = MagicMock()
-        parser.get_controlled_joint_names.return_value = ["joint1", "joint2", "joint3"]
+        parser.get_actuated_joint_names.return_value = ["joint1", "joint2", "joint3"]
         parser.root_link = "base_link"
         return parser
 
@@ -576,4 +576,3 @@ class TestXrdfRoundTripWithRealConfig:
         if "extra_links" in original_kin and original_kin["extra_links"]:
             add_frame_modifiers = [m for m in xrdf_config["modifiers"] if "add_frame" in m]
             assert len(add_frame_modifiers) > 0
-

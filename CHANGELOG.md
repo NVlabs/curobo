@@ -58,6 +58,9 @@
 - Export `ToolPoseCriteria` from `curobo.types`.
 - Cleaned up internal _src package initializers by replacing barrel imports with concrete module
   imports, leaving only the runtime backend selector as a non-marker initializer.
+- Validate kinematics c-space and lock-joint names against parser actuated
+  and mimic joint names, preserving explicit c-space-only lock joints for full
+  joint-state reconstruction.
 
 ### Breaking Changes
 - `MapperCfg` now requires `image_height` and `image_width` so the

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 # Standard Library
 import copy
+from collections import Counter
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
@@ -126,40 +127,11 @@ class KinematicsLoader(KinematicsLoaderCfg):
             self.cspace = CSpaceParams.load_from_joint_limits(
                 jpv["position"][1, :], jpv["position"][0, :], self.joint_names, self.device_cfg
             )
-        # we reduce cspace to only contain joints from current kinematic structure:
-
-        # instead we lock joints that are not in the kinematic structure:
-        extra_lock_joints = {
-            k: self.cspace.default_joint_position[self.cspace.joint_names.index(k)].item()
-            for k in self.cspace.joint_names
-            if k not in self.joint_names
-        }
-
-        # add extra lock joints to lock_jointstate:
-        # convert dictionary to list:
-        if len(extra_lock_joints) > 0:
-            extra_lock_joint_position = torch.tensor(
-                [extra_lock_joints[k] for k in extra_lock_joints.keys()],
-                device=self.device_cfg.device,
-            )
-            extra_lock_jointstate = JointState.from_position(
-                extra_lock_joint_position, joint_names=list(extra_lock_joints.keys())
-            )
-            if self.lock_jointstate is not None:
-                # only append if not already in lock_jointstate
-                for ki, kv in enumerate(extra_lock_joints.keys()):
-                    if kv not in self.lock_jointstate.joint_names:
-                        self.lock_jointstate = append_joints_to_state(
-                            self.lock_jointstate,
-                            JointState.from_position(
-                                extra_lock_joint_position[ki], joint_names=[kv]
-                            ),
-                        )
-
-            else:
-                self.non_fixed_joint_names += list(extra_lock_joints.keys())
-                self.non_fixed_joint_names = list(set(self.non_fixed_joint_names))
-                self.lock_jointstate = extra_lock_jointstate
+        self._append_lock_joint_state(self._get_validated_cspace_lock_joints())
+        lock_joint_names = (
+            [] if self.lock_jointstate is None else self.lock_jointstate.joint_names
+        )
+        self.non_fixed_joint_names = self.joint_names.copy() + lock_joint_names
 
         self.cspace.inplace_reindex(self.joint_names)
         self._update_joint_limits()
@@ -532,6 +504,176 @@ class KinematicsLoader(KinematicsLoaderCfg):
                 self.collision_sphere_buffer,
             )
 
+    def _append_lock_joint_state(self, lock_joint_values: Dict[str, float]):
+        """Append locked joints to reconstruction state without duplicating names."""
+        if len(lock_joint_values) == 0:
+            return
+
+        locked_joint_names = set()
+        if self.lock_jointstate is not None:
+            locked_joint_names = set(self.lock_jointstate.joint_names)
+        new_joint_names = []
+        new_joint_values = []
+        for joint_name, joint_value in lock_joint_values.items():
+            if joint_name in locked_joint_names:
+                continue
+            new_joint_names.append(joint_name)
+            new_joint_values.append(joint_value)
+
+        if len(new_joint_names) == 0:
+            return
+
+        new_lock_jointstate = JointState.from_position(
+            self.device_cfg.to_device(new_joint_values), joint_names=new_joint_names
+        )
+        if self.lock_jointstate is None:
+            self.lock_jointstate = new_lock_jointstate
+        else:
+            self.lock_jointstate = append_joints_to_state(
+                self.lock_jointstate, new_lock_jointstate
+            )
+
+    def _get_validated_cspace_lock_joints(self) -> Dict[str, float]:
+        """Validate cspace naming and return cspace-only lock joints to append."""
+        if self.cspace is None:
+            return {}
+
+        configured_lock_joints = self.lock_joints or {}
+        active_tree_joints = self.joint_names.copy()
+        active_tree_joint_names = set(active_tree_joints)
+        cspace_joint_names = self.cspace.joint_names
+        cspace_joint_name_set = set(cspace_joint_names)
+        lock_joint_names = (
+            [] if self.lock_jointstate is None else self.lock_jointstate.joint_names
+        )
+        resolved_tree_lock_joint_names = set(lock_joint_names)
+
+        parser_actuated_joint_names = self._kinematics_parser.get_actuated_joint_names()
+        for joint_name in active_tree_joints + lock_joint_names:
+            if joint_name not in parser_actuated_joint_names:
+                parser_actuated_joint_names.append(joint_name)
+        parser_actuated_joint_name_set = set(parser_actuated_joint_names)
+        mimic_joint_map = self._kinematics_parser.get_mimic_joint_map()
+
+        mimic_lock_joints = {
+            joint_name: mimic_joint_map[joint_name]
+            for joint_name in configured_lock_joints.keys()
+            if joint_name in mimic_joint_map
+        }
+        unresolved_lock_joints = [
+            joint_name
+            for joint_name in configured_lock_joints.keys()
+            if joint_name not in resolved_tree_lock_joint_names
+            and joint_name not in cspace_joint_name_set
+            and joint_name not in mimic_lock_joints
+        ]
+        unapplied_tree_lock_joints = [
+            joint_name
+            for joint_name in configured_lock_joints.keys()
+            if joint_name in active_tree_joint_names
+            and joint_name in parser_actuated_joint_name_set
+            and joint_name not in resolved_tree_lock_joint_names
+        ]
+        unresolved_lock_joints.extend(unapplied_tree_lock_joints)
+
+        cspace_only_joint_names = [
+            joint_name
+            for joint_name in cspace_joint_names
+            if joint_name not in active_tree_joint_names
+        ]
+        unconfigured_cspace_only_joints = [
+            joint_name
+            for joint_name in cspace_only_joint_names
+            if joint_name not in configured_lock_joints
+        ]
+        invalid_cspace_lock_joints = [
+            joint_name
+            for joint_name in cspace_only_joint_names
+            if joint_name in configured_lock_joints
+            and joint_name not in parser_actuated_joint_name_set
+            and joint_name not in resolved_tree_lock_joint_names
+        ]
+        cspace_lock_joints = {
+            joint_name: configured_lock_joints[joint_name]
+            for joint_name in cspace_only_joint_names
+            if joint_name in configured_lock_joints
+            and joint_name in parser_actuated_joint_name_set
+            and joint_name not in resolved_tree_lock_joint_names
+        }
+        missing_active_cspace_joints = [
+            joint_name
+            for joint_name in active_tree_joints
+            if joint_name not in cspace_joint_name_set
+        ]
+        duplicate_cspace_joints = [
+            joint_name
+            for joint_name, count in Counter(cspace_joint_names).items()
+            if count > 1
+        ]
+
+        if len(mimic_lock_joints) > 0:
+            log_and_raise(
+                "lock_joints contains mimic joint names; lock the active joint instead: "
+                + str(mimic_lock_joints)
+            )
+        if len(unresolved_lock_joints) > 0:
+            log_and_raise(
+                "lock_joints contains joints that were not found in the kinematic tree "
+                + "or cspace: "
+                + str(unresolved_lock_joints)
+            )
+        if len(invalid_cspace_lock_joints) > 0:
+            log_and_raise(
+                "cspace lock joints are not parser actuated joints and are not active "
+                + "in the configured tree: "
+                + str(invalid_cspace_lock_joints)
+            )
+        if len(duplicate_cspace_joints) > 0:
+            log_and_raise(
+                "cspace contains duplicate joint names: "
+                + str(duplicate_cspace_joints)
+            )
+        if len(unconfigured_cspace_only_joints) > 0:
+            log_and_raise(
+                "cspace contains joints that are not active in the configured tree and "
+                + "are not explicitly locked: "
+                + str(unconfigured_cspace_only_joints)
+            )
+        if len(missing_active_cspace_joints) > 0:
+            log_and_raise(
+                "cspace is missing active tree joints: "
+                + str(missing_active_cspace_joints)
+            )
+
+        active_duplicate_names = [
+            joint_name
+            for joint_name, count in Counter(active_tree_joints).items()
+            if count > 1
+        ]
+        lock_duplicate_names = [
+            joint_name
+            for joint_name, count in Counter(lock_joint_names).items()
+            if count > 1
+        ]
+        if len(active_duplicate_names) > 0:
+            log_and_raise(
+                "active tree joints contain duplicate names: " + str(active_duplicate_names)
+            )
+        if len(lock_duplicate_names) > 0:
+            log_and_raise("lock_jointstate contains duplicate names: " + str(lock_duplicate_names))
+
+        active_lock_overlap = [
+            joint_name
+            for joint_name in lock_joint_names
+            if joint_name in active_tree_joint_names
+        ]
+        if len(active_lock_overlap) > 0:
+            log_and_raise(
+                "lock_jointstate overlaps with active tree joints: " + str(active_lock_overlap)
+            )
+
+        return cspace_lock_joints
+
     @profiler.record_function("robot_generator/build_kinematics_with_lock_joints")
     def _build_kinematics_with_lock_joints(
         self,
@@ -554,14 +696,28 @@ class KinematicsLoader(KinematicsLoaderCfg):
         """
         chain_link_names = self._build_chain(base_link, other_links)
         # find links attached to lock joints:
-        lock_joint_names = list(lock_joints.keys())
+        configured_lock_joint_names = list(lock_joints.keys())
+        joint_data = self._get_joint_links(configured_lock_joint_names)
+        lock_joint_names = [
+            j
+            for j in configured_lock_joint_names
+            if "parent" in joint_data.get(j, {}) or "mimic" in joint_data.get(j, {})
+        ]
 
-        joint_data = self._get_joint_links(lock_joint_names)
+        if len(lock_joint_names) == 0:
+            self._build_kinematics_tensors(base_link, tool_frames, chain_link_names)
+            if self.collision_spheres is not None and len(self.collision_link_names) > 0:
+                self._build_collision_model(
+                    self.collision_spheres,
+                    self.collision_link_names,
+                    self.collision_sphere_buffer,
+                )
+            return
 
-        lock_links = list(
-            [joint_data[j]["parent"] for j in joint_data.keys()]
-            + [joint_data[j]["child"] for j in joint_data.keys()]
-        )
+        lock_links = []
+        for j in lock_joint_names:
+            if "parent" in joint_data[j]:
+                lock_links += [joint_data[j]["parent"], joint_data[j]["child"]]
 
         for k in lock_joint_names:
             if "mimic" in joint_data[k]:
@@ -586,11 +742,11 @@ class KinematicsLoader(KinematicsLoaderCfg):
         )
         # set lock joints in the joint angles:
         l_idx = torch.as_tensor(
-            [self.joint_names.index(l) for l in lock_joints.keys()],
+            [self.joint_names.index(l) for l in lock_joint_names],
             dtype=torch.long,
             device=self.device_cfg.device,
         )
-        l_val = self.device_cfg.to_device([lock_joints[l] for l in lock_joints.keys()])
+        l_val = self.device_cfg.to_device([lock_joints[l] for l in lock_joint_names])
 
         q[0, l_idx] = l_val
         kinematics_config = KinematicsParams(
@@ -632,16 +788,21 @@ class KinematicsLoader(KinematicsLoaderCfg):
             self._joint_map = self._joint_map.to(device=self.cpu_tensor_args.device)
 
             for j in lock_joint_names:
-                w_parent = lock_links.index(joint_data[j]["parent"])
-                w_child = lock_links.index(joint_data[j]["child"])
-                parent_t_child = (
-                    link_poses.get_index(0, w_parent)
-                    .inverse()
-                    .multiply(link_poses.get_index(0, w_child))
-                )
-                # Make this joint as fixed
-                i = joint_data[j]["link_index"]
-                self._fixed_transform[i] = parent_t_child.get_affine_matrix()
+                if "parent" in joint_data[j]:
+                    w_parent = lock_links.index(joint_data[j]["parent"])
+                    w_child = lock_links.index(joint_data[j]["child"])
+                    parent_t_child = (
+                        link_poses.get_index(0, w_parent)
+                        .inverse()
+                        .multiply(link_poses.get_index(0, w_child))
+                    )
+                    # Make this joint as fixed
+                    i = joint_data[j]["link_index"]
+                    self._fixed_transform[i] = parent_t_child.get_affine_matrix()
+                    self._joint_map_type[i] = -1
+                    self._joint_map[i] = -1
+                    self._controlled_links.remove(i)
+                    self._active_joints.remove(i)
 
                 if "mimic" in joint_data[j]:
                     for mimic_joint in joint_data[j]["mimic"]:
@@ -658,14 +819,10 @@ class KinematicsLoader(KinematicsLoaderCfg):
                         self._joint_map_type[i_q] = -1
                         self._joint_map[i_q] = -1
 
-                i = joint_data[j]["link_index"]
-                self._joint_map_type[i] = -1
-                self._joint_map[i:] -= 1
-                self._joint_map[i] = -1
-                self._controlled_links.remove(i)
+                joint_idx = self.joint_names.index(j)
+                self._joint_map[self._joint_map > joint_idx] -= 1
                 self.joint_names.remove(j)
                 self._num_dof -= 1
-                self._active_joints.remove(i)
             self._joint_map[self._joint_map < -1] = -1
             self._joint_map = self._joint_map.to(device=self.device_cfg.device)
             self._joint_map_type = self._joint_map_type.to(device=self.device_cfg.device)
@@ -683,10 +840,9 @@ class KinematicsLoader(KinematicsLoaderCfg):
             joint_affects_endeffector_tensor, device=self.device_cfg.device
         )
 
-        if len(self.lock_joints.keys()) > 0:
-            self.lock_jointstate = JointState(
-                position=l_val, joint_names=list(self.lock_joints.keys())
-            )
+        self._append_lock_joint_state(
+            {joint_name: lock_joints[joint_name] for joint_name in lock_joint_names}
+        )
 
     @profiler.record_function("robot_generator/build_collision_model")
     def _build_collision_model(

@@ -21,6 +21,7 @@ from curobo._src.geom.types import Mesh, Obstacle
 
 # CuRobo
 from curobo._src.robot.types.link_params import LinkParams
+from curobo._src.robot.types.joint_types import JointType
 from curobo._src.util.logging import log_and_raise
 
 
@@ -120,19 +121,49 @@ class RobotParser:
         chain_links.reverse()
         return chain_links
 
-    def get_controlled_joint_names(self) -> List[str]:
-        """Get names of all controlled joints in the robot.
+    def get_actuated_joint_names(self) -> List[str]:
+        """Get names of independently actuated joints in the robot.
 
         Returns:
-            Names of all controlled joints in the robot.
+            Names of all non-fixed, non-mimic joints in the robot.
         """
-        j_list = []
-        for k in self._parent_map.keys():
-            joint_name = self._parent_map[k]["joint_name"]
+        joint_names = []
+        for parent_data in self._parent_map.values():
+            if "joint_name" not in parent_data:
+                continue
+            joint_name = parent_data["joint_name"]
             joint = self._robot.joint_map[joint_name]
             if joint.type != "fixed" and joint.mimic is None:
-                j_list.append(joint_name)
-        return j_list
+                joint_names.append(joint_name)
+        if self.extra_links is not None:
+            for link_params in self.extra_links.values():
+                if (
+                    link_params.joint_type != JointType.FIXED
+                    and link_params.mimic_joint_name is None
+                    and link_params.joint_name not in joint_names
+                ):
+                    joint_names.append(link_params.joint_name)
+        return joint_names
+
+    def get_mimic_joint_map(self) -> Dict[str, str]:
+        """Get raw mimic joint names mapped to their active joint names.
+
+        Returns:
+            Mapping from mimic joint name to the independently actuated joint name it mimics.
+        """
+        mimic_joint_map = {}
+        for parent_data in self._parent_map.values():
+            if "joint_name" not in parent_data:
+                continue
+            joint_name = parent_data["joint_name"]
+            joint = self._robot.joint_map[joint_name]
+            if joint.mimic is not None:
+                mimic_joint_map[joint_name] = joint.mimic.joint
+        if self.extra_links is not None:
+            for link_params in self.extra_links.values():
+                if link_params.mimic_joint_name is not None:
+                    mimic_joint_map[link_params.mimic_joint_name] = link_params.joint_name
+        return mimic_joint_map
 
     def _get_from_extra_links(self, link_name: str) -> LinkParams:
         """Get link parameters for extra links.
