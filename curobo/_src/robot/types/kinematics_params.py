@@ -886,6 +886,16 @@ class KinematicsParams:
             # Convert to URDF joint type and axis
             urdf_joint_type, axis = _joint_type_to_urdf_type(joint_type_value)
 
+            # A joint authored with a negative URDF axis (e.g. <axis xyz="-1 0 0"/>) is
+            # stored by UrdfRobotParser as the POSITIVE joint type plus a -1 joint-offset
+            # scale (parser_urdf.py), so _joint_type_to_urdf_type returns the positive axis.
+            # Re-apply that stored sign here, otherwise the exported axis loses it and FK on
+            # the exported URDF rotates the opposite way for the same joint value.
+            if axis is not None and joint_idx >= 0:
+                offset_scale = float(self.joint_offset_map[2 * link_idx].cpu().numpy())
+                if offset_scale < 0:
+                    axis = -axis
+
             # Get fixed transform (origin)
             fixed_transform = self.fixed_transforms[link_idx].cpu().numpy()
             origin = np.eye(4)

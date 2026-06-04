@@ -467,3 +467,67 @@ class TestKinematicsParamsEdgeCases:
             franka_kinematics_cfg.reference_link_spheres,
         )
 
+
+
+class TestExportToUrdfAxisSign:
+    """Regression for NVlabs/curobo#676: ``export_to_urdf`` must preserve the sign of a
+    joint axis. A joint authored with a negative URDF axis (e.g. ``<axis xyz="-1 0 0"/>``)
+    is stored by the parser as the positive joint type plus a ``-1`` joint-offset scale;
+    the export must re-apply that sign, else FK on the exported URDF rotates the wrong way.
+    """
+
+    @staticmethod
+    def _write_single_joint_urdf(path, axis: str) -> None:
+        path.write_text(
+            '<?xml version="1.0"?>\n'
+            '<robot name="axis_sign_demo">\n'
+            '  <link name="base_link"><inertial><mass value="1.0"/>'
+            '<inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial></link>\n'
+            '  <link name="link1"><inertial><mass value="1.0"/>'
+            '<inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial></link>\n'
+            '  <joint name="j1" type="revolute">\n'
+            '    <parent link="base_link"/><child link="link1"/>\n'
+            '    <origin xyz="0.1 0 0" rpy="0 0 0"/>\n'
+            f'    <axis xyz="{axis}"/>\n'
+            '    <limit lower="-1.57" upper="1.57" effort="1" velocity="1"/>\n'
+            '  </joint>\n'
+            '</robot>\n'
+        )
+
+    @pytest.mark.parametrize("axis", ["-1 0 0", "1 0 0", "0 -1 0", "0 0 -1"])
+    def test_export_preserves_axis_sign_and_fk(self, axis, tmp_path, cuda_device_cfg):
+        import numpy as np
+        import yourdfpy
+
+        src_path = tmp_path / "src.urdf"
+        self._write_single_joint_urdf(src_path, axis)
+
+        kin_dict = {
+            "urdf_path": str(src_path), "base_link": "base_link", "tool_frames": ["link1"],
+            "cspace": {
+                "joint_names": ["j1"], "default_joint_position": [0.0],
+                "null_space_weight": [1.0], "cspace_distance_weight": [1.0],
+                "max_acceleration": 1.0, "max_jerk": 10.0,
+            },
+        }
+        cfg = KinematicsCfg.from_data_dict(kin_dict, device_cfg=cuda_device_cfg)
+
+        out_path = tmp_path / "exported.urdf"
+        cfg.kinematics_config.export_to_urdf(
+            output_path=str(out_path), kinematics_parser=cfg.kinematics_parser
+        )
+
+        src_urdf = yourdfpy.URDF.load(str(src_path), load_meshes=False, build_scene_graph=True)
+        exp_urdf = yourdfpy.URDF.load(str(out_path), load_meshes=False, build_scene_graph=True)
+
+        # 1. The exported axis must match the source axis (up to sign-equal float parse).
+        want = np.array([float(x) for x in axis.split()])
+        got = np.array([float(x) for x in exp_urdf.joint_map["j1"].axis])
+        np.testing.assert_allclose(got, want, atol=1e-9)
+
+        # 2. FK round-trip: child link pose must match the source for a non-trivial angle.
+        q = 0.7
+        src_urdf.update_cfg(np.array([q])); exp_urdf.update_cfg(np.array([q]))
+        np.testing.assert_allclose(
+            exp_urdf.get_transform("link1"), src_urdf.get_transform("link1"), atol=1e-6
+        )
