@@ -45,9 +45,10 @@ def _try_load_cuda_core_backend() -> Optional[dict]:
             "dynamics": cc_dyn,
             "pba": cc_pba,
         }
-    except ImportError as e:
-        # cuda.core not available
-        log_and_raise(f"Error loading cuda.core backend: {e}")
+    except ImportError:
+        # cuda.core not available — return None (soft) so _auto_select_backend can fall back
+        # to the compiled pybind backend. (Was log_and_raise, which raised and broke the
+        # documented cuda.core->pybind fallback whenever cuda.core isn't installed.)
         return None
 
 
