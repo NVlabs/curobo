@@ -546,6 +546,9 @@ class VoxelData:
             w_obj_pose: New pose in world frame.
             obj_w_pose: New inverse pose. Used if w_obj_pose is None.
             env_idx: Environment index.
+
+        Raises:
+            ValueError: If voxel grid with given name not found.
         """
         if w_obj_pose is None and obj_w_pose is None:
             log_and_raise("Either w_obj_pose or obj_w_pose must be provided")
@@ -558,7 +561,16 @@ class VoxelData:
         self.inv_pose[env_idx, idx, :7] = obj_w_pose.get_pose_vector()
 
     def set_enabled(self, name: str, enabled: bool, env_idx: int = 0) -> None:
-        """Enable or disable a voxel grid for collision checking."""
+        """Enable or disable a voxel grid for collision checking.
+
+        Args:
+            name: Name of the voxel grid.
+            enabled: True to enable, False to disable.
+            env_idx: Environment index.
+
+        Raises:
+            ValueError: If voxel grid with given name not found.
+        """
         idx = self.get_idx(name, env_idx)
         self.enable[env_idx, idx] = int(enabled)
 
