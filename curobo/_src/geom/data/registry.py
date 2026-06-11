@@ -8,7 +8,7 @@
 #   - is_obs_enabled(obs_set, env_idx, local_idx) -> bool
 #   - load_obstacle_transform(obs_set, env_idx, local_idx) -> ObstacleTransform
 #   - compute_local_sdf(obs_set, env_idx, local_idx, local_point) -> float32
-#   - compute_local_sdf_with_grad(obs_set, env_idx, local_idx, local_point) -> vec4
+#   - compute_local_sdf_with_grad(obs_set, env_idx, local_idx, local_point, query_distance) -> vec4
 #
 # To add a new obstacle type, add its module path here.
 OBSTACLE_SDF_MODULES = [

@@ -549,6 +549,7 @@ def compute_local_sdf_with_grad(
     env_idx: wp.int32,
     local_idx: wp.int32,
     local_pt: wp.vec3,
+    query_distance: wp.float32,
 ) -> wp.vec4:
     """Compute SDF and gradient for a cuboid obstacle in local frame.
 
@@ -565,6 +566,7 @@ def compute_local_sdf_with_grad(
         env_idx: Environment index.
         local_idx: Local index of the cuboid within the environment.
         local_pt: Query point in obstacle local frame.
+        query_distance: Minimum distance needed for the current collision query. Unused.
 
     Returns:
         vec4(signed_dist, grad_local_x, grad_local_y, grad_local_z).

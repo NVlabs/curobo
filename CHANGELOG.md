@@ -61,6 +61,8 @@
 - Validate kinematics c-space and lock-joint names against parser actuated
   and mimic joint names, preserving explicit c-space-only lock joints for full
   joint-state reconstruction.
+- Fix mesh obstacle SDF queries so small meshes do not report false-positive
+  collisions for far-away spheres whose radius exceeds the mesh AABB query cap.
 
 ### Breaking Changes
 - `MapperCfg` now requires `image_height` and `image_width` so the
