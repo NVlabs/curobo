@@ -137,6 +137,7 @@ def sphere_obstacle_collision_kernel(
     query = load_sphere_query(spheres, sph_flat_idx, eta)
     if query.radius < 0.0:
         return
+    radius_adjusted = query.radius_adjusted
 
     # Load obstacle transform
     inv_t = load_obstacle_transform(obs_set, env_idx, obs_local_idx)
@@ -145,10 +146,12 @@ def sphere_obstacle_collision_kernel(
     local_pt = wp.transform_point(inv_t, query.center)
 
     # Compute local SDF and gradient
-    local_result = compute_local_sdf_with_grad(obs_set, env_idx, obs_local_idx, local_pt)
+    local_result = compute_local_sdf_with_grad(
+        obs_set, env_idx, obs_local_idx, local_pt, radius_adjusted
+    )
 
     # Only compute forward transform and accumulate when in collision
-    penetration = -local_result[0] + query.radius_adjusted
+    penetration = -local_result[0] + radius_adjusted
     if penetration > 0.0:
         fwd_t = wp.transform_inverse(inv_t)
         grad_local = wp.vec3(local_result[1], local_result[2], local_result[3])

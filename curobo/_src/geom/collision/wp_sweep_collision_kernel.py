@@ -175,7 +175,9 @@ def swept_sphere_obstacle_collision_kernel(
     local_current = wp.transform_point(inv_t, query.center)
 
     # Process current timestep
-    sdf_result = compute_local_sdf_with_grad(obs, env_idx, obs_local_idx, local_current)
+    sdf_result = compute_local_sdf_with_grad(
+        obs, env_idx, obs_local_idx, local_current, radius_adjusted
+    )
     penetration = -sdf_result[0] + radius_adjusted
 
     if penetration > 0.0:
@@ -203,7 +205,9 @@ def swept_sphere_obstacle_collision_kernel(
 
             # Use one SDF overload in the sweep loops to avoid invalid Warp
             # codegen for VoxelDataWarp when both overloads are mixed here.
-            sdf_result = compute_local_sdf_with_grad(obs, env_idx, obs_local_idx, local_pt)
+            sdf_result = compute_local_sdf_with_grad(
+                obs, env_idx, obs_local_idx, local_pt, radius_adjusted
+            )
             penetration = -sdf_result[0] + radius_adjusted
 
             if penetration > 0.0:
@@ -233,7 +237,9 @@ def swept_sphere_obstacle_collision_kernel(
             local_pt = t * local_current + (1.0 - t) * local_next
 
             # See previous sweep loop for why this uses the with-grad overload.
-            sdf_result = compute_local_sdf_with_grad(obs, env_idx, obs_local_idx, local_pt)
+            sdf_result = compute_local_sdf_with_grad(
+                obs, env_idx, obs_local_idx, local_pt, radius_adjusted
+            )
             penetration = -sdf_result[0] + radius_adjusted
 
             if penetration > 0.0:

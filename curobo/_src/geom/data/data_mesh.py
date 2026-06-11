@@ -647,6 +647,7 @@ def compute_local_sdf_with_grad(
     env_idx: wp.int32,
     local_idx: wp.int32,
     local_pt: wp.vec3,
+    query_distance: wp.float32,
 ) -> wp.vec4:
     """Compute SDF and gradient for a mesh obstacle in local frame.
 
@@ -660,6 +661,7 @@ def compute_local_sdf_with_grad(
         env_idx: Environment index.
         local_idx: Local index of the mesh within the environment.
         local_pt: Query point in obstacle local frame.
+        query_distance: Minimum distance needed for the current collision query.
 
     Returns:
         vec4(signed_dist, grad_local_x, grad_local_y, grad_local_z).
@@ -674,6 +676,7 @@ def compute_local_sdf_with_grad(
     obs_set.dims[flat_idx,1],
     obs_set.dims[flat_idx,2])
     max_distance = wp.length(bounding_box_size) * 0.5
+    max_distance = wp.max(max_distance, query_distance)
 
     # Query mesh for closest point
     result = wp.mesh_query_point(mesh_id, local_pt, max_distance)
