@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Ship runtime configs and robot assets in builds without VCS file discovery.
+recursive-include curobo/content *
