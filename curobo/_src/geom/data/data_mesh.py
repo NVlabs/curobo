@@ -387,7 +387,7 @@ class MeshData:
             env_idx: Environment index.
 
         Raises:
-            RuntimeError: If mesh with given name not found.
+            ValueError: If mesh with given name not found.
         """
         if w_obj_pose is None and obj_w_pose is None:
             log_and_raise("Either w_obj_pose or obj_w_pose must be provided")
@@ -441,7 +441,16 @@ class MeshData:
         self.names[env_idx][mesh_idx] = name
 
     def set_enabled(self, name: str, enabled: bool, env_idx: int = 0) -> None:
-        """Enable or disable a mesh for collision checking."""
+        """Enable or disable a mesh for collision checking.
+
+        Args:
+            name: Name of the mesh.
+            enabled: True to enable, False to disable.
+            env_idx: Environment index.
+
+        Raises:
+            ValueError: If mesh with given name not found.
+        """
         idx = self.get_idx(name, env_idx)
         self.enable[env_idx, idx] = int(enabled)
 

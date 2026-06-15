@@ -340,7 +340,7 @@ class CuboidData:
             env_idx: Environment index.
 
         Raises:
-            RuntimeError: If cuboid with given name not found.
+            ValueError: If cuboid with given name not found.
         """
         if w_obj_pose is None and obj_w_pose is None:
             log_and_raise("Either w_obj_pose or obj_w_pose must be provided")
@@ -361,7 +361,7 @@ class CuboidData:
             env_idx: Environment index.
 
         Raises:
-            RuntimeError: If cuboid with given name not found.
+            ValueError: If cuboid with given name not found.
         """
         idx = self.get_idx(name, env_idx)
         self.dims[env_idx, idx, :3] = dims
@@ -375,7 +375,7 @@ class CuboidData:
             env_idx: Environment index.
 
         Raises:
-            RuntimeError: If cuboid with given name not found.
+            ValueError: If cuboid with given name not found.
         """
         idx = self.get_idx(name, env_idx)
         self.enable[env_idx, idx] = int(enabled)

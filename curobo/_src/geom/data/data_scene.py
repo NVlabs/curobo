@@ -323,21 +323,21 @@ class SceneData:
             try:
                 self.cuboids.update_pose(name, w_obj_pose=pose, env_idx=env_idx)
                 return
-            except RuntimeError:
+            except (RuntimeError, ValueError):
                 pass
 
         if self.meshes is not None:
             try:
                 self.meshes.update_pose(name, w_obj_pose=pose, env_idx=env_idx)
                 return
-            except RuntimeError:
+            except (RuntimeError, ValueError):
                 pass
 
         if self.voxels is not None:
             try:
                 self.voxels.update_pose(name, w_obj_pose=pose, env_idx=env_idx)
                 return
-            except RuntimeError:
+            except (RuntimeError, ValueError):
                 pass
 
         log_and_raise(f"Obstacle '{name}' not found in environment {env_idx}")
@@ -362,21 +362,21 @@ class SceneData:
             try:
                 self.cuboids.set_enabled(name, enabled, env_idx)
                 return
-            except RuntimeError:
+            except (RuntimeError, ValueError):
                 pass
 
         if self.meshes is not None:
             try:
                 self.meshes.set_enabled(name, enabled, env_idx)
                 return
-            except RuntimeError:
+            except (RuntimeError, ValueError):
                 pass
 
         if self.voxels is not None:
             try:
                 self.voxels.set_enabled(name, enabled, env_idx)
                 return
-            except RuntimeError:
+            except (RuntimeError, ValueError):
                 pass
 
         log_and_raise(f"Obstacle '{name}' not found in environment {env_idx}")
