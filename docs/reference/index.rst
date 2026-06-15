@@ -27,6 +27,15 @@ Performance & Benchmarks
 
    benchmarks
 
+Reference Examples
+------------------
+
+.. toctree::
+   :maxdepth: 1
+
+   lidar_volumetric_mapping
+   live_volumetric_mapping_mpc
+
 Implementation Details
 ----------------------
 
