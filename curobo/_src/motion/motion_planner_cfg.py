@@ -69,44 +69,99 @@ class MotionPlannerCfg:
         multi_env: bool = False,
         max_goalset: int = 1,
     ) -> MotionPlannerCfg:
-        """Create MotionPlannerCfg from flexible inputs.
+        """Create a MotionPlannerCfg from robot, task, and scene configs.
 
-        Each config parameter accepts either a file path (str), a dictionary,
-        or an already-constructed config object.
+        This factory builds the three components used by MotionPlanner: IK,
+        trajectory optimization, and PRM graph planning. Most integration code
+        should pass a robot, optional scene/collision cache, sizing bounds, and
+        leave the task YAMLs at their defaults.
+
+        Config path arguments may be relative YAML names under cuRobo's content
+        folders, absolute YAML paths, parsed dictionaries, or typed config
+        objects where supported.
 
         Args:
-            robot: Robot configuration - path to YAML, dict, or RobotCfg object.
-            ik_optimizer_configs: IK optimizer configs - paths or dicts.
-            ik_transition_model: IK transition model config - path or dict.
-            metrics_rollout: Metrics rollout config - path or dict.
-            trajopt_optimizer_configs: Trajectory optimization optimizer configs.
-            trajopt_transition_model: Trajectory optimization transition model.
-            graph_planner_config: Graph planner config - path or dict.
-            graph_planner_rollout: Graph planner rollout config - path or dict.
-            graph_planner_transition_model: Graph planner transition model.
-            scene_model: Optional scene model config - path or dict.
-            collision_cache: Cache configuration for collision checking.
-            self_collision_check: Whether to check self-collision.
-            device_cfg: Device configuration.
-            num_ik_seeds: Number of IK optimization seeds.
+            robot: Robot config. String paths are resolved relative to cuRobo
+                robot configs unless absolute. Dicts and RobotCfg objects are
+                accepted.
+            ik_optimizer_configs: IK optimizer task configs. Defaults to
+                ``["ik/lbfgs_ik.yml"]``. Add ``"ik/particle_ik.yml"`` when
+                broader IK search is needed.
+            ik_transition_model: IK transition model task config.
+            metrics_rollout: Metrics rollout task config shared by IK,
+                TrajOpt, and graph planner validation.
+            trajopt_optimizer_configs: Trajectory optimization task configs.
+            trajopt_transition_model: Trajectory optimization transition model
+                config.
+            graph_planner_config: PRM graph planner config. The default
+                enables graph seeding for single-environment planning. This
+                factory currently expects a graph planner config.
+            graph_planner_rollout: Rollout config used by the graph planner
+                for collision/feasibility checks.
+            graph_planner_transition_model: Transition model used by graph
+                planner rollout validation.
+            scene_model: Optional scene config. String paths are resolved
+                relative to cuRobo scene configs. When None, no world
+                obstacles are loaded initially.
+            collision_cache: Optional obstacle cache sizes, for example
+                ``{"mesh": 2, "cuboid": 8}``. When ``scene_model`` is None,
+                this still preallocates a scene collision checker for later
+                ``update_world`` calls.
+            self_collision_check: Enable robot self-collision costs/checks in
+                IK, TrajOpt, and graph planner validation.
+            device_cfg: Tensor device and dtype configuration.
+            num_ik_seeds: Number of IK seeds evaluated per problem. A value
+                of 16 is good for most single-tool planning problems; increase
+                to 32 when more IK diversity is needed. Increasing beyond 32
+                usually does not help unless solving multi-tool IK/planning
+                problems.
             num_trajopt_seeds: Number of trajectory optimization seeds.
-            position_tolerance: Position tolerance for success.
-            orientation_tolerance: Orientation tolerance for success.
-            use_cuda_graph: Whether to use CUDA graphs.
-            random_seed: Random seed for reproducibility.
-            optimizer_collision_activation_distance: Collision activation distance.
-            store_debug: Whether to store debug information.
-            transition_model_config_instance_type: Transition model config class.
-            cost_manager_config_instance_type: Cost manager config class.
-            max_batch_size: Maximum number of problems solved in parallel; fewer
-                may be provided (padded internally).
-            multi_env: When True, each batched problem uses its own collision
-                environment; when False, all share one environment.
-            max_goalset: Maximum goalset size per problem; fewer goals may be
-                provided (padded internally).
+                MotionPlanner asks IK to return this many solutions to seed
+                TrajOpt. The default of 4 is recommended; using more than 4
+                typically does not improve solution quality and can
+                significantly increase planning time.
+            position_tolerance: Cartesian position tolerance in meters used
+                for IK and TrajOpt success.
+            orientation_tolerance: Cartesian orientation tolerance in radians
+                used for IK and TrajOpt success.
+            use_cuda_graph: Enable CUDA graph capture for solver rollouts
+                and optimizers. Defaults to True and should be left enabled
+                for normal integration/runtime code. The value is forwarded
+                to IK, TrajOpt, and graph-planner rollout components. cuRobo
+                manages graph caches internally and pads smaller batches/
+                goalsets up to ``max_batch_size`` and ``max_goalset``. Set to
+                False only for debugging graph-capture issues; steady-state
+                solve calls can be about 5x slower without CUDA graph replay.
+                Also disabled automatically when ``store_debug=True``.
+            random_seed: Random seed forwarded to IK and TrajOpt seed
+                generation. Graph planner path finding uses its own seed in
+                PRMGraphPlannerCfg.
+            optimizer_collision_activation_distance: Collision-cost activation
+                distance forwarded to IK and TrajOpt optimizer rollouts. The
+                default is 0.01 m (10 mm). Increasing this distance makes the
+                optimizer react to obstacles earlier and keep more clearance,
+                but can make narrow passages harder or infeasible. Decreasing
+                it allows closer motion near obstacles, but can reduce
+                clearance margin and make collision avoidance less robust.
+            store_debug: Whether to store debug information. When True,
+                CUDA graphs are disabled automatically.
+            transition_model_config_instance_type: Advanced extension hook for
+                custom transition model config classes.
+            cost_manager_config_instance_type: Advanced extension hook for
+                custom cost manager config classes.
+            max_batch_size: Maximum batch size captured/allocated by IK and
+                TrajOpt. Single MotionPlanner calls use one problem;
+                BatchMotionPlanner uses up to this value. Smaller batches are
+                padded internally.
+            multi_env: Use one collision environment per batch item. This is
+                for BatchMotionPlanner with per-problem worlds; graph seeding
+                is skipped in this mode.
+            max_goalset: Maximum number of alternative goal poses per problem.
+                Smaller goalsets are padded internally.
 
         Returns:
-            Configured MotionPlannerCfg instance.
+            MotionPlannerCfg containing IK, TrajOpt, graph planner, and
+            optional scene collision configuration.
         """
         num_envs = max_batch_size if multi_env else 1
 

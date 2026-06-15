@@ -184,13 +184,24 @@ class IKSolverCfg:
             collision_cache: Cache configuration for collision checking.
             self_collision_check: Whether to check self-collision.
             device_cfg: Device configuration.
-            num_seeds: Number of optimization seeds.
+            num_seeds: Number of IK seeds evaluated per problem. A value of
+                16 is good for most single-tool IK problems; the default of
+                32 provides extra diversity. Increasing beyond 32 usually
+                does not help unless solving multi-tool IK/planning problems.
             position_tolerance: Position tolerance for success.
             orientation_tolerance: Orientation tolerance for success.
-            use_cuda_graph: Whether to use CUDA graphs.
+            use_cuda_graph: Enable CUDA graph capture for solver rollouts
+                and optimizers. Defaults to True and should be left enabled
+                for normal integration/runtime code. cuRobo manages graph
+                caches internally and pads smaller batches/goalsets up to
+                ``max_batch_size`` and ``max_goalset``. Set to False only for
+                debugging graph-capture issues; steady-state solve calls can
+                be about 5x slower without CUDA graph replay. Also disabled
+                automatically when ``store_debug=True``.
             random_seed: Random seed for reproducibility.
             optimizer_collision_activation_distance: Collision activation distance.
-            store_debug: Whether to store debug information.
+            store_debug: Whether to store debug information. When True,
+                CUDA graphs are disabled automatically.
             override_optimizer_num_iters: Override iteration counts per optimizer.
             transition_model_config_instance_type: Transition model config class.
             cost_manager_config_instance_type: Cost manager config class.
