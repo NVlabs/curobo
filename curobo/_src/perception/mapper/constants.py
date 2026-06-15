@@ -176,6 +176,133 @@ def _validate_feature_grid_shape(
         )
 
 
+def _validate_lidar_config(
+    lidar_num_sensors: int,
+    lidar_image_height: int | None,
+    lidar_image_width: int | None,
+    lidar_feature_grid_height: int | None,
+    lidar_feature_grid_width: int | None,
+    feature_dim: int,
+    lidar_linear_interpolation_max_allowable_difference_vox: float,
+    lidar_nearest_interpolation_max_allowable_dist_to_ray_vox: float,
+    max_support_pixels_per_block_lidar: int,
+) -> None:
+    """Validate compile-time LiDAR integration shape/configuration."""
+    if not isinstance(lidar_num_sensors, int) or isinstance(lidar_num_sensors, bool):
+        log_and_raise(
+            "lidar_num_sensors must be a plain int, got "
+            f"{type(lidar_num_sensors).__name__} ({lidar_num_sensors!r})."
+        )
+    if lidar_num_sensors < 0:
+        log_and_raise(f"lidar_num_sensors must be >= 0, got {lidar_num_sensors}.")
+    if not isinstance(max_support_pixels_per_block_lidar, int) or isinstance(
+        max_support_pixels_per_block_lidar, bool
+    ):
+        log_and_raise(
+            "max_support_pixels_per_block_lidar must be a plain int, got "
+            f"{type(max_support_pixels_per_block_lidar).__name__} "
+            f"({max_support_pixels_per_block_lidar!r})."
+        )
+    if max_support_pixels_per_block_lidar <= 0:
+        log_and_raise(
+            "max_support_pixels_per_block_lidar must be positive, got "
+            f"{max_support_pixels_per_block_lidar}."
+        )
+    if lidar_linear_interpolation_max_allowable_difference_vox <= 0.0:
+        log_and_raise(
+            "lidar_linear_interpolation_max_allowable_difference_vox must be "
+            "positive, got "
+            f"{lidar_linear_interpolation_max_allowable_difference_vox}."
+        )
+    if lidar_nearest_interpolation_max_allowable_dist_to_ray_vox <= 0.0:
+        log_and_raise(
+            "lidar_nearest_interpolation_max_allowable_dist_to_ray_vox must be "
+            "positive, got "
+            f"{lidar_nearest_interpolation_max_allowable_dist_to_ray_vox}."
+        )
+
+    has_image_height = lidar_image_height is not None
+    has_image_width = lidar_image_width is not None
+    has_feature_height = lidar_feature_grid_height is not None
+    has_feature_width = lidar_feature_grid_width is not None
+
+    if lidar_num_sensors == 0:
+        if has_image_height or has_image_width:
+            log_and_raise(
+                "lidar_image_height/lidar_image_width require lidar_num_sensors > 0."
+            )
+        if has_feature_height or has_feature_width:
+            log_and_raise(
+                "lidar_feature_grid_height/lidar_feature_grid_width require "
+                "lidar_num_sensors > 0."
+            )
+        return
+
+    if has_image_height != has_image_width:
+        log_and_raise(
+            "lidar_image_height and lidar_image_width must be specified together."
+        )
+    if not has_image_height:
+        log_and_raise(
+            "lidar_num_sensors > 0 requires lidar_image_height and lidar_image_width."
+        )
+    if not isinstance(lidar_image_height, int) or isinstance(lidar_image_height, bool):
+        log_and_raise(
+            "lidar_image_height must be a plain int, got "
+            f"{type(lidar_image_height).__name__} ({lidar_image_height!r})."
+        )
+    if not isinstance(lidar_image_width, int) or isinstance(lidar_image_width, bool):
+        log_and_raise(
+            "lidar_image_width must be a plain int, got "
+            f"{type(lidar_image_width).__name__} ({lidar_image_width!r})."
+        )
+    if lidar_image_height <= 0 or lidar_image_width <= 0:
+        log_and_raise(
+            "lidar_image_height and lidar_image_width must be positive, got "
+            f"{lidar_image_height}x{lidar_image_width}."
+        )
+
+    if has_feature_height != has_feature_width:
+        log_and_raise(
+            "lidar_feature_grid_height and lidar_feature_grid_width must be "
+            "specified together."
+        )
+    if feature_dim == 0:
+        if has_feature_height:
+            log_and_raise(
+                "lidar_feature_grid_height/lidar_feature_grid_width require "
+                "feature_dim > 0."
+            )
+        return
+
+    if not has_feature_height:
+        log_and_raise(
+            "feature_dim > 0 and lidar_num_sensors > 0 require "
+            "lidar_feature_grid_height and lidar_feature_grid_width."
+        )
+    if not isinstance(lidar_feature_grid_height, int) or isinstance(
+        lidar_feature_grid_height, bool
+    ):
+        log_and_raise(
+            "lidar_feature_grid_height must be a plain int, got "
+            f"{type(lidar_feature_grid_height).__name__} "
+            f"({lidar_feature_grid_height!r})."
+        )
+    if not isinstance(lidar_feature_grid_width, int) or isinstance(
+        lidar_feature_grid_width, bool
+    ):
+        log_and_raise(
+            "lidar_feature_grid_width must be a plain int, got "
+            f"{type(lidar_feature_grid_width).__name__} "
+            f"({lidar_feature_grid_width!r})."
+        )
+    if lidar_feature_grid_height <= 0 or lidar_feature_grid_width <= 0:
+        log_and_raise(
+            "lidar_feature_grid_height and lidar_feature_grid_width must be "
+            f"positive, got {lidar_feature_grid_height}x{lidar_feature_grid_width}."
+        )
+
+
 FEATURE_INTEGRATION_KERNEL_MODES: tuple[str, str, str] = ("auto", "grouped", "tiled")
 
 

@@ -71,6 +71,16 @@ class TestLoggingFunctions:
         with pytest.raises(ValueError, match="Test error message"):
             log_and_raise("Test error message", logger_name="test_error_logger")
 
+    def test_log_and_raise_exception_type(self, caplog):
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(TypeError, match="Test type error message"):
+                log_and_raise(
+                    "Test type error message",
+                    logger_name="test_type_error_logger",
+                    exception_type=TypeError,
+                )
+        assert "Test type error message" in caplog.text
+
 
 class TestDeprecated:
     def test_deprecated_decorator(self, caplog):
@@ -91,4 +101,3 @@ class TestDeprecated:
 
         assert hasattr(old_function, "__deprecated__")
         assert old_function.__deprecated__ is True
-

@@ -69,8 +69,8 @@ class TestBlockSparseTSDFIntegrator:
         integrator = BlockSparseTSDFIntegrator(config)
 
         assert config.max_visible_blocks_per_integration == 123
-        assert integrator._integrator.max_visible_blocks_per_integration == 123
-        assert integrator._integrator.pool_indices.shape == (123,)
+        assert integrator._camera_integrator.max_visible_blocks_per_integration == 123
+        assert integrator._camera_integrator.pool_indices.shape == (123,)
 
     @pytest.mark.parametrize("capacity", [0, -1, 101])
     def test_visible_capacity_validation(self, warp_init, device, capacity):

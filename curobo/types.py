@@ -7,7 +7,7 @@ robot states, poses, camera observations, and tensor device configurations.
 
 Example:
     ```python
-    from curobo.types import JointState, Pose, CameraObservation, DeviceCfg
+    from curobo.types import JointState, Pose, CameraObservation, LidarObservation, DeviceCfg
 
     # Create joint state
     joint_state = JointState.from_position([0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.0])
@@ -35,6 +35,7 @@ Example:
 from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_robot import RobotState
 from curobo._src.types.camera import CameraObservation
+from curobo._src.types.lidar import LidarObservation
 
 # Content path
 from curobo._src.types.content_path import ContentPath
@@ -55,6 +56,7 @@ __all__ = [
     "GoalToolPose",
     "ToolPoseCriteria",
     "CameraObservation",
+    "LidarObservation",
     "ContentPath",
     "DeviceCfg",
 ]

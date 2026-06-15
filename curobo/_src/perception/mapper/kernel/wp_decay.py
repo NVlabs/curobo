@@ -108,41 +108,15 @@ def launch_recycle(tsdf, num_blocks: int | None = None):
 # =============================================================================
 
 
-def decay_frustum_aware_multi_camera(
+def apply_decay_from_frustum_flags(
     tsdf,
-    intrinsics: torch.Tensor,
-    cam_positions: torch.Tensor,
-    cam_quaternions: torch.Tensor,
-    img_shape: tuple,
-    depth_minimum_distance: float = 0.1,
-    depth_maximum_distance: float = 10.0,
-    time_decay: float = 1.0,
-    frustum_decay: float = 0.5,
-    num_blocks: int = None,
+    *,
+    num_blocks: int,
+    time_decay: float,
+    frustum_decay: float,
 ):
-    """Frustum-aware decay for multiple cameras + block recycling.
-
-    A block is marked as "in frustum" if it is visible in ANY camera.
-    Decay is applied once using the union frustum, then empty blocks are
-    recycled.
-
-    Args:
-        tsdf: BlockSparseTSDF instance.
-        intrinsics: Camera intrinsics ``(num_cameras, 3, 3)`` float32.
-        cam_positions: Camera positions ``(num_cameras, 3)`` float32.
-        cam_quaternions: Camera quaternions ``(num_cameras, 4)`` wxyz float32.
-        img_shape: Image dimensions ``(H, W)`` (shared across cameras).
-        depth_minimum_distance: Minimum observable depth [m].
-        depth_maximum_distance: Maximum observable depth [m].
-        time_decay: Decay for all voxels.
-        frustum_decay: Extra decay for in-view blocks.
-        num_blocks: If provided, use as slice size instead of ``max_blocks``.
-    """
-    max_blocks = tsdf.config.max_blocks
-    n = num_blocks
-    if n is None:
-        n = int(tsdf.data.num_allocated.item())
-    n = min(int(n), max_blocks)
+    """Apply decay from precomputed ``tsdf.data.frustum_flags`` and recycle."""
+    n = int(num_blocks)
     if n <= 0:
         launch_recycle(tsdf, num_blocks=0)
         return
@@ -159,51 +133,7 @@ def decay_frustum_aware_multi_camera(
         launch_recycle(tsdf, num_blocks=n)
         return
 
-    data = tsdf.get_warp_data()
-    device, stream = get_warp_device_stream(tsdf.data.block_data)
-    kernels = tsdf.kernels
-
-    n_cameras = int(intrinsics.shape[0])
-    img_H, img_W = (int(img_shape[0]), int(img_shape[1]))
-    if n_cameras != kernels.num_cameras:
-        log_and_raise(
-            f"intrinsics num_cameras={n_cameras} does not match compiled "
-            f"kernel num_cameras={kernels.num_cameras}."
-        )
-    if img_H != kernels.image_height or img_W != kernels.image_width:
-        log_and_raise(
-            f"img_shape={(img_H, img_W)} does not match compiled kernel "
-            f"image shape={(kernels.image_height, kernels.image_width)}."
-        )
-
     frustum_flags = tsdf.data.frustum_flags
-    frustum_flags.zero_()
-
-    check_float32_tensors(
-        intrinsics.device,
-        intrinsics=intrinsics,
-        cam_positions=cam_positions,
-        cam_quaternions=cam_quaternions,
-    )
-    wp.launch(
-        kernels.mark_blocks_in_frustum_kernel,
-        dim=(n, n_cameras),
-        inputs=[
-            data.block_coords,
-            data.block_to_hash_slot,
-            data.num_allocated,
-            wp.from_torch(intrinsics, dtype=wp.float32),
-            wp.from_torch(cam_positions, dtype=wp.float32),
-            wp.from_torch(cam_quaternions, dtype=wp.float32),
-            depth_minimum_distance,
-            depth_maximum_distance,
-            wp.from_torch(frustum_flags, dtype=wp.int32),
-            max_blocks,
-        ],
-        device=device,
-        stream=stream,
-    )
-
     factor = tsdf.data.decay_factor[:n]
     factor.fill_(time_decay)
     factor.masked_fill_(frustum_flags[:n] > 0, time_decay * frustum_decay)
@@ -217,3 +147,185 @@ def decay_frustum_aware_multi_camera(
     tsdf.data.block_sums[:n] = tsdf.data.block_data[:n, :, 1].sum(dim=1, dtype=torch.float32)
 
     launch_recycle(tsdf, num_blocks=n)
+
+
+def decay_frustum_aware_multi_sensor(
+    tsdf,
+    *,
+    camera_intrinsics: torch.Tensor | None = None,
+    camera_positions: torch.Tensor | None = None,
+    camera_quaternions: torch.Tensor | None = None,
+    camera_img_shape: tuple[int, int] | None = None,
+    camera_depth_minimum_distance: float = 0.1,
+    camera_depth_maximum_distance: float = 10.0,
+    lidar_positions: torch.Tensor | None = None,
+    lidar_quaternions: torch.Tensor | None = None,
+    lidar_valid_range_m: torch.Tensor | None = None,
+    lidar_elevation_range_rad: torch.Tensor | None = None,
+    lidar_img_shape: tuple[int, int] | None = None,
+    time_decay: float = 1.0,
+    frustum_decay: float = 0.5,
+    num_blocks: int = None,
+):
+    """Frustum-aware decay for the union of provided camera/LiDAR frusta.
+
+    The current depth/range images are not inspected. Sensor geometry marks
+    blocks that are currently observable, then one decay/recycle pass is
+    applied using the union flag.
+    """
+    max_blocks = tsdf.config.max_blocks
+    n = num_blocks
+    if n is None:
+        n = int(tsdf.data.num_allocated.item())
+    n = min(int(n), max_blocks)
+    if n <= 0:
+        launch_recycle(tsdf, num_blocks=0)
+        return
+
+    if frustum_decay >= 1.0:
+        apply_decay_from_frustum_flags(
+            tsdf,
+            num_blocks=n,
+            time_decay=time_decay,
+            frustum_decay=frustum_decay,
+        )
+        return
+
+    data = tsdf.get_warp_data()
+    device, stream = get_warp_device_stream(tsdf.data.block_data)
+    kernels = tsdf.kernels
+    frustum_flags = tsdf.data.frustum_flags
+    frustum_flags.zero_()
+
+    has_camera = camera_intrinsics is not None
+    if has_camera:
+        if camera_positions is None or camera_quaternions is None or camera_img_shape is None:
+            log_and_raise(
+                "camera_intrinsics requires camera_positions, camera_quaternions, "
+                "and camera_img_shape."
+            )
+        n_cameras = int(camera_intrinsics.shape[0])
+        img_H, img_W = (int(camera_img_shape[0]), int(camera_img_shape[1]))
+        if n_cameras != kernels.num_cameras:
+            log_and_raise(
+                f"camera_intrinsics num_cameras={n_cameras} does not match compiled "
+                f"kernel num_cameras={kernels.num_cameras}."
+            )
+        if img_H != kernels.image_height or img_W != kernels.image_width:
+            log_and_raise(
+                f"camera_img_shape={(img_H, img_W)} does not match compiled kernel "
+                f"image shape={(kernels.image_height, kernels.image_width)}."
+            )
+        check_float32_tensors(
+            camera_intrinsics.device,
+            camera_intrinsics=camera_intrinsics,
+            camera_positions=camera_positions,
+            camera_quaternions=camera_quaternions,
+        )
+        wp.launch(
+            kernels.mark_blocks_in_frustum_kernel,
+            dim=(n, n_cameras),
+            inputs=[
+                data.block_coords,
+                data.block_to_hash_slot,
+                data.num_allocated,
+                wp.from_torch(camera_intrinsics, dtype=wp.float32),
+                wp.from_torch(camera_positions, dtype=wp.float32),
+                wp.from_torch(camera_quaternions, dtype=wp.float32),
+                camera_depth_minimum_distance,
+                camera_depth_maximum_distance,
+                wp.from_torch(frustum_flags, dtype=wp.int32),
+                max_blocks,
+            ],
+            device=device,
+            stream=stream,
+        )
+
+    has_lidar = lidar_positions is not None
+    if has_lidar:
+        if (
+            lidar_quaternions is None
+            or lidar_valid_range_m is None
+            or lidar_elevation_range_rad is None
+            or lidar_img_shape is None
+        ):
+            log_and_raise(
+                "lidar_positions requires lidar_quaternions, lidar_valid_range_m, "
+                "lidar_elevation_range_rad, and lidar_img_shape."
+            )
+        n_lidars = int(lidar_positions.shape[0])
+        lidar_H = int(lidar_img_shape[0])
+        if lidar_H <= 0:
+            log_and_raise(f"lidar_img_shape height must be positive, got {lidar_H}.")
+        check_float32_tensors(
+            lidar_positions.device,
+            lidar_positions=lidar_positions,
+            lidar_quaternions=lidar_quaternions,
+            lidar_valid_range_m=lidar_valid_range_m,
+            lidar_elevation_range_rad=lidar_elevation_range_rad,
+        )
+        wp.launch(
+            kernels.mark_lidar_blocks_in_frustum_kernel,
+            dim=(n, n_lidars),
+            inputs=[
+                data.block_coords,
+                data.block_to_hash_slot,
+                data.num_allocated,
+                wp.from_torch(lidar_positions, dtype=wp.float32),
+                wp.from_torch(lidar_quaternions, dtype=wp.float32),
+                wp.from_torch(lidar_valid_range_m, dtype=wp.float32),
+                wp.from_torch(lidar_elevation_range_rad, dtype=wp.float32),
+                lidar_H,
+                wp.from_torch(frustum_flags, dtype=wp.int32),
+                max_blocks,
+            ],
+            device=device,
+            stream=stream,
+        )
+
+    apply_decay_from_frustum_flags(
+        tsdf,
+        num_blocks=n,
+        time_decay=time_decay,
+        frustum_decay=frustum_decay,
+    )
+
+
+def decay_frustum_aware_multi_camera(
+    tsdf,
+    intrinsics: torch.Tensor,
+    cam_positions: torch.Tensor,
+    cam_quaternions: torch.Tensor,
+    img_shape: tuple,
+    depth_minimum_distance: float = 0.1,
+    depth_maximum_distance: float = 10.0,
+    time_decay: float = 1.0,
+    frustum_decay: float = 0.5,
+    num_blocks: int = None,
+):
+    """Frustum-aware decay for multiple cameras + block recycling.
+
+    Args:
+        tsdf: BlockSparseTSDF instance.
+        intrinsics: Camera intrinsics ``(num_cameras, 3, 3)`` float32.
+        cam_positions: Camera positions ``(num_cameras, 3)`` float32.
+        cam_quaternions: Camera quaternions ``(num_cameras, 4)`` wxyz float32.
+        img_shape: Image dimensions ``(H, W)`` (shared across cameras).
+        depth_minimum_distance: Minimum observable depth [m].
+        depth_maximum_distance: Maximum observable depth [m].
+        time_decay: Decay for all voxels.
+        frustum_decay: Extra decay for in-view blocks.
+        num_blocks: If provided, use as slice size instead of ``max_blocks``.
+    """
+    decay_frustum_aware_multi_sensor(
+        tsdf,
+        camera_intrinsics=intrinsics,
+        camera_positions=cam_positions,
+        camera_quaternions=cam_quaternions,
+        camera_img_shape=img_shape,
+        camera_depth_minimum_distance=depth_minimum_distance,
+        camera_depth_maximum_distance=depth_maximum_distance,
+        time_decay=time_decay,
+        frustum_decay=frustum_decay,
+        num_blocks=num_blocks,
+    )

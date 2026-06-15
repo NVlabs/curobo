@@ -285,21 +285,21 @@ def _expected_rgb_from_support(
     mapper: Mapper,
     rgb: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    voxel_integrator = mapper.integrator._tsdf_integrator._integrator
-    n_visible = int(voxel_integrator.visible_count.item())
+    camera_integrator = mapper.integrator._tsdf_integrator._camera_integrator
+    n_visible = int(camera_integrator.visible_count.item())
     max_pool = int(mapper.tsdf.data.num_allocated.item())
     expected_sum = torch.zeros((max_pool, 3), dtype=torch.float32, device=rgb.device)
     expected_weight = torch.zeros(max_pool, dtype=torch.float32, device=rgb.device)
     for vis_idx in range(n_visible):
-        pool_idx = int(voxel_integrator.pool_indices[vis_idx].item())
+        pool_idx = int(camera_integrator.pool_indices[vis_idx].item())
         if pool_idx < 0:
             continue
         for cam_i in range(rgb.shape[0]):
-            count = int(voxel_integrator.support_counts[vis_idx, cam_i].item())
+            count = int(camera_integrator.support_counts[vis_idx, cam_i].item())
             count = min(count, mapper.config.max_support_pixels_per_block_camera)
             if count <= 0:
                 continue
-            pixels = voxel_integrator.support_pixels[vis_idx, cam_i, :count].long()
+            pixels = camera_integrator.support_pixels[vis_idx, cam_i, :count].long()
             py = pixels // mapper.config.image_width
             px = pixels - py * mapper.config.image_width
             valid = (
@@ -319,8 +319,8 @@ def _expected_features_from_support(
     mapper: Mapper,
     feature_grid: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    voxel_integrator = mapper.integrator._tsdf_integrator._integrator
-    n_visible = int(voxel_integrator.visible_count.item())
+    camera_integrator = mapper.integrator._tsdf_integrator._camera_integrator
+    n_visible = int(camera_integrator.visible_count.item())
     max_pool = int(mapper.tsdf.data.num_allocated.item())
     feature_dim = feature_grid.shape[-1]
     expected_sum = torch.zeros(
@@ -332,15 +332,15 @@ def _expected_features_from_support(
     feature_h = feature_grid.shape[1]
     feature_w = feature_grid.shape[2]
     for vis_idx in range(n_visible):
-        pool_idx = int(voxel_integrator.pool_indices[vis_idx].item())
+        pool_idx = int(camera_integrator.pool_indices[vis_idx].item())
         if pool_idx < 0:
             continue
         for cam_i in range(feature_grid.shape[0]):
-            count = int(voxel_integrator.support_counts[vis_idx, cam_i].item())
+            count = int(camera_integrator.support_counts[vis_idx, cam_i].item())
             count = min(count, mapper.config.max_support_pixels_per_block_camera)
             if count <= 0:
                 continue
-            pixels = voxel_integrator.support_pixels[vis_idx, cam_i, :count].long()
+            pixels = camera_integrator.support_pixels[vis_idx, cam_i, :count].long()
             py = pixels // mapper.config.image_width
             px = pixels - py * mapper.config.image_width
             valid = (

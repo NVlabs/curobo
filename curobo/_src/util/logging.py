@@ -10,7 +10,7 @@ creating a new logger (:py:meth:`setup_logger`) with the desired name.
 import functools
 import logging
 import sys
-from typing import NoReturn
+from typing import NoReturn, Type
 
 
 def setup_logger(level="warning", logger_name: str = "curobo"):
@@ -79,9 +79,10 @@ def log_and_raise(
     stack_info=False,
     stacklevel: int = 2,
     *args,
+    exception_type: Type[Exception] = ValueError,
     **kwargs,
 ) -> NoReturn:
-    """Log error and raise ValueError.
+    """Log error and raise an exception.
 
     Args:
         txt: Helpful message that conveys the error.
@@ -90,9 +91,10 @@ def log_and_raise(
         stack_info: Add stacktracke to message. See :py:meth:`logging.Logger.error`.
         stacklevel: See :py:meth:`logging.Logger.error`. Default value of 2 removes this function
             from the stack trace.
+        exception_type: Exception type to raise. Default is :py:class:`ValueError`.
 
     Raises:
-        ValueError: Error message with exception.
+        Exception: ``exception_type`` initialized with ``txt``.
     """
     logger = logging.getLogger(logger_name)
     if sys.version_info.major == 3 and sys.version_info.minor <= 7:
@@ -101,7 +103,7 @@ def log_and_raise(
         logger.error(
             txt, exc_info=exc_info, stack_info=stack_info, stacklevel=stacklevel, *args, **kwargs
         )
-    raise ValueError(txt)
+    raise exception_type(txt)
 
 
 def deprecated(reason):

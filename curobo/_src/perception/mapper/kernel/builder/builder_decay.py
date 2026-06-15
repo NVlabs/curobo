@@ -89,6 +89,7 @@ def make_decay_kernels(
     GRID_D = wp.constant(wp.int32(grid_shape[0]))
     GRID_H = wp.constant(wp.int32(grid_shape[1]))
     GRID_W = wp.constant(wp.int32(grid_shape[2]))
+    PI = wp.constant(wp.float32(3.141592653589793))
     ORIGIN_X = wp.constant(wp.float32(origin_xyz[0]))
     ORIGIN_Y = wp.constant(wp.float32(origin_xyz[1]))
     ORIGIN_Z = wp.constant(wp.float32(origin_xyz[2]))
@@ -213,6 +214,104 @@ def make_decay_kernels(
 
         block_in_frustum[block_idx] = 1
 
+    @warp_kernel(f"mark_lidar_blocks_in_frustum_kernel_{suffix}")
+    def mark_lidar_blocks_in_frustum_kernel(
+        block_coords: wp.array(dtype=wp.int32),
+        block_to_hash_slot: wp.array(dtype=wp.int32),
+        num_allocated: wp.array(dtype=wp.int32),
+        lidar_positions: wp.array2d(dtype=wp.float32),
+        lidar_quaternions: wp.array2d(dtype=wp.float32),
+        lidar_valid_range_m: wp.array2d(dtype=wp.float32),
+        lidar_elevation_range_rad: wp.array2d(dtype=wp.float32),
+        lidar_image_height: wp.int32,
+        block_in_frustum: wp.array(dtype=wp.int32),
+        max_blocks: wp.int32,
+    ):
+        """Mark blocks visible in ANY full-azimuth LiDAR frustum."""
+        block_idx, lidar_i = wp.tid()
+
+        if block_idx >= max_blocks:
+            return
+        if block_idx >= num_allocated[0]:
+            return
+        if block_to_hash_slot[block_idx] < 0:
+            return
+
+        bx_key = block_coords[block_idx * 3 + 0]
+        by_key = block_coords[block_idx * 3 + 1]
+        bz_key = block_coords[block_idx * 3 + 2]
+        blocks_W = (GRID_W + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        blocks_H = (GRID_H + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        blocks_D = (GRID_D + BLOCK_SIZE - wp.int32(1)) // BLOCK_SIZE
+        bx = bx_key + blocks_W // wp.int32(2)
+        by = by_key + blocks_H // wp.int32(2)
+        bz = bz_key + blocks_D // wp.int32(2)
+
+        half_block = wp.float32(BLOCK_SIZE) * 0.5
+        gx = wp.float32(bx * BLOCK_SIZE) + half_block
+        gy = wp.float32(by * BLOCK_SIZE) + half_block
+        gz = wp.float32(bz * BLOCK_SIZE) + half_block
+
+        gx = gx - wp.float32(GRID_W) * 0.5
+        gy = gy - wp.float32(GRID_H) * 0.5
+        gz = gz - wp.float32(GRID_D) * 0.5
+
+        block_world = wp.vec3(
+            ORIGIN_X + gx * VOXEL_SIZE,
+            ORIGIN_Y + gy * VOXEL_SIZE,
+            ORIGIN_Z + gz * VOXEL_SIZE,
+        )
+        block_extent = wp.float32(BLOCK_SIZE) * VOXEL_SIZE
+        sphere_radius = wp.float32(0.866) * block_extent
+
+        lidar_pos = wp.vec3(
+            lidar_positions[lidar_i, 0],
+            lidar_positions[lidar_i, 1],
+            lidar_positions[lidar_i, 2],
+        )
+        lidar_quat = wp.quaternion(
+            lidar_quaternions[lidar_i, 1],
+            lidar_quaternions[lidar_i, 2],
+            lidar_quaternions[lidar_i, 3],
+            lidar_quaternions[lidar_i, 0],
+        )
+        block_lidar = wp.quat_rotate(wp.quat_inverse(lidar_quat), block_world - lidar_pos)
+
+        range_center = wp.sqrt(
+            block_lidar[0] * block_lidar[0]
+            + block_lidar[1] * block_lidar[1]
+            + block_lidar[2] * block_lidar[2]
+        )
+        min_range = lidar_valid_range_m[lidar_i, 0]
+        max_range = lidar_valid_range_m[lidar_i, 1]
+        if range_center + sphere_radius < min_range:
+            return
+        if range_center - sphere_radius > max_range:
+            return
+
+        xy_norm = wp.sqrt(block_lidar[0] * block_lidar[0] + block_lidar[1] * block_lidar[1])
+        elevation = wp.atan2(block_lidar[2], xy_norm)
+
+        angular_radius = PI
+        if range_center > sphere_radius:
+            ratio = sphere_radius / range_center
+            ratio = wp.min(wp.max(ratio, wp.float32(0.0)), wp.float32(1.0))
+            angular_radius = wp.asin(ratio)
+
+        min_elev = lidar_elevation_range_rad[lidar_i, 0]
+        max_elev = lidar_elevation_range_rad[lidar_i, 1]
+        if lidar_image_height == wp.int32(1):
+            fixed_elev = (min_elev + max_elev) * wp.float32(0.5)
+            if wp.abs(elevation - fixed_elev) <= angular_radius:
+                block_in_frustum[block_idx] = wp.int32(1)
+            return
+
+        if elevation + angular_radius < min_elev:
+            return
+        if elevation - angular_radius > max_elev:
+            return
+        block_in_frustum[block_idx] = wp.int32(1)
+
     # =====================================================================
     # Block Recycling Kernel
     # =====================================================================
@@ -265,6 +364,7 @@ def make_decay_kernels(
 
     return {
         "mark_blocks_in_frustum_kernel": mark_blocks_in_frustum_kernel,
+        "mark_lidar_blocks_in_frustum_kernel": mark_lidar_blocks_in_frustum_kernel,
         "recycle_empty_blocks_kernel": recycle_empty_blocks_kernel,
         "block_empty_threshold": block_empty_threshold,
     }

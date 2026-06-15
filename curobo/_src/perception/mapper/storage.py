@@ -123,13 +123,13 @@ class BlockSparseTSDFCfg:
     #: ``None`` when features are disabled.
     feature_grid_width: Optional[int] = None
     #: Number of adjacent feature channels accumulated per feature-kernel
-    #: thread. Must match the voxel-project integrator launch grouping.
+    #: thread. Must match the projective integrator launch grouping.
     feature_channels_per_thread: int = 4
     #: Compile-time cap for feature channels accumulated by one tiled
     #: feature-kernel CTA.
     max_feature_tile_channels: int = 4096
     #: Compile-time support-pixel capacity specialized into RGB and feature
-    #: integration kernels. Must match the voxel-project scratch depth.
+    #: integration kernels. Must match the projective scratch depth.
     max_support_pixels_per_block_camera: int = 32
     #: Upper bound on per-block accumulator weight (``block_rgb[:, 3]`` and
     #: ``block_feature_weight``) after each integration step. Caps the
