@@ -292,8 +292,8 @@ class TestMapperCfgForwarding:
             )
             assert mapper.tsdf.kernels.block_size == bs
 
-    def test_mapper_cfg_visible_capacity_reaches_voxel_integrator(self, warp_init):
-        """Visible-frame capacity must size voxel-project scratch, not TSDF storage."""
+    def test_mapper_cfg_visible_capacity_reaches_camera_integrator(self, warp_init):
+        """Visible-frame capacity must size camera scratch, not TSDF storage."""
         from curobo._src.perception.mapper.mapper import Mapper
         from curobo._src.perception.mapper.mapper_cfg import MapperCfg
 
@@ -312,23 +312,23 @@ class TestMapperCfgForwarding:
             )
         )
 
-        vp = mapper.integrator._tsdf_integrator._integrator
+        camera_integrator = mapper.integrator._tsdf_integrator._camera_integrator
         max_blocks = mapper.tsdf.config.max_blocks
 
         assert mapper.integrator._tsdf_integrator.config.max_visible_blocks_per_integration == 17
         assert mapper.integrator._tsdf_integrator.config.max_support_pixels_per_block_camera == 9
         assert mapper.integrator._tsdf_integrator.config.feature_integration_kernel == "grouped"
         assert mapper.integrator._tsdf_integrator.config.profile_integration_kernel_timings is True
-        assert vp.max_visible_blocks_per_integration == 17
-        assert vp.max_support_pixels_per_block_camera == 9
-        assert vp.use_tiled_feature_kernel is False
-        assert vp.profile_kernel_timings is True
-        assert vp.pool_indices.shape == (17,)
-        assert vp.support_counts.shape == (17, 2)
-        assert vp.support_pixels.shape == (17, 2, 9)
-        assert vp.clear_pool_indices.shape == (max_blocks,)
-        assert vp.visible_epoch.shape == (max_blocks,)
-        assert vp.pool_to_visible_slot.shape == (max_blocks,)
+        assert camera_integrator.max_visible_blocks_per_integration == 17
+        assert camera_integrator.max_support_pixels_per_block_camera == 9
+        assert camera_integrator.use_tiled_feature_kernel is False
+        assert camera_integrator.profile_kernel_timings is True
+        assert camera_integrator.pool_indices.shape == (17,)
+        assert camera_integrator.support_counts.shape == (17, 2)
+        assert camera_integrator.support_pixels.shape == (17, 2, 9)
+        assert camera_integrator.clear_pool_indices.shape == (max_blocks,)
+        assert camera_integrator.visible_epoch.shape == (max_blocks,)
+        assert camera_integrator.pool_to_visible_slot.shape == (max_blocks,)
         stats = mapper.get_stats(scan_pool=False)
         assert stats["last_integration"]["use_tiled_feature_kernel"] is False
         assert stats["last_integration_kernel_timings_ms"] == {}

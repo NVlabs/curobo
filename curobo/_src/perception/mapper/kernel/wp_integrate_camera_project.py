@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Voxel-Project TSDF integration launcher.
+"""Camera projective TSDF integration launcher.
 
 The Warp kernels themselves are built by
-:func:`curobo._src.perception.mapper.kernel.builder.builder_integrate.make_integrate_kernels`
+:func:`curobo._src.perception.mapper.kernel.builder.builder_camera_integrate.make_camera_integrate_kernels`
 and are reached through ``tsdf.kernels`` at launch time. This module only hosts the
-:class:`VoxelProjectIntegrator` launch wrapper used by
+:class:`CameraProjectIntegrator` launch wrapper used by
 :class:`BlockSparseTSDFIntegrator`.
 """
 
@@ -24,11 +24,11 @@ from curobo._src.util.warp import get_warp_device_stream
 from curobo.logging import log_and_raise
 
 
-class VoxelProjectIntegrator:
-    """Voxel-Project TSDF Integrator - Zero Atomics, Voxel-Centric.
+class CameraProjectIntegrator:
+    """Camera projective TSDF integrator - zero atomics, voxel-centric.
 
     Phases 1-3 discover and allocate blocks. Phase 4 uses voxel-centric
-    projection for contention-free TSDF updates. Phase 4 uses a
+    pinhole projection for contention-free TSDF updates. Phase 4 uses a
     variable 2D launch dimension (``n_visible, block_size ** 3``), which
     requires a small D2H sync but eliminates all atomic contention on
     ``block_data``.
@@ -62,7 +62,7 @@ class VoxelProjectIntegrator:
         """Allocate integration scratch buffers and record launch parameters."""
         if not use_hash_dedup:
             log_and_raise(
-                "VoxelProjectIntegrator support-pixel integration requires "
+                "CameraProjectIntegrator support-pixel integration requires "
                 "use_hash_dedup=True; the legacy torch dedup path does not "
                 "build support lists."
             )
@@ -549,7 +549,7 @@ class VoxelProjectIntegrator:
         if kernels.num_cameras != self.num_cameras:
             log_and_raise(
                 f"kernels.num_cameras={kernels.num_cameras} does not match "
-                f"VoxelProjectIntegrator.num_cameras={self.num_cameras}."
+                f"CameraProjectIntegrator.num_cameras={self.num_cameras}."
             )
         if kernels.image_height != self.image_height or kernels.image_width != self.image_width:
             log_and_raise(
@@ -560,7 +560,7 @@ class VoxelProjectIntegrator:
         if kernels.num_samples != self.num_samples:
             log_and_raise(
                 f"kernels.num_samples={kernels.num_samples} does not match "
-                f"VoxelProjectIntegrator.num_samples={self.num_samples}."
+                f"CameraProjectIntegrator.num_samples={self.num_samples}."
             )
         if kernels.grid_shape != tuple(int(v) for v in tsdf.config.grid_shape):
             log_and_raise(
@@ -591,18 +591,18 @@ class VoxelProjectIntegrator:
         if kernels.feature_grid_shape != self.feature_grid_shape:
             log_and_raise(
                 f"kernels.feature_grid_shape={kernels.feature_grid_shape} does not match "
-                f"VoxelProjectIntegrator.feature_grid_shape={self.feature_grid_shape}."
+                f"CameraProjectIntegrator.feature_grid_shape={self.feature_grid_shape}."
             )
         if self.feature_channels_per_thread != tsdf.config.feature_channels_per_thread:
             log_and_raise(
-                "VoxelProjectIntegrator.feature_channels_per_thread="
+                "CameraProjectIntegrator.feature_channels_per_thread="
                 f"{self.feature_channels_per_thread} does not match "
                 "tsdf.config.feature_channels_per_thread="
                 f"{tsdf.config.feature_channels_per_thread}."
             )
         if self.feature_channels_per_thread != kernels.feature_channels_per_thread:
             log_and_raise(
-                "VoxelProjectIntegrator.feature_channels_per_thread="
+                "CameraProjectIntegrator.feature_channels_per_thread="
                 f"{self.feature_channels_per_thread} does not match "
                 "kernels.feature_channels_per_thread="
                 f"{kernels.feature_channels_per_thread}."
@@ -612,7 +612,7 @@ class VoxelProjectIntegrator:
             != tsdf.config.max_support_pixels_per_block_camera
         ):
             log_and_raise(
-                "VoxelProjectIntegrator.max_support_pixels_per_block_camera="
+                "CameraProjectIntegrator.max_support_pixels_per_block_camera="
                 f"{self.max_support_pixels_per_block_camera} does not match "
                 "tsdf.config.max_support_pixels_per_block_camera="
                 f"{tsdf.config.max_support_pixels_per_block_camera}."
@@ -622,7 +622,7 @@ class VoxelProjectIntegrator:
             != kernels.max_support_pixels_per_block_camera
         ):
             log_and_raise(
-                "VoxelProjectIntegrator.max_support_pixels_per_block_camera="
+                "CameraProjectIntegrator.max_support_pixels_per_block_camera="
                 f"{self.max_support_pixels_per_block_camera} does not match "
                 "kernels.max_support_pixels_per_block_camera="
                 f"{kernels.max_support_pixels_per_block_camera}."

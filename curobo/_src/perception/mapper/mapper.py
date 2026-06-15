@@ -26,12 +26,20 @@ Example:
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Callable, Optional, Tuple
+from os import PathLike
+from typing import Callable, Optional, Tuple, Union
 
 import torch
 
 from curobo._src.geom.data.data_scene import SceneData
 from curobo._src.geom.types import Mesh, VoxelGrid
+from curobo._src.perception.mapper.checkpoint_blocks import (
+    build_block_metadata,
+    load_block_checkpoint,
+    prepare_blocks_for_import,
+    save_block_checkpoint,
+    validate_block_metadata_for_target,
+)
 from curobo._src.perception.mapper.integrator_esdf import (
     BlockSparseESDFIntegrator,
     BlockSparseESDFIntegratorCfg,
@@ -42,10 +50,10 @@ from curobo._src.perception.mapper.storage import (
     MatchedVoxels,
     OccupiedVoxels,
 )
+from curobo._src.types.camera import CameraObservation
+from curobo._src.types.lidar import LidarObservation
 from curobo._src.types.pose import Pose
-
-if TYPE_CHECKING:
-    from curobo._src.types.camera import CameraObservation
+from curobo._src.util.logging import deprecated, log_and_raise
 
 
 # Per-element magnitude limit for CameraObservation.feature_grid. The
@@ -54,6 +62,14 @@ if TYPE_CHECKING:
 # (``~support_capacity · max_per_pixel_value``) within a single frame
 # before the post-integration rescale kicks in.
 _FEATURE_MAGNITUDE_LIMIT: float = 10.0
+
+
+@deprecated(
+    "Use Mapper.integrate(camera_observation=...) or Mapper.integrate(lidar_observation=...) "
+    "instead."
+)
+def _deprecated_mapper_integrate_observation_alias() -> None:
+    pass
 
 
 class Mapper:
@@ -114,6 +130,21 @@ class Mapper:
             num_cameras=config.num_cameras,
             image_height=config.image_height,
             image_width=config.image_width,
+            lidar_num_sensors=config.lidar_num_sensors,
+            lidar_image_height=config.lidar_image_height,
+            lidar_image_width=config.lidar_image_width,
+            lidar_feature_grid_height=config.lidar_feature_grid_height,
+            lidar_feature_grid_width=config.lidar_feature_grid_width,
+            lidar_linear_interpolation_max_allowable_difference_vox=(
+                config.lidar_linear_interpolation_max_allowable_difference_vox
+            ),
+            lidar_nearest_interpolation_max_allowable_dist_to_ray_vox=(
+                config.lidar_nearest_interpolation_max_allowable_dist_to_ray_vox
+            ),
+            max_visible_blocks_per_lidar_integration=(
+                config.max_visible_blocks_per_lidar_integration
+            ),
+            max_support_pixels_per_block_lidar=config.max_support_pixels_per_block_lidar,
             device=config.device,
             block_size=config.block_size,
             roughness=config.roughness,
@@ -144,19 +175,83 @@ class Mapper:
 
     def integrate(
         self,
-        observation: CameraObservation,
+        *args,
+        observation: Optional[Union[CameraObservation, LidarObservation]] = None,
+        camera_observation: Optional[CameraObservation] = None,
+        lidar_observation: Optional[LidarObservation] = None,
     ) -> None:
-        """Integrate batched depth observation into TSDF.
+        """Integrate camera and/or LiDAR observations into the TSDF.
 
-        The observation must have a leading camera dimension matching
-        ``config.num_cameras``. See ``BlockSparseTSDFIntegrator.integrate``
-        for the expected tensor shapes.
+        Positional ``mapper.integrate(obs)`` calls remain supported. The
+        ``observation=`` keyword is retained as a deprecated alias; prefer
+        ``camera_observation=`` and/or ``lidar_observation=`` for new code.
 
         Args:
-            observation: Batched camera observation.
+            observation: Deprecated keyword alias for one camera or LiDAR observation.
+            camera_observation: Optional batched camera observation.
+            lidar_observation: Optional batched LiDAR observation.
         """
-        self._integrator.integrate(observation)
+        camera_observation, lidar_observation = self._normalize_integrate_observations(
+            args,
+            observation=observation,
+            camera_observation=camera_observation,
+            lidar_observation=lidar_observation,
+        )
+        self._integrator.integrate(
+            camera_observation=camera_observation,
+            lidar_observation=lidar_observation,
+        )
         self._last_voxel_grid = None
+
+    def _normalize_integrate_observations(
+        self,
+        args: tuple,
+        *,
+        observation: Optional[Union[CameraObservation, LidarObservation]],
+        camera_observation: Optional[CameraObservation],
+        lidar_observation: Optional[LidarObservation],
+    ) -> tuple[Optional[CameraObservation], Optional[LidarObservation]]:
+        if len(args) > 1:
+            log_and_raise(
+                f"integrate() takes at most one positional observation, got {len(args)}.",
+                exception_type=TypeError,
+            )
+        if args:
+            if observation is not None or camera_observation is not None or lidar_observation is not None:
+                log_and_raise(
+                    "Positional observation cannot be combined with observation=, "
+                    "camera_observation=, or lidar_observation=.",
+                    exception_type=TypeError,
+                )
+            observation = args[0]
+        elif observation is not None:
+            _deprecated_mapper_integrate_observation_alias()
+            if camera_observation is not None or lidar_observation is not None:
+                log_and_raise(
+                    "observation= cannot be combined with camera_observation= "
+                    "or lidar_observation=.",
+                    exception_type=TypeError,
+                )
+
+        if observation is not None:
+            if isinstance(observation, CameraObservation):
+                camera_observation = observation
+            elif isinstance(observation, LidarObservation):
+                lidar_observation = observation
+            else:
+                log_and_raise(
+                    "observation must be CameraObservation or LidarObservation, got "
+                    f"{type(observation).__name__}.",
+                    exception_type=TypeError,
+                )
+
+        if camera_observation is None and lidar_observation is None:
+            log_and_raise(
+                "integrate() requires a camera_observation, lidar_observation, "
+                "or one positional observation.",
+                exception_type=TypeError,
+            )
+        return camera_observation, lidar_observation
 
     def clear_region(self, bounds_min, bounds_max) -> int:
         """Clear dynamic map contents inside a conservative world-space AABB.
@@ -303,6 +398,56 @@ class Mapper:
         """Reset mapper for new scene."""
         self._integrator.reset()
         self._last_voxel_grid = None
+
+    def save_blocks(self, file_path: Union[str, PathLike[str]]) -> None:
+        """Save active mapper TSDF blocks to a compact checkpoint."""
+        save_block_checkpoint(
+            file_path,
+            block_metadata=build_block_metadata(self.tsdf),
+            blocks=self.tsdf.export_blocks(),
+        )
+
+    @classmethod
+    def load_blocks(
+        cls,
+        file_path: Union[str, PathLike[str]],
+        target_cfg: MapperCfg,
+        import_weight: Optional[float] = None,
+    ) -> "Mapper":
+        """Construct a mapper from ``target_cfg`` and import block checkpoint data."""
+        mapper = cls(target_cfg)
+        mapper.import_blocks(file_path, import_weight=import_weight)
+        return mapper
+
+    def import_blocks(
+        self,
+        file_path: Union[str, PathLike[str]],
+        import_weight: Optional[float] = None,
+    ) -> int:
+        """Import active TSDF blocks from disk into this empty mapper.
+
+        Args:
+            file_path: Checkpoint written by :meth:`save_blocks`.
+            import_weight: Optional constant confidence to assign to imported
+                dynamic TSDF/RGB/feature accumulators. ``None`` preserves saved
+                weights.
+
+        Returns:
+            Number of imported active blocks.
+        """
+        checkpoint = load_block_checkpoint(file_path)
+        block_metadata = checkpoint["block_metadata"]
+        validate_block_metadata_for_target(block_metadata, self.tsdf)
+        blocks = prepare_blocks_for_import(
+            checkpoint["blocks"],
+            block_metadata,
+            import_weight=import_weight,
+            minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+            block_empty_threshold=float(self.tsdf.kernels.block_empty_threshold),
+        )
+        num_blocks = self._integrator.import_blocks(blocks)
+        self._last_voxel_grid = None
+        return num_blocks
 
     def get_stats(
         self,

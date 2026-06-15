@@ -82,6 +82,26 @@ http://localhost:8080. Drag the gizmo to inspect ESDF slices through the scene.
 
    python -m curobo.examples.getting_started.volumetric_mapping --root ./datasets/sun3d/sun3d-mit_76_studyroom-76-1studyroom2 --visualize
 
+To demonstrate save and resume, write a compact block checkpoint after depth
+fusion. The example then constructs a fresh mapper, loads the checkpoint, and
+continues with static obstacle stamping, rendering, ESDF computation, and mesh
+extraction:
+
+.. code-block:: bash
+
+   python -m curobo.examples.getting_started.volumetric_mapping \\
+     --root ./datasets/sun3d/sun3d-mit_76_studyroom-76-1studyroom2 \\
+     --checkpoint ~/.cache/curobo/examples/volumetric_mapping/tsdf_blocks.pt
+
+To resume from that checkpoint without re-integrating the depth frames, use the
+same mapper configuration values and pass ``--resume-from``:
+
+.. code-block:: bash
+
+   python -m curobo.examples.getting_started.volumetric_mapping \\
+     --root ./datasets/sun3d/sun3d-mit_76_studyroom-76-1studyroom2 \\
+     --resume-from ~/.cache/curobo/examples/volumetric_mapping/tsdf_blocks.pt
+
 Step 3: Check the output
 ---------------------------
 
@@ -106,6 +126,7 @@ The following files are written to ``~/.cache/curobo/examples/volumetric_mapping
 - ``rendered_normals.png``: surface normal colormap
 - ``rendered_shaded.png``: Phong-shaded surface view
 - ``output_mesh.ply``: colored triangle mesh of the full reconstruction
+- ``tsdf_blocks.pt``: compact mapper block checkpoint when ``--checkpoint`` is set
 """
 
 import argparse
@@ -319,7 +340,26 @@ def main():
     parser.add_argument("--output", type=str, default="output_mesh.ply", help="Output mesh")
     parser.add_argument("--visualize", action="store_true", help="Enable viser visualization")
     parser.add_argument("--num-cameras", type=int, default=1, help="Number of cameras")
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Save depth-fused mapper blocks to this path, then reload them into "
+            "a fresh mapper before rendering and ESDF computation."
+        ),
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        default=None,
+        help="Load mapper blocks from this checkpoint and skip depth-frame integration.",
+    )
     args = parser.parse_args()
+    if args.checkpoint is not None and args.resume_from is not None:
+        raise ValueError("--checkpoint and --resume-from are mutually exclusive")
+    checkpoint_path = args.checkpoint.expanduser() if args.checkpoint is not None else None
+    resume_path = args.resume_from.expanduser() if args.resume_from is not None else None
 
     print(f"Loading Sun3D dataset from {args.root}...")
     dataset = Sun3dDataset(args.root)
@@ -346,8 +386,13 @@ def main():
         image_height=480,
         image_width=640,
     )
-    mapper = Mapper(config)
-    print(f"Mapper initialized: {mapper.memory_usage_mb():.1f} MB")
+    if resume_path is None:
+        mapper = Mapper(config)
+        print(f"Mapper initialized: {mapper.memory_usage_mb():.1f} MB")
+    else:
+        print(f"Loading mapper block checkpoint from {resume_path}...")
+        mapper = Mapper.load_blocks(resume_path, config)
+        print(f"Mapper resumed: {mapper.memory_usage_mb():.1f} MB")
 
     visualizer = None
     if args.visualize:
@@ -387,8 +432,11 @@ def main():
             line_width=3.0,
         )
 
-    max_frames = min(args.max_frames, len(dataset))
-    print(f"\nIntegrating {max_frames} frames...")
+    max_frames = 0 if resume_path is not None else min(args.max_frames, len(dataset))
+    if resume_path is None:
+        print(f"\nIntegrating {max_frames} frames...")
+    else:
+        print("\nSkipping depth integration because --resume-from was provided.")
 
     depth_filter = FilterDepth(
         image_shape=(480, 640),
@@ -498,6 +546,16 @@ def main():
                     pose=vis_obs.pose,
                     name=f"/cameras/image_{cam_i}",
                 )
+
+    if checkpoint_path is not None:
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        mapper.save_blocks(checkpoint_path)
+        print(f"Saved mapper block checkpoint: {checkpoint_path}")
+
+        # Reload into a new Mapper instance to show that downstream rendering,
+        # ESDF, and mesh extraction can continue from saved active TSDF blocks.
+        mapper = Mapper.load_blocks(checkpoint_path, config)
+        print("Reloaded checkpoint into a fresh mapper")
 
     # Stamp known geometry into the static TSDF channel. Unlike depth frames,
     # these primitives are integrated analytically and do not decay over time,

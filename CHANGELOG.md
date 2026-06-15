@@ -29,6 +29,22 @@
 - Add feature-mapping docs, videos, and an interactive getting-started
   example at `curobo/examples/getting_started/feature_mapping.py`.
 - Add polygon-face mesh construction with quad triangulation support.
+- Add compact mapper TSDF block checkpointing. `Mapper.save_blocks()`,
+  `Mapper.load_blocks()`, and `Mapper.import_blocks()` persist active sparse
+  TSDF/RGB/feature blocks with metadata, validate target compatibility, and
+  rebuild hash state when importing into an empty mapper.
+- Demonstrate mapper block checkpoint save/resume in the getting-started
+  volumetric mapping example.
+- Add LiDAR range-image integration for the mapper. `LidarObservation`
+  represents batched range, RGB, optional feature grids, poses, valid ranges,
+  and elevation bounds; `MapperCfg` now exposes LiDAR image/support settings,
+  and `Mapper.integrate(lidar_observation=...)` fuses LiDAR TSDF, RGB, and
+  feature observations.
+- Add `lidar_volumetric_mapping.py`, a mapper reference example for the
+  targeted Oxford Spires LiDAR sequence with optional C-RADIO feature fusion
+  and Hugging Face CLI setup plus sequence-only download commands.
+- Add `live_volumetric_mapping_mpc.py`, a live RGB-D TSDF/ESDF mapping
+  reference example with Franka MPC using a RealSense backend.
 
 ### Bug Fixes & Misc.
 - Fix B-spline MPC command extraction to skip the start-boundary support window.
@@ -63,6 +79,13 @@
   joint-state reconstruction.
 - Fix mesh obstacle SDF queries so small meshes do not report false-positive
   collisions for far-away spheres whose radius exceeds the mesh AABB query cap.
+- Split mapper camera and LiDAR projective integration paths, including
+  camera/LiDAR-specific kernel factories, frustum-decay support, integration
+  stats, and focused regression tests for block checkpointing and LiDAR
+  projection.
+- Add `log_and_raise(..., exception_type=...)` so logging-backed validation can
+  preserve `TypeError` for Python API misuse while keeping `ValueError` as the
+  default.
 
 ### Breaking Changes
 - `MapperCfg` now requires `image_height` and `image_width` so the
@@ -94,6 +117,13 @@
 - Direct imports from removed internal mapper kernel modules such as
   `wp_hash`, `wp_coord`, `wp_raycast`, and `wp_raycast_common` must move to
   the per-instance kernel factory accessors.
+- Direct imports from the old internal mapper camera projective modules
+  `builder_integrate` and `wp_integrate_voxel_project` must move to
+  `builder_camera_integrate` and `wp_integrate_camera_project`.
+- `Mapper.integrate(observation=...)` is deprecated. Use
+  `Mapper.integrate(camera_observation=...)` or
+  `Mapper.integrate(lidar_observation=...)` for keyword calls. Positional
+  `Mapper.integrate(obs)` remains supported.
 - Remove unused `PoseCostMetric` and `update_pose_cost_metric` solver APIs;
   the downstream cost manager did not consume the metric, so the API was
   effectively a no-op.

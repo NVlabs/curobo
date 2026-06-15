@@ -27,6 +27,7 @@ from curobo._src.perception.mapper.constants import (
     _validate_feature_channels_per_thread,
     _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
+    _validate_lidar_config,
 )
 from curobo.logging import log_and_raise
 
@@ -127,12 +128,34 @@ class MapperCfg:
     # === Cameras ===
     num_cameras: int = 1
     #: Camera image height in pixels. Required; used to pre-allocate the
-    #: voxel-project scratch buffer at Mapper construction (buffer size
+    #: camera projective scratch buffer at Mapper construction (buffer size
     #: ``num_cameras * image_height * image_width * num_samples``) so no
     #: per-frame reallocation or D2H syncs occur.
     image_height: Optional[int] = None
     #: Camera image width in pixels. Required; see :attr:`image_height`.
     image_width: Optional[int] = None
+
+    # === LiDARs ===
+    #: Number of batched LiDAR range images accepted by the optional LiDAR
+    #: integrator. ``0`` disables LiDAR integration.
+    lidar_num_sensors: int = 0
+    #: LiDAR range-image height. ``1`` represents a planar/single-ring scan.
+    lidar_image_height: Optional[int] = None
+    #: LiDAR range-image width / azimuth divisions.
+    lidar_image_width: Optional[int] = None
+    #: Compile-time LiDAR feature-grid height when both LiDAR and features are enabled.
+    lidar_feature_grid_height: Optional[int] = None
+    #: Compile-time LiDAR feature-grid width when both LiDAR and features are enabled.
+    lidar_feature_grid_width: Optional[int] = None
+    #: LiDAR bilinear range interpolation discontinuity guard, in voxels.
+    lidar_linear_interpolation_max_allowable_difference_vox: float = 2.0
+    #: LiDAR nearest fallback max distance-to-ray guard, in voxels.
+    lidar_nearest_interpolation_max_allowable_dist_to_ray_vox: float = 0.5
+    #: Maximum visible blocks one LiDAR integration frame may process. Defaults
+    #: to :attr:`max_blocks` when LiDAR is enabled.
+    max_visible_blocks_per_lidar_integration: Optional[int] = None
+    #: Maximum LiDAR support pixels stored per visible block per LiDAR.
+    max_support_pixels_per_block_lidar: int = 8
 
     # === Per-block Features ===
     #: Per-block feature channel dimensionality. 0 disables features.
@@ -211,7 +234,7 @@ class MapperCfg:
         if self.image_height is None or self.image_width is None:
             log_and_raise(
                 "MapperCfg requires image_height and image_width to pre-allocate "
-                "the voxel-project scratch buffer. Got image_height="
+                "the camera projective scratch buffer. Got image_height="
                 f"{self.image_height}, image_width={self.image_width}."
             )
         if self.image_height <= 0 or self.image_width <= 0:
@@ -224,6 +247,17 @@ class MapperCfg:
             self.feature_dim,
             self.feature_grid_height,
             self.feature_grid_width,
+        )
+        _validate_lidar_config(
+            self.lidar_num_sensors,
+            self.lidar_image_height,
+            self.lidar_image_width,
+            self.lidar_feature_grid_height,
+            self.lidar_feature_grid_width,
+            self.feature_dim,
+            self.lidar_linear_interpolation_max_allowable_difference_vox,
+            self.lidar_nearest_interpolation_max_allowable_dist_to_ray_vox,
+            self.max_support_pixels_per_block_lidar,
         )
         if self.max_feature_tile_channels <= 0:
             log_and_raise(
@@ -252,6 +286,23 @@ class MapperCfg:
                 "max_visible_blocks_per_integration must satisfy "
                 f"0 < C <= max_blocks ({max_blocks}), got "
                 f"{self.max_visible_blocks_per_integration}."
+            )
+        if self.lidar_num_sensors > 0:
+            if self.max_visible_blocks_per_lidar_integration is None:
+                self.max_visible_blocks_per_lidar_integration = max_blocks
+            if (
+                self.max_visible_blocks_per_lidar_integration <= 0
+                or self.max_visible_blocks_per_lidar_integration > max_blocks
+            ):
+                log_and_raise(
+                    "max_visible_blocks_per_lidar_integration must satisfy "
+                    f"0 < C <= max_blocks ({max_blocks}), got "
+                    f"{self.max_visible_blocks_per_lidar_integration}."
+                )
+        elif self.max_visible_blocks_per_lidar_integration is not None:
+            log_and_raise(
+                "max_visible_blocks_per_lidar_integration requires "
+                "lidar_num_sensors > 0."
             )
 
         # Set default grid_center

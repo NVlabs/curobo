@@ -59,6 +59,7 @@ from curobo._src.perception.mapper.constants import (
     _validate_feature_channels_per_thread,
     _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
+    _validate_lidar_config,
     _validate_block_size,
     validate_grid_shape_for_hash_layout,
 )
@@ -84,6 +85,7 @@ from curobo._src.perception.mapper.storage import (
     OccupiedVoxels,
 )
 from curobo._src.types.camera import CameraObservation
+from curobo._src.types.lidar import LidarObservation
 from curobo._src.util.cuda_graph_util import GraphExecutor
 from curobo._src.util.logging import log_info
 from curobo._src.util.torch_util import profile_class_methods
@@ -115,7 +117,7 @@ class BlockSparseESDFIntegratorCfg:
             Uses truncation_distance as the blend boundary since TSDF is only
             accurate within truncation distance.
         use_cuda_graph: Use CUDA graphs for acceleration. The integrate
-            step is never graph-captured (voxel-project Phase 4 has a
+            step is never graph-captured (camera projective Phase 4 has a
             data-dependent 2D launch dim); only the ESDF computation pipeline
             is captured, gated on ``seeding_method`` (``"gather"`` is
             CUDA-graph safe, ``"scatter"`` is not).
@@ -147,6 +149,15 @@ class BlockSparseESDFIntegratorCfg:
     grid_shape: Tuple[int, int, int] = None
     image_height: Optional[int] = None  # For buffer pre-allocation
     image_width: Optional[int] = None  # For buffer pre-allocation
+    lidar_num_sensors: int = 0
+    lidar_image_height: Optional[int] = None
+    lidar_image_width: Optional[int] = None
+    lidar_feature_grid_height: Optional[int] = None
+    lidar_feature_grid_width: Optional[int] = None
+    lidar_linear_interpolation_max_allowable_difference_vox: float = 2.0
+    lidar_nearest_interpolation_max_allowable_dist_to_ray_vox: float = 0.5
+    max_visible_blocks_per_lidar_integration: Optional[int] = None
+    max_support_pixels_per_block_lidar: int = 32
     enable_static: bool = False  # Enable static obstacle integration
     static_obstacle_color: Tuple[int, int, int] = (20, 20, 20)  # RGB for static obstacles
     device: str = "cuda:0"
@@ -231,6 +242,34 @@ class BlockSparseESDFIntegratorCfg:
                 "max_visible_blocks_per_integration must satisfy "
                 f"0 < C <= max_blocks ({self.max_blocks}), got "
                 f"{self.max_visible_blocks_per_integration}."
+            )
+        _validate_lidar_config(
+            self.lidar_num_sensors,
+            self.lidar_image_height,
+            self.lidar_image_width,
+            self.lidar_feature_grid_height,
+            self.lidar_feature_grid_width,
+            self.feature_dim,
+            self.lidar_linear_interpolation_max_allowable_difference_vox,
+            self.lidar_nearest_interpolation_max_allowable_dist_to_ray_vox,
+            self.max_support_pixels_per_block_lidar,
+        )
+        if self.lidar_num_sensors > 0:
+            if self.max_visible_blocks_per_lidar_integration is None:
+                self.max_visible_blocks_per_lidar_integration = self.max_blocks
+            if (
+                self.max_visible_blocks_per_lidar_integration <= 0
+                or self.max_visible_blocks_per_lidar_integration > self.max_blocks
+            ):
+                log_and_raise(
+                    "max_visible_blocks_per_lidar_integration must satisfy "
+                    f"0 < C <= max_blocks ({self.max_blocks}), got "
+                    f"{self.max_visible_blocks_per_lidar_integration}."
+                )
+        elif self.max_visible_blocks_per_lidar_integration is not None:
+            log_and_raise(
+                "max_visible_blocks_per_lidar_integration requires "
+                "lidar_num_sensors > 0."
             )
         _validate_feature_channels_per_thread(self.feature_channels_per_thread)
         _validate_feature_grid_shape(
@@ -320,6 +359,21 @@ class BlockSparseESDFIntegrator:
             grid_shape=config.grid_shape,
             image_height=config.image_height,
             image_width=config.image_width,
+            lidar_num_sensors=config.lidar_num_sensors,
+            lidar_image_height=config.lidar_image_height,
+            lidar_image_width=config.lidar_image_width,
+            lidar_feature_grid_height=config.lidar_feature_grid_height,
+            lidar_feature_grid_width=config.lidar_feature_grid_width,
+            lidar_linear_interpolation_max_allowable_difference_vox=(
+                config.lidar_linear_interpolation_max_allowable_difference_vox
+            ),
+            lidar_nearest_interpolation_max_allowable_dist_to_ray_vox=(
+                config.lidar_nearest_interpolation_max_allowable_dist_to_ray_vox
+            ),
+            max_visible_blocks_per_lidar_integration=(
+                config.max_visible_blocks_per_lidar_integration
+            ),
+            max_support_pixels_per_block_lidar=config.max_support_pixels_per_block_lidar,
             enable_static=config.enable_static,
             static_obstacle_color=config.static_obstacle_color,
             seeding_method=config.seeding_method,
@@ -384,7 +438,7 @@ class BlockSparseESDFIntegrator:
         self._frame_count = 0
 
         # --- CUDA Graph Executor for the ESDF compute pipeline ---
-        # The integrate step is never graph-captured: voxel-project Phase 4
+        # The integrate step is never graph-captured: camera projective Phase 4
         # has a data-dependent 2D launch dim (`n_unique, block_size**3`)
         # and requires a D2H sync on `n_unique`. Scatter seeding is
         # similarly launch-dim-variable, so ESDF graph capture is gated
@@ -474,21 +528,40 @@ class BlockSparseESDFIntegrator:
         self._last_esdf_origin.copy_(self._origin)
         self._frame_count = 0
 
+    def import_blocks(self, blocks: Dict[str, torch.Tensor]) -> int:
+        """Import compact TSDF blocks and clear derived ESDF buffers.
+
+        Returns:
+            Number of imported active blocks.
+        """
+        num_blocks = self._tsdf_integrator.import_blocks(blocks)
+        self._site_index.fill_(-1)
+        self._dist_field.zero_()
+        self._frame_count = 1 if num_blocks > 0 else 0
+        return num_blocks
+
     def integrate(
         self,
-        observation: CameraObservation,
+        observation: Optional[CameraObservation | LidarObservation] = None,
+        *,
+        camera_observation: Optional[CameraObservation] = None,
+        lidar_observation: Optional[LidarObservation] = None,
     ) -> None:
-        """Integrate batched depth observation into block-sparse TSDF.
+        """Integrate camera and/or LiDAR observations into block-sparse TSDF.
 
-        The observation must have a leading camera dimension matching
-        ``config.num_cameras``. See ``BlockSparseTSDFIntegrator.integrate``
-        for the expected tensor shapes. The integrate step is not
-        graph-captured (see ``use_cuda_graph`` in the cfg docstring).
+        The integrate step is not graph-captured (see ``use_cuda_graph`` in
+        the cfg docstring).
 
         Args:
-            observation: Batched camera observation.
+            observation: Optional positional/legacy camera or LiDAR observation.
+            camera_observation: Optional batched camera observation.
+            lidar_observation: Optional batched LiDAR observation.
         """
-        self._tsdf_integrator.integrate(observation)
+        self._tsdf_integrator.integrate(
+            observation=observation,
+            camera_observation=camera_observation,
+            lidar_observation=lidar_observation,
+        )
         self._frame_count += 1
 
     def clear_region(self, bounds_min, bounds_max) -> int:

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Voxel-project TSDF/RGB/feature integration kernels for one block size.
+"""Camera projective TSDF/RGB/feature integration kernels for one block size.
 
 The generated kernels close over map geometry, image shape, camera count,
 sample count, and feature-grid layout. Runtime arguments are reserved for
@@ -21,7 +21,7 @@ from curobo._src.perception.mapper.kernel.wp_integrate_common import (
 from curobo._src.util.warp import warp_constant_suffix, warp_kernel
 
 
-def make_integrate_kernels(
+def make_camera_integrate_kernels(
     block_size: int,
     *,
     feature_dim: int,
@@ -48,7 +48,7 @@ def make_integrate_kernels(
     block_grid_to_key_coords,
     block_key_to_grid_coords,
 ) -> dict[str, object]:
-    """Build voxel-project TSDF integration kernels."""
+    """Build camera projective TSDF integration kernels."""
     BLOCK_SIZE = wp.constant(block_size)
     NUM_CAMERAS = wp.constant(wp.int32(num_cameras))
     IMAGE_HEIGHT = wp.constant(wp.int32(image_height))
@@ -96,7 +96,7 @@ def make_integrate_kernels(
         depth_max: float,
         block_keys: wp.array(dtype=wp.int64),
     ):
-        """Phase 1 (voxel-project): emit only block keys, no sample data."""
+        """Phase 1 (camera projective): emit only block keys, no sample data."""
         tid = wp.tid()
         n_pixels = IMAGE_HEIGHT * IMAGE_WIDTH
         samples_per_cam = n_pixels * NUM_SAMPLES
@@ -410,7 +410,7 @@ def make_integrate_kernels(
         block_coords: wp.array(dtype=wp.int32),
         block_data: wp.array3d(dtype=wp.float16),
     ):
-        """Phase 4 (voxel-project): one thread per voxel, serial camera loop.
+        """Phase 4 (camera projective): one thread per voxel, serial camera loop.
 
         Launch with ``dim = (n_visible, BLOCK_SIZE ** 3)``. ``BLOCK_SIZE`` is
         closure-captured so thread indexing stays consistent with

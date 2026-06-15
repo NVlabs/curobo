@@ -42,14 +42,18 @@ from typing import Dict, Optional, Tuple
 import torch
 import warp as wp
 
+from curobo._src.perception.mapper.checkpoint_blocks import (
+    build_block_metadata,
+    rebuild_import_hash_state,
+    validate_import_block_coords_for_grid,
+    validate_import_block_coords_for_hash_layout,
+    validate_import_block_coords_unique,
+    validate_block_payload,
+)
 from curobo._src.perception.mapper.constants import (
     DEFAULT_HASH_LAYOUT,
     PY_HASH_EMPTY,
-    PY_HASH_PRIME_X,
-    PY_HASH_PRIME_Y,
-    PY_HASH_PRIME_Z,
     PY_HASH_TOMBSTONE,
-    PY_POSITIVE_MASK,
     PY_VALUE_MASK,
     _validate_feature_channels_per_thread,
     _validate_feature_grid_shape,
@@ -62,6 +66,7 @@ from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel im
 )
 from curobo._src.perception.mapper.kernel.warp_types import BlockSparseTSDFWarp
 from curobo._src.util.warp import init_warp
+from curobo.logging import log_and_raise
 
 # =============================================================================
 # Configuration
@@ -118,13 +123,13 @@ class BlockSparseTSDFCfg:
     #: ``None`` when features are disabled.
     feature_grid_width: Optional[int] = None
     #: Number of adjacent feature channels accumulated per feature-kernel
-    #: thread. Must match the voxel-project integrator launch grouping.
+    #: thread. Must match the projective integrator launch grouping.
     feature_channels_per_thread: int = 4
     #: Compile-time cap for feature channels accumulated by one tiled
     #: feature-kernel CTA.
     max_feature_tile_channels: int = 4096
     #: Compile-time support-pixel capacity specialized into RGB and feature
-    #: integration kernels. Must match the voxel-project scratch depth.
+    #: integration kernels. Must match the projective scratch depth.
     max_support_pixels_per_block_camera: int = 32
     #: Upper bound on per-block accumulator weight (``block_rgb[:, 3]`` and
     #: ``block_feature_weight``) after each integration step. Caps the
@@ -845,6 +850,144 @@ class BlockSparseTSDF:
 
         # Note: block_data and block_rgb are cleared lazily when blocks
         # are allocated (via clear_new_blocks_kernel)
+
+    def export_blocks(self) -> Dict[str, torch.Tensor]:
+        """Export active block payload tensors in compact pool order.
+
+        Active means ``block_to_hash_slot[:num_allocated] >= 0``. Recycled
+        pool entries and tombstones are intentionally omitted; pool indices
+        are runtime-local and are not persisted.
+        """
+        num_allocated = int(self._data.num_allocated.item())
+        if num_allocated == 0:
+            active_pool_idx = torch.empty(0, dtype=torch.long, device=self.device)
+        else:
+            active_mask = self._data.block_to_hash_slot[:num_allocated] >= 0
+            active_pool_idx = torch.nonzero(active_mask, as_tuple=False).flatten().long()
+
+        block_coords = self._data.block_coords.view(self.config.max_blocks, 3)
+        blocks: Dict[str, torch.Tensor] = {
+            "active_block_coords": block_coords[active_pool_idx].clone(),
+        }
+        if self._data.has_dynamic:
+            blocks["block_data"] = self._data.block_data[active_pool_idx].clone()
+            blocks["block_rgb"] = self._data.block_rgb[active_pool_idx].clone()
+        if self._data.has_features:
+            blocks["block_features"] = self._data.block_features[active_pool_idx].clone()
+            blocks["block_feature_weight"] = self._data.block_feature_weight[
+                active_pool_idx
+            ].clone()
+        if self._data.has_static:
+            blocks["static_block_data"] = self._data.static_block_data[
+                active_pool_idx
+            ].clone()
+        return blocks
+
+    def import_blocks(self, blocks: Dict[str, torch.Tensor]) -> None:
+        """Import compact active blocks into an empty storage instance.
+
+        The import compacts blocks into pool indices ``0..N-1`` and rebuilds
+        all runtime allocation state from coordinates. Importing into a mapper
+        that has ever allocated blocks is rejected in v1 to avoid undefined
+        merge semantics.
+        """
+        block_metadata = build_block_metadata(self)
+        validate_block_payload(blocks, block_metadata)
+
+        num_allocated = int(self._data.num_allocated.item())
+        free_count = int(self._data.free_count.item())
+        hash_used = self._data.hash_table != PY_HASH_EMPTY
+        if num_allocated != 0 or free_count != 0 or bool(hash_used.any().item()):
+            log_and_raise("Block import requires an empty target mapper.")
+
+        n_blocks = int(blocks["active_block_coords"].shape[0])
+        if n_blocks > self.config.max_blocks:
+            log_and_raise(
+                f"Block import has {n_blocks} active blocks but target max_blocks is "
+                f"{self.config.max_blocks}."
+            )
+
+        coords_cpu = (
+            blocks["active_block_coords"].detach().to(device="cpu", dtype=torch.int64)
+        )
+        validate_import_block_coords_unique(coords_cpu)
+        validate_import_block_coords_for_hash_layout(coords_cpu)
+        validate_import_block_coords_for_grid(
+            coords_cpu,
+            self.config.grid_shape,
+            self.block_size,
+        )
+        hash_table_cpu, block_to_hash_slot_cpu = rebuild_import_hash_state(
+            coords_cpu,
+            self.config.hash_capacity,
+            self.config.max_blocks,
+        )
+
+        self.reset()
+        self._data.block_coords.zero_()
+        self._data.hash_table.copy_(hash_table_cpu.to(device=self.device))
+        self._data.block_to_hash_slot.copy_(
+            block_to_hash_slot_cpu.to(device=self.device)
+        )
+        self._data.free_list.zero_()
+        self._data.free_count.zero_()
+        self._data.num_allocated.fill_(n_blocks)
+        self._data.allocation_failures.zero_()
+        self._data.block_sums.zero_()
+        self._data.static_block_sums.zero_()
+        self._data.frustum_flags.zero_()
+        self._data.decay_factor.fill_(1.0)
+        self._data.new_blocks.zero_()
+        self._data.new_block_count.zero_()
+        self._data.recycle_count.zero_()
+        self._tombstone_count = 0
+
+        if n_blocks > 0:
+            coords_device = blocks["active_block_coords"].to(
+                device=self.device,
+                dtype=torch.int32,
+            )
+            self._data.block_coords[: n_blocks * 3].copy_(coords_device.reshape(-1))
+
+        if self._data.has_dynamic:
+            self._data.block_data.zero_()
+            self._data.block_rgb.zero_()
+            if n_blocks > 0:
+                self._data.block_data[:n_blocks].copy_(
+                    blocks["block_data"].to(device=self.device)
+                )
+                self._data.block_rgb[:n_blocks].copy_(
+                    blocks["block_rgb"].to(device=self.device)
+                )
+                self._data.block_sums[:n_blocks].copy_(
+                    self._data.block_data[:n_blocks, :, 1].sum(
+                        dim=1,
+                        dtype=torch.float32,
+                    )
+                )
+
+        if self._data.has_features:
+            self._data.block_features.zero_()
+            self._data.block_feature_weight.zero_()
+            if n_blocks > 0:
+                self._data.block_features[:n_blocks].copy_(
+                    blocks["block_features"].to(device=self.device)
+                )
+                self._data.block_feature_weight[:n_blocks].copy_(
+                    blocks["block_feature_weight"].to(device=self.device)
+                )
+
+        if self._data.has_static and n_blocks > 0:
+            self._data.static_block_data[:n_blocks].copy_(
+                blocks["static_block_data"].to(device=self.device)
+            )
+            self._data.static_block_sums[:n_blocks].copy_(
+                torch.isfinite(self._data.static_block_data[:n_blocks].float())
+                .sum(dim=1)
+                .to(dtype=torch.int32)
+            )
+
+        self.invalidate_cache()
 
     def get_stats(
         self,

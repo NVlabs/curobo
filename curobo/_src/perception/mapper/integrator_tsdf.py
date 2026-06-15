@@ -37,6 +37,7 @@ from curobo._src.perception.mapper.constants import (
     _validate_feature_channels_per_thread,
     _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
+    _validate_lidar_config,
     _validate_block_size,
     resolve_feature_integration_kernel,
     validate_grid_shape_for_hash_layout,
@@ -47,10 +48,13 @@ from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel im
 )
 from curobo._src.perception.mapper.kernel.wp_decay import (
     decay_and_recycle,
-    decay_frustum_aware_multi_camera,
+    decay_frustum_aware_multi_sensor,
 )
-from curobo._src.perception.mapper.kernel.wp_integrate_voxel_project import (
-    VoxelProjectIntegrator,
+from curobo._src.perception.mapper.kernel.wp_integrate_lidar_project import (
+    LidarProjectIntegrator,
+)
+from curobo._src.perception.mapper.kernel.wp_integrate_camera_project import (
+    CameraProjectIntegrator,
 )
 from curobo._src.perception.mapper.kernel.wp_stamp_obstacles import (
     clear_static_channel,
@@ -71,6 +75,7 @@ from curobo._src.perception.mapper.storage import (
     OccupiedVoxels,
 )
 from curobo._src.types.camera import CameraObservation
+from curobo._src.types.lidar import LidarObservation
 from curobo._src.util.logging import log_info
 from curobo._src.util.torch_util import profile_class_methods
 from curobo.logging import log_and_raise
@@ -123,6 +128,15 @@ class BlockSparseTSDFIntegratorCfg:
     roughness: float = 3.0  # Geometric complexity multiplier
     image_height: Optional[int] = None  # For buffer pre-allocation
     image_width: Optional[int] = None  # For buffer pre-allocation
+    lidar_num_sensors: int = 0
+    lidar_image_height: Optional[int] = None
+    lidar_image_width: Optional[int] = None
+    lidar_feature_grid_height: Optional[int] = None
+    lidar_feature_grid_width: Optional[int] = None
+    lidar_linear_interpolation_max_allowable_difference_vox: float = 2.0
+    lidar_nearest_interpolation_max_allowable_dist_to_ray_vox: float = 0.5
+    max_visible_blocks_per_lidar_integration: Optional[int] = None
+    max_support_pixels_per_block_lidar: int = 32
     enable_static: bool = False  # Enable static obstacle integration
     static_obstacle_color: Tuple[int, int, int] = (20, 20, 20)  # RGB for static obstacles
     seeding_method: str = "gather"  # "gather" or "scatter"; selects ESDF seed kernel variant
@@ -210,11 +224,39 @@ class BlockSparseTSDFIntegratorCfg:
                 f"0 < C <= max_blocks ({self.max_blocks}), got "
                 f"{self.max_visible_blocks_per_integration}."
             )
+        _validate_lidar_config(
+            self.lidar_num_sensors,
+            self.lidar_image_height,
+            self.lidar_image_width,
+            self.lidar_feature_grid_height,
+            self.lidar_feature_grid_width,
+            self.feature_dim,
+            self.lidar_linear_interpolation_max_allowable_difference_vox,
+            self.lidar_nearest_interpolation_max_allowable_dist_to_ray_vox,
+            self.max_support_pixels_per_block_lidar,
+        )
+        if self.lidar_num_sensors > 0:
+            if self.max_visible_blocks_per_lidar_integration is None:
+                self.max_visible_blocks_per_lidar_integration = self.max_blocks
+            if (
+                self.max_visible_blocks_per_lidar_integration <= 0
+                or self.max_visible_blocks_per_lidar_integration > self.max_blocks
+            ):
+                log_and_raise(
+                    "max_visible_blocks_per_lidar_integration must satisfy "
+                    f"0 < C <= max_blocks ({self.max_blocks}), got "
+                    f"{self.max_visible_blocks_per_lidar_integration}."
+                )
+        elif self.max_visible_blocks_per_lidar_integration is not None:
+            log_and_raise(
+                "max_visible_blocks_per_lidar_integration requires "
+                "lidar_num_sensors > 0."
+            )
 
         if self.image_height is None or self.image_width is None:
             log_and_raise(
                 "BlockSparseTSDFIntegratorCfg requires image_height and "
-                "image_width to pre-allocate the voxel-project scratch "
+                "image_width to pre-allocate the camera projective scratch "
                 "buffer. Got image_height="
                 f"{self.image_height}, image_width={self.image_width}."
             )
@@ -299,6 +341,11 @@ class BlockSparseTSDFIntegrator:
             config.feature_dim,
             config.max_support_pixels_per_block_camera,
         )
+        use_tiled_lidar_feature_kernel = resolve_feature_integration_kernel(
+            config.feature_integration_kernel,
+            config.feature_dim,
+            config.max_support_pixels_per_block_lidar,
+        )
 
         tsdf_config = BlockSparseTSDFCfg(
             max_blocks=config.max_blocks,
@@ -326,7 +373,7 @@ class BlockSparseTSDFIntegrator:
         # Frame counter for periodic operations
         self._frame_count = 0
 
-        self._integrator = VoxelProjectIntegrator(
+        self._camera_integrator = CameraProjectIntegrator(
             num_cameras=config.num_cameras,
             image_height=config.image_height,
             image_width=config.image_width,
@@ -346,6 +393,39 @@ class BlockSparseTSDFIntegrator:
             ),
             profile_kernel_timings=config.profile_integration_kernel_timings,
         )
+        if config.lidar_num_sensors > 0:
+            self._lidar_integrator = LidarProjectIntegrator(
+                lidar_num_sensors=config.lidar_num_sensors,
+                lidar_image_height=config.lidar_image_height,
+                lidar_image_width=config.lidar_image_width,
+                voxel_size=config.voxel_size,
+                block_size=config.block_size,
+                truncation_distance=config.truncation_distance,
+                max_blocks=self._tsdf.config.max_blocks,
+                max_visible_blocks_per_lidar_integration=(
+                    config.max_visible_blocks_per_lidar_integration
+                ),
+                max_support_pixels_per_block_lidar=(
+                    config.max_support_pixels_per_block_lidar
+                ),
+                device=config.device,
+                feature_channels_per_thread=config.feature_channels_per_thread,
+                use_tiled_feature_kernel=use_tiled_lidar_feature_kernel,
+                lidar_feature_grid_shape=(
+                    (config.lidar_feature_grid_height, config.lidar_feature_grid_width)
+                    if config.lidar_feature_grid_height is not None
+                    else None
+                ),
+                linear_interpolation_max_allowable_difference_vox=(
+                    config.lidar_linear_interpolation_max_allowable_difference_vox
+                ),
+                nearest_interpolation_max_allowable_dist_to_ray_vox=(
+                    config.lidar_nearest_interpolation_max_allowable_dist_to_ray_vox
+                ),
+                profile_kernel_timings=config.profile_integration_kernel_timings,
+            )
+        else:
+            self._lidar_integrator = None
 
     @property
     def tsdf(self) -> BlockSparseTSDF:
@@ -357,9 +437,67 @@ class BlockSparseTSDFIntegrator:
         self._tsdf.reset()
         self._frame_count = 0
 
+    def import_blocks(self, blocks: Dict[str, torch.Tensor]) -> int:
+        """Import compact block payloads into the underlying TSDF storage.
+
+        Returns:
+            Number of imported active blocks.
+        """
+        self._tsdf.import_blocks(blocks)
+        num_blocks = int(self._tsdf.data.num_allocated.item())
+        self._frame_count = 1 if num_blocks > 0 else 0
+        return num_blocks
+
     def integrate(
         self,
+        observation: Optional[CameraObservation | LidarObservation] = None,
+        *,
+        camera_observation: Optional[CameraObservation] = None,
+        lidar_observation: Optional[LidarObservation] = None,
+    ):
+        """Integrate camera and/or LiDAR observations into the TSDF."""
+        if observation is not None:
+            if camera_observation is not None or lidar_observation is not None:
+                log_and_raise(
+                    "observation= cannot be combined with camera_observation= "
+                    "or lidar_observation=."
+                )
+            if isinstance(observation, CameraObservation):
+                camera_observation = observation
+            elif isinstance(observation, LidarObservation):
+                lidar_observation = observation
+            else:
+                log_and_raise(
+                    "observation must be CameraObservation or LidarObservation, got "
+                    f"{type(observation).__name__}."
+                )
+
+        if camera_observation is None and lidar_observation is None:
+            log_and_raise(
+                "integrate() requires camera_observation, lidar_observation, "
+                "or observation."
+            )
+
+        has_lidar = lidar_observation is not None
+        if has_lidar:
+            self._validate_lidar_observation(lidar_observation)
+            self._apply_frame_decay(camera_observation, lidar_observation)
+        if camera_observation is not None:
+            self._integrate_camera_frame(
+                camera_observation,
+                advance_frame=False,
+                apply_decay=not has_lidar,
+            )
+        if has_lidar:
+            self._integrate_lidar_frame(lidar_observation, advance_frame=False)
+        self._frame_count += 1
+
+    def _integrate_camera_frame(
+        self,
         observation: CameraObservation,
+        *,
+        advance_frame: bool = True,
+        apply_decay: bool = True,
     ):
         """Integrate a batched camera observation into the TSDF.
 
@@ -451,23 +589,10 @@ class BlockSparseTSDFIntegrator:
                     "feature_grid must be channels-last with stride 1 on the channel dim."
                 )
 
-        if self._frame_count > 0 and (self.config.time_decay < 1.0 or self.config.frustum_decay < 1.0):
-            img_shape = (depth_images.shape[1], depth_images.shape[2])
-            num_blocks = int(self._tsdf.data.num_allocated.item())
-            decay_frustum_aware_multi_camera(
-                self._tsdf,
-                intrinsics=intrinsics,
-                cam_positions=positions,
-                cam_quaternions=quaternions,
-                img_shape=img_shape,
-                depth_minimum_distance=self.config.depth_minimum_distance,
-                depth_maximum_distance=self.config.depth_maximum_distance,
-                time_decay=self.config.time_decay,
-                frustum_decay=self.config.frustum_decay,
-                num_blocks=num_blocks,
-            )
+        if apply_decay:
+            self._apply_frame_decay(observation, None)
 
-        self._integrator.integrate(
+        self._camera_integrator.integrate(
             self._tsdf,
             depth_images,
             rgb_images,
@@ -480,7 +605,234 @@ class BlockSparseTSDFIntegrator:
             feature_grid=feature_grid,
         )
 
-        self._frame_count += 1
+        if advance_frame:
+            self._frame_count += 1
+
+    def _apply_frame_decay(
+        self,
+        camera_observation: Optional[CameraObservation],
+        lidar_observation: Optional[LidarObservation],
+    ) -> None:
+        """Decay once for the union of all frusta in the current frame."""
+        if self._frame_count <= 0:
+            return
+        if self.config.time_decay >= 1.0 and self.config.frustum_decay >= 1.0:
+            return
+
+        camera_intrinsics = None
+        camera_positions = None
+        camera_quaternions = None
+        camera_img_shape = None
+        if camera_observation is not None:
+            depth_images = camera_observation.depth_image
+            if depth_images.ndim != 3:
+                log_and_raise(
+                    "depth_image must be (num_cameras, H, W), got "
+                    f"shape {tuple(depth_images.shape)}."
+                )
+            n_cameras = int(depth_images.shape[0])
+            if n_cameras != self.config.num_cameras:
+                log_and_raise(
+                    f"Expected num_cameras={self.config.num_cameras}, "
+                    f"got depth_image batch dim {n_cameras}."
+                )
+            camera_intrinsics = camera_observation.intrinsics
+            camera_positions = camera_observation.pose.position.view(n_cameras, 3)
+            camera_quaternions = camera_observation.pose.quaternion.view(n_cameras, 4)
+            camera_img_shape = (int(depth_images.shape[1]), int(depth_images.shape[2]))
+
+        lidar_positions = None
+        lidar_quaternions = None
+        lidar_valid_range_m = None
+        lidar_elevation_range_rad = None
+        lidar_img_shape = None
+        if lidar_observation is not None:
+            range_images = lidar_observation.range_image
+            n_lidars = int(range_images.shape[0])
+            lidar_positions = lidar_observation.pose.position.view(n_lidars, 3)
+            lidar_quaternions = lidar_observation.pose.quaternion.view(n_lidars, 4)
+            lidar_valid_range_m = lidar_observation.valid_range_m
+            lidar_elevation_range_rad = lidar_observation.elevation_range_rad
+            lidar_img_shape = (int(range_images.shape[1]), int(range_images.shape[2]))
+
+        num_blocks = int(self._tsdf.data.num_allocated.item())
+        decay_frustum_aware_multi_sensor(
+            self._tsdf,
+            camera_intrinsics=camera_intrinsics,
+            camera_positions=camera_positions,
+            camera_quaternions=camera_quaternions,
+            camera_img_shape=camera_img_shape,
+            camera_depth_minimum_distance=self.config.depth_minimum_distance,
+            camera_depth_maximum_distance=self.config.depth_maximum_distance,
+            lidar_positions=lidar_positions,
+            lidar_quaternions=lidar_quaternions,
+            lidar_valid_range_m=lidar_valid_range_m,
+            lidar_elevation_range_rad=lidar_elevation_range_rad,
+            lidar_img_shape=lidar_img_shape,
+            time_decay=self.config.time_decay,
+            frustum_decay=self.config.frustum_decay,
+            num_blocks=num_blocks,
+        )
+
+    def _integrate_lidar_frame(
+        self,
+        observation: LidarObservation,
+        *,
+        advance_frame: bool = True,
+    ):
+        """Integrate a batched LiDAR observation into the TSDF."""
+        if self.config.lidar_num_sensors <= 0:
+            log_and_raise(
+                "LidarObservation was provided but lidar_num_sensors == 0. "
+                "Enable LiDAR integration in the mapper config."
+            )
+        if self._lidar_integrator is None:
+            log_and_raise("LiDAR integrator is not initialized.")
+        self._validate_lidar_observation(observation)
+        n_lidars = int(observation.range_image.shape[0])
+        positions = observation.pose.position.view(n_lidars, 3)
+        quaternions = observation.pose.quaternion.view(n_lidars, 4)
+
+        self._lidar_integrator.integrate(
+            self._tsdf,
+            observation.range_image,
+            observation.rgb_image,
+            positions,
+            quaternions,
+            observation.valid_range_m,
+            observation.elevation_range_rad,
+            feature_grid=observation.feature_grid,
+        )
+        if advance_frame:
+            self._frame_count += 1
+
+    def _validate_lidar_observation(self, observation: LidarObservation) -> None:
+        range_image = observation.range_image
+        if range_image is None:
+            log_and_raise("LidarObservation.range_image is required.")
+        if range_image.ndim != 3:
+            log_and_raise(
+                "range_image must be (num_lidars, H, W), got "
+                f"shape {tuple(range_image.shape)}."
+            )
+        n_lidars = int(range_image.shape[0])
+        if n_lidars != self.config.lidar_num_sensors:
+            log_and_raise(
+                f"Expected lidar_num_sensors={self.config.lidar_num_sensors}, "
+                f"got range_image batch dim {n_lidars}."
+            )
+        expected_shape = (
+            self.config.lidar_num_sensors,
+            self.config.lidar_image_height,
+            self.config.lidar_image_width,
+        )
+        if tuple(range_image.shape) != expected_shape:
+            log_and_raise(
+                f"range_image shape mismatch: expected {expected_shape}, "
+                f"got {tuple(range_image.shape)}."
+            )
+        if range_image.dtype != torch.float32:
+            log_and_raise(f"range_image dtype must be torch.float32, got {range_image.dtype}.")
+
+        rgb_image = observation.rgb_image
+        if rgb_image is None:
+            log_and_raise("LidarObservation.rgb_image is required.")
+        expected_rgb_shape = expected_shape + (3,)
+        if tuple(rgb_image.shape) != expected_rgb_shape:
+            log_and_raise(
+                f"rgb_image shape mismatch: expected {expected_rgb_shape}, "
+                f"got {tuple(rgb_image.shape)}."
+            )
+        if rgb_image.dtype != torch.uint8:
+            log_and_raise(f"rgb_image dtype must be torch.uint8, got {rgb_image.dtype}.")
+        if rgb_image.device != range_image.device:
+            log_and_raise(
+                f"rgb_image device {rgb_image.device} does not match "
+                f"range_image device {range_image.device}."
+            )
+
+        if observation.pose is None:
+            log_and_raise("LidarObservation.pose is required.")
+        positions = observation.pose.position.view(n_lidars, 3)
+        quaternions = observation.pose.quaternion.view(n_lidars, 4)
+        if positions.device != range_image.device or quaternions.device != range_image.device:
+            log_and_raise("LidarObservation.pose tensors must be on the range_image device.")
+
+        valid_range_m = observation.valid_range_m
+        if valid_range_m is None:
+            log_and_raise("LidarObservation.valid_range_m is required.")
+        if tuple(valid_range_m.shape) != (n_lidars, 2):
+            log_and_raise(
+                "valid_range_m must be (num_lidars, 2), got "
+                f"shape {tuple(valid_range_m.shape)}."
+            )
+        if valid_range_m.dtype != torch.float32:
+            log_and_raise(
+                f"valid_range_m dtype must be torch.float32, got {valid_range_m.dtype}."
+            )
+        if valid_range_m.device != range_image.device:
+            log_and_raise(
+                f"valid_range_m device {valid_range_m.device} does not match "
+                f"range_image device {range_image.device}."
+            )
+
+        elevation_range_rad = observation.elevation_range_rad
+        if elevation_range_rad is None:
+            log_and_raise("LidarObservation.elevation_range_rad is required.")
+        if tuple(elevation_range_rad.shape) != (n_lidars, 2):
+            log_and_raise(
+                "elevation_range_rad must be (num_lidars, 2), got "
+                f"shape {tuple(elevation_range_rad.shape)}."
+            )
+        if elevation_range_rad.dtype != torch.float32:
+            log_and_raise(
+                "elevation_range_rad dtype must be torch.float32, got "
+                f"{elevation_range_rad.dtype}."
+            )
+        if elevation_range_rad.device != range_image.device:
+            log_and_raise(
+                f"elevation_range_rad device {elevation_range_rad.device} does not "
+                f"match range_image device {range_image.device}."
+            )
+        if self.config.lidar_image_height == 1 and not torch.allclose(
+            elevation_range_rad[:, 0], elevation_range_rad[:, 1]
+        ):
+            log_and_raise(
+                "Planar LiDAR with lidar_image_height == 1 requires "
+                "elevation_range_rad[:, 0] == elevation_range_rad[:, 1]."
+            )
+
+        feature_grid = observation.feature_grid
+        if feature_grid is not None and not self._tsdf.data.has_features:
+            log_and_raise(
+                "feature_grid was provided but feature_dim == 0; enable features via "
+                "MapperCfg.feature_dim or BlockSparseTSDFIntegratorCfg.feature_dim."
+            )
+        if self._tsdf.data.has_features and feature_grid is not None:
+            expected_feature_shape = (
+                n_lidars,
+                self.config.lidar_feature_grid_height,
+                self.config.lidar_feature_grid_width,
+                self._tsdf.data.feature_dim,
+            )
+            if tuple(feature_grid.shape) != expected_feature_shape:
+                log_and_raise(
+                    f"feature_grid shape mismatch: expected {expected_feature_shape}, "
+                    f"got {tuple(feature_grid.shape)}."
+                )
+            if feature_grid.dtype != torch.float16:
+                log_and_raise(
+                    f"feature_grid dtype must be torch.float16, got {feature_grid.dtype}."
+                )
+            if feature_grid.device != range_image.device:
+                log_and_raise(
+                    f"feature_grid device {feature_grid.device} does not match "
+                    f"range_image device {range_image.device}."
+                )
+            if feature_grid.stride(-1) != 1:
+                log_and_raise(
+                    "feature_grid must be channels-last with stride 1 on the channel dim."
+                )
 
     def recycle_empty_blocks(self) -> int:
         """Recycle blocks that have decayed to empty.
@@ -504,7 +856,7 @@ class BlockSparseTSDFIntegrator:
             Number of allocated blocks cleared. Blocks remain allocated; only
             dynamic TSDF/RGB, block sums, and per-block features are reset.
         """
-        return self._integrator.clear_region(self._tsdf, bounds_min, bounds_max)
+        return self._camera_integrator.clear_region(self._tsdf, bounds_min, bounds_max)
 
     def clear_blocks(self, pool_indices) -> int:
         """Clear dynamic map contents for explicit block-pool indices.
@@ -516,7 +868,7 @@ class BlockSparseTSDFIntegrator:
             Number of blocks cleared. Blocks remain allocated; only dynamic
             TSDF/RGB, block sums, and per-block features are reset.
         """
-        return self._integrator.clear_blocks(self._tsdf, pool_indices)
+        return self._camera_integrator.clear_blocks(self._tsdf, pool_indices)
 
     def extract_mesh(
         self,
@@ -613,16 +965,39 @@ class BlockSparseTSDFIntegrator:
         stats = self._tsdf.get_stats(scan_pool=scan_pool, scan_hash=scan_hash)
         stats["frame_count"] = self._frame_count
         stats["memory_mb"] = self._tsdf.memory_usage_mb()
-        last_integration = dict(self._integrator.last_integration_stats)
-        last_integration["support_overflow_count"] = int(
-            self._integrator.support_overflow_count.item()
+        last_camera_integration = dict(self._camera_integrator.last_integration_stats)
+        last_camera_integration["support_overflow_count"] = int(
+            self._camera_integrator.support_overflow_count.item()
         )
-        last_integration["profile_kernel_timings"] = self._integrator.profile_kernel_timings
-        last_integration["use_tiled_feature_kernel"] = self._integrator.use_tiled_feature_kernel
-        stats["last_integration"] = last_integration
+        last_camera_integration["profile_kernel_timings"] = (
+            self._camera_integrator.profile_kernel_timings
+        )
+        last_camera_integration["use_tiled_feature_kernel"] = (
+            self._camera_integrator.use_tiled_feature_kernel
+        )
+        stats["last_camera_integration"] = last_camera_integration
+        stats["last_camera_integration_kernel_timings_ms"] = dict(
+            self._camera_integrator.last_kernel_timings_ms
+        )
+        stats["last_integration"] = last_camera_integration
         stats["last_integration_kernel_timings_ms"] = dict(
-            self._integrator.last_kernel_timings_ms
+            self._camera_integrator.last_kernel_timings_ms
         )
+        if self._lidar_integrator is not None:
+            last_lidar_integration = dict(self._lidar_integrator.last_integration_stats)
+            last_lidar_integration["support_overflow_count"] = int(
+                self._lidar_integrator.support_overflow_count.item()
+            )
+            last_lidar_integration["profile_kernel_timings"] = (
+                self._lidar_integrator.profile_kernel_timings
+            )
+            last_lidar_integration["use_tiled_feature_kernel"] = (
+                self._lidar_integrator.use_tiled_feature_kernel
+            )
+            stats["last_lidar_integration"] = last_lidar_integration
+            stats["last_lidar_integration_kernel_timings_ms"] = dict(
+                self._lidar_integrator.last_kernel_timings_ms
+            )
         return stats
 
     def memory_usage_mb(self) -> float:
