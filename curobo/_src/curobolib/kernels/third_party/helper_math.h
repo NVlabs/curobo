@@ -1119,10 +1119,15 @@ inline __host__ __device__ uint4 max(uint4 a, uint4 b)
 // - linear interpolation between a and b, based on value t in [0, 1] range
 ////////////////////////////////////////////////////////////////////////////////
 
+#if !defined(CUDART_VERSION) || (CUDART_VERSION < 13000)
+// CUDA 13.0+ provides a built-in scalar lerp(float,float,float); our own then
+// conflicts. Skip the scalar overload on CUDA>=13 (semantics are identical: a+t*(b-a));
+// the float2/3/4 overloads below are cuRobo-specific and never conflict.
 inline __device__ __host__ float lerp(float a, float b, float t)
 {
     return a + t*(b-a);
 }
+#endif
 inline __device__ __host__ float2 lerp(float2 a, float2 b, float t)
 {
     return a + t*(b-a);

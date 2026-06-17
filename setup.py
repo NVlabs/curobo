@@ -45,6 +45,13 @@ if USE_PYBIND:
         if sys.platform == "win32":
             extra_cuda_args["nvcc"].append("--allow-unsupported-compiler")
 
+        # Kernel headers live in nested subdirs (e.g. optimization/lbfgs/) but the .cu
+        # files #include them by bare filename, so every subdir must be on the include path.
+        _kernels_root = source_dir / "curobo/_src/curobolib/kernels"
+        kernel_include_dirs = [str(_kernels_root)] + [
+            str(p) for p in _kernels_root.rglob("*") if p.is_dir()
+        ]
+
         # Create a list of modules to be compiled
         ext_modules = [
             CUDAExtension(
@@ -54,7 +61,7 @@ if USE_PYBIND:
                     "curobo/_src/curobolib/backends/pybind/kinematics_forward_kernel_launch.cu",
                     "curobo/_src/curobolib/backends/pybind/kinematics_backward_kernel_launch.cu",
                 ],
-                include_dirs=[str(source_dir / "curobo/_src/curobolib/kernels")],
+                include_dirs=kernel_include_dirs,
                 extra_compile_args=extra_cuda_args,
             ),
             CUDAExtension(
@@ -64,7 +71,7 @@ if USE_PYBIND:
                     "curobo/_src/curobolib/backends/pybind/line_search_kernel_launch.cu",
                     "curobo/_src/curobolib/backends/pybind/lbfgs_step_kernel_launch.cu",
                 ],
-                include_dirs=[str(source_dir / "curobo/_src/curobolib/kernels")],
+                include_dirs=kernel_include_dirs,
                 extra_compile_args=extra_cuda_args,
             ),
             CUDAExtension(
@@ -73,18 +80,16 @@ if USE_PYBIND:
                     "curobo/_src/curobolib/backends/pybind/trajectory_bindings.cpp",
                     "curobo/_src/curobolib/backends/pybind/trajectory_kernel_launch.cu",
                 ],
-                include_dirs=[str(source_dir / "curobo/_src/curobolib/kernels")],
+                include_dirs=kernel_include_dirs,
                 extra_compile_args=extra_cuda_args,
             ),
             CUDAExtension(
                 "curobo._src.curobolib.backends.pybind.geometry",
                 [
                     "curobo/_src/curobolib/backends/pybind/geometry_bindings.cpp",
-                    "curobo/_src/curobolib/backends/pybind/sphere_obb_kernel_launch.cu",
                     "curobo/_src/curobolib/backends/pybind/self_collision_kernel_launch.cu",
-                    "curobo/_src/curobolib/backends/pybind/sphere_voxel_kernel_launch.cu",
                 ],
-                include_dirs=[str(source_dir / "curobo/_src/curobolib/kernels")],
+                include_dirs=kernel_include_dirs,
                 extra_compile_args=extra_cuda_args,
             ),
         ]
