@@ -29,7 +29,7 @@ from curobo._src.util.usd_util import get_prim_world_pose
 
 try:
     # Third Party
-    from pxr import Usd, UsdGeom
+    from pxr import Gf, Usd, UsdGeom
 except ImportError:
     raise ImportError(
         "usd-core failed to import, install with pip install usd-core"
@@ -167,43 +167,40 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Optional[Mesh]:
     Args:
         prim: The USD prim to extract from.
         cache: UsdGeom.XformCache for transform computation.
-        transform: Optional additional transformation matrix to apply.
+        transform: Optional additional transformation matrix to bake into mesh vertices.
 
     Returns:
         Mesh obstacle instance, or None if mesh data is invalid.
     """
     points = list(prim.GetAttribute("points").Get())
-    points = [np.ravel(x) for x in points]
 
     faces = list(prim.GetAttribute("faceVertexIndices").Get())
 
-    face_count = list(prim.GetAttribute("faceVertexCounts").Get())
-    if prim.GetAttribute("xformOp:scale").IsValid():
-        scale = list(prim.GetAttribute("xformOp:scale").Get())
-    else:
-        scale = [1.0, 1.0, 1.0]
-    size = prim.GetAttribute("size").Get()
-    if size is None:
-        size = 1
-    scale = [s * size for s in scale]
-
-    mat, t_scale = get_prim_world_pose(cache, prim)
-    # also get any world scale:
-    scale = t_scale
-
+    face_counts = list(prim.GetAttribute("faceVertexCounts").Get())
+    world_transform = cache.GetLocalToWorldTransform(prim)
+    vertices = np.asarray(
+        [world_transform.Transform(Gf.Vec3d(*point)) for point in points], dtype=np.float32
+    )
+    linear_transform = np.asarray(world_transform.ExtractRotationMatrix(), dtype=np.float32)
     if transform is not None:
-        mat = transform @ mat
-    # compute position and orientation on cuda:
-    tensor_mat = torch.as_tensor(mat, device=torch.device("cuda", 0))
-    pose = Pose.from_matrix(tensor_mat).tolist()
+        vertices = vertices @ transform[:3, :3].T + transform[:3, 3]
+        linear_transform = transform[:3, :3] @ linear_transform
+
+    if np.linalg.det(linear_transform) < 0.0:
+        flipped_faces = []
+        face_start = 0
+        for face_count in face_counts:
+            face_end = face_start + face_count
+            flipped_faces.extend(reversed(faces[face_start:face_end]))
+            face_start = face_end
+        faces = flipped_faces
 
     m = Mesh.from_polygon_faces(
         name=str(prim.GetPath()),
-        pose=pose,
-        vertices=points,
+        pose=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        vertices=vertices.tolist(),
         faces=faces,
-        face_counts=face_count,
-        scale=scale,
+        face_counts=face_counts,
     )
 
     return m
