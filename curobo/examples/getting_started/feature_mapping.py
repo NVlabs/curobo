@@ -764,6 +764,8 @@ def main():
     # sync with the model regardless of which C-RADIO variant is loaded.
     probe_feats = feature_model.extract_patch_features(dataset[0].rgb_image)
     feature_dim = probe_feats.shape[-1]
+    feature_grid_height = int(probe_feats.shape[0])
+    feature_grid_width = int(probe_feats.shape[1])
     print(f"Feature dim: {feature_dim}")
     print(f"Feature shape: {probe_feats.shape}")
 
@@ -780,6 +782,8 @@ def main():
         image_height=SUN3D_IMAGE_SHAPE[0],
         image_width=SUN3D_IMAGE_SHAPE[1],
         feature_dim=feature_dim,
+        feature_grid_height=feature_grid_height,
+        feature_grid_width=feature_grid_width,
         block_size=8,
     )
     mapper = Mapper(config)
