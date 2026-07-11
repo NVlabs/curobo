@@ -47,6 +47,19 @@ def trajopt_solver(franka_trajopt_config):
 
 
 @pytest.fixture(scope="module")
+def trajopt_solver_padded(cuda_device_cfg):
+    """Create a TrajOptSolver that pads single requests to a batch of two."""
+    config = TrajOptSolverCfg.create(
+        robot="franka.yml",
+        device_cfg=cuda_device_cfg,
+        num_seeds=2,
+        use_cuda_graph=False,
+        max_batch_size=2,
+    )
+    return TrajOptSolver(config)
+
+
+@pytest.fixture(scope="module")
 def franka_trajopt_config_goalset(cuda_device_cfg):
     """TrajOptSolverCfg with room for multi-pose goalsets (num_goalset > 1)."""
     return TrajOptSolverCfg.create(
@@ -576,9 +589,12 @@ class TestTrajOptSolverSolveCspace:
     def test_solve_cspace_uses_implicit_seed_goal(
         self, trajopt_solver, sample_start_state, monkeypatch
     ):
-        """solve_cspace should not populate goal_js; seed_goal_js pins the endpoint."""
+        """solve_cspace should forward derivatives without populating goal_js."""
         goal_state = sample_start_state.clone()
         goal_state.position[..., 0] += 0.1
+        goal_state.velocity[..., 0] = 0.2
+        goal_state.acceleration[..., 1] = -0.1
+        goal_state.jerk[..., 2] = 0.05
         captured = {}
 
         def fake_solve_impl(**kwargs):
@@ -601,6 +617,71 @@ class TestTrajOptSolverSolveCspace:
 
         assert captured["use_implicit_goal"] is True
         assert "goal_state" not in captured
+        assert captured["implicit_goal_state"] is goal_state
+        torch.testing.assert_close(
+            captured["implicit_goal_state"].velocity,
+            goal_state.velocity,
+        )
+        torch.testing.assert_close(
+            captured["implicit_goal_state"].acceleration,
+            goal_state.acceleration,
+        )
+        torch.testing.assert_close(
+            captured["implicit_goal_state"].jerk,
+            goal_state.jerk,
+        )
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_solve_cspace_pads_boundary_derivatives(
+        self, trajopt_solver_padded, cuda_device_cfg, monkeypatch
+    ):
+        """All start and goal derivatives should follow internal batch padding."""
+        dof = trajopt_solver_padded.action_dim
+        position = (
+            torch.arange(dof, **cuda_device_cfg.as_torch_dict()).unsqueeze(0) * 0.01
+        )
+        start_state = JointState(
+            position=position,
+            velocity=torch.full_like(position, 0.1),
+            acceleration=torch.full_like(position, 0.2),
+            jerk=torch.full_like(position, 0.3),
+        )
+        goal_state = JointState(
+            position=position + 0.1,
+            velocity=torch.full_like(position, -0.1),
+            acceleration=torch.full_like(position, -0.2),
+            jerk=torch.full_like(position, -0.3),
+        )
+        captured = {}
+
+        def fake_solve_impl(**kwargs):
+            captured.update(kwargs)
+            solve_state = kwargs["solve_state"]
+            return TrajOptSolverResult(
+                success=torch.ones(
+                    (solve_state.batch_size, kwargs["return_seeds"]),
+                    device=cuda_device_cfg.device,
+                    dtype=torch.bool,
+                )
+            )
+
+        monkeypatch.setattr(trajopt_solver_padded, "_solve_impl", fake_solve_impl)
+
+        trajopt_solver_padded.solve_cspace(
+            current_state=start_state,
+            goal_state=goal_state,
+        )
+
+        for padded_state, source_state in (
+            (captured["current_state"], start_state),
+            (captured["implicit_goal_state"], goal_state),
+        ):
+            for state_field in ("position", "velocity", "acceleration", "jerk"):
+                padded_value = getattr(padded_state, state_field)
+                source_value = getattr(source_state, state_field)
+                assert padded_value.shape == (2, dof)
+                torch.testing.assert_close(padded_value[0], source_value[0])
+                torch.testing.assert_close(padded_value[1], source_value[0])
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_solve_cspace_returns_result(self, trajopt_solver, sample_start_state):

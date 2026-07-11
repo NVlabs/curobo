@@ -332,8 +332,12 @@ class MotionPlanner:
         """Plan a collision-free trajectory to a joint configuration.
 
         Args:
-            goal_state: Target joint configuration.
-            current_state: Initial joint state.
+            goal_state: Target joint state. With the default B-spline
+                trajectory optimizer, supplied velocity, acceleration, and
+                jerk tensors define the terminal trajectory boundary.
+            current_state: Initial joint state. With the default B-spline
+                trajectory optimizer, supplied velocity, acceleration, and
+                jerk tensors define the initial trajectory boundary.
             max_attempts: Maximum planning attempts.
             enable_graph_attempt: Attempt at which to start graph seeding.
 

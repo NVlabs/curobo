@@ -272,6 +272,7 @@ class TrajOptSolver:
         time_optimal_iters: Optional[int] = None,
         finetune_iters: Optional[int] = None,
         finetune_dt_scale: float = 0.55,
+        implicit_goal_state: Optional[JointState] = None,
     ) -> TrajOptSolverResult:
         opt_time = 0.0
         metrics_time = 0.0
@@ -293,6 +294,16 @@ class TrajOptSolver:
             seed_goal_state = action_seed[..., -1, :].view(-1, self.action_dim)
             seed_goal_state = seed_goal_state.view(solve_state.batch_size, num_seeds, self.action_dim)
             seed_goal_state = JointState.from_position(seed_goal_state)
+            if implicit_goal_state is not None:
+                for derivative in ("velocity", "acceleration", "jerk"):
+                    boundary_value = getattr(implicit_goal_state, derivative)
+                    if boundary_value is not None:
+                        seed_value = getattr(seed_goal_state, derivative)
+                        seed_value.copy_(
+                            boundary_value.reshape(
+                                solve_state.batch_size, 1, self.action_dim
+                            ).expand(-1, num_seeds, -1)
+                        )
             if self._seed_dt_buffer is None or self._seed_dt_buffer.shape != (
                 solve_state.batch_size,
                 num_seeds,
@@ -851,10 +862,14 @@ class TrajOptSolver:
         goal configuration.
 
         Args:
-            goal_state: Desired goal joint state with position tensor of shape
-                ``[batch, dof]``.
+            goal_state: Desired terminal joint state. Its position tensor must
+                have shape ``[batch, dof]``. For B-spline transitions, supplied
+                velocity, acceleration, and jerk tensors define the terminal
+                trajectory boundary; omitted derivatives default to zero.
             current_state: Current joint state of the robot with position tensor of
-                shape ``[batch, dof]``.
+                shape ``[batch, dof]``. For B-spline transitions, supplied
+                velocity, acceleration, and jerk tensors define the initial
+                trajectory boundary.
             seed_traj: Optional seed trajectory tensor of shape
                 ``[batch, action_horizon, dof]`` used instead of generated seeds.
             return_seeds: Number of top-ranked solutions to return per problem.
@@ -902,21 +917,19 @@ class TrajOptSolver:
         if needs_pad:
             pad = max_batch - batch_size
             current_state = current_state.clone()
-            current_state.position = torch.cat(
-                [current_state.position, current_state.position[:1].expand(pad, -1)], dim=0,
-            )
-            if current_state.velocity is not None:
-                current_state.velocity = torch.cat(
-                    [current_state.velocity, current_state.velocity[:1].expand(pad, -1)], dim=0,
-                )
-            if current_state.acceleration is not None:
-                current_state.acceleration = torch.cat(
-                    [current_state.acceleration, current_state.acceleration[:1].expand(pad, -1)], dim=0,
-                )
             goal_state = goal_state.clone()
-            goal_state.position = torch.cat(
-                [goal_state.position, goal_state.position[:1].expand(pad, -1)], dim=0,
-            )
+            for state in (current_state, goal_state):
+                for state_field in ("position", "velocity", "acceleration", "jerk"):
+                    state_value = getattr(state, state_field)
+                    if state_value is not None:
+                        setattr(
+                            state,
+                            state_field,
+                            torch.cat(
+                                [state_value, state_value[:1].expand(pad, -1)],
+                                dim=0,
+                            ),
+                        )
             if seed_traj is not None:
                 seed_traj = torch.cat(
                     [seed_traj, seed_traj[:1].expand(pad, *[-1] * (seed_traj.ndim - 1))], dim=0,
@@ -960,6 +973,7 @@ class TrajOptSolver:
             dt=dt,
             use_implicit_goal=True,
             finetune_attempts=finetune_attempts,
+            implicit_goal_state=goal_state,
             initial_iters=initial_iters,
             time_optimal_iters=time_optimal_iters,
             finetune_iters=finetune_iters,

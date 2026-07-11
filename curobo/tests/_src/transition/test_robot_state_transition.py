@@ -477,6 +477,80 @@ class TestRobotStateTransitionForwardBSpline:
         assert isinstance(result, RobotState)
         assert result.joint_state.position.shape == (batch_size, horizon, num_dof)
 
+    def test_forward_bspline_enforces_nonzero_boundary_velocity(
+        self, bspline_transition_cfg, cuda_device_cfg
+    ):
+        """B-spline rollout should exactly impose both velocity boundaries."""
+        transition = RobotStateTransition(bspline_transition_cfg)
+        batch_size = 2
+        num_dof = transition.num_dof
+
+        start_state = JointState.zeros((1, num_dof), cuda_device_cfg)
+        start_state.position[:] = torch.linspace(
+            -0.3, 0.3, num_dof, **cuda_device_cfg.as_torch_dict()
+        )
+        start_state.velocity[..., 0] = 0.1
+        start_state.velocity[..., 2] = -0.05
+
+        goal_state = JointState.zeros((1, num_dof), cuda_device_cfg)
+        goal_state.position[:] = start_state.position + 0.2
+        goal_state.velocity[..., 1] = 0.12
+        goal_state.velocity[..., 3] = -0.08
+        goal_state.dt = torch.full(
+            (1,),
+            transition.dt,
+            **cuda_device_cfg.as_torch_dict(),
+        )
+
+        start_state_idx = torch.zeros(
+            batch_size, device=cuda_device_cfg.device, dtype=torch.int32
+        )
+        goal_state_idx = torch.zeros_like(start_state_idx)
+        use_implicit_goal_state = torch.ones(
+            (1,), device=cuda_device_cfg.device, dtype=torch.uint8
+        )
+        act_seq = torch.randn(
+            batch_size,
+            transition.n_knots,
+            transition.action_dim,
+            **cuda_device_cfg.as_torch_dict(),
+        )
+
+        result = transition.forward(
+            start_state,
+            act_seq,
+            start_state_idx=start_state_idx,
+            goal_state=goal_state,
+            goal_state_idx=goal_state_idx,
+            use_implicit_goal_state=use_implicit_goal_state,
+        )
+
+        for batch_idx in range(batch_size):
+            torch.testing.assert_close(
+                result.joint_state.position[batch_idx, 0],
+                start_state.position[0],
+                atol=1e-4,
+                rtol=1e-4,
+            )
+            torch.testing.assert_close(
+                result.joint_state.velocity[batch_idx, 0],
+                start_state.velocity[0],
+                atol=1e-4,
+                rtol=1e-4,
+            )
+            torch.testing.assert_close(
+                result.joint_state.position[batch_idx, -1],
+                goal_state.position[0],
+                atol=1e-4,
+                rtol=1e-4,
+            )
+            torch.testing.assert_close(
+                result.joint_state.velocity[batch_idx, -1],
+                goal_state.velocity[0],
+                atol=1e-4,
+                rtol=1e-4,
+            )
+
     def test_forward_bspline_smooth_trajectory(self, bspline_transition_cfg, cuda_device_cfg):
         """Test that B-spline produces smooth trajectories."""
         transition = RobotStateTransition(bspline_transition_cfg)

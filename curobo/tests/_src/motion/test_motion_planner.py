@@ -629,6 +629,102 @@ class TestMotionPlannerPlanCspace:
         assert result is None or isinstance(result, TrajOptSolverResult)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_plan_cspace_nonzero_boundary_velocity(self, motion_planner):
+        """Plan from and to nonzero joint velocities."""
+        tensor_args = motion_planner.device_cfg.as_torch_dict()
+        q0 = torch.tensor(
+            [[0.0, -0.4, 0.2, -1.7, 0.0, 1.4, 0.7]],
+            **tensor_args,
+        )
+        dq0 = torch.tensor(
+            [[0.10, 0.00, -0.05, 0.00, 0.00, 0.00, 0.00]],
+            **tensor_args,
+        )
+        q1 = torch.tensor(
+            [[0.4, -0.2, 0.4, -1.4, 0.1, 1.6, 0.5]],
+            **tensor_args,
+        )
+        dq1 = torch.tensor(
+            [[0.00, 0.12, 0.00, -0.08, 0.00, 0.00, 0.00]],
+            **tensor_args,
+        )
+        start_state = JointState(
+            position=q0,
+            velocity=dq0,
+            acceleration=torch.zeros_like(q0),
+            jerk=torch.zeros_like(q0),
+            joint_names=motion_planner.joint_names,
+        )
+        goal_state = JointState(
+            position=q1,
+            velocity=dq1,
+            acceleration=torch.zeros_like(q1),
+            jerk=torch.zeros_like(q1),
+            joint_names=motion_planner.joint_names,
+        )
+
+        result = motion_planner.plan_cspace(
+            current_state=start_state,
+            goal_state=goal_state,
+            max_attempts=5,
+        )
+
+        assert result is not None
+        assert bool(result.success.any())
+        assert result.js_solution is not None
+        torch.testing.assert_close(
+            result.js_solution.position[0, 0, 0],
+            q0[0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+        torch.testing.assert_close(
+            result.js_solution.velocity[0, 0, 0],
+            dq0[0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+        torch.testing.assert_close(
+            result.js_solution.position[0, 0, -1],
+            q1[0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+        torch.testing.assert_close(
+            result.js_solution.velocity[0, 0, -1],
+            dq1[0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+
+        interpolated_plan = result.get_interpolated_plan()
+        assert interpolated_plan is not None
+        torch.testing.assert_close(
+            interpolated_plan.position[0, 0, 0],
+            q0[0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+        torch.testing.assert_close(
+            interpolated_plan.velocity[0, 0, 0],
+            dq0[0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+        torch.testing.assert_close(
+            interpolated_plan.position[0, 0, -1],
+            q1[0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+        torch.testing.assert_close(
+            interpolated_plan.velocity[0, 0, -1],
+            dq1[0],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_cspace_result_has_success(self, motion_planner, sample_start_state):
         """Test plan_cspace result has success field."""
         goal_state = sample_start_state.clone()
