@@ -27,6 +27,9 @@ from curobo._src.solver.solve_state import SolveState
 from curobo._src.solver.solver_core import SolverCore
 from curobo._src.solver.solver_trajopt_cfg import TrajOptSolverCfg
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
+from curobo._src.solver.trajopt_seed.bspline3_action_seed import (
+    BSpline3ActionSeedGenerator,
+)
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
@@ -62,6 +65,13 @@ class TrajOptSolver:
         self._trajectory_seed_generator = TrajectorySeedGenerator(
             self.action_horizon, self.action_dim, self.device_cfg
         )
+        self._trajectory_action_seed_generator = None
+        if self.transition_model.control_space == ControlSpace.BSPLINE_3:
+            self._trajectory_action_seed_generator = BSpline3ActionSeedGenerator(
+                n_knots=self.action_horizon,
+                interpolation_steps=self.interpolation_steps,
+                interpolated_dt=self.transition_model.dt,
+            )
         self._interpolated_traj_buffer = None
         self._interpolation_dt_buffer = None
         self._seed_dt_buffer = None
@@ -186,6 +196,47 @@ class TrajOptSolver:
     def prepare_trajectory_seeds(self, batch_size, num_seeds, current_state, seed_config=None, seed_traj=None):
         return self.core.prepare_trajectory_seeds(batch_size, num_seeds, current_state, seed_config, seed_traj)
 
+    @profiler.record_function("trajopt_solver/prepare_seed_trajectory")
+    def prepare_seed_trajectory(
+        self,
+        seed_trajectory: torch.Tensor,
+        current_state: JointState,
+        goal_state: Optional[JointState] = None,
+        use_implicit_goal: bool = True,
+    ) -> Optional[torch.Tensor]:
+        """Prepare a waypoint seed trajectory for this solver's action space."""
+        control_space = self.transition_model.control_space
+
+        if control_space == ControlSpace.POSITION:
+            return None
+
+        if control_space == ControlSpace.VELOCITY:
+            return None
+
+        if control_space == ControlSpace.ACCELERATION:
+            return None
+
+        if control_space == ControlSpace.BSPLINE_3:
+            if not use_implicit_goal:
+                return None
+            if self._trajectory_action_seed_generator is None:
+                log_and_raise("BSPLINE_3 action seed generator is not initialized")
+            return self._trajectory_action_seed_generator.fit_action_seed(
+                waypoints=seed_trajectory,
+                current_state=current_state,
+                goal_state=goal_state,
+                use_implicit_goal=use_implicit_goal,
+            )
+
+        if control_space == ControlSpace.BSPLINE_4:
+            return None
+
+        if control_space == ControlSpace.BSPLINE_5:
+            return None
+
+        log_and_raise(f"Unsupported control space: {control_space}")
+        return None
+
     def enable_tool_pose_tracking(self, tool_frames=None):
         """Enable tool-pose cost terms for the specified (or all) tool frames."""
         self.core.enable_tool_pose_tracking(
@@ -268,6 +319,7 @@ class TrajOptSolver:
         use_implicit_goal: bool = False,
         finetune_attempts: int = 0,
         goal_state: Optional[JointState] = None,
+        seed_implicit_goal_state: Optional[JointState] = None,
         initial_iters: Optional[int] = None,
         time_optimal_iters: Optional[int] = None,
         finetune_iters: Optional[int] = None,
@@ -290,9 +342,20 @@ class TrajOptSolver:
             seed_traj=seed_traj,
         )
         with profiler.record_function("trajopt_solver/calculate_seed_goal_state"):
-            seed_goal_state = action_seed[..., -1, :].view(-1, self.action_dim)
-            seed_goal_state = seed_goal_state.view(solve_state.batch_size, num_seeds, self.action_dim)
-            seed_goal_state = JointState.from_position(seed_goal_state)
+            if seed_implicit_goal_state is None:
+                seed_goal_state = action_seed[..., -1, :].view(-1, self.action_dim)
+                seed_goal_state = seed_goal_state.view(
+                    solve_state.batch_size, num_seeds, self.action_dim
+                )
+                seed_goal_state = JointState.from_position(seed_goal_state)
+            else:
+                expected_shape = (solve_state.batch_size, num_seeds, self.action_dim)
+                if seed_implicit_goal_state.position.shape != expected_shape:
+                    log_and_raise(
+                        "seed_implicit_goal_state.position.shape "
+                        + f"{seed_implicit_goal_state.position.shape} != {expected_shape}"
+                    )
+                seed_goal_state = seed_implicit_goal_state.clone()
             if self._seed_dt_buffer is None or self._seed_dt_buffer.shape != (
                 solve_state.batch_size,
                 num_seeds,
@@ -694,6 +757,7 @@ class TrajOptSolver:
         use_implicit_goal: bool = False,
         finetune_attempts: int = 1,
         goal_state: Optional[JointState] = None,
+        seed_implicit_goal_state: Optional[JointState] = None,
         initial_iters: Optional[int] = None,
         time_optimal_iters: Optional[int] = None,
         finetune_iters: Optional[int] = None,
@@ -732,6 +796,10 @@ class TrajOptSolver:
             goal_state: Optional explicit goal joint state with position tensor of
                 shape ``[batch, dof]``. Used to seed the goal end of the
                 trajectory.
+            seed_implicit_goal_state: Optional per-seed implicit terminal joint state
+                with position tensor of shape ``[batch, num_seeds, dof]``. When set,
+                this overrides the default terminal state inferred from the last
+                action seed.
             initial_iters: Override for the number of optimizer iterations on the
                 first pass. ``None`` keeps the config default.
             time_optimal_iters: Override for the number of optimizer iterations on
@@ -790,6 +858,49 @@ class TrajOptSolver:
                 seed_traj = torch.cat(
                     [seed_traj, seed_traj[:1].expand(pad, *[-1] * (seed_traj.ndim - 1))], dim=0,
                 )
+            if seed_implicit_goal_state is not None:
+                pad = max_batch - batch_size
+                seed_implicit_goal_state = seed_implicit_goal_state.clone()
+                seed_implicit_goal_state.position = torch.cat(
+                    [
+                        seed_implicit_goal_state.position,
+                        seed_implicit_goal_state.position[:1].expand(
+                            pad, *[-1] * (seed_implicit_goal_state.position.ndim - 1)
+                        ),
+                    ],
+                    dim=0,
+                )
+                if seed_implicit_goal_state.velocity is not None:
+                    seed_implicit_goal_state.velocity = torch.cat(
+                        [
+                            seed_implicit_goal_state.velocity,
+                            seed_implicit_goal_state.velocity[:1].expand(
+                                pad, *[-1] * (seed_implicit_goal_state.velocity.ndim - 1)
+                            ),
+                        ],
+                        dim=0,
+                    )
+                if seed_implicit_goal_state.acceleration is not None:
+                    seed_implicit_goal_state.acceleration = torch.cat(
+                        [
+                            seed_implicit_goal_state.acceleration,
+                            seed_implicit_goal_state.acceleration[:1].expand(
+                                pad,
+                                *[-1] * (seed_implicit_goal_state.acceleration.ndim - 1),
+                            ),
+                        ],
+                        dim=0,
+                    )
+                if seed_implicit_goal_state.jerk is not None:
+                    seed_implicit_goal_state.jerk = torch.cat(
+                        [
+                            seed_implicit_goal_state.jerk,
+                            seed_implicit_goal_state.jerk[:1].expand(
+                                pad, *[-1] * (seed_implicit_goal_state.jerk.ndim - 1)
+                            ),
+                        ],
+                        dim=0,
+                    )
         batch_size = max_batch
 
         if batch_size == 1:
@@ -820,6 +931,7 @@ class TrajOptSolver:
             use_implicit_goal=use_implicit_goal,
             finetune_attempts=finetune_attempts,
             goal_state=goal_state,
+            seed_implicit_goal_state=seed_implicit_goal_state,
             initial_iters=initial_iters,
             time_optimal_iters=time_optimal_iters,
             finetune_iters=finetune_iters,
