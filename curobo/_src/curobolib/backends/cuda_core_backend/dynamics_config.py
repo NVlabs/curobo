@@ -13,6 +13,7 @@ from cuda.core import LaunchConfig
 
 # CuRobo
 from curobo._src.curobolib.backends.cuda_core_backend.kernel_config import CudaCoreKernelCfg
+from curobo._src.curobolib.backends.cuda_core_backend.util import get_sm_shared_memory_capacity
 
 
 class DynamicsKernelCfg(CudaCoreKernelCfg):
@@ -72,9 +73,6 @@ class DynamicsLaunchCfg:
     DEFAULT_COOPERATIVE_BACKWARD_BATCHES_PER_BLOCK = None
 
     DEFAULT_MAX_SHARED_MEM = 48 * 1024  # 48 KB
-    # Total configurable L1/shared-memory per SM (Ampere=128 KB, Hopper=228 KB).
-    # Used to check how many blocks can co-reside on one SM.
-    DEFAULT_SM_SHARED_MEM_CAPACITY = 100 * 1024  # conservative for Ampere
 
     WARP_SIZE = 32
 
@@ -337,7 +335,7 @@ class DynamicsLaunchCfg:
             batches_per_block,
             threads_per_batch,
             smem_per_block_fn=lambda b: b * smem_per_batch,
-            sm_shared_mem_capacity=DynamicsLaunchCfg.DEFAULT_SM_SHARED_MEM_CAPACITY,
+            sm_shared_mem_capacity=get_sm_shared_memory_capacity(),
         )
 
         threads_per_block = batches_per_block * threads_per_batch
@@ -425,7 +423,7 @@ class DynamicsLaunchCfg:
             batches_per_block,
             threads_per_batch,
             smem_per_block_fn=lambda b: smem_block_shared + b * smem_per_batch,
-            sm_shared_mem_capacity=DynamicsLaunchCfg.DEFAULT_SM_SHARED_MEM_CAPACITY,
+            sm_shared_mem_capacity=get_sm_shared_memory_capacity(),
         )
 
         threads_per_block = batches_per_block * threads_per_batch
