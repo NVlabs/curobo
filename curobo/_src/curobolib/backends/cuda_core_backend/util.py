@@ -12,9 +12,7 @@ import torch
 # CuRobo
 from curobo._src.util.logging import log_warn
 
-#: Shared memory per SM assumed when the device query is unavailable. This is the
-#: value the launch heuristics used before they queried the device, so occupancy
-#: estimates stay unchanged on hosts without a usable CUDA device.
+#: Shared memory per SM assumed when the device query is unavailable.
 FALLBACK_SM_SHARED_MEM_CAPACITY = 100 * 1024
 
 
@@ -25,14 +23,13 @@ def ceil_div(a: int, b: int) -> int:
 
 @lru_cache(maxsize=None)
 def _query_sm_shared_memory_capacity(device_id: int) -> int:
-    """Query total shared memory per SM for a device, caching the result.
+    """Query shared memory per SM for a device, cached per ordinal.
 
     Args:
         device_id: CUDA device ordinal.
 
     Returns:
-        Shared memory per SM in bytes, or :data:`FALLBACK_SM_SHARED_MEM_CAPACITY`
-        if the attribute could not be read.
+        Shared memory per SM in bytes, or the fallback if the query fails.
     """
     # Third Party
     import cuda.bindings.runtime as cudart
@@ -50,11 +47,7 @@ def _query_sm_shared_memory_capacity(device_id: int) -> int:
 
 
 def get_sm_shared_memory_capacity(device_id: Optional[int] = None) -> int:
-    """Get total shared memory per SM for a CUDA device.
-
-    This varies widely across architectures (100 KB on compute capability 8.6
-    and 12.x, 164 KB on 8.0, 228 KB on 9.0/10.x/11.0), so occupancy heuristics
-    that assume a single value are wrong on most devices.
+    """Get total shared memory per SM, which is architecture dependent.
 
     Args:
         device_id: CUDA device ordinal. Defaults to the current device.
