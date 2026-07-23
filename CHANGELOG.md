@@ -73,6 +73,10 @@
   reference example with Franka MPC using a RealSense backend.
 
 ### Bug Fixes & Misc.
+- Query shared memory per SM from the CUDA device when sizing RNEA launch
+  configurations, instead of assuming a fixed 100 KB. The assumed value was
+  only correct for compute capability 8.6 and 12.x, so occupancy was
+  underestimated by up to 2.3x on 9.0/10.x/11.0 and 1.6x on 8.0.
 - Reduce GPU memory consumption for batched motion planning by 3x with
   batch-aware IK and TrajOpt seed defaults and a smaller interpolation buffer.
 - Fix `MotionPlanner` and `BatchMotionPlanner` attachment-manager access so
