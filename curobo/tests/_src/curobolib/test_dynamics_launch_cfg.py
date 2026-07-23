@@ -65,12 +65,7 @@ class TestSharedMemoryCapacityQuery:
 
 
 class TestLaunchConfigValidity:
-    """Launch configs stay within hardware limits at every SM capacity.
-
-    The capacity only selects between batch counts that already satisfy the
-    per-block shared-memory cap and the thread-per-block limit, so widening it
-    must never produce a config that violates either.
-    """
+    """Launch configs stay within hardware limits at every SM capacity."""
 
     @pytest.mark.parametrize("capacity", SM_CAPACITIES)
     @pytest.mark.parametrize("num_links,batch_size,threads_per_batch", ROBOT_CASES)
@@ -95,13 +90,7 @@ class TestWarpAlignBatches:
     """The occupancy heuristic responds to the SM shared-memory budget."""
 
     def test_capacity_changes_the_choice(self):
-        """A wider budget truncates less, which can change the winning block.
-
-        At 26000 bytes per batch and 32 threads per batch, a 100 KB SM holds one
-        2-batch block (score 64) or three 1-batch blocks (score 96), so it picks
-        the smaller. A 228 KB SM holds four 2-batch blocks (score 256) or eight
-        1-batch blocks (also 256), and the tie keeps the larger.
-        """
+        """A wider budget truncates less, which can change the winning block."""
         kwargs = {
             "batches_per_block": 2,
             "threads_per_batch": 32,
@@ -126,11 +115,7 @@ class TestWarpAlignBatches:
 
 
 class TestCapacityAffectsRealRobots:
-    """The queried capacity changes launch shapes for real robot sizes.
-
-    This is the motivation for the device query: hardcoding 100 KB silently
-    applies compute-capability-8.6/12.x occupancy to every architecture.
-    """
+    """The queried capacity changes launch shapes for real robot sizes."""
 
     @pytest.mark.parametrize(
         "num_links,threads_per_batch,direction", [(9, 1, "forward"), (21, 4, "backward")]
