@@ -262,7 +262,7 @@ class MotionPlanner:
             seed_config = ik_result.solution
             if success_count < num_seeds:
                 good_solution = seed_config[ik_result.success][0:1, :].clone()
-                seed_config[~ik_result.success][:, :] = good_solution
+                seed_config[~ik_result.success] = good_solution
 
             seed_traj = None
             finetune_attempts = 1

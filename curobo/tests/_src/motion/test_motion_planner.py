@@ -3,6 +3,9 @@
 #
 """Unit tests for MotionPlanner class."""
 
+# Standard Library
+from unittest.mock import Mock
+
 # Third Party
 import pytest
 import torch
@@ -10,6 +13,7 @@ import torch
 # CuRobo
 from curobo._src.motion.motion_planner import MotionPlanner
 from curobo._src.motion.motion_planner_cfg import MotionPlannerCfg
+from curobo._src.solver.solver_ik_result import IKSolverResult
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
@@ -1411,6 +1415,49 @@ class TestMotionPlannerKinematicsProperty:
 
 class TestMotionPlannerPartialIKSuccess:
     """Test MotionPlanner partial IK success path (lines 135-136)."""
+
+    def test_failed_ik_solutions_are_replaced_before_graph_planning(self) -> None:
+        """Test failed IK solutions are replaced before graph planning."""
+        solutions = torch.tensor(
+            [[[1.0, 2.0], [10.0, 20.0], [3.0, 4.0], [30.0, 40.0]]],
+            dtype=torch.float32,
+        )
+        success = torch.tensor([[True, False, True, False]])
+        expected_seed_config = solutions.clone()
+        expected_seed_config[~success] = solutions[success][0:1, :]
+        ik_result = IKSolverResult(
+            success=success,
+            solution=solutions,
+            solve_time=0.0,
+            total_time=0.0,
+        )
+        trajopt_result = TrajOptSolverResult(
+            success=torch.tensor([[True]]),
+            solve_time=0.0,
+            total_time=0.0,
+        )
+
+        planner = MotionPlanner.__new__(MotionPlanner)
+        planner._destroyed = True
+        planner.ik_solver = Mock()
+        planner.ik_solver.solve_pose.return_value = ik_result
+        planner.trajopt_solver = Mock()
+        planner.trajopt_solver.config.num_seeds = solutions.shape[1]
+        planner.trajopt_solver.solve_pose.return_value = trajopt_result
+        planner.graph_planner = Mock()
+        planner._get_graph_seed_trajectories = Mock(
+            return_value=torch.zeros((1, solutions.shape[1], 2, solutions.shape[2]))
+        )
+
+        planner._plan_pose_single(
+            goal_tool_poses=Mock(spec=GoalToolPose),
+            current_state=JointState.from_position(torch.zeros((1, solutions.shape[2]))),
+            max_attempts=1,
+            enable_graph_attempt=0,
+        )
+
+        graph_seed_config = planner._get_graph_seed_trajectories.call_args.args[1]
+        torch.testing.assert_close(graph_seed_config, expected_seed_config)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_pose_partial_ik_success(
