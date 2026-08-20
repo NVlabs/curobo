@@ -29,9 +29,6 @@ from curobo._src.util_file import (
     join_path,
     write_yaml,
 )
-from curobo.content import (
-    get_robot_configs_path,
-)
 
 # set seeds
 torch.manual_seed(2)
@@ -46,7 +43,6 @@ torch._dynamo.config.cache_size_limit = 64
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-from curobo._src.util.config_io import join_path, resolve_config
 
 
 def run_full_config_collision_free_ik(
