@@ -33,7 +33,7 @@ dependencies = [
     "setuptools_scm>=6.2",
     "tqdm",
     "trimesh",
-    "viser",
+    "viser>=1",
     "warp-lang>=0.10.0",
     "wheel",
     "yourdfpy>=0.0.53",
