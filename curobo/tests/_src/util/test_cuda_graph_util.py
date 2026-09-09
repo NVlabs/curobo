@@ -7,6 +7,7 @@ import pytest
 import torch
 
 # CuRobo
+from curobo._src.state.state_joint import JointState
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 
 
@@ -233,6 +234,67 @@ class TestGraphExecutorWithBackward:
     def device(self):
         return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+    @pytest.mark.parametrize("structured_input", [False, True])
+    def test_graph_replay_does_not_retain_request_gradients(
+        self, device: torch.device, structured_input: bool
+    ) -> None:
+        """Repeated gradient inputs keep GPU memory bounded and internal gradients correct."""
+        if device.type != "cuda":
+            pytest.skip("CUDA not available")
+
+        def make_input(value: float) -> torch.Tensor | JointState:
+            """Create a fresh request with a gradient-bearing position tensor."""
+            position = torch.full(
+                (256, 64), value, device=device, dtype=torch.float32, requires_grad=True
+            )
+            return JointState(position=position) if structured_input else position
+
+        def compute_gradient(value: torch.Tensor | JointState) -> torch.Tensor:
+            """Compute gradients inside the captured function."""
+            position = value.position if isinstance(value, JointState) else value
+            # Keep the backward pass on the capture stream, independent of the
+            # stream on which the request's autograd nodes were constructed.
+            position = position.detach().requires_grad_(True)
+            return torch.autograd.grad(position.square().sum(), position)[0]
+
+        executor = GraphExecutor(
+            compute_gradient, device=device, use_cuda_graph=True, clone_outputs=False
+        )
+        try:
+            executor.warmup(make_input(0.0))
+            torch.cuda.synchronize(device)
+            baseline = torch.cuda.memory_allocated(device)
+            for value in range(1, 33):
+                request = make_input(float(value))
+                result = executor(request)
+                torch.testing.assert_close(result, torch.full_like(result, 2.0 * value))
+                del request, result
+            torch.cuda.synchronize(device)
+            # Allow one input-sized allocation, but not a retained input per replay.
+            assert torch.cuda.memory_allocated(device) - baseline <= 256 * 64 * 4
+        finally:
+            executor.reset()
+
+    def test_eager_execution_preserves_gradients_for_new_inputs(
+        self, device: torch.device
+    ) -> None:
+        """Direct execution differentiates with respect to each current request."""
+
+        def squared_loss(value: torch.Tensor) -> torch.Tensor:
+            """Return a differentiable scalar loss."""
+            return value.square().sum()
+
+        executor = GraphExecutor(squared_loss, device=device, use_cuda_graph=False)
+        try:
+            for value in (1.0, 2.0):
+                request = torch.full(
+                    (4,), value, device=device, dtype=torch.float32, requires_grad=True
+                )
+                executor(request).backward()
+                torch.testing.assert_close(request.grad, torch.full_like(request, 2.0 * value))
+        finally:
+            executor.reset()
+
     def test_backward_operation(self, device):
         """Test function with backward pass."""
 
@@ -443,4 +505,3 @@ class TestGraphExecutorEdgeCases:
         assert isinstance(result, torch.Tensor)
         assert not isinstance(result, tuple)
         assert torch.allclose(result, torch.tensor([2.0, 4.0], device=device))
-
