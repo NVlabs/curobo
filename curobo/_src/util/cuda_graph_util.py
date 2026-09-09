@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+from contextlib import nullcontext
 from typing import Callable, Optional, Tuple, Union
 
 import torch
@@ -85,16 +86,19 @@ class GraphExecutor:
                 )
             self._initialize(inputs)
 
-        # Copy inputs to internal tensors (only if different memory location)
-        for i, inp in enumerate(inputs):
-            if hasattr(self._graph_input[i], "copy_"):
-                if hasattr(self._graph_input[i], "data_ptr") and callable(
-                    self._graph_input[i].data_ptr
-                ):
-                    if self._graph_input[i].data_ptr() != inp.data_ptr():
+        # Graph input copies stage data, not differentiable work. Tracking them
+        # would retain every request through a growing CopyBackwards chain.
+        # Keep normal autograd behavior for direct execution.
+        with torch.no_grad() if self._use_cuda_graph else nullcontext():
+            for i, inp in enumerate(inputs):
+                if hasattr(self._graph_input[i], "copy_"):
+                    if hasattr(self._graph_input[i], "data_ptr") and callable(
+                        self._graph_input[i].data_ptr
+                    ):
+                        if self._graph_input[i].data_ptr() != inp.data_ptr():
+                            self._graph_input[i].copy_(inp)
+                    else:
                         self._graph_input[i].copy_(inp)
-                else:
-                    self._graph_input[i].copy_(inp)
 
         # Execute
         if self._use_cuda_graph:
