@@ -5,8 +5,12 @@
 # Standard Library
 import os
 from pathlib import Path
+from typing import Callable
 
 # Third Party
+import pytest
+import yaml
+
 # CuRobo
 from curobo._src.util.config_io import (
     copy_file_to_path,
@@ -21,6 +25,7 @@ from curobo._src.util.config_io import (
     join_path,
     load_yaml,
     merge_dict_a_into_b,
+    resolve_config,
     write_yaml,
 )
 
@@ -68,6 +73,42 @@ class TestJoinPath:
 
 
 class TestYaml:
+    @pytest.mark.parametrize("loader", [load_yaml, resolve_config])
+    @pytest.mark.parametrize(
+        "payload", ["!!python/tuple [1, 2]", "!!python/object/apply:builtins.str [42]"]
+    )
+    def test_reject_python_tags(
+        self, tmp_path: Path, loader: Callable[[str], dict], payload: str
+    ) -> None:
+        """Configuration entry points reject Python-specific YAML tags."""
+        yaml_file = tmp_path / "python.yaml"
+        yaml_file.write_text(payload)
+        with pytest.raises(yaml.constructor.ConstructorError):
+            loader(str(yaml_file))
+
+    def test_scientific_notation(self, tmp_path: Path) -> None:
+        """Retain scientific-notation parsing with the safe loader."""
+        yaml_file = tmp_path / "floats.yaml"
+        yaml_file.write_text("small: 1e-3\nlarge: 2E3\nnegative: -4e-2\n")
+        assert load_yaml(str(yaml_file)) == {"small": 0.001, "large": 2000.0, "negative": -0.04}
+
+    def test_write_plain_sequences(self, tmp_path: Path) -> None:
+        """Tuples are written as portable YAML sequences without Python tags."""
+        yaml_file = tmp_path / "sequences.yaml"
+        write_yaml({"pose": (1.0, 2.0, 3.0), "enabled": True}, str(yaml_file))
+        assert yaml.safe_load(yaml_file.read_text()) == {
+            "pose": [1.0, 2.0, 3.0],
+            "enabled": True,
+        }
+
+    def test_reject_objects_before_overwriting(self, tmp_path: Path) -> None:
+        """Unsupported objects fail without truncating an existing configuration."""
+        yaml_file = tmp_path / "output.yaml"
+        yaml_file.write_text("original: true\n")
+        with pytest.raises(yaml.representer.RepresenterError):
+            write_yaml({"runtime_object": object()}, str(yaml_file))
+        assert yaml_file.read_text() == "original: true\n"
+
     def test_load_yaml_from_file(self, tmp_path):
         yaml_file = tmp_path / "test.yaml"
         yaml_file.write_text("key: value\nnum: 42\n")
@@ -182,4 +223,3 @@ class TestCreateDirIfNotExists:
         create_dir_if_not_exists(str(new_dir))
         assert new_dir.exists()
         assert new_dir.is_dir()
-

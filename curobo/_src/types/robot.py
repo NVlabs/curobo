@@ -12,9 +12,13 @@ from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
 from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
 
 # CuRobo
-from curobo._src.robot.loader.kinematics_loader_cfg import KinematicsLoaderCfg
+from curobo._src.robot.loader.kinematics_loader_cfg import (
+    KinematicsLoaderCfg,
+    serialize_kinematics_config,
+)
 from curobo._src.robot.types.cspace_params import CSpaceParams
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.util.logging import log_and_raise
 from curobo._src.util_file import write_yaml
 
 
@@ -138,16 +142,14 @@ class RobotCfg:
             device_cfg=device_cfg,
         )
 
-    def write_config(self, file_path):
-        dictionary = vars(self)
-        dictionary["kinematics"] = vars(dictionary["kinematics"])
-        # Handle dynamics config - just store a flag
-        if dictionary["dynamics"] is not None:
-            dictionary["load_dynamics"] = True
-            dictionary.pop("dynamics")  # Don't serialize the full config
-        else:
-            dictionary["load_dynamics"] = False
-            dictionary.pop("dynamics", None)
+    def write_config(self, file_path: str) -> None:
+        """Write a reloadable robot YAML configuration without serializing runtime objects."""
+        if self.kinematics.generator_config is None:
+            log_and_raise("Writing a robot configuration requires its generator_config.")
+        dictionary = {
+            "kinematics": serialize_kinematics_config(vars(self.kinematics.generator_config)),
+            "load_dynamics": self.dynamics is not None,
+        }
         write_yaml(dictionary, file_path)
 
     @property

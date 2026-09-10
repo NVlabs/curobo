@@ -8,16 +8,81 @@
 from pathlib import Path
 
 # Third Party
+import numpy as np
 import pytest
+import yaml
 
 from curobo._src.geom.sphere_fit.types import SphereFitType
 
 # CuRobo
 from curobo._src.robot.builder.builder_robot import RobotBuilder
+from curobo._src.robot.loader.kinematics_loader_cfg import KinematicsLoaderCfg
+from curobo._src.robot.types.joint_types import JointType
+from curobo._src.robot.types.link_params import LinkParams
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util_file import get_assets_path, get_robot_configs_path, join_path, load_yaml
 
 FAST_ITERATIONS = 50
+
+
+@pytest.mark.parametrize("output_format", ["yaml", "yaml_without_cspace_generation", "xrdf"])
+def test_safe_export(
+    tmp_path: Path,
+    cpu_device_cfg: DeviceCfg,
+    monkeypatch: pytest.MonkeyPatch,
+    output_format: str,
+) -> None:
+    """Export typed cspace and extra links as portable data without changing the source."""
+    data = load_yaml(join_path(get_robot_configs_path(), "simple_mimic_robot.yml"))
+    config = KinematicsLoaderCfg(**data["robot_cfg"]["kinematics"], device_cfg=cpu_device_cfg)
+    link = LinkParams(
+        link_name="sensor",
+        parent_link_name="ee_link",
+        joint_name="sensor_joint",
+        joint_type=JointType.FIXED,
+        fixed_transform=np.array(
+            [[0, -1, 0, 1], [1, 0, 0, 2], [0, 0, 1, 3]], dtype=np.float32
+        ),
+        link_com=np.zeros(3, dtype=np.float32),
+        link_inertia=np.zeros(6, dtype=np.float32),
+    )
+    config.extra_links = {"sensor": link}
+    config.collision_spheres = {
+        "ee_link": [{"center": np.zeros(3, dtype=np.float32), "radius": np.float32(0.1)}]
+    }
+    # Isolate export from mesh loading and collision fitting in the constructor.
+    builder = RobotBuilder.__new__(RobotBuilder)
+    # Exercise a cspace dictionary that already carries device and tensor fields.
+    builder._cspace_config = vars(config.cspace).copy()
+    output_path = tmp_path / "robot.yaml"
+    if output_format == "xrdf":
+        builder.save_xrdf(config, str(output_path))
+    else:
+        builder.save(config, str(output_path), include_cspace=output_format == "yaml")
+    output = yaml.safe_load(output_path.read_text())
+    assert "!!python" not in output_path.read_text()
+    if output_format == "xrdf":
+        assert output["cspace"]["joint_names"] == ["active_joint_2"]
+        frame = output["modifiers"][-1]["add_frame"]
+        assert frame["joint_type"] == "FIXED"
+        assert frame["fixed_transform"]["position"] == [1.0, 2.0, 3.0]
+    else:
+        saved = output["kinematics"]
+        assert "device_cfg" not in saved
+        assert "device_cfg" not in saved["cspace"]
+        assert saved["cspace"]["default_joint_position"] == pytest.approx([0.3, 0.0])
+        # LinkParams.create currently defaults to CUDA; keep this I/O test on CPU.
+        monkeypatch.setattr(
+            "curobo._src.robot.types.link_params.DeviceCfg", lambda: cpu_device_cfg
+        )
+        restored = KinematicsLoaderCfg(**saved, device_cfg=cpu_device_cfg)
+        np.testing.assert_allclose(
+            restored.extra_links["sensor"].fixed_transform, link.fixed_transform, atol=1e-6
+        )
+        assert restored.extra_links["sensor"].joint_type == JointType.FIXED
+    assert config.extra_links["sensor"] is link
+    assert config.cspace.device_cfg is cpu_device_cfg
+    assert builder._cspace_config["device_cfg"] is cpu_device_cfg
 
 
 def default_fit_type() -> SphereFitType:

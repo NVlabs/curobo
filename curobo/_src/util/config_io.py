@@ -14,7 +14,7 @@ from typing import Any, Dict, List, TypeVar, Union
 
 # Third Party
 import yaml
-from yaml import CLoader as Loader
+from yaml import SafeLoader as Loader
 
 # CuRobo
 
@@ -100,15 +100,16 @@ def load_yaml(file_path: Union[str, Dict]) -> Dict:
     return resolve_config(file_path)
 
 
-def write_yaml(data: Dict, file_path: str):
+def write_yaml(data: Dict, file_path: str) -> None:
     """Write dictionary to yaml file.
 
     Args:
         data: Dictionary to write to yaml file.
         file_path: Path to write the yaml file.
     """
+    yaml_text = yaml.safe_dump(data)
     with open(file_path, "w") as file:
-        yaml.dump(data, file)
+        file.write(yaml_text)
 
 
 def copy_file_to_path(source_file: str, destination_path: str) -> str:

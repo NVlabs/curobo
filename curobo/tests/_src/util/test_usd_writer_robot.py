@@ -674,7 +674,7 @@ class TestRobotAnimationEdgeCases:
         # Save modified config
         import yaml
         with open(config_path, "w") as f:
-            yaml.dump({"robot_cfg": robot_cfg}, f)
+            yaml.safe_dump({"robot_cfg": robot_cfg}, f)
 
         output_path = tmp_path / "no_mesh_trajectory.usd"
 
@@ -911,4 +911,3 @@ class TestRobotPrimExtraction:
         assert "base_joint" in joint_prims
         # Geometry prim should not be in link_prims even though it matches base_link
         assert link_prims["base_link"].GetPath().pathString == f"{robot_base}/base_link"
-
