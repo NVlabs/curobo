@@ -12,13 +12,24 @@ at runtime, following the pattern from cuda-python examples.
 import hashlib
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from cuda import pathfinder
 
 from curobo._src.runtime import debug_cuda_compile as cuda_debug_compile
 from curobo._src.util.logging import log_and_raise, log_debug, log_info, log_warn
+
+
+class _PyTorchStreamWrapper:
+    """Expose a PyTorch CUDA stream through the cuda.core stream protocol."""
+
+    def __init__(self, torch_stream: Any) -> None:
+        self.torch_stream = torch_stream
+
+    def __cuda_stream__(self) -> Tuple[int, int]:
+        """Return the CUDA stream protocol tuple."""
+        return (0, int(self.torch_stream.cuda_stream))
 
 
 def get_cuda_home() -> Optional[str]:
@@ -43,9 +54,12 @@ class CudaCoreKernelCache:
     """
 
     def __init__(self):
-        self.compiled_kernels: Dict[str, any] = {}
-        self.device: Optional[any] = None
+        self.compiled_kernels: Dict[str, Any] = {}
+        self.device: Optional[Any] = None
         self.arch: Optional[str] = None
+        self._stream_cache: Dict[
+            Tuple[str, int], Tuple[_PyTorchStreamWrapper, Any]
+        ] = {}
 
     def initialize(self):
         """Initialize CUDA device and get architecture"""
@@ -60,7 +74,7 @@ class CudaCoreKernelCache:
             except ImportError:
                 log_and_raise("cuda.core not available, cannot initialize CudaCoreKernelCache")
 
-    def get_stream_wrapper(self, torch_stream):
+    def get_stream_wrapper(self, torch_stream: Any) -> Any:
         """Create cuda.core compatible stream from PyTorch stream.
 
         Args:
@@ -70,21 +84,17 @@ class CudaCoreKernelCache:
             cuda.core Stream object
         """
 
-        class PyTorchStreamWrapper:
-            def __init__(self, pt_stream):
-                self.pt_stream = pt_stream
-
-            def __cuda_stream__(self):
-                stream_id = self.pt_stream.cuda_stream
-                return (0, stream_id)
-
         if self.device is None:
             self.initialize()
 
-        # This doesn't create a new stream, it just wraps the PyTorch stream in a cuda.core
-        # Stream object
-        cuda_core_stream = self.device.create_stream(PyTorchStreamWrapper(torch_stream))
-        return cuda_core_stream
+        stream_key = (str(torch_stream.device), int(torch_stream.cuda_stream))
+        cached_stream = self._stream_cache.get(stream_key)
+        if cached_stream is None:
+            stream_wrapper = _PyTorchStreamWrapper(torch_stream)
+            cuda_core_stream = self.device.create_stream(stream_wrapper)
+            cached_stream = (stream_wrapper, cuda_core_stream)
+            self._stream_cache[stream_key] = cached_stream
+        return cached_stream[1]
 
     def get_kernel_hash(
         self, source_files: List[Path], kernel_name: str, compile_flags: List[str]
