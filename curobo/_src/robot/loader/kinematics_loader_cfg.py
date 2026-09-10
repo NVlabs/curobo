@@ -16,11 +16,49 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
+import numpy as np
+import torch
+
 from curobo._src.robot.types.cspace_params import CSpaceParams
 from curobo._src.robot.types.link_params import LinkParams
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.types.pose import Pose
 from curobo._src.util.logging import log_and_raise, log_warn
 from curobo._src.util_file import get_assets_path, get_robot_configs_path, join_path, load_yaml
+
+
+def serialize_kinematics_config(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert loader fields to YAML data, omitting runtime options without mutating inputs."""
+
+    def to_yaml_value(value: Any) -> Any:
+        """Convert numeric values and known robot parameter types to plain YAML data."""
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().tolist()
+        if isinstance(value, (np.ndarray, np.generic)):
+            return value.tolist()
+        if isinstance(value, CSpaceParams):
+            value = {k: v for k, v in vars(value).items() if k != "device_cfg"}
+        elif isinstance(value, LinkParams):
+            link = vars(value).copy()
+            transform = torch.eye(4, device="cpu", dtype=torch.float32)
+            transform[:3] = torch.as_tensor(value.fixed_transform, device="cpu", dtype=torch.float32)
+            link["fixed_transform"] = Pose.from_matrix(transform).tolist()
+            link["joint_type"] = value.joint_type.name
+            value = link
+        if isinstance(value, dict):
+            return {k: to_yaml_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [to_yaml_value(v) for v in value]
+        return value
+
+    data = {
+        k: v for k, v in data.items()
+        if k not in ("device_cfg", "load_collision_spheres", "num_envs")
+    }
+    # A supplied cspace dictionary can already contain its device configuration.
+    if isinstance(data.get("cspace"), dict):
+        data["cspace"] = {k: v for k, v in data["cspace"].items() if k != "device_cfg"}
+    return to_yaml_value(data)
 
 
 @dataclass
@@ -197,4 +235,3 @@ class KinematicsLoaderCfg:
 
         if self.grasp_contact_link_names is not None:
             self.grasp_contact_link_names = copy.deepcopy(self.grasp_contact_link_names)
-

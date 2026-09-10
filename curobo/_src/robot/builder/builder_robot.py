@@ -23,7 +23,10 @@ from curobo._src.geom.sphere_fit.types import SphereFitMetrics, SphereFitType
 from curobo._src.robot.kinematics.kinematics import Kinematics
 from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
 from curobo._src.state.state_joint import JointState
-from curobo._src.robot.loader.kinematics_loader_cfg import KinematicsLoaderCfg
+from curobo._src.robot.loader.kinematics_loader_cfg import (
+    KinematicsLoaderCfg,
+    serialize_kinematics_config,
+)
 from curobo._src.robot.parser.parser_urdf import UrdfRobotParser
 from curobo._src.types.content_path import ContentPath
 from curobo._src.types.device_cfg import DeviceCfg
@@ -668,6 +671,7 @@ class RobotBuilder:
         output_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
         # Write YAML
+        data_dict["kinematics"] = serialize_kinematics_config(data_dict["kinematics"])
         write_yaml(data_dict, str(output_path))
         log_info(f"Saved robot configuration to: {output_path}")
 
@@ -733,6 +737,7 @@ class RobotBuilder:
             del config_dict["kinematics"]["device_cfg"]
 
         # Convert to XRDF format using utility function
+        config_dict["kinematics"] = serialize_kinematics_config(config_dict["kinematics"])
         xrdf_dict = convert_curobo_to_xrdf(
             config_dict,
             geometry_name=geometry_name,

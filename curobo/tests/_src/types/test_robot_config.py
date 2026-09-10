@@ -6,10 +6,12 @@
 
 # Standard Library
 from copy import deepcopy
+from pathlib import Path
 
 # Third Party
 import pytest
 import torch
+import yaml
 
 # CuRobo
 from curobo._src.robot.kinematics.kinematics import KinematicsCfg
@@ -18,6 +20,32 @@ from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
 from curobo._src.util_file import get_assets_path, get_robot_configs_path, join_path, load_yaml
+
+
+@pytest.mark.parametrize("load_dynamics", [False, True])
+def test_write_config_roundtrip(
+    tmp_path: Path, cpu_device_cfg: DeviceCfg, load_dynamics: bool
+) -> None:
+    """Safe YAML reloads into a robot and writing leaves runtime objects intact."""
+    data = load_yaml(join_path(get_robot_configs_path(), "simple_mimic_robot.yml"))["robot_cfg"]
+    data["kinematics"]["lock_joints"] = None
+    data["load_dynamics"] = load_dynamics
+    robot = RobotCfg.create(data, device_cfg=cpu_device_cfg)
+    kinematics, dynamics = robot.kinematics, robot.dynamics
+    output_path = tmp_path / "robot.yaml"
+    robot.write_config(str(output_path))
+    saved = yaml.safe_load(output_path.read_text())
+    assert saved["load_dynamics"] is load_dynamics
+    assert "device_cfg" not in saved
+    assert "device_cfg" not in saved["kinematics"]["cspace"]
+    restored = RobotCfg.create(saved, device_cfg=cpu_device_cfg)
+    assert restored.cspace.joint_names == robot.cspace.joint_names
+    assert (restored.dynamics is not None) is load_dynamics
+    torch.testing.assert_close(
+        restored.cspace.default_joint_position, robot.cspace.default_joint_position
+    )
+    assert robot.kinematics is kinematics
+    assert robot.dynamics is dynamics
 
 
 def test_cspace_config():
