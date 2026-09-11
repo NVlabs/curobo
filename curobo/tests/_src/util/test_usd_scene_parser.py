@@ -7,6 +7,7 @@
 # Standard Library
 
 # Third Party
+import numpy as np
 import pytest
 
 # CuRobo
@@ -14,7 +15,7 @@ from curobo._src.geom.types import Cuboid, Cylinder, SceneCfg, Sphere
 
 try:
     # Third Party
-    from pxr import Usd, UsdGeom
+    from pxr import Gf, Usd, UsdGeom
 
     from curobo._src.util.usd_scene_parser import (
         UsdSceneParser,
@@ -268,6 +269,64 @@ class TestGeometryExtractors:
         assert extracted is not None
         assert len(extracted.faces) == 2
         assert extracted.faces == [[1, 3, 0], [1, 2, 3]]
+
+    @pytest.mark.parametrize("reader_type", [UsdSceneParser, UsdWriter])
+    def test_get_mesh_attrs_bakes_reflected_transform_and_reference_frame(
+        self, tmp_path, reader_type
+    ):
+        """Test mesh extraction preserves reflected world transforms."""
+        stage = create_stage(str(tmp_path / "reflected_mesh.usd"))
+        reference_path = "/world/reference"
+        reference_prim = UsdGeom.Xform.Define(stage, reference_path).GetPrim()
+        set_prim_transform(reference_prim, [0.5, -0.25, 0.75, 1, 0, 0, 0])
+
+        mesh_path = "/world/reflected_mesh"
+        mesh_geom = UsdGeom.Mesh.Define(stage, mesh_path)
+        mesh_geom.CreatePointsAttr([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+        mesh_geom.CreateFaceVertexCountsAttr([3])
+        mesh_geom.CreateFaceVertexIndicesAttr([0, 1, 2])
+        mesh_prim = stage.GetPrimAtPath(mesh_path)
+        set_prim_transform(
+            mesh_prim,
+            [1.25, 0.5, 0.25, 1, 0, 0, 0],
+            scale=[-1.0, 2.0, 1.0],
+        )
+
+        reader = reader_type()
+        reader.load_stage(stage)
+        scene = reader.get_obstacles_from_stage(
+            only_paths=[mesh_path], reference_prim_path=reference_path
+        )
+
+        extracted = scene.mesh[0]
+        cache = UsdGeom.XformCache()
+        world_transform = cache.GetLocalToWorldTransform(mesh_prim)
+        expected_world_points = np.asarray(
+            [
+                world_transform.Transform(Gf.Vec3d(*point))
+                for point in mesh_geom.GetPointsAttr().Get()
+            ],
+            dtype=np.float32,
+        )
+        expected_reference_points = expected_world_points - np.asarray(
+            [0.5, -0.25, 0.75], dtype=np.float32
+        )
+
+        np.testing.assert_allclose(extracted.pose[:3], [0.75, 0.75, -0.5], atol=1e-6)
+        np.testing.assert_allclose(extracted.pose[3:], [1.0, 0.0, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(
+            extracted.vertices,
+            [[0.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+            atol=1e-6,
+        )
+
+        transformed_vertices = np.asarray(extracted.vertices) + np.asarray(
+            extracted.pose[:3], dtype=np.float32
+        )
+        np.testing.assert_allclose(transformed_vertices, expected_reference_points)
+
+        triangle = np.asarray(extracted.vertices)[np.asarray(extracted.faces[0])]
+        assert np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])[2] > 0.0
 
     def test_get_cube_attrs_with_zero_dimension_raises(self, tmp_path):
         """Test that zero cube dimension raises ValueError."""

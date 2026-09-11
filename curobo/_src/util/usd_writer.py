@@ -419,30 +419,42 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Mesh:
     # read cube information
     # scale = prim.GetAttribute("size").Get()
     points = list(prim.GetAttribute("points").Get())
-    points = [np.ravel(x) for x in points]
     # points = np.ndarray(points)
 
     faces = list(prim.GetAttribute("faceVertexIndices").Get())
 
     face_count = list(prim.GetAttribute("faceVertexCounts").Get())
-    if prim.GetAttribute("xformOp:scale").IsValid():
-        scale = list(prim.GetAttribute("xformOp:scale").Get())
-    else:
-        scale = [1.0, 1.0, 1.0]
-    size = prim.GetAttribute("size").Get()
-    if size is None:
-        size = 1
-    scale = [s * size for s in scale]
-
-    mat, t_scale = get_prim_world_pose(cache, prim)
-    # also get any world scale:
-    scale = t_scale
+    world_transform = cache.GetLocalToWorldTransform(prim)
+    vertices = np.asarray(
+        [world_transform.Transform(Gf.Vec3d(*point)) for point in points], dtype=np.float32
+    )
+    mat, _ = get_prim_world_pose(cache, prim)
+    linear_transform = np.asarray(world_transform.ExtractRotationMatrix(), dtype=np.float32)
     # position = list(prim.GetAttribute("xformOp:translate").Get())
     # q = prim.GetAttribute("xformOp:orient").Get()
     # orientation = [q.GetReal()] + list(q.GetImaginary())
 
     if transform is not None:
+        vertices = vertices @ transform[:3, :3].T + transform[:3, 3]
         mat = transform @ mat
+        linear_transform = transform[:3, :3] @ linear_transform
+
+    reflected_transform = np.linalg.det(linear_transform) < 0.0
+    if reflected_transform:
+        mat[:3, :3] = np.eye(3, dtype=mat.dtype)
+
+    inverse_pose = np.linalg.inv(mat)
+    vertices = vertices @ inverse_pose[:3, :3].T + inverse_pose[:3, 3]
+
+    if reflected_transform:
+        flipped_faces = []
+        face_start = 0
+        for count in face_count:
+            face_end = face_start + count
+            flipped_faces.extend(reversed(faces[face_start:face_end]))
+            face_start = face_end
+        faces = flipped_faces
+
     # compute position and orientation on cuda:
     tensor_mat = torch.as_tensor(mat, device=torch.device("cuda", 0))
     pose = Pose.from_matrix(tensor_mat).tolist()
@@ -452,10 +464,9 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Mesh:
     m = Mesh.from_polygon_faces(
         name=str(prim.GetPath()),
         pose=pose,
-        vertices=points,
+        vertices=vertices.tolist(),
         faces=faces,
         face_counts=face_count,
-        scale=scale,
     )
     # print(len(m.vertices), max(m.faces))
 
