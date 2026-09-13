@@ -73,6 +73,8 @@
   reference example with Franka MPC using a RealSense backend.
 
 ### Bug Fixes & Misc.
+- Fix `motion_cross_S` writing the prismatic-joint velocity-product term to the
+  angular components instead of the linear components of the spatial vector.
 - Reduce GPU memory consumption for batched motion planning by 3x with
   batch-aware IK and TrajOpt seed defaults and a smaller interpolation buffer.
 - Fix `MotionPlanner` and `BatchMotionPlanner` attachment-manager access so

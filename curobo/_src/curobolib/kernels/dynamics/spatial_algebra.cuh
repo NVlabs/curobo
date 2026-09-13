@@ -164,16 +164,16 @@ __device__ __forceinline__ void motion_cross_S(
             result[4] = -v0 * alpha;
             break;
         case 3: // prismatic X
-            result[1] =  w2 * alpha;
-            result[2] = -w1 * alpha;
+            result[4] =  w2 * alpha;
+            result[5] = -w1 * alpha;
             break;
         case 4: // prismatic Y
-            result[0] = -w2 * alpha;
-            result[2] =  w0 * alpha;
+            result[3] = -w2 * alpha;
+            result[5] =  w0 * alpha;
             break;
         case 5: // prismatic Z
-            result[0] =  w1 * alpha;
-            result[1] = -w0 * alpha;
+            result[3] =  w1 * alpha;
+            result[4] = -w0 * alpha;
             break;
     }
 }
