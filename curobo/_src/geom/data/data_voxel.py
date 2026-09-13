@@ -1150,9 +1150,9 @@ def compute_local_sdf(
     """
     flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
 
-    dims_x = wp.int32(obs_set.params[flat_idx, 0])
-    dims_y = wp.int32(obs_set.params[flat_idx, 1])
-    dims_z = wp.int32(obs_set.params[flat_idx, 2])
+    dims_x = wp.int32(wp.round(obs_set.params[flat_idx, 0]))
+    dims_y = wp.int32(wp.round(obs_set.params[flat_idx, 1]))
+    dims_z = wp.int32(wp.round(obs_set.params[flat_idx, 2]))
     voxel_size = obs_set.params[flat_idx, 3]
     grid_dims = wp.vec3i(dims_x, dims_y, dims_z)
 
@@ -1194,9 +1194,9 @@ def compute_local_sdf_with_grad(
     """
     flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
 
-    dims_x = wp.int32(obs_set.params[flat_idx, 0])
-    dims_y = wp.int32(obs_set.params[flat_idx, 1])
-    dims_z = wp.int32(obs_set.params[flat_idx, 2])
+    dims_x = wp.int32(wp.round(obs_set.params[flat_idx, 0]))
+    dims_y = wp.int32(wp.round(obs_set.params[flat_idx, 1]))
+    dims_z = wp.int32(wp.round(obs_set.params[flat_idx, 2]))
     voxel_size = obs_set.params[flat_idx, 3]
     grid_dims = wp.vec3i(dims_x, dims_y, dims_z)
 
