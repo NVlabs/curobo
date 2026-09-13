@@ -100,6 +100,28 @@ class TestGraphPlannerBatchSeedShape:
         assert result.interpolated_waypoints is None
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_infeasible_query_does_not_reject_feasible_batch_query(self, planner):
+        """An infeasible endpoint only rejects its own batch query."""
+        horizon = 16
+        feasible_state = planner.sampling_strategy.generate_feasible_action_samples(1)
+        x_start = feasible_state.repeat(2, 1)
+        x_goal = torch.cat((feasible_state, torch.full_like(feasible_state, 999.0)))
+
+        result = planner.find_path(
+            x_start,
+            x_goal,
+            interpolate_waypoints=True,
+            interpolation_steps=horizon,
+            interpolation_type=TrajInterpolationType.LINEAR,
+            validate_interpolated_trajectory=False,
+        )
+
+        assert result.success.tolist() == [True, False]
+        assert result.interpolated_waypoints.shape == (2, horizon, planner.action_dim)
+        assert not (result.interpolated_waypoints[0] == 0).all()
+        assert (result.interpolated_waypoints[1] == 0).all()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_successful_queries_have_full_shape(self, planner):
         """When some queries succeed, waypoints shape is (N, H, D), not filtered."""
         N = 4

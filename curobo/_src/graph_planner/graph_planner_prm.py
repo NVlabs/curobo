@@ -334,12 +334,34 @@ class PRMGraphPlanner:
         b, _, _ = node_set.shape
         node_set = node_set.view(b * 2, self.action_dim)
         # check if start and goal are in freespace:
-        mask = self.check_samples_feasibility(node_set)
-        if mask.all() != True:
+        endpoint_feasible = self.check_samples_feasibility(node_set).reshape(num_problems, 2)
+        problem_feasible = endpoint_feasible.all(dim=1)
+        if not problem_feasible.any():
             log_warn("Start or End state in collision")
             result.plan_waypoints = [None for _ in range(num_problems)]
             result.valid_query = False
             result.debug_info = "Start or End state in collision"
+            return result
+        if not problem_feasible.all():
+            invalid_indices = torch.where(~problem_feasible)[0].cpu().tolist()
+            log_warn(f"Start or End state in collision for batch indices {invalid_indices}")
+
+            feasible_indices = torch.where(problem_feasible)[0]
+            feasible_result = self._find_path_impl(
+                x_start[feasible_indices], x_goal[feasible_indices]
+            )
+
+            result.success[feasible_indices] = feasible_result.success
+            result.path_length[feasible_indices] = feasible_result.path_length
+            feasible_indices_list = feasible_indices.cpu().tolist()
+            for feasible_result_idx, original_idx in enumerate(feasible_indices_list):
+                result.plan_waypoints[original_idx] = feasible_result.plan_waypoints[
+                    feasible_result_idx
+                ]
+            result.valid_query = False
+            result.debug_info = (
+                f"Start or End state in collision for batch indices {invalid_indices}"
+            )
             return result
 
         # if start and goal are same, return True:
