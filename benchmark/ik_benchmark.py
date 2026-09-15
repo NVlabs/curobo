@@ -29,9 +29,6 @@ from curobo._src.util_file import (
     join_path,
     write_yaml,
 )
-from curobo.content import (
-    get_robot_configs_path,
-)
 
 # set seeds
 torch.manual_seed(2)
@@ -46,7 +43,6 @@ torch._dynamo.config.cache_size_limit = 64
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-from curobo._src.util.config_io import join_path, resolve_config
 
 
 def run_full_config_collision_free_ik(
@@ -57,12 +53,10 @@ def run_full_config_collision_free_ik(
     collision_free=True,
     num_seeds=12,
 ):
-    if not collision_free:
-        robot_file = resolve_config(join_path(get_robot_configs_path(), robot_file))
-        if "kinematics" not in robot_file:
-            robot_file = robot_file["robot_cfg"]
-        robot_file["kinematics"]["collision_link_names"] = None
-        robot_file["kinematics"]["lock_joints"] = None
+    # Do not mutate kinematics.collision_link_names or lock_joints here.
+    # Nulling collision_link_names prunes Unitree G1 thumb/middle chains while
+    # cspace still lists those joints; #678 then rejects the config. Collision
+    # cost is already skipped via self_collision_check and scene_model below.
     device_cfg = DeviceCfg()
     position_threshold = 0.005
 
