@@ -265,23 +265,50 @@ class MotionPlanner:
                 seed_config[~ik_result.success][:, :] = good_solution
 
             seed_traj = None
+            seed_implicit_goal_state = None
             finetune_attempts = 1
             finetune_dt_scale = 0.55
             if current_attempt >= enable_graph_attempt and self.graph_planner is not None:
-                graph_seed = self._get_graph_seed_trajectories(
+                graph_waypoints = self._get_graph_seed_trajectories(
                     current_state, seed_config,
                 )
-                if graph_seed is None:
+
+                if graph_waypoints is None:
                     continue
-                seed_traj = graph_seed
+
+                seed_traj = self.trajopt_solver.prepare_seed_trajectory(
+                    graph_waypoints,
+                    current_state=current_state,
+                    goal_state=None,
+                    use_implicit_goal=True,
+                )
                 total_time += 0.0  # graph time already in graph_seed call
                 finetune_attempts = 3
                 finetune_dt_scale = 0.75
+
+                if seed_traj is not None and seed_traj.shape[1] < num_seeds:
+                    n_valid = seed_traj.shape[1]
+                    good_seed = seed_traj[:, 0:1].clone()
+                    pad = good_seed.repeat(1, num_seeds - n_valid, 1, 1)
+                    seed_traj = torch.cat([seed_traj, pad], dim=1)
+                    waypoint_pad = graph_waypoints[:, 0:1].clone().repeat(
+                        1, num_seeds - n_valid, 1, 1
+                    )
+                    graph_waypoints = torch.cat([graph_waypoints, waypoint_pad], dim=1)
+
+                if seed_traj is None:
+                    seed_implicit_goal_state = None
+                else:
+                    seed_implicit_goal_state = JointState.from_position(
+                        graph_waypoints[:, :, -1, :].clone(),
+                        joint_names=self.trajopt_solver.joint_names,
+                    )
 
             trajopt_result = self.trajopt_solver.solve_pose(
                 goal_tool_poses, current_state,
                 seed_config=seed_config,
                 seed_traj=seed_traj,
+                seed_implicit_goal_state=seed_implicit_goal_state,
                 use_implicit_goal=True,
                 finetune_attempts=finetune_attempts,
                 finetune_dt_scale=finetune_dt_scale,
@@ -360,12 +387,17 @@ class MotionPlanner:
 
             if current_attempt >= enable_graph_attempt and self.graph_planner is not None:
                 goal_configs = goal_state.position.view(1, 1, -1).repeat(1, num_seeds, 1)
-                graph_seed = self._get_graph_seed_trajectories(
+                graph_waypoints = self._get_graph_seed_trajectories(
                     current_state, goal_configs,
                 )
-                if graph_seed is None:
+                if graph_waypoints is None:
                     continue
-                seed_traj = graph_seed
+                seed_traj = self.trajopt_solver.prepare_seed_trajectory(
+                    graph_waypoints,
+                    current_state=current_state,
+                    goal_state=goal_state,
+                    use_implicit_goal=True,
+                )
                 finetune_attempts = 3
                 finetune_dt_scale = 0.75
 
@@ -396,7 +428,7 @@ class MotionPlanner:
             seed_config: Goal configs ``(1, num_seeds, dof)``.
 
         Returns:
-            Seed trajectories ``(1, n_success, horizon, dof)`` or None.
+            Seed trajectories ``(1, n_success, n_waypoints, dof)`` or None.
         """
         dof = self.trajopt_solver.action_dim
         num_seeds = seed_config.shape[1] if seed_config.ndim == 3 else seed_config.shape[0]
@@ -407,9 +439,9 @@ class MotionPlanner:
         result = self.graph_planner.find_path(
             graph_starts.clone(), graph_goals.clone(),
             interpolate_waypoints=True,
-            interpolation_steps=self.trajopt_solver.action_horizon,
+            interpolation_steps=100,
             interpolation_type=TrajInterpolationType.LINEAR,
-            validate_interpolated_trajectory=False,
+            validate_interpolated_trajectory=True,
         )
         if torch.count_nonzero(result.success) == 0:
             return None

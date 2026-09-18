@@ -222,10 +222,10 @@ namespace curobo{
       // 13       | 9              | knots[9], knots[10], knots[11], knots[12]
       // 14       | 10             | knots[10], knots[11], knots[12], knots[13]
       // 15       | 11             | knots[11], knots[12], knots[13], knots[14]
-      // 16       | 12             | knots[12], knots[13], knots[14], fixed_knots[0] // we skip knots[15] to maintain the same dimension as replicate case.
-      // 17       | 13 (n_knots - Degree)              | knots[13], knots[14], fixed_knots[0], fixed_knots[1]
-      // 18       | 14 (n_knots - Degree + 1)          | knots[14], fixed_knots[0], fixed_knots[1], fixed_knots[2]
-      // 19       | 15 (n_knots - Degree + 2)          | fixed_knots[0], fixed_knots[1], fixed_knots[2], fixed_knots[3]
+      // 16       | 12             | knots[12], knots[13], knots[14], fixed_knots[3] // we skip knots[15] to maintain the same dimension as replicate case.
+      // 17       | 13 (n_knots - Degree)              | knots[13], knots[14], fixed_knots[3], fixed_knots[2]
+      // 18       | 14 (n_knots - Degree + 1)          | knots[14], fixed_knots[3], fixed_knots[2], fixed_knots[1]
+      // 19       | 15 (n_knots - Degree + 2)          | fixed_knots[3], fixed_knots[2], fixed_knots[1], fixed_knots[0]
 
 
 
@@ -249,9 +249,9 @@ namespace curobo{
         const int constraint_offset = require_start_boundary ? b_offset : goal_offset;
         const int constraint_idx = constraint_offset * dof + d_idx;
         constraint.position = require_start_boundary ? start_position[constraint_idx] : goal_position[constraint_idx];
-        constraint.velocity = require_start_boundary ? start_velocity[constraint_idx] : goal_velocity[constraint_idx];
+        constraint.velocity = require_start_boundary ? start_velocity[constraint_idx] : -goal_velocity[constraint_idx];
         constraint.acceleration = require_start_boundary ? start_acceleration[constraint_idx] : goal_acceleration[constraint_idx];
-        constraint.jerk = require_start_boundary ? start_jerk[constraint_idx] : goal_jerk[constraint_idx];
+        constraint.jerk = require_start_boundary ? start_jerk[constraint_idx] : -goal_jerk[constraint_idx];
       }
 
 
