@@ -98,7 +98,8 @@ class SelfCollisionDistance(torch.autograd.Function):
             if ctx.needs_input_grad[0]:
                 (g_vec, g_dist) = ctx.saved_tensors
                 if ctx.return_loss:
-                    g_vec = g_vec * grad_out_distance
+                    # Scale each batch/time query across its spheres and coordinates.
+                    g_vec = g_vec * grad_out_distance.unsqueeze(-1)
                 sphere_grad = g_vec
 
         return (
