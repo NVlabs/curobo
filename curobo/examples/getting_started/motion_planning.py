@@ -291,9 +291,9 @@ def grasp_planning_example(output_dir: Optional[Path] = None):
     if result.success is not None and result.success.any():
         print("✓ Grasp planning succeeded!")
 
-        approach = result.approach_interpolated_trajectory
-        grasp = result.grasp_interpolated_trajectory
-        lift = result.lift_interpolated_trajectory
+        approach = result.get_approach_interpolated_plan()
+        grasp = result.get_grasp_interpolated_plan()
+        lift = result.get_lift_interpolated_plan()    
 
         if approach is not None:
             print(f"  Approach: {approach.position.shape[-2]} waypoints")
@@ -517,21 +517,24 @@ def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_t
                 grasp_lift_in_tool_frame=True,
             )
             if result is not None and result.success is not None and result.success.any():
+                approach_interp = result.get_approach_interpolated_plan()
                 traj_plot.image = _create_trajectory_image(
-                    result.approach_interpolated_trajectory, planner.joint_names,
+                    approach_interp, planner.joint_names,
                     title="Approach",
                 )
-                execute_trajectory(result.approach_interpolated_trajectory)
+                execute_trajectory(approach_interp)
+                grasp_interp = result.get_grasp_interpolated_plan()
                 traj_plot.image = _create_trajectory_image(
-                    result.grasp_interpolated_trajectory, planner.joint_names,
+                    grasp_interp, planner.joint_names,
                     title="Grasp",
                 )
-                execute_trajectory(result.grasp_interpolated_trajectory)
+                execute_trajectory(grasp_interp)
+                lift_interp = result.get_lift_interpolated_plan()
                 traj_plot.image = _create_trajectory_image(
-                    result.lift_interpolated_trajectory, planner.joint_names,
+                    lift_interp, planner.joint_names,
                     title="Lift",
                 )
-                execute_trajectory(result.lift_interpolated_trajectory)
+                execute_trajectory(lift_interp)
             else:
                 print("Grasp planning failed")
             is_moving = False
