@@ -159,8 +159,6 @@ class KinematicsParams:
         """Post initialization checks and data transfer to device tensors."""
         if self.cspace is None and self.joint_limits is not None and self.joint_names is not None:
             self.load_cspace_cfg_from_kinematics()
-        if self.joint_limits is not None and self.cspace is not None:
-            self.joint_limits = self.cspace.scale_joint_limits(self.joint_limits)
         if self.link_spheres is not None and self.reference_link_spheres is None:
             self.reference_link_spheres = self.link_spheres.clone()
         if self.fixed_transforms is not None:

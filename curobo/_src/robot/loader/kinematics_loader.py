@@ -1118,7 +1118,6 @@ class KinematicsLoader(KinematicsLoaderCfg):
         # clip joint position:
         joint_limits["position"][0] += self.cspace.position_limit_clip
         joint_limits["position"][1] -= self.cspace.position_limit_clip
-        joint_limits["velocity"][0] *= self.cspace.velocity_scale
-        joint_limits["velocity"][1] *= self.cspace.velocity_scale
 
         self._joint_limits = JointLimits(joint_names=self.joint_names, **joint_limits)
+        self._joint_limits = self.cspace.scale_joint_limits(self._joint_limits)

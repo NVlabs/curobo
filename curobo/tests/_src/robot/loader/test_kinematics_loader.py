@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+import copy
+
 import pytest
 import torch
 
@@ -97,6 +99,30 @@ def test_cuda_robot_generator_config_cspace():
     robot_generator = KinematicsLoader(config)
 
     assert len(robot_generator.cspace.max_jerk) == 7
+
+
+def test_cspace_limit_scales_apply_once():
+    """Velocity, acceleration, and jerk scales multiply joint limits once."""
+    robot_file = "franka.yml"
+    robot_params = load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"][
+        "kinematics"
+    ]
+    base_limits = KinematicsLoader(
+        KinematicsLoaderCfg(**copy.deepcopy(robot_params))
+    ).kinematics_config.joint_limits
+
+    scaled_params = copy.deepcopy(robot_params)
+    scaled_params["cspace"]["velocity_scale"] = 0.5
+    scaled_params["cspace"]["acceleration_scale"] = 0.5
+    scaled_params["cspace"]["jerk_scale"] = 0.5
+    scaled_limits = KinematicsLoader(
+        KinematicsLoaderCfg(**scaled_params)
+    ).kinematics_config.joint_limits
+
+    assert torch.allclose(scaled_limits.velocity, base_limits.velocity * 0.5)
+    assert torch.allclose(scaled_limits.acceleration, base_limits.acceleration * 0.5)
+    assert torch.allclose(scaled_limits.jerk, base_limits.jerk * 0.5)
+    assert torch.allclose(scaled_limits.position, base_limits.position)
 
 
 def test_cspace_only_configured_lock_joint_uses_configured_value():
