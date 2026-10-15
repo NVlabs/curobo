@@ -86,15 +86,16 @@ class GraphExecutor:
             self._initialize(inputs)
 
         # Copy inputs to internal tensors (only if different memory location)
-        for i, inp in enumerate(inputs):
-            if hasattr(self._graph_input[i], "copy_"):
-                if hasattr(self._graph_input[i], "data_ptr") and callable(
-                    self._graph_input[i].data_ptr
-                ):
-                    if self._graph_input[i].data_ptr() != inp.data_ptr():
+        with torch.no_grad():
+            for i, inp in enumerate(inputs):
+                if hasattr(self._graph_input[i], "copy_"):
+                    if hasattr(self._graph_input[i], "data_ptr") and callable(
+                        self._graph_input[i].data_ptr
+                    ):
+                        if self._graph_input[i].data_ptr() != inp.data_ptr():
+                            self._graph_input[i].copy_(inp)
+                    else:
                         self._graph_input[i].copy_(inp)
-                else:
-                    self._graph_input[i].copy_(inp)
 
         # Execute
         if self._use_cuda_graph:
