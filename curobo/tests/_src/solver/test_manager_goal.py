@@ -173,6 +173,22 @@ class TestGoalManagerUpdateGoalBuffer:
         # Should reuse buffer
         assert buffer2 is buffer1 or not update_reference
 
+    @pytest.mark.parametrize("warm", [False, True])
+    def test_update_goal_buffer_rejects_horizon_gt_1(
+        self, goal_manager, sample_solve_state, sample_goal_poses, warm
+    ):
+        """A per-timestep goal (horizon > 1) raises a clear error, on a fresh or a warm buffer."""
+        if warm:
+            goal_manager.update_goal_buffer(sample_solve_state, goal_tool_poses=sample_goal_poses)
+        horizon = 16
+        goal = GoalToolPose(
+            tool_frames=sample_goal_poses.tool_frames,
+            position=sample_goal_poses.position.repeat(1, horizon, 1, 1, 1),
+            quaternion=sample_goal_poses.quaternion.repeat(1, horizon, 1, 1, 1),
+        )
+        with pytest.raises(ValueError, match="horizon > 1"):
+            goal_manager.update_goal_buffer(sample_solve_state, goal_tool_poses=goal)
+
 
 class TestGoalManagerBatchHelper:
     """Test GoalManager batch helper property."""

@@ -384,7 +384,8 @@ class MPCSolver:
         Args:
             goal_tool_poses: Target tool-frame poses. Position shape
                 ``[batch, horizon, num_links, num_goalset, 3]``; quaternion
-                shape ``[batch, horizon, num_links, num_goalset, 4]``.
+                shape ``[batch, horizon, num_links, num_goalset, 4]``, with
+                ``horizon`` 1 (per-timestep targets are not supported yet).
             robot_ids: Optional 1-D integer tensor selecting which robots in
                 the batch to update. When ``None`` all robots are updated.
             run_ik: If ``True``, run :class:`IKSolver` to compute a feasible
