@@ -710,7 +710,8 @@ class TrajOptSolver:
         Args:
             goal_tool_poses: Target poses for each tool link. Shape of position
                 tensor is ``[batch, horizon, num_links, num_goalset, 3]``; quaternion
-                tensor is ``[batch, horizon, num_links, num_goalset, 4]``.
+                tensor is ``[batch, horizon, num_links, num_goalset, 4]``, with
+                ``horizon`` 1 (per-timestep targets are not supported yet).
             current_state: Current joint state of the robot with position tensor of
                 shape ``[batch, dof]``.
             seed_config: Optional initial joint configurations used as trajectory

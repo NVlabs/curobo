@@ -117,6 +117,13 @@ class GoalManager:
         """
         update_reference = False
 
+        if goal_tool_poses is not None and goal_tool_poses.horizon != 1:
+            log_and_raise(
+                "Per-timestep goal poses (GoalToolPose horizon > 1) are not supported by the "
+                f"solvers yet: got horizon {goal_tool_poses.horizon}. Pass horizon=1, or solve "
+                "one frame at a time (see SequenceGoalToolPose.get_frame)."
+            )
+
         if (
             self._solve_state is None
             or self._goal_buffer is None
