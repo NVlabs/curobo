@@ -183,8 +183,9 @@ class ToolPose(Sequence):
 class GoalToolPose(Sequence):
     """5D goal specification: ``[batch, horizon, num_links, num_goalset, 3/4]``.
 
-    Used only on the goal/target side. horizon=1 for static goals,
-    horizon>1 for per-timestep targets.
+    Used only on the goal/target side. horizon=1 for static goals. horizon>1
+    (per-timestep targets) is reserved: the solvers do not support it yet and
+    raise on it.
     """
 
     #: Link/frame names, length must equal ``position.shape[2]``.
