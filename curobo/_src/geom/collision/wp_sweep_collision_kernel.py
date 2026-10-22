@@ -10,7 +10,7 @@ the struct type at runtime.
 
 Key features:
 - Single kernel for all obstacle types (cuboid, mesh, voxel)
-- 2D parallelization: threads = num_spheres × max_n_obstacles
+- Obstacle-coherent tiles across sphere trajectories
 - Sparse atomic accumulation: only non-zero costs write to output
 - Optimized frame transforms: load once, accumulate in local frame, transform once
 
@@ -37,16 +37,16 @@ Kernels:
 # - By keeping variables named "is_obs_enabled" and "compute_sdf_with_grad" in scope,
 #   subsequent wp.func calls detect the existing Function and add overloads
 from importlib import import_module
+from inspect import signature
 from typing import Any
 
 # Third Party
 import warp as wp
 
 from curobo._src.geom.collision.wp_collision_common import (
-    accumulate_collision,
     apply_collision_activation,
-    load_sphere_query,
 )
+from curobo._src.geom.data.data_mesh import MeshDataWarp
 from curobo._src.geom.data.registry import OBSTACLE_SDF_MODULES
 
 # Initialize to None - will be set by first iteration
@@ -73,188 +73,228 @@ del _module_path, _data_module, _obs_fn, _transform_fn, _sdf_fn
 
 
 SWEEP_STEPS = wp.constant(3)
+SPHERE_TILE_SIZE = wp.constant(128)
+
+# Keep older Warp versions on their supported compiler options.
+_kernel_options = {"enable_backward": False}
+_kernel_parameters = signature(wp.kernel).parameters
+if "launch_bounds" in _kernel_parameters:
+    _kernel_options["launch_bounds"] = (128, 6)
+if "enable_cuda_smem_spilling" in _kernel_parameters:
+    _kernel_options["enable_cuda_smem_spilling"] = True
+_mesh_query_options = {}
+if "inline" in signature(wp.func).parameters:
+    _mesh_query_options["inline"] = False
+
+wp.set_module_options({"enable_backward": False, "block_dim": 128})
 
 
-# =============================================================================
-# Generic Swept-Sphere Collision Kernel
-# =============================================================================
+@wp.func(**_mesh_query_options)
+def mesh_sdf(
+    mesh_id: wp.uint64, point: wp.vec3, query_limit: wp.float32, radius: wp.float32
+) -> wp.vec4:
+    """Query mesh distance and compute a normal only inside the activation band."""
+    query = wp.mesh_query_point(mesh_id, point, query_limit)
+    if not query.result:
+        return wp.vec4(query_limit, 0.0, 0.0, 0.0)
+    nearest = wp.mesh_eval_position(mesh_id, query.face, query.u, query.v)
+    delta = nearest - point
+    length = wp.length(delta)
+    grad = wp.vec3(0.0, 0.0, 0.0)
+    if length > 1.0e-6 and -length * query.sign + radius > 0.0:
+        grad = query.sign * delta / length
+    return wp.vec4(length * query.sign, grad[0], grad[1], grad[2])
 
 
-@wp.kernel(enable_backward=False)
-def swept_sphere_obstacle_collision_kernel(
-    # Obstacle set (generic - uses Warp function overloading)
+@wp.func
+def _sweep_sdf(
     obs_set: Any,
-    # Sphere data
-    spheres: wp.array(dtype=wp.vec4),  # [batch * horizon * num_spheres]
-    # Parameters
+    env_idx: wp.int32,
+    obs_idx: wp.int32,
+    point: wp.vec3,
+    radius: wp.float32,
+) -> wp.vec4:
+    """Use the registered SDF overload for cuboid and voxel obstacles."""
+    return compute_local_sdf_with_grad(obs_set, env_idx, obs_idx, point, radius)
+
+
+@wp.func
+def _sweep_sdf(
+    obs_set: MeshDataWarp,
+    env_idx: wp.int32,
+    obs_idx: wp.int32,
+    point: wp.vec3,
+    radius: wp.float32,
+) -> wp.vec4:
+    """Use the outlined mesh query without changing other collision kernels."""
+    index = env_idx * obs_set.max_n + obs_idx
+    dimensions = wp.vec3(obs_set.dims[index, 0], obs_set.dims[index, 1], obs_set.dims[index, 2])
+    query_limit = wp.max(wp.length(dimensions) * 0.5, radius)
+    return mesh_sdf(obs_set.mesh_ids[index], point, query_limit, radius)
+
+
+@wp.func
+def collision_term(
+    sdf: wp.vec4, radius: wp.float32, eta: wp.float32, accumulated: wp.vec4
+) -> wp.vec4:
+    """Accumulate one activated sample in the obstacle frame."""
+    penetration = -sdf[0] + radius
+    if penetration <= 0.0:
+        return accumulated
+    activation = apply_collision_activation(penetration, eta)
+    cost_sum = accumulated[0] + activation[0]
+    grad_sum = wp.vec3(accumulated[1], accumulated[2], accumulated[3])
+    grad_sum += activation[1] * wp.vec3(sdf[1], sdf[2], sdf[3])
+    return wp.vec4(cost_sum, grad_sum[0], grad_sum[1], grad_sum[2])
+
+
+@wp.func
+def sweep_jump(penetration: wp.float32, radius: wp.float32) -> wp.float32:
+    """Preserve the adaptive stepping rule, including missing-SDF queries."""
+    if penetration > 0.0:
+        return penetration
+    if -penetration >= 1000.0:
+        return radius
+    return wp.max(-penetration, radius)
+
+
+@wp.func
+def sweep_segment(
+    obs_set: Any,
+    env_idx: wp.int32,
+    obs_idx: wp.int32,
+    local_current: wp.vec3,
+    local_adjacent: wp.vec3,
+    radius: wp.float32,
+    eta: wp.float32,
+    current_sdf: wp.vec4,
+    first_jump: wp.float32,
+    accumulated: wp.vec4,
+) -> wp.vec4:
+    """Reuse the center query as the first sample, then advance up to two times."""
+    half_dist = wp.length(local_adjacent - local_current) * 0.5
+    result = accumulated
+    if half_dist > 0.0:
+        result = collision_term(current_sdf, radius, eta, result)
+        jump = first_jump
+        inv_half_dist = 1.0 / wp.max(half_dist, 0.001)
+        for step in range(SWEEP_STEPS - 1):
+            if jump >= half_dist:
+                break
+            fraction = 1.0 - 0.5 * jump * inv_half_dist
+            point = fraction * local_current + (1.0 - fraction) * local_adjacent
+            sdf = _sweep_sdf(obs_set, env_idx, obs_idx, point, radius)
+            result = collision_term(sdf, radius, eta, result)
+            jump += sweep_jump(-sdf[0] + radius, radius)
+    return result
+
+
+@wp.kernel(**_kernel_options)
+def swept_sphere_obstacle_collision_kernel(
+    obs_set: Any,
+    spheres: wp.array(dtype=wp.vec4),
     weight: wp.array(dtype=wp.float32),
     activation_distance: wp.array(dtype=wp.float32),
     env_query_idx: wp.array(dtype=wp.int32),
-    # Outputs (pre-zeroed)
-    distance: wp.array(dtype=wp.float32),  # [batch * horizon * num_spheres]
-    gradient: wp.array(dtype=wp.float32),  # [batch * horizon * num_spheres * 4]
-    # Dimensions
+    distance: wp.array(dtype=wp.float32),
+    gradient: wp.array(dtype=wp.float32),
     batch_size: wp.int32,
     horizon: wp.int32,
     num_spheres: wp.int32,
     max_n_obs: wp.int32,
     use_multi_env: wp.uint8,
 ):
-    """Compute swept-sphere collision with 2D parallelization.
+    """Accumulate swept collision costs for [batch, horizon, sphere] inputs.
 
-    Sweeps toward previous and next timesteps in the trajectory.
-    Uses adaptive stepping based on penetration distance.
-    The number of sweep steps is fixed at compile time via SWEEP_STEPS constant.
-
-    Thread layout: tid = sph_flat_idx * max_n_obs + obs_local_idx
-
-    Args:
-        obs_set: Obstacle set (CuboidDataWarp, MeshDataWarp, or VoxelDataWarp).
-        spheres: Sphere positions and radii for all timesteps.
-        weight: Collision cost weight.
-        activation_distance: Distance threshold for collision activation.
-        env_query_idx: Environment index per batch element.
-        distance: Output distance buffer (pre-zeroed).
-        gradient: Output gradient buffer (pre-zeroed).
-        batch_size: Number of batch elements.
-        horizon: Trajectory horizon.
-        num_spheres: Number of spheres per timestep.
-        max_n_obs: Maximum obstacles per environment.
-        use_multi_env: Whether to use batch-specific environments.
+    Each full tile evaluates 128 adjacent points on sphere trajectories against
+    one obstacle. Reordering threads changes floating-point atomic summation
+    order but preserves the native arguments, sample weights, and output layout.
     """
-    tid = wp.tid()
-
-    # 2D decode: (sphere, obstacle)
-    sph_flat_idx = tid / max_n_obs
-    obs_local_idx = tid - sph_flat_idx * max_n_obs
-
+    thread_idx = wp.tid()
     total_spheres = batch_size * horizon * num_spheres
-    if sph_flat_idx >= total_spheres:
+    if total_spheres == 0:
         return
-
-
-
-    # Decode batch/horizon indices
-    b_idx = sph_flat_idx / (horizon * num_spheres)
-    h_idx = (sph_flat_idx - b_idx * horizon * num_spheres) / num_spheres
-
-    # Get environment index
-    env_idx = wp.int32(0)
+    complete_tiles = total_spheres / SPHERE_TILE_SIZE
+    complete_threads = complete_tiles * SPHERE_TILE_SIZE * max_n_obs
+    obstacle_idx = wp.int32(0)
+    trajectory_idx = wp.int32(0)
+    # Adjacent threads traverse time for the same sphere and obstacle.
+    if thread_idx < complete_threads:
+        tile_idx = thread_idx / SPHERE_TILE_SIZE
+        obstacle_idx = tile_idx % max_n_obs
+        trajectory_idx = (tile_idx / max_n_obs) * SPHERE_TILE_SIZE + thread_idx % SPHERE_TILE_SIZE
+    else:
+        # A partial tile still covers every remaining sphere/obstacle pair once.
+        tail_size = total_spheres - complete_tiles * SPHERE_TILE_SIZE
+        if tail_size == 0:
+            return
+        tail_idx = thread_idx - complete_threads
+        obstacle_idx = tail_idx / tail_size
+        trajectory_idx = complete_tiles * SPHERE_TILE_SIZE + tail_idx % tail_size
+    if obstacle_idx >= max_n_obs:
+        return
+    batch_idx = trajectory_idx / (horizon * num_spheres)
+    within_batch = trajectory_idx - batch_idx * horizon * num_spheres
+    sphere_in_robot = within_batch / horizon
+    timestep = within_batch - sphere_in_robot * horizon
+    sphere_idx = (batch_idx * horizon + timestep) * num_spheres + sphere_in_robot
+    environment = wp.int32(0)
     if use_multi_env == wp.uint8(1):
-        env_idx = env_query_idx[b_idx]
-
-
-    # Check if obstacle exists and is enabled
-    if not is_obs_enabled(obs_set, env_idx, obs_local_idx):
+        environment = env_query_idx[batch_idx]
+    if not is_obs_enabled(obs_set, environment, obstacle_idx):
         return
-
-    # Copy struct from param space to local stack to prevent nvcc
-    # from generating cvta.to.local on the param pointer
     obs = obs_set
-
-    # Load parameters
-    eta = activation_distance[0]
-    w = weight[0]
-
-    # Load sphere - extract radius_adjusted as scalar so query struct can die early
-    query = load_sphere_query(spheres, sph_flat_idx, eta)
-    if query.radius < 0.0:
+    sphere = spheres[sphere_idx]
+    if sphere[3] < 0.0:
         return
-    radius_adjusted = query.radius_adjusted
-
-    # Load obstacle transform ONCE for all sweep queries
-    inv_t = load_obstacle_transform(obs, env_idx, obs_local_idx)
-
-    # Accumulators in local frame (apply weight and transform at end)
-    cost_sum = wp.float32(0.0)
-    grad_sum_local = wp.vec3(0.0, 0.0, 0.0)
-
-    # Transform current sphere center to local frame.
-    # After this, query.center is no longer needed - sweep distances
-    # are computed in local frame (rigid transforms preserve distances).
-    local_current = wp.transform_point(inv_t, query.center)
-
-    # Process current timestep
-    sdf_result = compute_local_sdf_with_grad(
-        obs, env_idx, obs_local_idx, local_current, radius_adjusted
-    )
-    penetration = -sdf_result[0] + radius_adjusted
-
-    if penetration > 0.0:
-        activation_result = apply_collision_activation(penetration, eta)
-        cost_sum += activation_result[0]
-        grad_sum_local += activation_result[1] * wp.vec3(sdf_result[1], sdf_result[2], sdf_result[3])
-
-    # Sweep toward h-1 (previous timestep)
-    # Interpolation and distance are computed in local frame to:
-    # 1. Avoid per-step quaternion rotations (lerp in local space)
-    # 2. Free query.center registers (rigid transforms preserve distances)
-    if h_idx > 0 and SWEEP_STEPS > 0:
-        prev_sphere = spheres[sph_flat_idx - num_spheres]
-        local_prev = wp.transform_point(
-            inv_t, wp.vec3(prev_sphere[0], prev_sphere[1], prev_sphere[2])
+    eta = activation_distance[0]
+    radius = sphere[3] + eta
+    inverse_transform = load_obstacle_transform(obs, environment, obstacle_idx)
+    local_current = wp.transform_point(inverse_transform, wp.vec3(sphere[0], sphere[1], sphere[2]))
+    current_sdf = _sweep_sdf(obs, environment, obstacle_idx, local_current, radius)
+    first_jump = sweep_jump(-current_sdf[0] + radius, radius)
+    accumulated = collision_term(current_sdf, radius, eta, wp.vec4(0.0, 0.0, 0.0, 0.0))
+    if timestep > 0 and SWEEP_STEPS > 0:
+        previous = spheres[sphere_idx - num_spheres]
+        local_previous = wp.transform_point(
+            inverse_transform, wp.vec3(previous[0], previous[1], previous[2])
         )
-        half_dist = wp.length(local_prev - local_current) * 0.5
-        inv_half_dist = 1.0 / wp.max(half_dist, 0.001)
-        jump = wp.float32(0.0)
-        for _ in range(SWEEP_STEPS):
-            if jump >= half_dist:
-                break
-            t = 1.0 - 0.5 * jump * inv_half_dist
-            local_pt = t * local_current + (1.0 - t) * local_prev
-
-            # Use one SDF overload in the sweep loops to avoid invalid Warp
-            # codegen for VoxelDataWarp when both overloads are mixed here.
-            sdf_result = compute_local_sdf_with_grad(
-                obs, env_idx, obs_local_idx, local_pt, radius_adjusted
-            )
-            penetration = -sdf_result[0] + radius_adjusted
-
-            if penetration > 0.0:
-                activation_result = apply_collision_activation(penetration, eta)
-                cost_sum += activation_result[0]
-                grad_sum_local += activation_result[1] * wp.vec3(sdf_result[1], sdf_result[2], sdf_result[3])
-                jump += penetration
-            else:
-                if -penetration >= 1000.0:
-                    jump += radius_adjusted
-                else:
-                    jump += wp.max(-penetration, radius_adjusted)
-
-    # Sweep toward h+1 (next timestep)
-    if h_idx < horizon - 1 and SWEEP_STEPS > 0:
-        next_sphere = spheres[sph_flat_idx + num_spheres]
-        local_next = wp.transform_point(
-            inv_t, wp.vec3(next_sphere[0], next_sphere[1], next_sphere[2])
+        accumulated = sweep_segment(
+            obs,
+            environment,
+            obstacle_idx,
+            local_current,
+            local_previous,
+            radius,
+            eta,
+            current_sdf,
+            first_jump,
+            accumulated,
         )
-        half_dist = wp.length(local_next - local_current) * 0.5
-        inv_half_dist = 1.0 / wp.max(half_dist, 0.001)
-        jump = wp.float32(0.0)
-        for _ in range(SWEEP_STEPS):
-            if jump >= half_dist:
-                break
-            t = 1.0 - 0.5 * jump * inv_half_dist
-            local_pt = t * local_current + (1.0 - t) * local_next
-
-            # See previous sweep loop for why this uses the with-grad overload.
-            sdf_result = compute_local_sdf_with_grad(
-                obs, env_idx, obs_local_idx, local_pt, radius_adjusted
-            )
-            penetration = -sdf_result[0] + radius_adjusted
-
-            if penetration > 0.0:
-                activation_result = apply_collision_activation(penetration, eta)
-                cost_sum += activation_result[0]
-                grad_sum_local += activation_result[1] * wp.vec3(sdf_result[1], sdf_result[2], sdf_result[3])
-                jump += penetration
-            else:
-                if -penetration >= 1000.0:
-                    jump += radius_adjusted
-                else:
-                    jump += wp.max(-penetration, radius_adjusted)
-
-    # Transform accumulated gradient to world frame ONCE and apply weight
-    if cost_sum > 0.0:
-        fwd_t = wp.transform_inverse(inv_t)
-        grad_world = wp.transform_vector(fwd_t, grad_sum_local)
-        accumulate_collision(sph_flat_idx, w * cost_sum, w * grad_world, distance, gradient)
+    if timestep < horizon - 1 and SWEEP_STEPS > 0:
+        following = spheres[sphere_idx + num_spheres]
+        local_following = wp.transform_point(
+            inverse_transform, wp.vec3(following[0], following[1], following[2])
+        )
+        accumulated = sweep_segment(
+            obs,
+            environment,
+            obstacle_idx,
+            local_current,
+            local_following,
+            radius,
+            eta,
+            current_sdf,
+            first_jump,
+            accumulated,
+        )
+    if accumulated[0] > 0.0:
+        forward_transform = wp.transform_inverse(inverse_transform)
+        grad_world = wp.transform_vector(
+            forward_transform, wp.vec3(accumulated[1], accumulated[2], accumulated[3])
+        )
+        collision_weight = weight[0]
+        wp.atomic_add(distance, sphere_idx, collision_weight * accumulated[0])
+        wp.atomic_add(gradient, sphere_idx * 4, collision_weight * grad_world[0])
+        wp.atomic_add(gradient, sphere_idx * 4 + 1, collision_weight * grad_world[1])
+        wp.atomic_add(gradient, sphere_idx * 4 + 2, collision_weight * grad_world[2])
