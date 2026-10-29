@@ -32,13 +32,16 @@ from curobo._src.types.tool_pose import GoalToolPose
 
 
 def test_default_refinement_budget() -> None:
+    """Default to 50 initial iterations and one 25-iteration graph-sized refinement."""
     from curobo._src.motion.motion_planner_batch import BatchMotionPlanner
     from curobo._src.solver.solver_trajopt import TrajOptSolver
     from curobo._src.util.config_io import join_path, load_yaml
     from curobo.content import get_task_configs_path
 
     config = load_yaml(join_path(get_task_configs_path(), "trajopt/lbfgs_bspline_trajopt.yml"))
-    assert config["optimizer"]["num_iters"] == 25
+    assert config["optimizer"]["num_iters"] == 50
+    assert config["optimizer"]["inner_iters"] == 25
+    assert config["optimizer"]["fixed_iters"] is True
     for method in (
         MotionPlanner.plan_pose,
         BatchMotionPlanner.plan_pose,
@@ -47,7 +50,7 @@ def test_default_refinement_budget() -> None:
         TrajOptSolver.solve_pose,
         TrajOptSolver.solve_cspace,
     ):
-        assert signature(method).parameters["finetune_attempts"].default == 2
+        assert signature(method).parameters["finetune_attempts"].default == 1
     for method in (
         BatchMotionPlanner.plan_pose,
         TrajOptSolver.solve_pose,

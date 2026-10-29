@@ -4,6 +4,7 @@ Native runtime source and export tooling versioned with cuRobo:
 
 - `robot/`: backend-neutral C++ APIs for robot computation.
 - `mapper/`: C++ runtime for cuRobo's block-sparse mapper.
+- [`benchmarks/`](benchmarks/README.md): reproducible native IK and motion-planning benchmarks.
 
 Runtime implementations use CUDA and Warp kernels. Public
 headers and APIs must not require callers to select or interact with a specific

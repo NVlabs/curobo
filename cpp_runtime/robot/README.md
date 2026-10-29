@@ -265,10 +265,10 @@ instead of hard-coding those artifact dimensions.
 
 curobo::robot::TrajectoryOptimizationConfig config;
 config.num_seeds = 4;
-config.max_iterations = 25;
+config.max_iterations = 50;
 config.refinement_iterations = 25;
 config.trajectory_dt = 0.15F;
-config.finetune_attempts = 2;
+config.finetune_attempts = 1;
 config.finetune_dt_scale = 0.6F;
 config.check_effort_limits = true;  // Optional RNEA cost and feasibility check.
 curobo::robot::TrajectoryOptimizer trajopt(
@@ -343,8 +343,9 @@ must outlive the optimizer.
 
 `TrajectoryOptimizationConfig::enable_timeopt=true` optimizes timing for every retained seed
 before final validation and selection by shortest valid duration. It defaults to
-false. TimeOpt validation checks collision, joint bounds, velocity, acceleration,
-jerk, and torque even when `check_effort_limits` is false. The timeopt shares the
+true; set it to false to use uniform trajectory timing. TimeOpt validation checks
+collision, joint bounds, velocity, acceleration, jerk, and torque even when
+`check_effort_limits` is false. The timeopt shares the
 optimizer's dynamics model; payload updates are visible to captured CUDA graphs.
 
 After a successful solve, `TrajectoryOptimizer::timeopt_trajectory()` returns
@@ -492,7 +493,7 @@ representation, and runs TrajOpt again.
 
 curobo::robot::MotionPlanningConfig config;
 config.trajectory_optimization.num_seeds = 4;
-config.trajectory_optimization.finetune_attempts = 2;
+config.trajectory_optimization.finetune_attempts = 1;
 config.inverse_kinematics.check_effort_limits = true;
 config.rrt.check_effort_limits = true;
 config.trajectory_optimization.check_effort_limits = true;
@@ -527,8 +528,9 @@ request.stream = stream;
 planner.plan(request);
 ```
 
-`config.trajectory_optimization.enable_timeopt=true` enables timeopt inside
-the planner's retry loop for both direct and RRT-seeded TrajOpt. After a successful
+Timeopt is enabled by default inside the planner's retry loop for both direct and
+RRT-seeded TrajOpt. Set `config.trajectory_optimization.enable_timeopt=false` to disable
+it. After a successful
 `plan()` or `plan_pose()`, `planner.timeopt_trajectory()` returns the selected
 executable states and timing controls under the same lifetime and sampling
 contract described above.
@@ -612,8 +614,9 @@ planner.plan_pose(pose_request);
 direct seeds, and retries up to `max_attempts`. Starting at
 `enable_graph_attempt`, it runs paired RRT over the valid IK solutions, fits
 the successful paths, and sends them through TrajOpt. Defaults match the
-single-goal Python policy: five attempts, graph planning from attempt one, one
-time-optimal refinement, and `finetune_dt_scale = 0.65`. It supports one pose
+single-goal Python policy: up to 20 attempts, graph planning from attempt one,
+50 initial iterations, one 25-iteration time-optimal refinement, and
+`finetune_dt_scale = 0.6`. It supports one pose
 per tool frame; goalsets are intentionally not part of this deployment API.
 
 For the Python-compatible grasp pipeline, pass a goalset directly to

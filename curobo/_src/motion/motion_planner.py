@@ -723,7 +723,7 @@ class MotionPlanner:
         max_attempts: int = 20,
         enable_graph_attempt: int = 1,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
-        finetune_attempts: int = 2,
+        finetune_attempts: int = 1,
     ) -> Optional[TrajOptSolverResult]:
         """Plan a trajectory to reach target tool poses.
 
@@ -731,6 +731,7 @@ class MotionPlanner:
         ``num_goalset > 1`` the planner uses a simpler IK+TrajOpt loop without
         graph seeding. ``finetune_attempts`` controls the number of additional
         time-optimal TrajOpt passes after the initial solve.
+        The default configuration uses 50 initial iterations and one 25-iteration pass.
         """
         if current_state.ndim > 2:
             log_and_raise(f"current_state must be a 2D tensor, got shape: {current_state.shape}")
@@ -763,7 +764,7 @@ class MotionPlanner:
         max_attempts: int,
         enable_graph_attempt: int,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
-        finetune_attempts: int = 2,
+        finetune_attempts: int = 1,
     ) -> Optional[TrajOptSolverResult]:
         """Plan one goal, reusing direct-attempt IK once for graph fallback."""
         self._reset_graph_telemetry()
@@ -894,7 +895,7 @@ class MotionPlanner:
         use_implicit_goal: bool = True,
         max_attempts: int = 10,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
-        finetune_attempts: int = 2,
+        finetune_attempts: int = 1,
     ) -> Optional[TrajOptSolverResult]:
         """Goalset planning: IK + TrajOpt, no graph seeding."""
         self._reset_graph_telemetry()
@@ -956,7 +957,7 @@ class MotionPlanner:
         current_state: JointState,
         max_attempts: int = 20,
         enable_graph_attempt: int = 1,
-        finetune_attempts: int = 2,
+        finetune_attempts: int = 1,
     ) -> Optional[TrajOptSolverResult]:
         """Plan a collision-free trajectory to a joint configuration.
 

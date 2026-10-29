@@ -123,13 +123,15 @@ int main(int argc, char** argv) {
     }
     const bool layered_grasp = argc == 3;
     curobo::robot::MotionPlanningConfig config;
-    if (config.trajectory_optimization.max_iterations != 25 ||
+    if (config.trajectory_optimization.max_iterations != 50 ||
         config.trajectory_optimization.refinement_iterations != 25 ||
-        config.trajectory_optimization.finetune_attempts != 2 ||
-        curobo::robot::PoseMotionPlanningRequest{}.finetune_attempts != 2 ||
+        config.trajectory_optimization.finetune_attempts != 1 ||
+        !config.trajectory_optimization.enable_timeopt ||
+        curobo::robot::PoseMotionPlanningRequest{}.finetune_attempts != 1 ||
+        curobo::robot::PoseMotionPlanningRequest{}.max_attempts != 20 ||
         config.trajectory_optimization.initial_dt_scale != 1.25F ||
         config.trajectory_optimization.finetune_dt_scale != 0.6F) {
-      throw std::runtime_error("motion-planner defaults must use fitted 25+2*25");
+      throw std::runtime_error("motion-planner defaults must use fitted 50+25 with timeopt");
     }
     if (config.inverse_kinematics.cspace_rank_weight != 5.0F) {
       throw std::runtime_error(

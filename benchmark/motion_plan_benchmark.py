@@ -428,7 +428,7 @@ def benchmark_mb(
                         result = mg.plan_pose(
                             goal_tool_poses,
                             start_state,
-                            max_attempts=1,
+                            max_attempts=20,
                         )
                     print(
                         prof.key_averages(group_by_stack_n=10).table(
@@ -450,7 +450,7 @@ def benchmark_mb(
                 result = mg.plan_pose(
                     goal_tool_poses,
                     start_state,
-                    max_attempts=1,
+                    max_attempts=20,
                 )
                 graph_time = mg.last_graph_time
                 graph_calls = mg.last_graph_calls
@@ -880,10 +880,18 @@ def create_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable torque-limited motion planning",
     )
-    parser.add_argument(
+    timeopt_group = parser.add_mutually_exclusive_group()
+    timeopt_group.add_argument(
         "--enable-timeopt",
         action="store_true",
-        help="Optimize timing for every candidate before final validation and selection",
+        default=True,
+        help="Optimize timing for every candidate before final validation and selection (default)",
+    )
+    timeopt_group.add_argument(
+        "--disable-timeopt",
+        dest="enable_timeopt",
+        action="store_false",
+        help="Disable time optimization and use uniform trajectory timing",
     )
     parser.add_argument(
         "--write_benchmark",

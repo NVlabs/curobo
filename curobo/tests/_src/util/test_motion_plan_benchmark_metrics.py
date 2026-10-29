@@ -31,6 +31,9 @@ def test_cli_exposes_only_motion_benchmark_options() -> None:
     """Keep graph, optimizer-ablation, and NVTX controls out of this benchmark."""
     benchmark = _load_benchmark_module()
     parser = benchmark.create_argument_parser()
+    assert parser.parse_args([]).enable_timeopt is True
+    assert parser.parse_args(["--enable-timeopt"]).enable_timeopt is True
+    assert parser.parse_args(["--disable-timeopt"]).enable_timeopt is False
     options = {
         option
         for action in parser._actions
@@ -49,6 +52,7 @@ def test_cli_exposes_only_motion_benchmark_options() -> None:
         "--disable_cuda_graph",
         "--use-dynamics",
         "--enable-timeopt",
+        "--disable-timeopt",
         "--write_benchmark",
         "--save_usd",
         "--save_plot",
@@ -113,4 +117,5 @@ def test_kpi_contains_motion_and_rrt_metrics(tmp_path: Path) -> None:
     assert output["RRT Calls"] == 4
     assert output["RRT Time (s)"] == 1.0
     assert output["RRT Time Per Call (s)"] == 1.0
+    assert "Normalized Jerk" not in output
     assert not any("Graph" in key for key in output)

@@ -98,6 +98,15 @@ class TestTrajOptSolverCfgDataclassAttributes:
 class TestTrajOptSolverCfgCreate:
     """Test TrajOptSolverCfg.create factory method."""
 
+    @pytest.mark.parametrize("enable_timeopt", [None, False])
+    def test_timeopt_default_and_opt_out(
+        self, cuda_device_cfg: DeviceCfg, enable_timeopt: bool | None
+    ) -> None:
+        """Enable timeopt by default while honoring an explicit opt-out."""
+        options = {} if enable_timeopt is None else {"enable_timeopt": enable_timeopt}
+        config = TrajOptSolverCfg.create(robot="franka.yml", device_cfg=cuda_device_cfg, **options)
+        assert config.enable_timeopt is (enable_timeopt is None)
+
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_basic(self, cuda_device_cfg):
         """Test basic create call."""

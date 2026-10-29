@@ -25,10 +25,10 @@ class TrajectoryOptimizerRuntime;
 struct TrajectoryOptimizationConfig {
   int device_ordinal{0};
   int num_seeds{4};
-  int max_iterations{25};
+  int max_iterations{50};
   /** Iterations in each refinement pass after the initial solve. */
   int refinement_iterations{25};
-  int finetune_attempts{2};
+  int finetune_attempts{1};
   float trajectory_dt{0.15F};
   /** Scale the input seed's required timestep for the first solve. */
   float initial_dt_scale{1.25F};
@@ -43,7 +43,7 @@ struct TrajectoryOptimizationConfig {
   /** Compute RNEA torque costs and enforce exported joint effort limits. */
   bool check_effort_limits{false};
   /** Optimize timing for all retained seeds before validation and duration selection. */
-  bool enable_timeopt{false};
+  bool enable_timeopt{true};
   /** Also validate timeopt candidates at this constant execution speed. */
   float execution_speed_scale{1.0F};
 };

@@ -37,6 +37,16 @@ def motion_planner_config(cuda_device_cfg):
     return config
 
 
+@pytest.mark.parametrize("enable_timeopt", [None, False])
+def test_timeopt_default_and_opt_out(
+    cuda_device_cfg: DeviceCfg, enable_timeopt: bool | None
+) -> None:
+    """Forward the timeopt default and explicit opt-out to trajectory optimization."""
+    options = {} if enable_timeopt is None else {"enable_timeopt": enable_timeopt}
+    config = MotionPlannerCfg.create(robot="franka.yml", device_cfg=cuda_device_cfg, **options)
+    assert config.trajopt_solver_config.enable_timeopt is (enable_timeopt is None)
+
+
 class TestMotionPlannerCfgDataclassDefinition:
     """Test MotionPlannerCfg dataclass definition."""
 
@@ -393,7 +403,7 @@ class TestMotionPlannerCfgDefaults:
         import inspect
 
         parameter_names = list(inspect.signature(MotionPlannerCfg.create).parameters)
-        assert parameter_names[-10:-4] == [
+        assert parameter_names[-11:-5] == [
             "graph_planner_algorithm",
             "rrt_planner_config",
             "fit_graph_seed_to_bspline",
@@ -401,11 +411,12 @@ class TestMotionPlannerCfgDefaults:
             "run_trajopt_on_graph_seed",
             "enable_trajopt",
         ]
-        assert parameter_names[-4:] == [
+        assert parameter_names[-5:] == [
             "ik_metrics_rollout",
             "trajopt_metrics_rollout",
             "create_constrained_rrt",
             "constrained_rrt_planner_config",
+            "enable_timeopt",
         ]
 
     def test_default_create_constrained_rrt_parameter(self):

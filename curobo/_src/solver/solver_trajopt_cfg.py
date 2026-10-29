@@ -80,7 +80,7 @@ class TrajOptSolverCfg:
     interpolation_buffer_size: int = 1000
 
     #: Optimize timing for every candidate before final validation and selection by duration.
-    enable_timeopt: bool = False
+    enable_timeopt: bool = True
 
     # Convenience accessors into core_cfg
     @property
@@ -149,7 +149,7 @@ class TrajOptSolverCfg:
         max_goalset: int = 1,
         interpolation_dt: float = 0.025,
         interpolation_buffer_size: int = 1000,
-        enable_timeopt: bool = False,
+        enable_timeopt: bool = True,
     ) -> TrajOptSolverCfg:
         """Create TrajOptSolverCfg from flexible inputs.
 
@@ -193,7 +193,8 @@ class TrajOptSolverCfg:
                 increase GPU memory usage because state buffers are allocated
                 for every batched seed trajectory.
             enable_timeopt: Apply fixed-path velocity, acceleration, jerk, and
-                torque timeopt to every seed before final selection. Requires cubic B-splines.
+                torque timeopt to every seed before final selection. Enabled by default;
+                requires cubic B-splines.
 
         Returns:
             Configured TrajOptSolverCfg instance.

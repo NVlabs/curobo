@@ -325,7 +325,7 @@ class BatchMotionPlanner:
         max_attempts: int = 1,
         success_ratio: float = 1.0,
         enable_graph_attempt: int = 0,
-        finetune_attempts: int = 2,
+        finetune_attempts: int = 1,
         initial_iters: Optional[int] = None,
         time_optimal_iters: Optional[int] = 25,
         finetune_iters: Optional[int] = 25,
@@ -482,7 +482,7 @@ class BatchMotionPlanner:
         max_attempts: int = 1,
         success_ratio: float = 1.0,
         enable_graph_attempt: int = 0,
-        finetune_attempts: int = 2,
+        finetune_attempts: int = 1,
     ) -> Optional[TrajOptSolverResult]:
         """Plan trajectories for a batch of joint-space targets.
 

@@ -130,9 +130,9 @@ struct PoseMotionPlanningRequest {
   int32_t* selected_seed{nullptr};
   int32_t* planning_attempts{nullptr};
   cudaStream_t stream{nullptr};
-  int max_attempts{5};
+  int max_attempts{20};
   int enable_graph_attempt{1};
-  int finetune_attempts{2};
+  int finetune_attempts{1};
   float finetune_dt_scale{0.6F};
   /** Constrain intermediate tool poses to a line ending at the goal pose. */
   bool constrain_tool_path{false};

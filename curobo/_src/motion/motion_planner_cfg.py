@@ -175,7 +175,7 @@ class MotionPlannerCfg:
         trajopt_metrics_rollout: Optional[Union[str, Dict[str, Any]]] = None,
         create_constrained_rrt: bool = True,
         constrained_rrt_planner_config: Optional[Union[BiRRTConfig, Dict[str, Any]]] = None,
-        enable_timeopt: bool = False,
+        enable_timeopt: bool = True,
     ) -> MotionPlannerCfg:
         """Create a MotionPlannerCfg from robot, task, and scene configs.
 
@@ -190,8 +190,8 @@ class MotionPlannerCfg:
 
         Args:
             enable_timeopt: Optimize timing for all optimized or fitted graph seeds before
-                selection. Combine with enable_trajopt=False and enable_graph_attempt=0
-                in the planning call for IK + graph search + timeopt.
+                selection. Enabled by default. Combine with enable_trajopt=False and
+                enable_graph_attempt=0 in the planning call for IK + graph search + timeopt.
             robot: Robot config. String paths are resolved relative to cuRobo
                 robot configs unless absolute. Dicts and RobotCfg objects are
                 accepted.

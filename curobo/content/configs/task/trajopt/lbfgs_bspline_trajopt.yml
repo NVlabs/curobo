@@ -10,14 +10,14 @@ optimizer:
   epsilon: 0.01
   fixed_iters: true
   history: 26 # 27
-  inner_iters: 25
+  inner_iters: 25 # Reuse this CUDA graph block twice initially and once per finetune.
   last_best: 10
   line_search_scale:
   - 0.01
   - 0.5
   - 1.0
   line_search_type: approx_wolfe
-  num_iters: 25
+  num_iters: 50
   num_problems: 1
   solver_name: lbfgs
   solver_type: lbfgs

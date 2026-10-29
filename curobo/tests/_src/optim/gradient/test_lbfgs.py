@@ -8,6 +8,10 @@
 
 from __future__ import annotations
 
+# Standard Library
+from dataclasses import replace
+from typing import Any
+
 # Third Party
 import pytest
 import torch
@@ -456,6 +460,52 @@ def test_optimize_without_timing_matches_timed_solve(optimizer_setup):
     untimed_result = untimed_optimizer.optimize_without_timing(initial_action)
 
     torch.testing.assert_close(untimed_result, timed_result)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_50_then_25_iterations_reuse_cuda_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replay one 25-step graph twice initially and once while retaining finetune history."""
+    config = LBFGSOptCfg(
+        num_problems=2, num_iters=50, inner_iters=25, history=7,
+        fixed_iters=True, step_scale=0.05,
+    )
+    graph_rollout = MockRollout(num_dof=7, action_horizon=4, batch_size=2)
+    eager_rollout = MockRollout(num_dof=7, action_horizon=4, batch_size=2)
+    optimizer = LBFGSOpt(config, [graph_rollout, graph_rollout], use_cuda_graph=True)
+    eager = LBFGSOpt(replace(config), [eager_rollout, eager_rollout], use_cuda_graph=False)
+    seed = torch.linspace(-0.3, 0.3, 56, device="cuda", dtype=torch.float32).view(2, 4, 7)
+    optimizer.reinitialize(seed)
+    optimizer.optimize(seed)
+    executor = optimizer._core._executors["_opt_iters"]
+    graph = executor._graph
+    assert graph is not None
+    original_replay = executor.replay
+    replay_count = 0
+
+    def count_replay(*args: Any, **kwargs: Any) -> Any:
+        nonlocal replay_count
+        replay_count += 1
+        return original_replay(*args, **kwargs)
+
+    monkeypatch.setattr(executor, "replay", count_replay)
+    graph_seed, eager_seed = seed.clone(), seed.clone()
+    for iterations, retain_history, expected_replays in (
+        (50, False, 2), (25, True, 1), (50, False, 2)
+    ):
+        if not retain_history:
+            graph_seed, eager_seed = seed.clone(), seed.clone()
+        optimizer.update_niters(iterations)
+        eager.update_niters(iterations)
+        optimizer.reinitialize(graph_seed, clear_optimizer_state=not retain_history)
+        eager.reinitialize(eager_seed, clear_optimizer_state=not retain_history)
+        before = replay_count
+        graph_seed = optimizer.optimize(graph_seed).clone()
+        eager_seed = eager.optimize(eager_seed).clone()
+        assert replay_count - before == expected_replays
+        assert optimizer._core._executors["_opt_iters"] is executor
+        assert executor._graph is graph
+        assert optimizer.config.inner_iters == 25
+        torch.testing.assert_close(graph_seed, eager_seed, rtol=3e-4, atol=1e-5)
 
 
 @pytest.mark.parametrize("use_cuda_kernel_line_search", [True, False])
