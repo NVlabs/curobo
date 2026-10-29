@@ -49,6 +49,17 @@ Step 1: Download the dataset
 This tutorial uses the `Sun3D <http://sun3d.cs.princeton.edu/>`_ indoor RGB-D
 dataset, which provides color images, depth maps, and ground-truth camera poses.
 
+.. note::
+
+   The scene below is SUN3D data from Xiao, Owens, and Torralba (ICCV 2013),
+   repackaged by the `3DMatch project <https://3dmatch.cs.princeton.edu/>`_.
+   It is downloaded separately and is not bundled with cuRobo. The dataset is
+   licensed under `CC BY-NC-SA 4.0 <https://creativecommons.org/licenses/by-nc-sa/4.0/>`_.
+   The `SUN3D publication record at MIT
+   <https://dspace.mit.edu/entities/publication/2ec16fd3-1d8b-4424-9fcf-2c4288bfcf30>`_
+   lists the same license for the paper.
+   cuRobo's Apache 2.0 license applies to the example code, not the dataset.
+
 Quick start (downloads a single scene, ~1400 MB):
 
 .. code-block:: bash

@@ -3,7 +3,7 @@
 #
 # Standard Library
 from abc import abstractmethod
-from typing import Optional
+from typing import Optional, Tuple
 
 # Third Party
 import torch
@@ -17,12 +17,14 @@ from curobo._src.curobolib.cuda_ops.trajectory import (
     AccelerationTensorStepIdxKernel,
     BSplineIdxKernel,
     CliqueTensorStepIdxKernel,
+    get_bspline_time_scaled_dt,
 )
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.trajectory.trajectory_interpolation import calculate_dt_no_clamp
 
 
 class StateFromBase:
@@ -34,6 +36,7 @@ class StateFromBase:
         self.device_cfg = device_cfg
         self._diag_dt = None
         self._inv_dt_h = None
+        self._time_scaled_dt = None
         self.action_horizon = horizon
         self.update_batch_size(batch_size, horizon)
 
@@ -49,8 +52,66 @@ class StateFromBase:
         horizon: Optional[int] = None,
         force_update: bool = False,
     ) -> None:
+        if batch_size != self.batch_size or self._time_scaled_dt is None:
+            self._time_scaled_dt = torch.empty(
+                (batch_size,),
+                device=self.device_cfg.device,
+                dtype=self.device_cfg.dtype,
+            )
         self.horizon = horizon
         self.batch_size = batch_size
+
+    def compute_time_scaled_dt_from_action(
+        self,
+        start_state: JointState,
+        u_act: torch.Tensor,
+        out_state_seq: JointState,
+        max_velocity: torch.Tensor,
+        max_acceleration: torch.Tensor,
+        max_jerk: torch.Tensor,
+        epsilon: float = 1e-3,
+        minimum_dt: float = -1.0,
+        maximum_dt: float = -1.0,
+        start_state_idx: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Compute a feasible trajectory dt from actions using a state rollout.
+
+        This reference implementation supports every transition model. Specialized
+        transition models can override it to avoid materializing the full state.
+        Negative dt bounds disable the corresponding clamp.
+        """
+        state = self.forward(
+            start_state,
+            u_act,
+            out_state_seq,
+            start_state_idx,
+            **kwargs,
+        )
+        if (
+            state.velocity is None
+            or state.acceleration is None
+            or state.jerk is None
+            or state.dt is None
+        ):
+            log_and_raise(
+                "Time scaling requires velocity, acceleration, jerk, and trajectory dt."
+            )
+        dt_scale = calculate_dt_no_clamp(
+            state.velocity,
+            state.acceleration,
+            state.jerk,
+            max_velocity,
+            max_acceleration,
+            max_jerk,
+            epsilon=epsilon,
+        )
+        torch.mul(dt_scale, state.dt, out=self._time_scaled_dt)
+        if minimum_dt >= 0.0:
+            torch.clamp_min(self._time_scaled_dt, minimum_dt, out=self._time_scaled_dt)
+        if maximum_dt >= 0.0:
+            torch.clamp_max(self._time_scaled_dt, maximum_dt, out=self._time_scaled_dt)
+        return self._time_scaled_dt
 
     @abstractmethod
     def forward(
@@ -340,6 +401,7 @@ class StateFromBSplineKnot(StateFromBase):
         """
         self.dof = dof
         self._u_grad = None
+        self._time_scaled_dt_per_timestep = None
         self.n_knots = n_knots
         self.use_implicit_goal_state = use_implicit_goal_state
         self.control_space = control_space
@@ -356,16 +418,127 @@ class StateFromBSplineKnot(StateFromBase):
         horizon: Optional[int] = None,
         force_update: bool = False,
     ) -> None:
-        if batch_size != self.batch_size or horizon != self.horizon:
+        if (
+            batch_size != self.batch_size
+            or horizon != self.horizon
+            or self._time_scaled_dt_per_timestep is None
+        ):
             self.action_horizon = self.n_knots
             self._u_grad = torch.zeros(
                 (batch_size, self.n_knots, self.dof),
                 device=self.device_cfg.device,
                 dtype=self.device_cfg.dtype,
             )
+            self._time_scaled_dt_per_timestep = torch.empty(
+                (batch_size, horizon),
+                device=self.device_cfg.device,
+                dtype=self.device_cfg.dtype,
+            )
         if force_update:
             self._u_grad = self._u_grad.detach()
+            self._time_scaled_dt_per_timestep = self._time_scaled_dt_per_timestep.detach()
         return super().update_batch_size(batch_size, horizon)
+
+    def _validate_inputs(
+        self,
+        start_state: JointState,
+        u_act: torch.Tensor,
+        out_state_seq: JointState,
+        start_state_idx: Optional[torch.Tensor],
+        goal_state: Optional[JointState],
+        goal_state_idx: Optional[torch.Tensor],
+        use_implicit_goal_state: Optional[torch.Tensor],
+    ) -> Tuple[JointState, torch.Tensor]:
+        """Validate B-spline boundary inputs and resolve optional goal defaults."""
+        if self.use_implicit_goal_state:
+            if goal_state is None:
+                log_and_raise("Goal state is not provided for implicit goal state")
+            if start_state_idx is not None and goal_state_idx is None:
+                log_and_raise("Goal state index is not provided for implicit goal state")
+        else:
+            if goal_state is None:
+                goal_state = start_state
+            if goal_state_idx is None:
+                goal_state_idx = start_state_idx
+        if start_state_idx is None:
+            log_and_raise("Start state index is required for BSpline kernel")
+        if goal_state_idx is None:
+            log_and_raise("idx is None")
+        if goal_state is None:
+            log_and_raise("goal state is None")
+        if goal_state.dt is None:
+            log_and_raise("dt is None")
+        if use_implicit_goal_state is None:
+            log_and_raise("use_implicit_goal_state is None")
+        if goal_state_idx.shape[0] != u_act.shape[0]:
+            log_and_raise(
+                f"Shape mismatch: goal_state_idx.shape[0] != u_act.shape[0]: {goal_state_idx.shape[0]} != {u_act.shape[0]}"
+            )
+        if use_implicit_goal_state.shape[0] != goal_state.shape[0]:
+            log_and_raise(
+                f"Shape mismatch: use_implicit_goal_state.shape[0] != goal_state.shape[0]: {use_implicit_goal_state.shape[0]} != {goal_state.shape[0]}"
+            )
+        if start_state.jerk is None:
+            log_and_raise("start jerk is None")
+        if out_state_seq.dt is None:
+            log_and_raise("out dt is None")
+        if u_act.shape[1] != self.n_knots:
+            log_and_raise(f"u_act.shape[1] != self.n_knots: {u_act.shape[1]} != {self.n_knots}")
+        if self.padded_horizon != out_state_seq.shape[1]:
+            log_and_raise(
+                f"padded_horizon != out_state_seq.shape[1]: {self.padded_horizon} != {out_state_seq.shape[1]}"
+            )
+        return goal_state, goal_state_idx
+
+    def compute_time_scaled_dt_from_action(
+        self,
+        start_state: JointState,
+        u_act: torch.Tensor,
+        out_state_seq: JointState,
+        max_velocity: torch.Tensor,
+        max_acceleration: torch.Tensor,
+        max_jerk: torch.Tensor,
+        epsilon: float = 1e-3,
+        minimum_dt: float = -1.0,
+        maximum_dt: float = -1.0,
+        start_state_idx: Optional[torch.Tensor] = None,
+        goal_state: Optional[JointState] = None,
+        goal_state_idx: Optional[torch.Tensor] = None,
+        use_implicit_goal_state: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Compute B-spline time scaling without materializing a state trajectory."""
+        goal_state, goal_state_idx = self._validate_inputs(
+            start_state,
+            u_act,
+            out_state_seq,
+            start_state_idx,
+            goal_state,
+            goal_state_idx,
+            use_implicit_goal_state,
+        )
+        get_bspline_time_scaled_dt(
+            self._time_scaled_dt_per_timestep,
+            u_act,
+            start_state,
+            goal_state,
+            start_state_idx,
+            goal_state_idx,
+            use_implicit_goal_state,
+            max_velocity,
+            max_acceleration,
+            max_jerk,
+            epsilon,
+            minimum_dt,
+            maximum_dt,
+            self.bspline_degree,
+        )
+        torch.amax(
+            self._time_scaled_dt_per_timestep,
+            dim=-1,
+            out=self._time_scaled_dt,
+        )
+        return self._time_scaled_dt
 
     def forward(
         self,
@@ -402,44 +575,15 @@ class StateFromBSplineKnot(StateFromBase):
         Returns:
             out_state_seq: Output state sequence. Shape is (batch_size, horizon, dof).
         """
-        if self.use_implicit_goal_state:
-            if goal_state is None:
-                log_and_raise("Goal state is not provided for implicit goal state")
-            if start_state_idx is not None:
-                if goal_state_idx is None:
-                    log_and_raise("Goal state index is not provided for implicit goal state")
-        else:
-            if goal_state is None:
-                goal_state = start_state
-            if goal_state_idx is None:
-                goal_state_idx = start_state_idx
-        if start_state_idx is None:
-            log_and_raise("Start state index is required for BSpline kernel")
-        if goal_state_idx is None:
-            log_and_raise("idx is None")
-        if goal_state.dt is None:
-            log_and_raise("dt is None")
-        if use_implicit_goal_state is None:
-            log_and_raise("use_implicit_goal_state is None")
-        if goal_state_idx.shape[0] != u_act.shape[0]:
-            log_and_raise(
-                f"Shape mismatch: goal_state_idx.shape[0] != u_act.shape[0]: {goal_state_idx.shape[0]} != {u_act.shape[0]}"
-            )
-        if use_implicit_goal_state.shape[0] != goal_state.shape[0]:
-            log_and_raise(
-                f"Shape mismatch: use_implicit_goal_state.shape[0] != goal_state.shape[0]: {use_implicit_goal_state.shape[0]} != {goal_state.shape[0]}"
-            )
-
-        if start_state.jerk is None:
-            log_and_raise("start jerk is None")
-        if out_state_seq.dt is None:
-            log_and_raise("out dt is None")
-        if u_act.shape[1] != self.n_knots:
-            log_and_raise(f"u_act.shape[1] != self.n_knots: {u_act.shape[1]} != {self.n_knots}")
-        if self.padded_horizon != out_state_seq.shape[1]:
-            log_and_raise(
-                f"padded_horizon != out_state_seq.shape[1]: {self.padded_horizon} != {out_state_seq.shape[1]}"
-            )
+        goal_state, goal_state_idx = self._validate_inputs(
+            start_state,
+            u_act,
+            out_state_seq,
+            start_state_idx,
+            goal_state,
+            goal_state_idx,
+            use_implicit_goal_state,
+        )
 
         (
             out_state_seq.position,

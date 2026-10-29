@@ -28,6 +28,7 @@ dependencies = [
     "networkx",
     "numpy",
     "numpy-quaternion",
+    "Pillow",
     "pyyaml",
     "scipy>=1.7.0",
     "setuptools_scm>=6.2",
@@ -48,6 +49,7 @@ cu12 = [
 ]
 
 cu13 = [
+    "cuda-bindings>=13.0.3",
     "cuda-core[cu13]>=0.7",
     # "nvidia-cuda-cccl>=13",  # Needed only for CCCL/cooperative_groups headers.
     "nvidia-cuda-runtime>=13",
@@ -61,14 +63,11 @@ cu12-torch = [
 ]
 
 cu13-torch = [
+    "cuda-bindings>=13.0.3",
     "cuda-core[cu13]>=0.6",
     # "nvidia-cuda-cccl>=13",  # Needed only for CCCL/cooperative_groups headers.
     "nvidia-cuda-runtime>=13",
     "torch>=2.9",
-]
-
-pybind =[
-    "pybind11",
 ]
 
 usd = [
@@ -117,10 +116,6 @@ exclude = ["tests"]
 [tool.setuptools.package-data]
 # Include kernel source files for cuda.core runtime compilation
 "curobo._src.curobolib.kernels" = ["**/*.cu", "**/*.cuh", "**/*.h"]
-# Include pybind binding and launch files for optional pybind compilation
-"curobo._src.curobolib.backends.pybind" = ["*.cpp", "*.cu"]
-# Include compiled shared objects
-"*" = ["*.so"]
 
 [tool.ruff]
 line-length = 99

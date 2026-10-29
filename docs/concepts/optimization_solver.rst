@@ -49,7 +49,6 @@ implements the ``Optimizer`` Protocol (see :ref:`chaining-optimizers` below).
             color="#558c8c";
 
             lbfgs   [label="LBFGSOpt",             color="#76b900", style="filled, rounded", fontcolor="white"];
-            lsr1    [label="LSR1Opt",              color="#76b900", style="filled, rounded", fontcolor="white"];
             cg      [label="ConjugateGradientOpt", color="#76b900", style="filled, rounded", fontcolor="white"];
             gd      [label="GradientDescentOpt",   color="#76b900", style="filled, rounded", fontcolor="white"];
         }
@@ -95,12 +94,11 @@ implements the ``Optimizer`` Protocol (see :ref:`chaining-optimizers` below).
         }
 
         // "Implements" edges from each optimizer to the Optimizer protocol.
-        {lbfgs, lsr1, cg, gd, mppi, es, scipy_opt, torch_opt, multi}
+        {lbfgs, cg, gd, mppi, es, scipy_opt, torch_opt, multi}
             -> optimizer [label="implements", style="dashed", fontcolor="#2B4162"];
 
         // "Composes" edges from each optimizer to the components it owns.
         lbfgs   -> {gradient_core, qn}      [label="composes"];
-        lsr1    -> {gradient_core, qn}      [label="composes"];
         cg      -> {gradient_core}          [label="composes"];
         gd      -> {bounds, best, debug}    [label="composes"];
 
@@ -328,4 +326,3 @@ rollout for 1 trajectory in the batch and green blocks refer to the cost terms.
 .. figure:: ../images/optimization_graph.png
    :width: 500px
    :align: center
-

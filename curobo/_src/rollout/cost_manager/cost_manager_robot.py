@@ -19,6 +19,8 @@ from curobo._src.cost.cost_cspace_dist import CSpaceDistCost
 from curobo._src.cost.cost_scene_collision import SceneCollisionCost
 from curobo._src.cost.cost_self_collision import SelfCollisionCost
 from curobo._src.cost.cost_tool_pose import ToolPoseCost
+from curobo._src.cost.cost_tool_relative_transform import ToolRelativeTransformCost
+from curobo._src.cost.cost_tool_velocity_limit import ToolVelocityLimitCost
 from curobo._src.geom.collision.collision_scene import SceneCollision
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.metrics import CostCollection
@@ -92,6 +94,14 @@ class RobotCostManager:
 
     def get_cost_components(self) -> Dict[str, BaseCost]:
         return self.costs
+
+    @property
+    def dense_temporal_support_span(self) -> int:
+        """Return the maximum dense-time support span of registered costs."""
+        return max(
+            (component.dense_temporal_support_span for component in self.costs.values()),
+            default=0,
+        )
 
     # -- Batch lifecycle --
 
@@ -177,6 +187,27 @@ class RobotCostManager:
             config.tool_pose_cfg.set_tool_frames(transition_model.robot_model.tool_frames)
             self.register_cost("tool_pose", ToolPoseCost(config.tool_pose_cfg))
 
+        # Relative transforms from one fixed moving reference tool frame
+        if config.tool_relative_transform_cfg is not None:
+            config.tool_relative_transform_cfg.set_tool_frames(robot_model.tool_frames)
+            self.register_cost(
+                "tool_relative_transform",
+                ToolRelativeTransformCost(config.tool_relative_transform_cfg),
+            )
+
+        # Projected world-frame tool velocity limits
+        if config.tool_velocity_limit_cfg is not None:
+            if not robot_model.compute_jacobian:
+                log_and_raise(
+                    "ToolVelocityLimitCost requires a transition model with "
+                    "compute_jacobian=True"
+                )
+            config.tool_velocity_limit_cfg.set_tool_frames(robot_model.tool_frames)
+            self.register_cost(
+                "tool_velocity_limit",
+                ToolVelocityLimitCost(config.tool_velocity_limit_cfg),
+            )
+
         # Start cspace distance
         if config.start_cspace_dist_cfg is not None:
             config.start_cspace_dist_cfg.initialize_from_transition_model(transition_model)
@@ -237,6 +268,48 @@ class RobotCostManager:
                     )
                     cost_collection.add(cost_value, "tool_pose")
 
+        # Relative tool transforms
+        if (
+            self.has_cost("tool_relative_transform")
+            and goal is not None
+            and goal.tool_relative_transform_target is not None
+        ):
+            relative_cost = self.get_cost("tool_relative_transform")
+            if relative_cost.enabled:
+                with self._stream_context("tool_relative_transform"):
+                    cost_value, _, _ = relative_cost.forward(
+                        state.tool_poses,
+                        goal.tool_relative_transform_target,
+                        goal.idxs_tool_relative_transform_target,
+                    )
+                    cost_collection.add(cost_value, "tool_relative_transform")
+
+        # Tool velocity limits
+        if self.has_cost("tool_velocity_limit"):
+            velocity_cost = self.get_cost("tool_velocity_limit")
+            if velocity_cost.enabled:
+                if state.joint_state.velocity is None:
+                    log_and_raise(
+                        "ToolVelocityLimitCost is configured but the robot state has no "
+                        "joint velocity"
+                    )
+                tool_jacobians = (
+                    state.cuda_robot_model_state.tool_jacobians
+                    if state.cuda_robot_model_state is not None
+                    else None
+                )
+                if tool_jacobians is None:
+                    log_and_raise(
+                        "ToolVelocityLimitCost is configured but the robot state has no "
+                        "tool Jacobians"
+                    )
+                with self._stream_context("tool_velocity_limit"):
+                    cost_value, _, _ = velocity_cost.forward(
+                        state.joint_state.velocity,
+                        tool_jacobians,
+                    )
+                    cost_collection.add(cost_value, "tool_velocity_limit")
+
         # Cspace bounds/limits
         if self.has_cost("cspace"):
             cspace_cost = self.get_cost("cspace")
@@ -270,11 +343,15 @@ class RobotCostManager:
             scene_collision_cost = self.get_cost("scene_collision")
             if scene_collision_cost.enabled:
                 with self._stream_context("scene_collision"):
-                    idxs_env = (
-                        goal.idxs_env.view(-1)
-                        if goal is not None and goal.idxs_env is not None
-                        else None
-                    )
+                    idxs_env = kwargs.get("idxs_env_query", kwargs.get("env_query_idx"))
+                    if idxs_env is None:
+                        idxs_env = (
+                            goal.idxs_env.view(-1)
+                            if goal is not None and goal.idxs_env is not None
+                            else None
+                        )
+                    else:
+                        idxs_env = idxs_env.view(-1)
                     cost_value = scene_collision_cost.forward(
                         state.cuda_robot_model_state,
                         idxs_env,
@@ -356,6 +433,26 @@ class RobotCostManager:
                 convergence.add(rotation_error, "tool_pose_orientation_tolerance")
                 convergence.add(goalset_idx, "tool_pose_goalset_index")
 
+        if (
+            self.has_cost("tool_relative_transform")
+            and goal.tool_relative_transform_target is not None
+        ):
+            relative_cost = self.get_cost("tool_relative_transform")
+            if relative_cost.enabled:
+                _, position_error, rotation_error = relative_cost.forward(
+                    state.tool_poses,
+                    goal.tool_relative_transform_target,
+                    goal.idxs_tool_relative_transform_target,
+                )
+                convergence.add(
+                    position_error,
+                    "tool_relative_transform_position_tolerance",
+                )
+                convergence.add(
+                    rotation_error,
+                    "tool_relative_transform_orientation_tolerance",
+                )
+
         return convergence
 
     # -- Update params --
@@ -373,6 +470,25 @@ class RobotCostManager:
                 return
             if tool_pose_cost is not None:
                 tool_pose_cost.update_tool_pose_criteria(tool_pose_criteria)
+        if "tool_relative_transform_criteria" in kwargs:
+            relative_criteria = kwargs["tool_relative_transform_criteria"]
+            relative_cost = self.get_cost("tool_relative_transform")
+            if not isinstance(relative_criteria, dict):
+                log_and_raise(
+                    "tool_relative_transform_criteria must be a dict, "
+                    f"got {type(relative_criteria)}"
+                )
+            if relative_cost is not None:
+                relative_cost.update_tool_relative_transform_criteria(relative_criteria)
+        if "tool_velocity_limit_criteria" in kwargs:
+            velocity_criteria = kwargs["tool_velocity_limit_criteria"]
+            velocity_cost = self.get_cost("tool_velocity_limit")
+            if not isinstance(velocity_criteria, dict):
+                log_and_raise(
+                    f"tool_velocity_limit_criteria must be a dict, got {type(velocity_criteria)}"
+                )
+            if velocity_cost is not None:
+                velocity_cost.update_tool_velocity_limit_criteria(velocity_criteria)
         if "dt" in kwargs:
             self.update_dt(kwargs["dt"])
 

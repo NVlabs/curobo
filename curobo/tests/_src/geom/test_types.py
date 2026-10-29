@@ -9,11 +9,13 @@ import json
 import os
 import struct
 import tempfile
+from io import BytesIO
 
 # Third Party
 import numpy as np
 import pytest
 import torch
+from PIL import Image
 
 # CuRobo
 from curobo._src.geom.types import (
@@ -27,6 +29,7 @@ from curobo._src.geom.types import (
     SceneCfg,
     Sphere,
     VoxelGrid,
+    _ArrayTextureImage,
     batch_tensor_cube,
     tensor_capsule,
     tensor_cube,
@@ -39,6 +42,20 @@ from curobo._src.types.device_cfg import DeviceCfg
 def device_cfg():
     """Create tensor configuration."""
     return DeviceCfg()
+
+
+@pytest.mark.parametrize("channels", [None, 1, 3, 4])
+def test_array_texture_png_preserves_pixels(channels: int | None) -> None:
+    """PNG encoding preserves grayscale, RGB, and alpha data exactly."""
+    shape = (3, 5) if channels is None else (3, 5, channels)
+    pixels = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
+    texture = _ArrayTextureImage(pixels)
+    buffer = BytesIO()
+    texture.save(buffer, format="PNG")
+    buffer.seek(0)
+    with Image.open(buffer) as image:
+        expected = pixels[..., 0] if channels == 1 else pixels
+        np.testing.assert_array_equal(np.asarray(image), expected)
 
 
 class TestMaterial:
@@ -524,17 +541,32 @@ class TestSceneCfg:
         """Test getting collision check world."""
         scene = SceneCfg(
             cuboid=[Cuboid(name="box", pose=[0, 0, 0, 1, 0, 0, 0], dims=[1, 1, 1])],
-            cylinder=[Cylinder(name="cyl", pose=[1, 0, 0, 1, 0, 0, 0], radius=0.2, height=1.0)],
+            capsule=[
+                Capsule(
+                    name="cap",
+                    pose=[0, 0, 0, 1, 0, 0, 0],
+                    radius=0.2,
+                    base=[0, 0, -0.5],
+                    tip=[0, 0, 0.5],
+                )
+            ],
+            cylinder=[
+                Cylinder(name="cyl", pose=[1, 0, 0, 1, 0, 0, 0], radius=0.2, height=1.0)
+            ],
         )
         coll_world = scene.get_collision_check_world()
-        # Cylinder should be converted to mesh
-        assert len(coll_world.mesh) >= 1
+        assert len(coll_world.capsule) == 1
+        assert len(coll_world.cylinder) == 1
         assert len(coll_world.cuboid) == 1
 
     def test_scenecfg_get_cache_dict(self):
         """Test getting cache dictionary."""
         scene = SceneCfg(
             cuboid=[Cuboid(name="box1", pose=[0, 0, 0, 1, 0, 0, 0], dims=[1, 1, 1])],
+            capsule=[Capsule(name="cap1", pose=[0, 0, 0, 1, 0, 0, 0], radius=0.2)],
+            cylinder=[
+                Cylinder(name="cyl1", pose=[0, 0, 0, 1, 0, 0, 0], radius=0.2, height=1.0)
+            ],
             mesh=[
                 Mesh(
                     name="mesh1",
@@ -546,6 +578,8 @@ class TestSceneCfg:
         )
         cache = scene.get_cache_dict()
         assert cache["obb"] == 1
+        assert cache["capsule"] == 1
+        assert cache["cylinder"] == 1
         assert cache["mesh"] == 1
 
     def test_scenecfg_clone(self):

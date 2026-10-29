@@ -69,6 +69,7 @@ from curobo.model_predictive_control import ModelPredictiveControl, ModelPredict
 from curobo.perception import FilterDepth, Mapper, MapperCfg
 from curobo.profiling import CudaEventTimer
 from curobo.scene import Scene, VoxelGrid
+from curobo.servo import JointTargetServo
 from curobo.types import (
     CameraObservation,
     ContentPath,
@@ -84,6 +85,21 @@ MPC_ROBOT_FILE = "franka.yml"
 MPC_TARGET_OFFSET_M = 0.20
 FIRST_FRAME_POINTCLOUD_CENTER_M = (0.6, 0.0, 0.2)
 DEPTH_MAX_M = 1.0
+
+
+def _make_joint_state(
+    position: torch.Tensor,
+    joint_names: list[str],
+    velocity: Optional[torch.Tensor] = None,
+    acceleration: Optional[torch.Tensor] = None,
+) -> JointState:
+    """Create a joint state with zero missing derivatives."""
+    joint_state = JointState.from_position(position, joint_names=joint_names)
+    joint_state.velocity = torch.zeros_like(position) if velocity is None else velocity
+    joint_state.acceleration = (
+        torch.zeros_like(position) if acceleration is None else acceleration
+    )
+    return joint_state
 
 
 def _import_realsense():
@@ -505,13 +521,16 @@ class LiveEsdfMpc:
             #cold_start_optimization_num_iters=120,
         )
         self.mpc = ModelPredictiveControl(config)
+        self.servo = JointTargetServo(
+            joint_limits=self.mpc.kinematics.get_joint_limits(),
+            servo_dt_s=config.optimization_dt,
+        )
 
-        self.current_state = JointState.from_position(
+        self.current_state = _make_joint_state(
             self.mpc.default_joint_position.clone().unsqueeze(0),
             joint_names=self.mpc.joint_names,
         )
-        self.current_state.velocity = torch.zeros_like(self.current_state.position)
-        self.current_state.acceleration = torch.zeros_like(self.current_state.position)
+        self.servo.reset(self.current_state)
 
         self.mpc.setup(self.current_state)
         self.target_link = self.mpc.tool_frames[0]
@@ -570,13 +589,14 @@ class LiveEsdfMpc:
         if result.action_sequence is None or result.action_sequence.position.shape[1] == 0:
             return result
 
-        next_position = result.action_sequence.position[:, -1, :]
-        self.current_state = JointState.from_position(
-            next_position.clone(),
+        target_state = _make_joint_state(
+            result.action_sequence.position[:, -1, :].clone(),
             joint_names=self.mpc.joint_names,
+            velocity=result.action_sequence.velocity[:, -1, :],
+            acceleration=result.action_sequence.acceleration[:, -1, :],
         )
-        self.current_state.velocity = result.action_sequence.velocity[:, -1, :]
-        self.current_state.acceleration = result.action_sequence.acceleration[:, -1, :]
+        self.servo.set_target(target_state)
+        self.current_state = self.servo.step(self.current_state)
         self.visualizer.set_joint_state(self.current_state.squeeze(0))
         return result
 

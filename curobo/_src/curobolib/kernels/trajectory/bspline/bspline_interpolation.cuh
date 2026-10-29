@@ -118,7 +118,10 @@ namespace curobo{
                                                     const int       d_idx,
                                                     const int       b_offset,
                                                     const int       goal_offset,
-                                                    const int       n_knots)
+                                                    const int       n_knots,
+                                                    float          *evaluated_velocity = nullptr,
+                                                    float          *evaluated_acceleration = nullptr,
+                                                    float          *evaluated_jerk = nullptr)
     {
       constexpr int splineSupportSize = get_spline_support_size<Degree>();
       const int horizon = padded_horizon - 1;
@@ -263,6 +266,19 @@ namespace curobo{
 
       // Create context with precomputed powers for efficient computation
       auto context = create_context<Degree, BasisImpl>(t_mod, knot_dt);
+      // Form boundary controls relative to their position so small derivative
+      // terms survive float32 rounding before division by knot_dt powers.
+      float position_offset = 0.0F;
+      if (require_start_boundary || (require_goal_boundary && use_implicit_goal))
+      {
+        position_offset = constraint.position;
+        constraint.position = 0.0F;
+        #pragma unroll
+        for (int i = 0; i < splineSupportSize; ++i)
+        {
+          knots[i] -= position_offset;
+        }
+      }
       //BSplineBasisOptimized
       // Apply boundary constraints using the context
       apply_boundary_constraints<Degree>(knots,
@@ -276,19 +292,35 @@ namespace curobo{
         use_implicit_goal);
 
       // Compute interpolation values using the context
-      out_pos = context.compute_position(knots);
+      out_pos = position_offset + context.compute_position(knots);
       out_vel = context.compute_velocity(knots);
       out_acc = context.compute_acceleration(knots);
       out_jerk = context.compute_jerk(knots);
 
-      // write out (use max_out_tsteps for output indexing if different from padded_horizon):
-      const int output_horizon = (max_out_tsteps > 0) ? max_out_tsteps : padded_horizon;
-      out_position_mem[b_idx * output_horizon * dof + h_idx * dof + d_idx]     = out_pos;
-      out_velocity_mem[b_idx * output_horizon * dof + h_idx * dof + d_idx]     = out_vel;
-      out_acceleration_mem[b_idx * output_horizon * dof + h_idx * dof + d_idx] = out_acc;
-      out_jerk_mem[b_idx * output_horizon * dof + h_idx * dof + d_idx]         = out_jerk;
+      if (evaluated_velocity != nullptr)
+      {
+        *evaluated_velocity = out_vel;
+      }
+      if (evaluated_acceleration != nullptr)
+      {
+        *evaluated_acceleration = out_acc;
+      }
+      if (evaluated_jerk != nullptr)
+      {
+        *evaluated_jerk = out_jerk;
+      }
 
-      if (h_idx == 0 && d_idx == 0)
+      // write out (use max_out_tsteps for output indexing if different from padded_horizon):
+      if (out_position_mem != nullptr)
+      {
+        const int output_horizon = (max_out_tsteps > 0) ? max_out_tsteps : padded_horizon;
+        out_position_mem[b_idx * output_horizon * dof + h_idx * dof + d_idx]     = out_pos;
+        out_velocity_mem[b_idx * output_horizon * dof + h_idx * dof + d_idx]     = out_vel;
+        out_acceleration_mem[b_idx * output_horizon * dof + h_idx * dof + d_idx] = out_acc;
+        out_jerk_mem[b_idx * output_horizon * dof + h_idx * dof + d_idx]         = out_jerk;
+      }
+
+      if (out_dt != nullptr && h_idx == 0 && d_idx == 0)
       {
         // out dt has shape [batch, 1]
         // write out only once per batch.

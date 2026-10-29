@@ -23,8 +23,10 @@ repository-specific rules in `.agent/`.
 - Keep public APIs minimal and user-focused. Do not expose implementation details
   unless they are required by the user-facing contract.
 - Prefer existing local patterns and helpers over new abstractions.
-- Use only `Copyright (c) 2026` in SPDX copyright headers for new files;
-  preserve existing headers when modifying older files.
+- For new NVIDIA-authored files, use
+  `SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.`
+  followed by `SPDX-License-Identifier: Apache-2.0`. Preserve existing copyright
+  years and upstream notices when modifying older files.
 - Add focused tests for behavioral changes. Do not use `float64` in tests.
 - Keep CUDA graph enabled for normal runtime, examples, and performance-sensitive
   paths. Disable CUDA graph only in tests or debugging paths where eager

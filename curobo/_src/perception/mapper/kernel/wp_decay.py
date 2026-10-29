@@ -13,6 +13,8 @@ only hosts the Python-side launch wrappers used by
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 import warp as wp
 
@@ -109,42 +111,50 @@ def launch_recycle(tsdf, num_blocks: int | None = None):
 
 
 def apply_decay_from_frustum_flags(
-    tsdf,
+    tsdf: Any,
     *,
     num_blocks: int,
     time_decay: float,
     frustum_decay: float,
-):
+) -> None:
     """Apply decay from precomputed ``tsdf.data.frustum_flags`` and recycle."""
     n = int(num_blocks)
     if n <= 0:
         launch_recycle(tsdf, num_blocks=0)
         return
 
-    if frustum_decay >= 1.0:
-        block_data = tsdf.data.block_data[:n]
-        if time_decay < 1.0:
-            block_data.mul_(time_decay)
-            tsdf.data.block_grid_rgb[:n].mul_(time_decay)
-            if tsdf.data.has_features:
-                tsdf.data.block_features[:n].mul_(time_decay)
-                tsdf.data.block_feature_weight[:n].mul_(time_decay)
-        tsdf.data.block_sums[:n] = block_data[:, :, 1].sum(dim=1, dtype=torch.float32)
-        launch_recycle(tsdf, num_blocks=n)
-        return
-
-    frustum_flags = tsdf.data.frustum_flags
-    factor = tsdf.data.decay_factor[:n]
-    factor.fill_(time_decay)
-    factor.masked_fill_(frustum_flags[:n] > 0, time_decay * frustum_decay)
-
-    tsdf.data.block_data[:n].mul_(factor.view(n, 1, 1))
-    tsdf.data.block_grid_rgb[:n].mul_(factor.view(n, 1, 1))
-    if tsdf.data.has_features:
-        tsdf.data.block_features[:n].mul_(factor.view(n, 1, 1))
-        tsdf.data.block_feature_weight[:n].mul_(factor.view(n, 1))
-
-    tsdf.data.block_sums[:n] = tsdf.data.block_data[:n, :, 1].sum(dim=1, dtype=torch.float32)
+    data = tsdf.get_warp_data()
+    device, stream = get_warp_device_stream(tsdf.data.block_data)
+    kernels = tsdf.kernels
+    feature_dim = int(tsdf.data.feature_dim) if tsdf.data.has_features else 0
+    block_voxels = int(tsdf.block_size**3)
+    color_grid_cells = int(kernels.color_grid_voxels * 4)
+    feature_cells = int(kernels.feature_grid_voxels * feature_dim)
+    launch_width = max(block_voxels, color_grid_cells, feature_cells)
+    tsdf.data.block_sums[:n].zero_()
+    wp.launch(
+        kernels.apply_decay_and_sum_kernel,
+        dim=(n, launch_width),
+        inputs=[
+            data.block_data,
+            data.block_grid_rgb,
+            data.block_features,
+            data.block_feature_weight,
+            wp.from_torch(tsdf.data.frustum_flags, dtype=wp.int32),
+            data.block_sums,
+            data.num_allocated,
+            float(time_decay),
+            float(frustum_decay),
+            1 if frustum_decay < 1.0 else 0,
+            block_voxels,
+            color_grid_cells,
+            feature_dim,
+            feature_cells,
+            int(tsdf.config.max_blocks),
+        ],
+        device=device,
+        stream=stream,
+    )
 
     launch_recycle(tsdf, num_blocks=n)
 

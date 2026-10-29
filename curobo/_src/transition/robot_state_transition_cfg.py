@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard Library
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Type, Union
 
 # Third Party
@@ -72,7 +72,11 @@ class RobotStateTransitionCfg:
     state_finite_difference_mode: str = "BACKWARD"
     filter_robot_command: bool = False
     interpolation_steps: int = 1
+    compute_jacobian: bool = False
+    _compute_jacobian_requested: bool = field(init=False, repr=False)
     class_type: Type[RobotStateTransition] = RobotStateTransition
+    #: Compute torques when robot dynamics are available, without copying robot parameters.
+    compute_inverse_dynamics: bool = True
 
     @staticmethod
     def create(
@@ -96,6 +100,7 @@ class RobotStateTransitionCfg:
         return RobotStateTransitionCfg(**data_dict, device_cfg=device_cfg)
 
     def __post_init__(self):
+        self._compute_jacobian_requested = self.compute_jacobian
         if self.control_space in ControlSpace.bspline_types():
             if self.interpolation_steps < 1:
                 log_and_raise("interpolation_steps needs to be greater than 0")

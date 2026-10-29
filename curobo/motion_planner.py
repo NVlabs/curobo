@@ -9,7 +9,10 @@ Example:
     ```python
     from curobo import MotionPlanner, MotionPlannerCfg
 
-    config = MotionPlannerCfg.create(robot="franka.yml")
+    config = MotionPlannerCfg.create(
+        robot="franka.yml",
+        ik_cspace_rank_weight=5.0,
+    )
     planner = MotionPlanner(config)
     result = planner.plan_pose(goal_tool_poses, current_state)
     ```

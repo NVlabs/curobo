@@ -12,7 +12,7 @@ import torch.autograd.profiler as profiler
 
 # CuRobo
 import curobo._src.runtime as curobo_runtime
-from curobo._src.rollout.metrics import RolloutMetrics
+from curobo._src.rollout.metrics import CostCollection, RolloutMetrics
 from curobo._src.runtime import debug as debug_mode
 from curobo._src.solver.solver_base_result import BaseSolverResult
 from curobo._src.state.state_joint import JointState
@@ -23,6 +23,83 @@ from curobo._src.state.state_joint_trajectory_ops import (
 )
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.torch_util import get_torch_jit_decorator
+
+
+@dataclass
+class _PoseConvergenceSummary:
+    """Pose convergence values split by their result-facing semantics."""
+
+    converged: Optional[torch.Tensor]
+    rank_cost: Optional[torch.Tensor]
+    absolute_position_error: Optional[torch.Tensor]
+    absolute_rotation_error: Optional[torch.Tensor]
+    absolute_goalset_index: Optional[torch.Tensor]
+
+
+def _parse_pose_convergence(
+    convergence: CostCollection,
+    position_tolerance: float,
+    orientation_tolerance: float,
+) -> _PoseConvergenceSummary:
+    """Parse final-step pose metrics without mixing absolute and relative widths.
+
+    Every position/orientation tolerance contributes to convergence and seed
+    ranking. Only the canonical ``tool_pose`` metrics populate the public
+    absolute pose-error and goalset-index result fields.
+    """
+    convergence_terms = []
+    rank_cost_terms = []
+    absolute_position_terms = []
+    absolute_rotation_terms = []
+    absolute_goalset_terms = []
+
+    for metric_name, metric_values in zip(convergence.names, convergence.values):
+        if metric_values.ndim >= 3:
+            final_values = metric_values[:, -1]
+        elif metric_values.ndim == 2:
+            final_values = metric_values[:, -1:]
+        else:
+            final_values = metric_values
+        final_values = final_values.reshape(metric_values.shape[0], -1)
+
+        if metric_name.endswith("_position_tolerance"):
+            convergence_terms.append(final_values < position_tolerance)
+            rank_cost_terms.append(final_values.sum(dim=-1))
+            if metric_name == "tool_pose_position_tolerance":
+                absolute_position_terms.append(final_values)
+        elif metric_name.endswith("_orientation_tolerance"):
+            convergence_terms.append(final_values < orientation_tolerance)
+            rank_cost_terms.append(final_values.sum(dim=-1))
+            if metric_name == "tool_pose_orientation_tolerance":
+                absolute_rotation_terms.append(final_values)
+        elif metric_name == "tool_pose_goalset_index":
+            absolute_goalset_terms.append(final_values)
+
+    return _PoseConvergenceSummary(
+        converged=(
+            torch.all(torch.cat(convergence_terms, dim=-1), dim=-1)
+            if convergence_terms
+            else None
+        ),
+        rank_cost=(
+            torch.stack(rank_cost_terms, dim=-1).sum(dim=-1)
+            if rank_cost_terms
+            else None
+        ),
+        absolute_position_error=(
+            torch.cat(absolute_position_terms, dim=-1)
+            if absolute_position_terms
+            else None
+        ),
+        absolute_rotation_error=(
+            torch.cat(absolute_rotation_terms, dim=-1)
+            if absolute_rotation_terms
+            else None
+        ),
+        absolute_goalset_index=(
+            torch.cat(absolute_goalset_terms, dim=-1) if absolute_goalset_terms else None
+        ),
+    )
 
 
 @dataclass
@@ -50,6 +127,14 @@ class TrajOptSolverResult(BaseSolverResult):
     maximum_trajectory_dt: Optional[torch.Tensor] = None
     minimum_trajectory_dt: Optional[torch.Tensor] = None
 
+    #: Origin of the returned trajectory: linear_fit, graph_fit, trajopt, or mixed.
+    trajectory_source: Optional[str] = None
+
+    #: Fixed-path timeopt duration [batch, return_seeds], when timeopt is enabled.
+    timeopt_duration: Optional[torch.Tensor] = None
+    #: Seconds spent on timeopt and validation for all candidates in this solve.
+    timeopt_time: float = 0.0
+
     def copy_at_batch_indices(self, other: "TrajOptSolverResult", mask: torch.Tensor) -> None:
         """Extend base method to also copy interpolated trajectory fields."""
         super().copy_at_batch_indices(other, mask)
@@ -61,8 +146,13 @@ class TrajOptSolverResult(BaseSolverResult):
                     dst[mask] = src[mask]
         if self.interpolated_last_tstep is not None and other.interpolated_last_tstep is not None:
             self.interpolated_last_tstep[mask] = other.interpolated_last_tstep[mask]
+        if self.timeopt_duration is not None and other.timeopt_duration is not None:
+            self.timeopt_duration[mask] = other.timeopt_duration[mask]
 
     def motion_time(self) -> torch.Tensor:
+        """Return executable duration; js_solution retains native timing for comparison."""
+        if self.timeopt_duration is not None:
+            return self.timeopt_duration
         if self.js_solution is None:
             log_and_raise("js_solution is not set")
         horizon = self.js_solution.shape[-2]
@@ -127,6 +217,11 @@ class TrajOptSolverResult(BaseSolverResult):
             feasible=base_clone.feasible,
             cspace_error=base_clone.cspace_error,
             solution_state=base_clone.solution_state,
+            trajectory_source=self.trajectory_source,
+            timeopt_duration=(
+                self.timeopt_duration.clone() if self.timeopt_duration is not None else None
+            ),
+            timeopt_time=self.timeopt_time,
         )
 
     @profiler.record_function("trajopt_solver_result/get_interpolated_plan")
@@ -156,47 +251,31 @@ class TrajOptSolverResult(BaseSolverResult):
             include_all_hybrid=False,
             sum_horizon=True,  # Checks constraints over horizon
         )
-        # 2. Check Convergence (Position and Orientation at the *last* timestep)
-        converge_list = []
-        cost_list = []
-        goalset_index_list = []
-        for k in range(len(self.metrics.convergence.names)):
-            metric_name = self.metrics.convergence.names[k]
-            # Values shape: (batch*num_seeds, horizon, num_links) or (batch*num_seeds, horizon)
-            metric_values = self.metrics.convergence.values[k]
-
-            # Check convergence only at the last timestep (index -1)
-            last_step_values = metric_values[
-                :, -1:
-            ]  # Keep dim: (batch*num_seeds, 1, num_links) or (batch*num_seeds, 1)
-
-            if "position_tolerance" in metric_name:
-                cost_list.append(last_step_values)
-                converged = last_step_values < self.position_tolerance
-                converge_list.append(converged)
-            elif "orientation_tolerance" in metric_name:
-                cost_list.append(last_step_values)
-                converged = last_step_values < self.orientation_tolerance
-                converge_list.append(converged)
-            elif "goalset_index" in metric_name:
-                goalset_index_list.append(last_step_values)  # Keep last step index
-
-        # Combine convergence criteria
-        if converge_list:
-            converged_all_links = torch.cat(
-                converge_list, dim=-1
-            )  # Shape: (batch*num_seeds, 1, num_links * 2)
-            converged = torch.all(converged_all_links, dim=-1).squeeze(
-                -1
-            )  # Shape: (batch*num_seeds,)
+        # 2. Check final-step pose convergence. Relative-transform metrics are
+        # independent constraints; they must not change the shape or meaning of
+        # the public absolute pose-error and goalset-index fields.
+        pose_summary = _parse_pose_convergence(
+            self.metrics.convergence,
+            self.position_tolerance,
+            self.orientation_tolerance,
+        )
+        if pose_summary.converged is not None:
+            converged = pose_summary.converged
+        elif isinstance(feasible, bool):
+            converged = torch.ones(
+                batch_size * num_seeds,
+                dtype=torch.bool,
+                device=self.solution.device if self.solution is not None else "cpu",
+            )
         else:
-            # Handle case with no convergence metrics (e.g. pure smoothing)
-            # Assume converged if feasible? Or always False? Let's say always True if feasible.
-            converged = torch.ones_like(feasible)
+            converged = torch.ones_like(feasible, dtype=torch.bool).view(-1)
 
         # Success = Feasible AND Converged
 
-        success = torch.logical_and(converged, feasible)
+        if isinstance(feasible, bool):
+            success = converged if feasible else torch.zeros_like(converged)
+        else:
+            success = torch.logical_and(converged, feasible.view(-1))
 
         # check dt success:
         # dt_success =  self.js_solution.dt < self.maximum_trajectory_dt
@@ -209,33 +288,27 @@ class TrajOptSolverResult(BaseSolverResult):
             )
             success = torch.logical_and(interpolated_feasible, success)
 
-        goalset_index = torch.cat(goalset_index_list, dim=-1) if goalset_index_list else None
+        goalset_index = pose_summary.absolute_goalset_index
+        cost_sum = (
+            pose_summary.rank_cost
+            if pose_summary.rank_cost is not None
+            else torch.zeros_like(success, dtype=torch.float32)
+        )
 
-        # compute position and rotation errors
-        if cost_list:
-            cost = torch.cat(cost_list, dim=-1)  # Shape: (batch*num_seeds, 1, num_links * 2)
-
+        if pose_summary.absolute_position_error is not None:
+            position_error = torch.max(
+                pose_summary.absolute_position_error,
+                dim=-1,
+            )[0]
         else:
-            cost = torch.zeros(
-                (self.batch_size, self.num_seeds, 0), device=success.device, dtype=torch.float32
-            )
-        cost_sum = cost.sum(dim=-1).squeeze(-1)
-
-        pose_error_flat = cost.view(
-            batch_size * num_seeds, cost.shape[-1]
-        )  # Shape: (batch*num_seeds, num_links * 2)
-        num_links = int(pose_error_flat.shape[-1] / 2) if cost.numel() > 0 else 0
-        if num_links > 0:
-            pose_error_link_view = pose_error_flat.view(batch_size, num_seeds, num_links, 2)
-            # position_error shape: (batch, return_seeds)
-            position_error = torch.max(pose_error_link_view[..., 0], dim=-1)[0]
-            # rotation_error shape: (batch, return_seeds)
-            rotation_error = torch.max(pose_error_link_view[..., 1], dim=-1)[0]
+            position_error = torch.zeros_like(success, dtype=torch.float32)
+        if pose_summary.absolute_rotation_error is not None:
+            rotation_error = torch.max(
+                pose_summary.absolute_rotation_error,
+                dim=-1,
+            )[0]
         else:
-            # Handle case with no pose cost metrics
-            dummy_error = torch.zeros_like(success, dtype=torch.float32)
-            position_error = dummy_error
-            rotation_error = dummy_error
+            rotation_error = torch.zeros_like(success, dtype=torch.float32)
 
         # Goalset indices if applicable
         if goalset_index is not None:
@@ -307,7 +380,11 @@ class TrajOptSolverResult(BaseSolverResult):
         total_cost = seed_rollout_cost + smooth_cost  # Combine pose error and dt cost
         total_cost = total_cost.view(batch_size, num_seeds)
 
-        total_cost[~success] += 1e16  # Penalize non-successful trajectories
+        total_cost = torch.where(
+            success,
+            total_cost,
+            total_cost + 1e16,
+        )
 
         # Reshape for topk selection per batch item
         total_cost_reshaped = total_cost.view(batch_size, num_seeds)  # Shape: (batch, num_seeds)
@@ -361,17 +438,26 @@ class TrajOptSolverResult(BaseSolverResult):
         new_result.rotation_error = torch.gather(self.rotation_error, dim=1, index=topk_seeds)
         new_result.seed_cost = torch.gather(self.seed_cost, dim=1, index=topk_seeds)
         new_result.seed_rank = torch.gather(self.seed_rank, dim=1, index=topk_seeds)
+        if self.timeopt_duration is not None:
+            new_result.timeopt_duration = torch.gather(self.timeopt_duration, 1, topk_seeds)
 
-        num_links = self.goalset_index.shape[-1]
-        # make sure topk_seeds has shape (batch_size, topk, num_links) by broadcasting:
-        if num_links == 1:
-            topk_seeds_goalset_index = topk_seeds.view(batch_size, topk, 1)
-        else:
-            topk_seeds_goalset_index = topk_seeds.unsqueeze(-1).expand(batch_size, topk, num_links)
+        if self.goalset_index is not None:
+            num_links = self.goalset_index.shape[-1]
+            # Broadcast the selected seeds across the absolute-pose link dimension.
+            if num_links == 1:
+                topk_seeds_goalset_index = topk_seeds.view(batch_size, topk, 1)
+            else:
+                topk_seeds_goalset_index = topk_seeds.unsqueeze(-1).expand(
+                    batch_size,
+                    topk,
+                    num_links,
+                )
 
-        new_result.goalset_index = torch.gather(
-            self.goalset_index, dim=1, index=topk_seeds_goalset_index
-        )
+            new_result.goalset_index = torch.gather(
+                self.goalset_index,
+                dim=1,
+                index=topk_seeds_goalset_index,
+            )
 
         # Broadcast topk_seeds has shape (batch_size, topk, horizon, dof) by broadcasting:
         horizon = self.solution.shape[2]
@@ -451,10 +537,11 @@ class TrajOptSolverResult(BaseSolverResult):
             self.interpolated_last_tstep[batch_idx, seed_idx] = other.interpolated_last_tstep[
                 batch_idx, seed_idx
             ]
+        if self.timeopt_duration is not None and other.timeopt_duration is not None:
+            self.timeopt_duration[batch_idx, seed_idx] = other.timeopt_duration[batch_idx, seed_idx]
 
         if self.interpolated_metrics is not None and other.interpolated_metrics is not None:
             flat_indices = batch_idx * self.num_seeds + seed_idx
             self.interpolated_metrics.copy_only_index(other.interpolated_metrics, flat_indices)
 
         super().copy_successful_solutions(other)
-

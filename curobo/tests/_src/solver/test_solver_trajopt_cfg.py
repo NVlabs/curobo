@@ -9,9 +9,9 @@ import torch
 
 # CuRobo
 from curobo._src.solver.solver_trajopt_cfg import TrajOptSolverCfg
+from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
-from curobo._src.util.trajectory import TrajInterpolationType
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
 
 
@@ -106,6 +106,7 @@ class TestTrajOptSolverCfgCreate:
             device_cfg=cuda_device_cfg,
         )
         assert isinstance(config, TrajOptSolverCfg)
+        assert all(not opt.line_search_backtracking for opt in config.optimizer_configs)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_with_dict_robot(self, cuda_device_cfg, franka_robot_cfg_dict):

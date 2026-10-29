@@ -6,12 +6,11 @@ Manages: rollouts, line search, best tracking, debug recording, iteration state,
 cost/gradient evaluation, CUDA graph executors, and all lifecycle methods.
 
 The optimizer provides a step_direction_fn and optional hooks for buffer management.
-Composed by LBFGSOpt, LSR1Opt, and ConjugateGradientOpt.
+Composed by LBFGSOpt and ConjugateGradientOpt.
 """
 
 from __future__ import annotations
 
-import math
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
@@ -22,13 +21,33 @@ from curobo._src.optim.components.action_bounds import ActionBounds
 from curobo._src.optim.components.best_tracker import BestTracker
 from curobo._src.optim.components.debug_recorder import DebugRecorder
 from curobo._src.optim.gradient.line_search_context import LineSearchContext
-from curobo._src.optim.gradient.line_search_strategy import LineSearchStrategyFactory
+from curobo._src.optim.gradient.line_search_strategy import (
+    LineSearchStatus,
+    LineSearchStrategyFactory,
+)
+from curobo._src.optim.gradient.update_best_solution import update_best_solution
 from curobo._src.optim.optimization_iteration_state import OptimizationIterationState
 from curobo._src.rollout.rollout_protocol import Rollout
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
-from curobo._src.util.logging import log_and_raise, log_info
+from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import check_nan_last_dimension
+from curobo._src.util.torch_util import get_torch_jit_decorator
+
+
+@get_torch_jit_decorator(only_valid_for_compile=True)
+def _scale_step_direction(
+    step_direction: torch.Tensor,
+    optimization_step_max: torch.Tensor,
+) -> torch.Tensor:
+    """Scale each flat optimization direction with one batch-wise normalizer."""
+    flat_direction = step_direction.view(step_direction.shape[0], -1)
+    scale = torch.amax(
+        torch.abs(flat_direction) / optimization_step_max.view(1, -1),
+        dim=-1,
+        keepdim=True,
+    ).clamp(min=1.0)
+    return (flat_direction / scale).view_as(step_direction)
 
 
 class GradientOptCore:
@@ -55,6 +74,7 @@ class GradientOptCore:
         on_initial_state: Optional[Callable] = None,
         on_resize: Optional[Callable] = None,
         on_shift: Optional[Callable] = None,
+        step_direction_fn_scales_output: bool = False,
         use_cuda_graph: bool = False,
     ):
         """Initialize gradient optimizer core with rollouts, callbacks, and config.
@@ -82,6 +102,8 @@ class GradientOptCore:
                 optimizer-specific buffers when the batch size changes.
             on_shift: Optional callback ``fn(shift_steps)`` to shift
                 optimizer-specific buffers for MPC warm-starting.
+            step_direction_fn_scales_output: If True, ``step_direction_fn``
+                applies the configured optimization-space step limit itself.
             use_cuda_graph: If True, CUDA graph executors are created for
                 ``_opt_iters`` and ``_prepare_initial_iteration_state``
                 after :meth:`finish_init` is called.
@@ -91,6 +113,8 @@ class GradientOptCore:
                 f"num_rollout_instances {config.num_rollout_instances} "
                 f"!= len(rollout_list) {len(rollout_list)}"
             )
+        if config.fix_terminal_action:
+            log_and_raise("fix_terminal_action is not supported")
 
         self.config = config
         self.device_cfg = config.device_cfg
@@ -106,6 +130,7 @@ class GradientOptCore:
         self._on_initial_state = on_initial_state
         self._on_resize = on_resize
         self._on_shift = on_shift
+        self._step_direction_fn_scales_output = step_direction_fn_scales_output
 
         # Rollout instances: [0] = main, [1] = initial evaluation
         self.rollout_fn = rollout_list[0]
@@ -122,17 +147,13 @@ class GradientOptCore:
         self._best = BestTracker(config.device_cfg)
         self._debug = DebugRecorder() if config.store_debug else None
 
-        # Check CUDA kernel feasibility for line search
-        if self.opt_dim >= 1024:
-            self.config.use_cuda_kernel_line_search = False
+        # The fused kernel requires at least one thread per line-search candidate.
         if len(self.config.line_search_scale) > self.opt_dim:
             self.config.use_cuda_kernel_line_search = False
 
         # Line search: created lazily in update_num_problems
         self._line_search_strategy = None
         self._line_search_context = None
-        self._initial_line_search_strategy = None
-        self._initial_line_search_context = None
 
         # Gradient backward vector
         self._l_vec = None
@@ -208,29 +229,44 @@ class GradientOptCore:
 
     @property
     def action_horizon_step_max(self):
-        """Return per-timestep maximum step size, refreshing bounds first.
+        """Return the flat optimization-space maximum step size.
 
         Returns:
-            Tensor: Shape ``(action_horizon, action_dim)`` with the maximum
-            allowed step magnitude at each timestep.
+            Tensor: Contiguous shape ``(action_horizon * action_dim,)`` with
+            the maximum allowed magnitude for each optimization variable.
         """
-        self._bounds.refresh(
-            self.action_bound_lows, self.action_bound_highs, self.action_horizon
-        )
+        self._bounds.refresh(self.action_bound_lows, self.action_bound_highs, self.action_horizon)
         return self._bounds.horizon_step_max
 
     @property
+    def step_scaling_enabled(self) -> bool:
+        """Return whether optimizer directions use the configured step limit."""
+        return self.config.step_scale != 0.0 and self.config.step_scale != 1.0
+
+    def scale_step_direction(self, step_direction: torch.Tensor) -> torch.Tensor:
+        """Limit a direction by the flat optimization-space step bounds.
+
+        Args:
+            step_direction: Tensor with shape ``(batch, action_horizon,
+                action_dim)`` or ``(batch, action_horizon * action_dim)``.
+
+        Returns:
+            Tensor with the same shape as ``step_direction``. Each batch item
+            is scaled uniformly so every variable respects its step limit.
+        """
+        if not self.step_scaling_enabled:
+            return step_direction
+
+        return _scale_step_direction(step_direction, self.action_horizon_step_max)
+
+    @property
     def action_horizon_bounds_lows(self):
-        self._bounds.refresh(
-            self.action_bound_lows, self.action_bound_highs, self.action_horizon
-        )
+        self._bounds.refresh(self.action_bound_lows, self.action_bound_highs, self.action_horizon)
         return self._bounds.horizon_lows
 
     @property
     def action_horizon_bounds_highs(self):
-        self._bounds.refresh(
-            self.action_bound_lows, self.action_bound_highs, self.action_horizon
-        )
+        self._bounds.refresh(self.action_bound_lows, self.action_bound_highs, self.action_horizon)
         return self._bounds.horizon_highs
 
     @property
@@ -272,6 +308,15 @@ class GradientOptCore:
         self.opt_dt = timer.stop()
         return out
 
+    def optimize_without_timing(self, seed_action: torch.Tensor) -> torch.Tensor:
+        """Run optimization without recording or synchronizing a CUDA timer.
+
+        This entry point is intended for callers that capture a complete solve
+        in an enclosing CUDA graph. The optimization and result selection are
+        identical to :meth:`optimize`; only the outer event timer is omitted.
+        """
+        return self._optimize_impl(seed_action)
+
     def _optimize_impl(self, seed_action: torch.Tensor) -> torch.Tensor:
         """Execute the outer optimization loop over line-search iterations.
 
@@ -289,17 +334,13 @@ class GradientOptCore:
         Returns:
             Tensor of shape ``(num_problems, action_horizon, action_dim)``.
         """
-        q = seed_action.view(
-            self.config.num_problems, self.action_horizon, self.action_dim
-        )
+        q = seed_action.view(self.config.num_problems, self.action_horizon, self.action_dim)
 
         if self._iteration_state is not None:
             iteration_state = self._iteration_state
             self._iteration_state = None
         else:
-            iteration_state = self._dispatch(
-                "_prepare_initial_iteration_state", q
-            )
+            iteration_state = self._dispatch("_prepare_initial_iteration_state", q)
 
         self._record_iteration_state(iteration_state)
 
@@ -321,15 +362,11 @@ class GradientOptCore:
         )
 
         if not self.config.return_best_action:
-            nan_labels = check_nan_last_dimension(q).view(
-                self.config.num_problems, 1
-            )
+            nan_labels = check_nan_last_dimension(q).view(self.config.num_problems, 1)
             q_best = torch.where(nan_labels, best_q, q)
         else:
             q_best = best_q.clone()
-        return q_best.view(
-            self.config.num_problems, self.action_horizon, self.action_dim
-        )
+        return q_best.view(self.config.num_problems, self.action_horizon, self.action_dim)
 
     def _opt_iters(
         self, iteration_state: OptimizationIterationState
@@ -355,9 +392,7 @@ class GradientOptCore:
         return iteration_state
 
     @profiler.record_function("gradient_opt_core/opt_step")
-    def _opt_step(
-        self, iteration_state: OptimizationIterationState
-    ) -> OptimizationIterationState:
+    def _opt_step(self, iteration_state: OptimizationIterationState) -> OptimizationIterationState:
         """Execute a single line-search step followed by a step-direction update.
 
         Performs the line search to find the next action and its gradient, then
@@ -391,6 +426,8 @@ class GradientOptCore:
                 log_and_raise("next_state.exploration_action is nan")
 
         step_direction = self._step_direction_fn(next_state)
+        if not self._step_direction_fn_scales_output:
+            step_direction = self.scale_step_direction(step_direction)
 
         if curobo_runtime.debug_nan:
             if torch.isnan(step_direction).any():
@@ -399,18 +436,14 @@ class GradientOptCore:
         next_state.step_direction = step_direction
         return next_state
 
-    def _prepare_initial_iteration_state(
-        self, action: torch.Tensor
-    ) -> OptimizationIterationState:
+    def _prepare_initial_iteration_state(self, action: torch.Tensor) -> OptimizationIterationState:
         iteration_state = self._create_initial_iteration_state(action)
         iteration_state = self._run_initial_evaluation(iteration_state)
         if self._on_initial_state:
             self._on_initial_state(iteration_state, None)
         return iteration_state
 
-    def _create_initial_iteration_state(
-        self, action: torch.Tensor
-    ) -> OptimizationIterationState:
+    def _create_initial_iteration_state(self, action: torch.Tensor) -> OptimizationIterationState:
         grad_q = action.detach().clone() * 0.0
         return OptimizationIterationState(
             action=action.clone(),
@@ -425,18 +458,62 @@ class GradientOptCore:
             exploration_gradient=grad_q.clone(),
             exploration_cost=self._best.cost.clone(),
             converged=self._best.converged,
+            line_search_index=torch.full(
+                (self.config.num_problems,),
+                -1,
+                device=action.device,
+                dtype=torch.int32,
+            ),
+            line_search_status=torch.full(
+                (self.config.num_problems,),
+                LineSearchStatus.BASELINE,
+                device=action.device,
+                dtype=torch.int32,
+            ),
+            curvature_update_valid=torch.zeros(
+                self.config.num_problems,
+                device=action.device,
+                dtype=torch.bool,
+            ),
         )
 
     def _run_initial_evaluation(
-        self, iteration_state: OptimizationIterationState
+        self, iteration_state: OptimizationIterationState, mask: Optional[torch.Tensor] = None
     ) -> OptimizationIterationState:
-        iteration_state = self._initial_line_search_strategy.search(
-            iteration_state, context=self._initial_line_search_context
+        initial_particles = 1 if len(self._rollout_list) > 1 else self.config.num_particles
+        action_set = (
+            iteration_state.exploration_action.view(self.config.num_problems, 1, self.opt_dim)
+            .expand(-1, initial_particles, -1)
+            .contiguous()
+        )
+        cost, gradient = self._compute_cost_constraint_and_gradient_initial(action_set)
+        baseline_cost = cost[:, 0, 0].detach()
+        baseline_gradient = gradient[:, 0].view(
+            self.config.num_problems, self.action_horizon, self.action_dim
+        )
+        iteration_state.action.copy_(iteration_state.exploration_action)
+        iteration_state.cost.copy_(baseline_cost)
+        iteration_state.gradient.copy_(baseline_gradient)
+        iteration_state.exploration_cost.copy_(baseline_cost)
+        iteration_state.exploration_gradient.copy_(baseline_gradient)
+        iteration_state = update_best_solution(
+            iteration_state,
+            self.action_horizon,
+            self.action_dim,
+            self.config.cost_delta_threshold,
+            self.config.cost_relative_threshold,
+            self.config.convergence_iteration,
         )
         initial_step_direction = (
             -self.config.initial_step_scale * iteration_state.exploration_gradient
         )
+        initial_step_direction = self.scale_step_direction(initial_step_direction)
         iteration_state.step_direction.copy_(initial_step_direction)
+        if self.config.line_search_backtracking:
+            if mask is None:
+                self._line_search_context.beta.fill_(1.0)
+            else:
+                self._line_search_context.beta.masked_fill_(mask, 1.0)
         return iteration_state
 
     # -- Cost/gradient evaluation --
@@ -461,19 +538,15 @@ class GradientOptCore:
                 - gradient: Same shape as ``x``.
         """
         x_n = x.detach().requires_grad_(True)
-        x_in = x_n.view(
+        x_in = x_n.reshape(
             self.config.num_problems * self.config.num_particles,
             self.action_horizon,
             self.action_dim,
         )
         trajectories = self.rollout_fn.evaluate_action(x_in, use_cuda_graph=False)
-        costs = trajectories.costs_and_constraints.get_sum_cost_and_constraint(
-            sum_horizon=True
-        )
+        costs = trajectories.costs_and_constraints.get_sum_cost_and_constraint(sum_horizon=True)
         if costs.shape != (self.config.num_problems * self.config.num_particles,):
-            log_and_raise(
-                f"costs.shape != (num_problems*num_particles,): {costs.shape}"
-            )
+            log_and_raise(f"costs.shape != (num_problems*num_particles,): {costs.shape}")
         cost = costs.view(self.config.num_problems, self.config.num_particles, 1)
         cost.backward(gradient=self._l_vec, retain_graph=False)
         g_x = x_n.grad.detach()
@@ -484,24 +557,21 @@ class GradientOptCore:
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         x_n = x.detach().requires_grad_(True)
+        num_particles = x.shape[1]
         x_in = x_n.view(
-            self.config.num_problems * self.config.num_particles,
+            self.config.num_problems * num_particles,
             self.action_horizon,
             self.action_dim,
         )
-        initial_rollout = self._rollout_list[1] if len(self._rollout_list) > 1 else self._rollout_list[0]
-        trajectories = initial_rollout.evaluate_action(
-            x_in, use_cuda_graph=False
+        initial_rollout = (
+            self._rollout_list[1] if len(self._rollout_list) > 1 else self._rollout_list[0]
         )
-        costs = trajectories.costs_and_constraints.get_sum_cost_and_constraint(
-            sum_horizon=True
-        )
-        if costs.shape != (self.config.num_problems * self.config.num_particles,):
-            log_and_raise(
-                f"costs.shape != (num_problems*num_particles,): {costs.shape}"
-            )
-        cost = costs.view(self.config.num_problems, self.config.num_particles, 1)
-        cost.backward(gradient=self._l_vec, retain_graph=False)
+        trajectories = initial_rollout.evaluate_action(x_in, use_cuda_graph=False)
+        costs = trajectories.costs_and_constraints.get_sum_cost_and_constraint(sum_horizon=True)
+        if costs.shape != (self.config.num_problems * num_particles,):
+            log_and_raise(f"costs.shape != (num_problems*num_particles,): {costs.shape}")
+        cost = costs.view(self.config.num_problems, num_particles, 1)
+        cost.backward(gradient=torch.ones_like(cost), retain_graph=False)
         g_x = x_n.grad.detach()
         return cost, g_x
 
@@ -530,9 +600,7 @@ class GradientOptCore:
             reset_num_iters: If True, restore ``num_iters`` to its
                 original configured value.
         """
-        action = action.view(
-            self.config.num_problems, self.action_horizon, self.action_dim
-        )
+        action = action.view(self.config.num_problems, self.action_horizon, self.action_dim)
 
         if mask is None and self._debug:
             self._debug.clear()
@@ -540,15 +608,24 @@ class GradientOptCore:
         if reset_num_iters:
             self.config.num_iters = self._og_num_iters
 
+        if mask is None and self.use_cuda_graph:
+            executor = self._executors.get("_prepare_initial_iteration_state")
+            if executor is not None and not executor.is_initialized:
+                # Graph capture runs warmup evaluations that mutate best-state counters.
+                # Capture before the real reset so the reset restores eager semantics.
+                executor.warmup(action)
+
         self._best.clear(mask)
-        if self._on_reinitialize:
+        if clear_optimizer_state and self._on_reinitialize:
             self._on_reinitialize(mask)
 
-        iteration_state = self._create_initial_iteration_state(action)
-        iteration_state = self._run_initial_evaluation(iteration_state)
-
-        if self._on_initial_state:
-            self._on_initial_state(iteration_state, mask)
+        if mask is None:
+            iteration_state = self._dispatch("_prepare_initial_iteration_state", action)
+        else:
+            iteration_state = self._create_initial_iteration_state(action)
+            iteration_state = self._run_initial_evaluation(iteration_state, mask)
+            if self._on_initial_state:
+                self._on_initial_state(iteration_state, mask)
 
         if self._iteration_state is None:
             self._iteration_state = iteration_state
@@ -586,32 +663,17 @@ class GradientOptCore:
             self._line_search_strategy = LineSearchStrategyFactory.get_strategy(
                 self.config.line_search_type
             )
-            self._initial_line_search_context = self._create_line_search_context(
-                compute_costs_and_gradients=(
-                    self._compute_cost_constraint_and_gradient_initial
-                ),
-            )
-            self._initial_line_search_strategy = LineSearchStrategyFactory.get_strategy(
-                self.config.line_search_type
-            )
 
         self._line_search_context.update_num_problems(num_problems)
-        self._line_search_strategy.update_num_problems(
-            num_problems, self._line_search_context
-        )
-        self._initial_line_search_context.update_num_problems(num_problems)
-        self._initial_line_search_strategy.update_num_problems(
-            num_problems, self._initial_line_search_context
-        )
+        self._line_search_strategy.update_num_problems(num_problems, self._line_search_context)
 
-        for rollout in self._rollout_list:
-            rollout.update_batch_size(
-                batch_size=num_problems * self.config.num_particles
-            )
+        self._rollout_list[0].update_batch_size(
+            batch_size=num_problems * self.config.num_particles
+        )
+        for rollout in self._rollout_list[1:]:
+            rollout.update_batch_size(batch_size=num_problems)
 
-    def _create_line_search_context(
-        self, compute_costs_and_gradients=None
-    ) -> LineSearchContext:
+    def _create_line_search_context(self, compute_costs_and_gradients=None) -> LineSearchContext:
         if compute_costs_and_gradients is None:
             compute_costs_and_gradients = self._compute_cost_constraint_and_gradient
         return LineSearchContext(
@@ -623,19 +685,18 @@ class GradientOptCore:
             compute_costs_and_gradients=compute_costs_and_gradients,
             action_horizon=self.action_horizon,
             action_dim=self.action_dim,
-            step_scale=self.config.step_scale,
-            fix_terminal_action=self.config.fix_terminal_action,
-            action_horizon_step_max=self._bounds.step_max,
             line_search_scale=self.config.line_search_scale,
             num_problems=self.config.num_problems,
             convergence_iteration=self.config.convergence_iteration,
             cost_delta_threshold=self.config.cost_delta_threshold,
             cost_relative_threshold=self.config.cost_relative_threshold,
+            line_search_backtracking=self.config.line_search_backtracking,
         )
 
     def update_rollout_params(self, goal):
-        for rollout in self._rollout_list:
-            rollout.update_params(goal, num_particles=self.config.num_particles)
+        self._rollout_list[0].update_params(goal, num_particles=self.config.num_particles)
+        for rollout in self._rollout_list[1:]:
+            rollout.update_params(goal, num_particles=1)
 
     def update_goal_dt(self, goal):
         for rollout in self._rollout_list:
@@ -668,15 +729,12 @@ class GradientOptCore:
 
     def update_solver_params(self, solver_params: Dict[str, Dict[str, Any]]) -> bool:
         if self.config.solver_name not in solver_params:
-            log_and_raise(
-                f"Optimizer {self.config.solver_name} not found in {solver_params}"
-            )
+            log_and_raise(f"Optimizer {self.config.solver_name} not found in {solver_params}")
         for param_name, param_value in solver_params[self.config.solver_name].items():
             setattr(self.config, param_name, param_value)
         if self.config.inner_iters > self.config.num_iters:
             log_and_raise(
-                f"inner_iters {self.config.inner_iters} > num_iters "
-                f"{self.config.num_iters}"
+                f"inner_iters {self.config.inner_iters} > num_iters {self.config.num_iters}"
             )
         if self.config.num_iters % self.config.inner_iters != 0:
             log_and_raise(
@@ -684,9 +742,7 @@ class GradientOptCore:
                 f"inner_iters {self.config.inner_iters}"
             )
         if self.outer_iters <= 0:
-            log_and_raise(
-                f"outer_iters {self.outer_iters} <= 0"
-            )
+            log_and_raise(f"outer_iters {self.outer_iters} <= 0")
         return True
 
     def update_niters(self, niters: int):
@@ -702,10 +758,6 @@ class GradientOptCore:
 
             for method_name, executor in self._executors.items():
                 if executor is not None:
-                    file_name = (
-                        f"{file_path}_{self.config.solver_name}_{method_name}.dot"
-                    )
-                    log_warn(
-                        f"Dumping CUDA Graph for {method_name} to {file_name}"
-                    )
+                    file_name = f"{file_path}_{self.config.solver_name}_{method_name}.dot"
+                    log_warn(f"Dumping CUDA Graph for {method_name} to {file_name}")
                     executor.debug_dump(file_name)

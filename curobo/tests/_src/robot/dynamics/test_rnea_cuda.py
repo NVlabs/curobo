@@ -10,22 +10,139 @@ import numpy as np
 import pytest
 import torch
 
+from curobo._src.robot.types.kinematics_params import KinematicsParams
+from curobo._src.types.device_cfg import DeviceCfg
 from curobo.tests._src.robot.dynamics.rnea_numpy_reference import (
     rnea_from_kinematics_params,
 )
 
 
-def _load_robot(robot_yml):
+@pytest.mark.parametrize(
+    ("max_level_width", "num_links", "num_levels", "expected"),
+    [
+        (1, 8, 8, 1),
+        (3, 13, 11, 1),
+        (2, 22, 12, 16),
+        (6, 56, 22, 16),
+        (20, 80, 20, 32),
+    ],
+)
+def test_threads_per_batch_requires_sustained_tree_parallelism(
+    max_level_width: int,
+    num_links: int,
+    num_levels: int,
+    expected: int,
+) -> None:
+    """Sustained branches should use at least half-warp cooperative RNEA."""
+    from curobo._src.robot.dynamics.dynamics import _compute_threads_per_batch
+
+    assert _compute_threads_per_batch(max_level_width, num_links, num_levels) == expected
+
+
+@pytest.mark.parametrize(
+    (
+        "max_level_width",
+        "num_links",
+        "num_levels",
+        "batch_size",
+        "policy_sm_count",
+        "expected",
+    ),
+    [
+        # One serial chain: expose batch parallelism at low states per SM,
+        # then reduce cooperative traversal width as the grid grows.
+        (1, 7, 1, 1024, 170, 32),
+        (1, 7, 1, 1025, 170, 4),
+        (1, 7, 1, 4097, 170, 2),
+        (1, 7, 1, 8193, 170, 1),
+        # The same rollout needs less within-state parallelism on a small GPU.
+        (1, 7, 1, 976, 16, 1),
+        (1, 7, 1, 976, 32, 2),
+        # Multiple independent chains in one tree level.
+        (2, 12, 1, 1024, 170, 32),
+        (2, 12, 1, 1025, 170, 4),
+        # Multi-level trees use one simple half-warp/warp policy.
+        (3, 29, 2, 512, 170, 32),
+        (3, 29, 2, 513, 170, 16),
+        (3, 29, 2, 48, 16, 32),
+        (3, 29, 2, 49, 16, 16),
+        (3, 29, 2, 131072, 170, 16),
+    ],
+)
+def test_runtime_threads_per_batch_uses_tree_batch_and_sm_count(
+    max_level_width: int,
+    num_links: int,
+    num_levels: int,
+    batch_size: int,
+    policy_sm_count: int,
+    expected: int,
+) -> None:
+    """Runtime RNEA policy should use tree shape and effective states per SM."""
+    from curobo._src.robot.dynamics.dynamics import _compute_runtime_threads_per_batch
+
+    assert (
+        _compute_runtime_threads_per_batch(
+            max_level_width,
+            num_links,
+            num_levels,
+            batch_size,
+            policy_sm_count,
+        )
+        == expected
+    )
+
+
+def _load_robot(robot_yml: str) -> tuple[KinematicsParams, DeviceCfg]:
     """Load curobo robot and return KinematicsParams."""
     from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
-    from curobo._src.types.device_cfg import DeviceCfg
 
     device_cfg = DeviceCfg()
     cfg = KinematicsCfg.from_robot_yaml_file(robot_yml, device_cfg=device_cfg)
     return cfg.kinematics_config, device_cfg
 
 
-def _run_cuda_rnea(kp, device_cfg, q_np, qd_np, qdd_np, gravity=-9.81):
+def test_runtime_sm_override_updates_dynamics_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The public SM override should control the runtime RNEA launch policy."""
+    import curobo._src.runtime as curobo_runtime
+    from curobo._src.robot.dynamics.dynamics import Dynamics
+    from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+
+    monkeypatch.setattr(curobo_runtime, "kernel_launch_sm_count", 16)
+    kinematics_params, device_cfg = _load_robot("franka.yml")
+    dynamics = Dynamics(
+        DynamicsCfg(
+            kinematics_config=kinematics_params,
+            device_cfg=device_cfg,
+        )
+    )
+
+    dynamics.setup_batch_size(batch_size=976)
+
+    assert dynamics._threads_per_batch == 1
+
+
+def _load_unlocked_mimic_robot() -> tuple[KinematicsParams, DeviceCfg]:
+    """Load the simple robot with its source and mimic joints both active."""
+    from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
+
+    device_cfg = DeviceCfg()
+    cfg = KinematicsCfg.from_robot_yaml_file(
+        "simple_mimic_robot.yml",
+        device_cfg=device_cfg,
+        lock_joints=None,
+    )
+    kp = cfg.kinematics_config
+
+    active_joint_map = kp.joint_map[kp.joint_map >= 0].cpu().numpy()
+    _, mapped_link_counts = np.unique(active_joint_map, return_counts=True)
+    joint_offsets = kp.joint_offset_map.view(-1, 2).cpu().numpy()
+    assert np.any(mapped_link_counts > 1)
+    assert np.any(joint_offsets[:, 0] != 1.0)
+    assert np.any(joint_offsets[:, 1] != 0.0)
+    return kp, device_cfg
+
+
+def _run_cuda_rnea(kp, device_cfg, q_np, qd_np, qdd_np, gravity=-9.81, f_ext_np=None):
     """Run RNEA via the Dynamics class."""
     from curobo._src.robot.dynamics.dynamics import Dynamics
     from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
@@ -51,20 +168,26 @@ def _run_cuda_rnea(kp, device_cfg, q_np, qd_np, qdd_np, gravity=-9.81):
         qdd_t = qdd_t.unsqueeze(0)
 
     joint_state = JointState(position=q_t, velocity=qd_t, acceleration=qdd_t)
-    tau = dynamics.compute_inverse_dynamics(joint_state)
+    f_ext = None
+    if f_ext_np is not None:
+        f_ext = torch.tensor(f_ext_np, dtype=torch.float32, device=device_cfg.device)
+        if f_ext.dim() == 2:
+            f_ext = f_ext.unsqueeze(0)
+    tau = dynamics.compute_inverse_dynamics(joint_state, f_ext=f_ext)
     return tau.detach().cpu().numpy()
 
 
-def _run_numpy_rnea(kp, q_np, qd_np, qdd_np, gravity=-9.81):
+def _run_numpy_rnea(kp, q_np, qd_np, qdd_np, gravity=-9.81, f_ext_np=None):
     """Run RNEA via NumPy reference."""
     if q_np.ndim == 1:
-        tau, _, _, _ = rnea_from_kinematics_params(q_np, qd_np, qdd_np, kp, gravity)
+        tau, _, _, _ = rnea_from_kinematics_params(q_np, qd_np, qdd_np, kp, gravity, f_ext_np)
         return tau
     else:
         taus = []
         for b in range(q_np.shape[0]):
+            f_ext_b = None if f_ext_np is None else f_ext_np[b]
             tau, _, _, _ = rnea_from_kinematics_params(
-                q_np[b], qd_np[b], qdd_np[b], kp, gravity
+                q_np[b], qd_np[b], qdd_np[b], kp, gravity, f_ext_b
             )
             taus.append(tau)
         return np.stack(taus)
@@ -97,7 +220,10 @@ class TestCUDAvsNumPy:
         tau_numpy = _run_numpy_rnea(kp, q, qd, qdd)
 
         np.testing.assert_allclose(
-            tau_cuda.flatten(), tau_numpy, atol=1e-4, rtol=1e-4,
+            tau_cuda.flatten(),
+            tau_numpy,
+            atol=1e-4,
+            rtol=1e-4,
             err_msg=f"{robot_yml}: gravity compensation mismatch",
         )
 
@@ -116,7 +242,10 @@ class TestCUDAvsNumPy:
         tau_numpy = _run_numpy_rnea(kp, q, qd, qdd)
 
         np.testing.assert_allclose(
-            tau_cuda.flatten(), tau_numpy, atol=1e-3, rtol=1e-3,
+            tau_cuda.flatten(),
+            tau_numpy,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: random single config mismatch",
         )
 
@@ -136,7 +265,10 @@ class TestCUDAvsNumPy:
         tau_numpy = _run_numpy_rnea(kp, q, qd, qdd)
 
         np.testing.assert_allclose(
-            tau_cuda, tau_numpy, atol=1e-3, rtol=1e-3,
+            tau_cuda,
+            tau_numpy,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: batch mismatch",
         )
 
@@ -155,8 +287,194 @@ class TestCUDAvsNumPy:
         tau_numpy = _run_numpy_rnea(kp, q, qd, qdd)
 
         np.testing.assert_allclose(
-            tau_cuda, tau_numpy, atol=1e-3, rtol=1e-3,
+            tau_cuda,
+            tau_numpy,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg="franka large batch mismatch",
+        )
+
+    def test_mimic_joint_batch(self):
+        """Mimic multiplier, offset, and torque accumulation should match NumPy."""
+        kp, device_cfg = _load_unlocked_mimic_robot()
+        rng = np.random.RandomState(2034)
+        batch_size = 7
+        q = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+        qd = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+        qdd = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+
+        tau_cuda = _run_cuda_rnea(kp, device_cfg, q, qd, qdd)
+        tau_numpy = _run_numpy_rnea(kp, q, qd, qdd)
+
+        np.testing.assert_allclose(tau_cuda, tau_numpy, atol=1e-4, rtol=1e-4)
+
+    @pytest.mark.parametrize("robot_yml", ["franka.yml", "dual_ur10e.yml", "unitree_g1.yml"])
+    def test_sparse_external_forces_keep_collapsed_topology(self, robot_yml):
+        """Fixed-link wrenches should preserve full-model results after collapse."""
+        from curobo._src.robot.dynamics.dynamics import Dynamics
+        from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+
+        kp, device_cfg = _load_robot(robot_yml)
+        dynamics = Dynamics(DynamicsCfg(kinematics_config=kp, device_cfg=device_cfg))
+        model = dynamics._reduced_model
+
+        assert model.num_links < kp.num_links
+        assert model.project_external_forces
+        assert model.num_original_links == kp.num_links
+
+        owners = model.external_force_owners.cpu().numpy()
+        fixed_links = np.flatnonzero(kp.joint_map_type.cpu().numpy() == -1)
+        owned_fixed = fixed_links[owners[fixed_links] >= 0]
+        world_fixed = fixed_links[owners[fixed_links] < 0]
+        movable_links = np.flatnonzero(kp.joint_map_type.cpu().numpy() != -1)
+        assert owned_fixed.size > 0
+
+        rng = np.random.RandomState(2031)
+        batch_size = 3
+        q = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+        qd = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+        qdd = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+        f_ext = np.zeros((batch_size, kp.num_links, 6), dtype=np.float32)
+        force_links = [int(owned_fixed[-1]), int(movable_links[len(movable_links) // 2])]
+        if world_fixed.size:
+            force_links.append(int(world_fixed[0]))
+        f_ext[:, force_links] = rng.randn(batch_size, len(force_links), 6)
+
+        tau_cuda = _run_cuda_rnea(kp, device_cfg, q, qd, qdd, f_ext_np=f_ext)
+        tau_numpy = _run_numpy_rnea(kp, q, qd, qdd, f_ext_np=f_ext)
+        np.testing.assert_allclose(tau_cuda, tau_numpy, atol=2e-3, rtol=2e-3)
+
+    def test_fixed_link_external_force_backward(self):
+        """Projected fixed-link forces should preserve state and wrench gradients."""
+        from curobo._src.robot.dynamics.dynamics import Dynamics
+        from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+        from curobo._src.state.state_joint import JointState
+        from curobo.tests._src.robot.dynamics.rnea_numpy_reference import (
+            rnea_backward_from_kinematics_params,
+        )
+
+        kp, device_cfg = _load_robot("franka.yml")
+        dynamics = Dynamics(DynamicsCfg(kinematics_config=kp, device_cfg=device_cfg))
+        dynamics.setup_batch_size(batch_size=1)
+        owners = dynamics._reduced_model.external_force_owners.cpu().numpy()
+        fixed_links = np.flatnonzero(kp.joint_map_type.cpu().numpy() == -1)
+        fixed_link = int(fixed_links[owners[fixed_links] >= 0][-1])
+
+        rng = np.random.RandomState(2032)
+        q_np = rng.randn(kp.num_dof).astype(np.float32)
+        qd_np = rng.randn(kp.num_dof).astype(np.float32)
+        qdd_np = rng.randn(kp.num_dof).astype(np.float32)
+        tau_bar = rng.randn(kp.num_dof).astype(np.float32)
+        f_ext_np = np.zeros((kp.num_links, 6), dtype=np.float32)
+        f_ext_np[fixed_link] = rng.randn(6)
+
+        q = torch.tensor(q_np[None], device=device_cfg.device, requires_grad=True)
+        qd = torch.tensor(qd_np[None], device=device_cfg.device, requires_grad=True)
+        qdd = torch.tensor(qdd_np[None], device=device_cfg.device, requires_grad=True)
+        f_ext = torch.tensor(f_ext_np[None], device=device_cfg.device, requires_grad=True)
+        state = JointState(position=q, velocity=qd, acceleration=qdd)
+        tau = dynamics.compute_inverse_dynamics(state, f_ext=f_ext)
+        gradients = torch.autograd.grad(
+            tau,
+            (q, qd, qdd, f_ext),
+            grad_outputs=torch.tensor(tau_bar[None], device=device_cfg.device),
+        )
+
+        _, velocity, acceleration, force = rnea_from_kinematics_params(
+            q_np, qd_np, qdd_np, kp, f_ext=f_ext_np
+        )
+        state_gradients = rnea_backward_from_kinematics_params(
+            tau_bar,
+            q_np,
+            qd_np,
+            qdd_np,
+            velocity,
+            acceleration,
+            force,
+            kp,
+        )
+        for actual, expected in zip(gradients[:3], state_gradients):
+            np.testing.assert_allclose(
+                actual.detach().cpu().numpy().flatten(),
+                expected,
+                atol=2e-3,
+                rtol=2e-3,
+            )
+
+        epsilon = 1e-4
+        expected_f_ext_gradient = np.zeros_like(f_ext_np)
+        for link_index in range(kp.num_links):
+            for component in range(6):
+                f_ext_plus = f_ext_np.copy()
+                f_ext_minus = f_ext_np.copy()
+                f_ext_plus[link_index, component] += epsilon
+                f_ext_minus[link_index, component] -= epsilon
+                tau_plus = _run_numpy_rnea(kp, q_np, qd_np, qdd_np, f_ext_np=f_ext_plus)
+                tau_minus = _run_numpy_rnea(kp, q_np, qd_np, qdd_np, f_ext_np=f_ext_minus)
+                expected_f_ext_gradient[link_index, component] = np.dot(
+                    tau_plus - tau_minus, tau_bar
+                ) / (2.0 * epsilon)
+        np.testing.assert_allclose(
+            gradients[3].detach().cpu().numpy().squeeze(0),
+            expected_f_ext_gradient,
+            atol=3e-3,
+            rtol=3e-3,
+        )
+
+    def test_external_force_broadcast_preserves_gradient_sum(self):
+        """A link-only wrench tensor should broadcast and accumulate its gradient."""
+        from curobo._src.robot.dynamics.dynamics import Dynamics
+        from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+        from curobo._src.state.state_joint import JointState
+
+        kp, device_cfg = _load_robot("franka.yml")
+        batch_size = 3
+        rng = np.random.RandomState(2033)
+        state = JointState(
+            position=torch.tensor(
+                rng.randn(batch_size, kp.num_dof).astype(np.float32),
+                device=device_cfg.device,
+            ),
+            velocity=torch.tensor(
+                rng.randn(batch_size, kp.num_dof).astype(np.float32),
+                device=device_cfg.device,
+            ),
+            acceleration=torch.tensor(
+                rng.randn(batch_size, kp.num_dof).astype(np.float32),
+                device=device_cfg.device,
+            ),
+        )
+        force_data = torch.tensor(
+            rng.randn(kp.num_links, 6).astype(np.float32),
+            device=device_cfg.device,
+        )
+        grad_tau = torch.tensor(
+            rng.randn(batch_size, kp.num_dof).astype(np.float32),
+            device=device_cfg.device,
+        )
+
+        broadcast_dynamics = Dynamics(DynamicsCfg(kinematics_config=kp, device_cfg=device_cfg))
+        broadcast_dynamics.setup_batch_size(batch_size)
+        broadcast_force = force_data.clone().requires_grad_()
+        broadcast_tau = broadcast_dynamics.compute_inverse_dynamics(state, f_ext=broadcast_force)
+        broadcast_gradient = torch.autograd.grad(
+            broadcast_tau, broadcast_force, grad_outputs=grad_tau
+        )[0]
+
+        batched_dynamics = Dynamics(DynamicsCfg(kinematics_config=kp, device_cfg=device_cfg))
+        batched_dynamics.setup_batch_size(batch_size)
+        batched_force = force_data.repeat(batch_size, 1, 1).requires_grad_()
+        batched_tau = batched_dynamics.compute_inverse_dynamics(state, f_ext=batched_force)
+        batched_gradient = torch.autograd.grad(batched_tau, batched_force, grad_outputs=grad_tau)[
+            0
+        ]
+
+        torch.testing.assert_close(broadcast_tau, batched_tau, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(
+            broadcast_gradient,
+            batched_gradient.sum(dim=0),
+            atol=1e-4,
+            rtol=1e-4,
         )
 
 
@@ -191,9 +509,7 @@ class TestCUDAvsPinocchio:
         kp, device_cfg = _load_robot(robot_yml)
 
         urdf_path = f"/tmp/test_rnea_cuda_{robot_yml.replace('.yml', '')}.urdf"
-        kp.export_to_urdf(
-            robot_name="dynamics", output_path=urdf_path, include_spheres=False
-        )
+        kp.export_to_urdf(robot_name="dynamics", output_path=urdf_path, include_spheres=False)
         pin_model, _, _ = pin.buildModelsFromUrdf(urdf_path)
         pin_data = pin_model.createData()
         if os.path.exists(urdf_path):
@@ -223,19 +539,19 @@ class TestCUDAvsPinocchio:
         # Pinocchio: send inputs in Pinocchio joint order (inv_perm gathers
         # curobo-ordered vector into Pinocchio order), then map output back
         # to curobo order with perm.
-        tau_pin_ordered = pin.rnea(
-            pin_model, pin_data, q[inv_perm], qd[inv_perm], qdd[inv_perm]
-        )
+        tau_pin_ordered = pin.rnea(pin_model, pin_data, q[inv_perm], qd[inv_perm], qdd[inv_perm])
         tau_pin = np.array(tau_pin_ordered)[perm]
 
         # CUDA
         tau_cuda = _run_cuda_rnea(
-            kp, device_cfg, q.astype(np.float32), qd.astype(np.float32),
-            qdd.astype(np.float32)
+            kp, device_cfg, q.astype(np.float32), qd.astype(np.float32), qdd.astype(np.float32)
         )
 
         np.testing.assert_allclose(
-            tau_cuda.flatten(), tau_pin, atol=1e-3, rtol=1e-3,
+            tau_cuda.flatten(),
+            tau_pin,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: CUDA vs Pinocchio gravity",
         )
 
@@ -260,12 +576,14 @@ class TestCUDAvsPinocchio:
 
             # CUDA
             tau_cuda = _run_cuda_rnea(
-                kp, device_cfg, q.astype(np.float32), qd.astype(np.float32),
-                qdd.astype(np.float32)
+                kp, device_cfg, q.astype(np.float32), qd.astype(np.float32), qdd.astype(np.float32)
             )
 
             np.testing.assert_allclose(
-                tau_cuda.flatten(), tau_pin, atol=1e-3, rtol=1e-3,
+                tau_cuda.flatten(),
+                tau_pin,
+                atol=1e-3,
+                rtol=1e-3,
                 err_msg=f"{robot_yml}: CUDA vs Pinocchio random",
             )
 
@@ -366,11 +684,78 @@ class TestDynamicsInterface:
         tau2 = dynamics.compute_inverse_dynamics(js2)
         assert tau2.shape == (20, num_dof)
 
+    @pytest.mark.parametrize("use_cuda_graph", [False, True])
+    def test_fixed_link_mass_update_refreshes_reduced_model(self, use_cuda_graph: bool) -> None:
+        """Shared inertial updates reach separate workspaces and captured RNEA calls."""
+        from curobo._src.robot.dynamics.dynamics import Dynamics
+        from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+        from curobo._src.state.state_joint import JointState
+        from curobo._src.util.cuda_graph_util import GraphExecutor
+
+        kp, device_cfg = _load_robot("franka.yml")
+        dynamics = Dynamics(DynamicsCfg(kinematics_config=kp, device_cfg=device_cfg))
+        dynamics.setup_batch_size(batch_size=1)
+        other = Dynamics(DynamicsCfg(kinematics_config=kp, device_cfg=device_cfg))
+        other.setup_batch_size(batch_size=3)
+        assert other._reduced_model.link_masses_com is dynamics._reduced_model.link_masses_com
+        assert other._reduced_model.link_inertias is dynamics._reduced_model.link_inertias
+        assert other._reduced_model.fixed_transforms is dynamics._reduced_model.fixed_transforms
+        assert other._tau_buffer.data_ptr() != dynamics._tau_buffer.data_ptr()
+        assert other._forward_cache.data_ptr() != dynamics._forward_cache.data_ptr()
+        independent = Dynamics(DynamicsCfg(kinematics_config=kp.clone(), device_cfg=device_cfg))
+        assert independent._reduced_model.link_masses_com is not other._reduced_model.link_masses_com
+        independent_mass = independent._reduced_model.link_masses_com.clone()
+
+        q_np = np.linspace(-0.4, 0.5, kp.num_dof, dtype=np.float32)
+        qd_np = np.zeros(kp.num_dof, dtype=np.float32)
+        qdd_np = np.zeros(kp.num_dof, dtype=np.float32)
+        state = JointState(
+            position=torch.tensor(q_np[None], device=device_cfg.device),
+            velocity=torch.tensor(qd_np[None], device=device_cfg.device),
+            acceleration=torch.tensor(qdd_np[None], device=device_cfg.device),
+        )
+        executor = GraphExecutor(
+            dynamics.compute_inverse_dynamics, device=device_cfg.device,
+            use_cuda_graph=use_cuda_graph,
+        )
+        tau_before = executor(state).clone()
+
+        hand_index = kp.link_name_to_idx_map["panda_hand"]
+        other.update_link_mass(
+            "panda_hand",
+            float(kp.link_masses_com[hand_index, 3].item()) + 1.0,
+        )
+        tau_after = executor(state)
+        tau_reference = _run_numpy_rnea(kp, q_np, qd_np, qdd_np)
+
+        assert not torch.allclose(tau_after, tau_before)
+        torch.testing.assert_close(other.compute_inverse_dynamics(state), tau_after)
+        torch.testing.assert_close(independent._reduced_model.link_masses_com, independent_mass)
+        np.testing.assert_allclose(
+            tau_after.detach().cpu().numpy().flatten(),
+            tau_reference,
+            atol=1e-3,
+            rtol=1e-3,
+        )
+        # Whole-model copies must refresh the same shared buffers as payload updates.
+        updated = kp.clone()
+        updated.link_masses_com[hand_index, 3] += 0.5
+        updated.fixed_transforms[hand_index, 0, 3] += 0.05
+        kp.copy_(updated)
+        tau_copied = executor(state)
+        np.testing.assert_allclose(
+            tau_copied.detach().cpu().numpy().flatten(),
+            _run_numpy_rnea(updated, q_np, qd_np, qdd_np),
+            atol=1e-3,
+            rtol=1e-3,
+        )
+        torch.testing.assert_close(other.compute_inverse_dynamics(state), tau_copied)
+        executor.reset()
+
 
 # ---------------------------------------------------------------------------
 # CUDA backward (VJP) vs NumPy backward
 # ---------------------------------------------------------------------------
-
 
 
 def _run_cuda_backward(kp, device_cfg, q_np, qd_np, qdd_np, tau_bar_np, gravity=-9.81):
@@ -401,12 +786,9 @@ def _run_cuda_backward(kp, device_cfg, q_np, qd_np, qdd_np, tau_bar_np, gravity=
     batch_size = q_2d.shape[0]
     dynamics.setup_batch_size(batch_size=batch_size)
 
-    q_t = torch.tensor(q_2d, dtype=torch.float32, device=device_cfg.device,
-                        requires_grad=True)
-    qd_t = torch.tensor(qd_2d, dtype=torch.float32, device=device_cfg.device,
-                         requires_grad=True)
-    qdd_t = torch.tensor(qdd_2d, dtype=torch.float32, device=device_cfg.device,
-                          requires_grad=True)
+    q_t = torch.tensor(q_2d, dtype=torch.float32, device=device_cfg.device, requires_grad=True)
+    qd_t = torch.tensor(qd_2d, dtype=torch.float32, device=device_cfg.device, requires_grad=True)
+    qdd_t = torch.tensor(qdd_2d, dtype=torch.float32, device=device_cfg.device, requires_grad=True)
     tau_bar_t = torch.tensor(tb_2d, dtype=torch.float32, device=device_cfg.device)
 
     joint_state = JointState(position=q_t, velocity=qd_t, acceleration=qdd_t)
@@ -428,9 +810,7 @@ def _run_numpy_backward(kp, q_np, qd_np, qdd_np, tau_bar_np, gravity=-9.81):
     )
 
     if q_np.ndim == 1:
-        _, v, a, f = rnea_from_kinematics_params(
-            q_np, qd_np, qdd_np, kp, gravity
-        )
+        _, v, a, f = rnea_from_kinematics_params(q_np, qd_np, qdd_np, kp, gravity)
         gq, gqd, gqdd = rnea_backward_from_kinematics_params(
             tau_bar_np, q_np, qd_np, qdd_np, v, a, f, kp, gravity
         )
@@ -438,12 +818,9 @@ def _run_numpy_backward(kp, q_np, qd_np, qdd_np, tau_bar_np, gravity=-9.81):
     else:
         gqs, gqds, gqdds = [], [], []
         for b in range(q_np.shape[0]):
-            _, v, a, f = rnea_from_kinematics_params(
-                q_np[b], qd_np[b], qdd_np[b], kp, gravity
-            )
+            _, v, a, f = rnea_from_kinematics_params(q_np[b], qd_np[b], qdd_np[b], kp, gravity)
             gq, gqd, gqdd = rnea_backward_from_kinematics_params(
-                tau_bar_np[b], q_np[b], qd_np[b], qdd_np[b],
-                v, a, f, kp, gravity
+                tau_bar_np[b], q_np[b], qd_np[b], qdd_np[b], v, a, f, kp, gravity
             )
             gqs.append(gq)
             gqds.append(gqd)
@@ -473,21 +850,28 @@ class TestCUDABackwardVsNumPy:
         qdd = rng.randn(num_dof).astype(np.float32)
         tau_bar = np.ones(num_dof, dtype=np.float32)
 
-        gq_cuda, gqd_cuda, gqdd_cuda = _run_cuda_backward(
-            kp, device_cfg, q, qd, qdd, tau_bar
-        )
+        gq_cuda, gqd_cuda, gqdd_cuda = _run_cuda_backward(kp, device_cfg, q, qd, qdd, tau_bar)
         gq_np, gqd_np, gqdd_np = _run_numpy_backward(kp, q, qd, qdd, tau_bar)
 
         np.testing.assert_allclose(
-            gq_cuda.flatten(), gq_np, atol=1e-3, rtol=1e-3,
+            gq_cuda.flatten(),
+            gq_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_q mismatch",
         )
         np.testing.assert_allclose(
-            gqd_cuda.flatten(), gqd_np, atol=1e-3, rtol=1e-3,
+            gqd_cuda.flatten(),
+            gqd_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_qd mismatch",
         )
         np.testing.assert_allclose(
-            gqdd_cuda.flatten(), gqdd_np, atol=1e-3, rtol=1e-3,
+            gqdd_cuda.flatten(),
+            gqdd_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_qdd mismatch",
         )
 
@@ -503,30 +887,37 @@ class TestCUDABackwardVsNumPy:
         qdd = rng.randn(num_dof).astype(np.float32)
         tau_bar = rng.randn(num_dof).astype(np.float32)
 
-        gq_cuda, gqd_cuda, gqdd_cuda = _run_cuda_backward(
-            kp, device_cfg, q, qd, qdd, tau_bar
-        )
+        gq_cuda, gqd_cuda, gqdd_cuda = _run_cuda_backward(kp, device_cfg, q, qd, qdd, tau_bar)
         gq_np, gqd_np, gqdd_np = _run_numpy_backward(kp, q, qd, qdd, tau_bar)
 
         np.testing.assert_allclose(
-            gq_cuda.flatten(), gq_np, atol=1e-3, rtol=1e-3,
+            gq_cuda.flatten(),
+            gq_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_q random tau_bar mismatch",
         )
         np.testing.assert_allclose(
-            gqd_cuda.flatten(), gqd_np, atol=1e-3, rtol=1e-3,
+            gqd_cuda.flatten(),
+            gqd_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_qd random tau_bar mismatch",
         )
         np.testing.assert_allclose(
-            gqdd_cuda.flatten(), gqdd_np, atol=1e-3, rtol=1e-3,
+            gqdd_cuda.flatten(),
+            gqdd_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_qdd random tau_bar mismatch",
         )
 
     @pytest.mark.parametrize("robot_yml", ["franka.yml", "ur10e.yml", "unitree_g1.yml"])
-    def test_grad_batch(self, robot_yml):
+    @pytest.mark.parametrize("batch_size", [8, 10])
+    def test_grad_batch(self, robot_yml, batch_size):
         """Batched backward should match per-element NumPy."""
         kp, device_cfg = _load_robot(robot_yml)
         num_dof = kp.num_dof
-        batch_size = 8
 
         rng = np.random.RandomState(99)
         q = rng.randn(batch_size, num_dof).astype(np.float32)
@@ -534,21 +925,28 @@ class TestCUDABackwardVsNumPy:
         qdd = rng.randn(batch_size, num_dof).astype(np.float32)
         tau_bar = rng.randn(batch_size, num_dof).astype(np.float32)
 
-        gq_cuda, gqd_cuda, gqdd_cuda = _run_cuda_backward(
-            kp, device_cfg, q, qd, qdd, tau_bar
-        )
+        gq_cuda, gqd_cuda, gqdd_cuda = _run_cuda_backward(kp, device_cfg, q, qd, qdd, tau_bar)
         gq_np, gqd_np, gqdd_np = _run_numpy_backward(kp, q, qd, qdd, tau_bar)
 
         np.testing.assert_allclose(
-            gq_cuda, gq_np, atol=1e-3, rtol=1e-3,
+            gq_cuda,
+            gq_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_q batch mismatch",
         )
         np.testing.assert_allclose(
-            gqd_cuda, gqd_np, atol=1e-3, rtol=1e-3,
+            gqd_cuda,
+            gqd_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_qd batch mismatch",
         )
         np.testing.assert_allclose(
-            gqdd_cuda, gqdd_np, atol=1e-3, rtol=1e-3,
+            gqdd_cuda,
+            gqdd_np,
+            atol=1e-3,
+            rtol=1e-3,
             err_msg=f"{robot_yml}: grad_qdd batch mismatch",
         )
 
@@ -562,23 +960,54 @@ class TestCUDABackwardVsNumPy:
         qdd = np.zeros(num_dof, dtype=np.float32)
         tau_bar = np.ones(num_dof, dtype=np.float32)
 
-        gq_cuda, gqd_cuda, gqdd_cuda = _run_cuda_backward(
-            kp, device_cfg, q, qd, qdd, tau_bar
-        )
+        gq_cuda, gqd_cuda, gqdd_cuda = _run_cuda_backward(kp, device_cfg, q, qd, qdd, tau_bar)
         gq_np, gqd_np, gqdd_np = _run_numpy_backward(kp, q, qd, qdd, tau_bar)
 
         np.testing.assert_allclose(
-            gq_cuda.flatten(), gq_np, atol=1e-4, rtol=1e-4,
+            gq_cuda.flatten(),
+            gq_np,
+            atol=1e-4,
+            rtol=1e-4,
             err_msg="franka: grad_q at zero mismatch",
         )
         np.testing.assert_allclose(
-            gqd_cuda.flatten(), gqd_np, atol=1e-4, rtol=1e-4,
+            gqd_cuda.flatten(),
+            gqd_np,
+            atol=1e-4,
+            rtol=1e-4,
             err_msg="franka: grad_qd at zero mismatch",
         )
         np.testing.assert_allclose(
-            gqdd_cuda.flatten(), gqdd_np, atol=1e-4, rtol=1e-4,
+            gqdd_cuda.flatten(),
+            gqdd_np,
+            atol=1e-4,
+            rtol=1e-4,
             err_msg="franka: grad_qdd at zero mismatch",
         )
+
+    def test_mimic_joint_gradients(self):
+        """Mimic source-joint state gradients should include every mapped link."""
+        kp, device_cfg = _load_unlocked_mimic_robot()
+        rng = np.random.RandomState(2035)
+        batch_size = 7
+        q = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+        qd = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+        qdd = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+        tau_bar = rng.randn(batch_size, kp.num_dof).astype(np.float32)
+
+        actual = _run_cuda_backward(kp, device_cfg, q, qd, qdd, tau_bar)
+        expected = _run_numpy_backward(kp, q, qd, qdd, tau_bar)
+
+        for name, actual_gradient, expected_gradient in zip(
+            ("q", "qd", "qdd"), actual, expected, strict=True
+        ):
+            np.testing.assert_allclose(
+                actual_gradient,
+                expected_gradient,
+                atol=1e-4,
+                rtol=1e-4,
+                err_msg=f"mimic joint grad_{name} mismatch",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +1052,7 @@ def _run_optimization(dynamics, num_dof, device, batch_size=10, n_steps=1000, lr
             qdd.grad.zero_()
         joint_state = JointState(position=q, velocity=qd, acceleration=qdd)
         tau = dynamics.compute_inverse_dynamics(joint_state)
-        loss = (tau ** 2).sum()
+        loss = (tau**2).sum()
         loss.backward()
         with torch.no_grad():
             grad = qdd.grad.clamp(-1e3, 1e3)
@@ -647,18 +1076,14 @@ class TestOptimizationConvergence:
     def test_curobo_converges(self, robot_yml):
         """CuRobo RNEA: loss should drop significantly, proving gradients work."""
         dynamics, kp, device_cfg = _create_dynamics(robot_yml, 10)
-        losses, tau_final, _ = _run_optimization(
-            dynamics, kp.num_dof, device_cfg.device
-        )
+        losses, tau_final, _ = _run_optimization(dynamics, kp.num_dof, device_cfg.device)
         # Just verify gradients reduce the loss significantly
         assert losses[-1] < losses[0] * 0.1, (
-            f"{robot_yml}: cuRobo loss didn't reduce "
-            f"({losses[-1]:.2f} vs {losses[0]:.2f})"
+            f"{robot_yml}: cuRobo loss didn't reduce ({losses[-1]:.2f} vs {losses[0]:.2f})"
         )
         assert tau_final.abs().max() < 10.0, (
             f"{robot_yml}: tau too large, max={tau_final.abs().max():.2f}"
         )
-
 
 
 if __name__ == "__main__":

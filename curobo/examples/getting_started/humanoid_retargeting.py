@@ -240,10 +240,10 @@ physical plausibility, or as a first pass to verify the link mapping.
     cfg = MotionRetargeterCfg.create(
         robot="unitree_g1_29dof_retarget.yml",
         tool_pose_criteria={
-            "pelvis": ToolPoseCriteria.track_position_and_orientation(
+            "pelvis": ToolPoseCriteria.track_pose(
                 xyz=[1.0, 1.0, 1.0], rpy=[0.067, 0.067, 0.067],
             ),
-            "left_ankle_roll_link": ToolPoseCriteria.track_position_and_orientation(
+            "left_ankle_roll_link": ToolPoseCriteria.track_pose(
                 xyz=[1.0, 1.0, 1.0], rpy=[0.067, 0.067, 0.067],
             ),
             # ... one entry per tool frame
@@ -454,7 +454,7 @@ def _build_tool_pose_criteria(ik_map: dict) -> Dict[str, ToolPoseCriteria]:
         link = ik_map[j]["t_body"]
         pw = 100.0 * ik_map[j]["t_weight"] / max_weight
         rw = 10.0 * ik_map[j]["r_weight"] / max_weight
-        criteria[link] = ToolPoseCriteria.track_position_and_orientation(
+        criteria[link] = ToolPoseCriteria.track_pose(
             xyz=[pw, pw, pw], rpy=[rw, rw, rw], non_terminal_scale=0.5,
         )
     return criteria

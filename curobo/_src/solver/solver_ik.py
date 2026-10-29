@@ -7,15 +7,19 @@ seed solver, multi-link goal handling, batch padding, and solution ranking by po
 error. Supports goalset IK, velocity-aware IK via optimization_dt, and optional
 collision checking.
 """
+
 from __future__ import annotations
 
 # Standard Library
+from dataclasses import dataclass
 from typing import Dict, Optional
 
 # Third Party
 import torch
 import torch.autograd.profiler as profiler
 
+from curobo._src.cost.criteria_tool_relative_transform import ToolRelativeTransformCriteria
+from curobo._src.cost.criteria_tool_velocity_limit import ToolVelocityLimitCriteria
 from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 
 # CuRobo
@@ -24,6 +28,10 @@ from curobo._src.geom.types import SceneCfg
 from curobo._src.robot.kinematics.kinematics import KinematicsState
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.metrics import RolloutMetrics
+from curobo._src.solver.processor_ik_result import (
+    IKResultProcessorConfig,
+    WarpIKResultProcessor,
+)
 from curobo._src.solver.seed_ik.seed_ik_solver import SeedIKSolver
 from curobo._src.solver.seed_ik.seed_ik_solver_cfg import SeedIKSolverCfg
 from curobo._src.solver.solve_mode import SolveMode
@@ -31,13 +39,24 @@ from curobo._src.solver.solve_state import SolveState
 from curobo._src.solver.solver_core import SolverCore
 from curobo._src.solver.solver_ik_cfg import IKSolverCfg
 from curobo._src.solver.solver_ik_result import IKSolverResult
+from curobo._src.solver.solver_trajopt_result import _parse_pose_convergence
 from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_robot import RobotState
+from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.logging import log_and_raise, log_warn
 from curobo._src.util.tensor_util import stable_topk
-from curobo._src.util.torch_util import get_torch_jit_decorator
+
+
+@dataclass(frozen=True)
+class _IKConvergenceLayout:
+    """Indices into a stable IK convergence metric collection."""
+
+    position_indices: tuple[int, ...]
+    orientation_indices: tuple[int, ...]
+    goalset_indices: tuple[int, ...]
+    cspace_indices: tuple[int, ...]
 
 
 def _pad_batch_inputs(
@@ -54,37 +73,86 @@ def _pad_batch_inputs(
     quat = goal_tool_poses.quaternion
     expand_dims = [-1] * (pos.ndim - 1)
     goal_tool_poses.position = torch.cat(
-        [pos, pos[:1].expand(pad, *expand_dims)], dim=0,
+        [pos, pos[:1].expand(pad, *expand_dims)],
+        dim=0,
     )
     goal_tool_poses.quaternion = torch.cat(
-        [quat, quat[:1].expand(pad, *[-1] * (quat.ndim - 1))], dim=0,
+        [quat, quat[:1].expand(pad, *[-1] * (quat.ndim - 1))],
+        dim=0,
     )
     if current_state is not None:
         current_state = current_state.clone()
         current_state.position = torch.cat(
-            [current_state.position, current_state.position[:1].expand(pad, -1)], dim=0,
+            [current_state.position, current_state.position[:1].expand(pad, -1)],
+            dim=0,
         )
         if current_state.velocity is not None:
             current_state.velocity = torch.cat(
-                [current_state.velocity, current_state.velocity[:1].expand(pad, -1)], dim=0,
+                [current_state.velocity, current_state.velocity[:1].expand(pad, -1)],
+                dim=0,
             )
         if current_state.acceleration is not None:
             current_state.acceleration = torch.cat(
-                [current_state.acceleration, current_state.acceleration[:1].expand(pad, -1)], dim=0,
+                [current_state.acceleration, current_state.acceleration[:1].expand(pad, -1)],
+                dim=0,
             )
     if seed_config is not None:
         seed_config = torch.cat(
-            [seed_config, seed_config[:1].expand(pad, *[-1] * (seed_config.ndim - 1))], dim=0,
+            [seed_config, seed_config[:1].expand(pad, *[-1] * (seed_config.ndim - 1))],
+            dim=0,
         )
     return goal_tool_poses, current_state, seed_config
+
+
+def _pad_tool_relative_transform_target(
+    target: Optional[ToolRelativeTransformTarget],
+    batch_size: int,
+    max_batch: int,
+) -> Optional[ToolRelativeTransformTarget]:
+    """Pad a per-problem relative target while preserving a shared target.
+
+    A single target group is shared by every problem. Otherwise there must be
+    exactly one group per unpadded problem, and group zero is repeated for the
+    fixed-size padding lanes.
+    """
+    if target is None:
+        return None
+    if target.num_target_groups == 1:
+        return target
+    if target.num_target_groups != batch_size:
+        log_and_raise(
+            "tool_relative_transform_target must have one shared target group "
+            "or one group per problem; got "
+            f"{target.num_target_groups} groups for batch_size={batch_size}"
+        )
+    if batch_size == max_batch:
+        return target
+
+    pad = max_batch - batch_size
+    return ToolRelativeTransformTarget(
+        reference_tool_frame=target.reference_tool_frame,
+        tool_frames=target.tool_frames.copy(),
+        position=torch.cat([target.position, target.position[:1].expand(pad, -1, -1)], dim=0),
+        quaternion=torch.cat(
+            [target.quaternion, target.quaternion[:1].expand(pad, -1, -1)], dim=0
+        ),
+    )
 
 
 def _slice_batch_result(result, batch_size: int):
     """Slice padded result tensors back to the original batch size."""
     result.success = result.success[:batch_size]
-    for attr in ("solution", "position_error", "rotation_error", "goalset_index",
-                 "feasible", "optimized_seeds", "total_cost_reshaped",
-                 "seed_rank", "seed_cost"):
+    for attr in (
+        "solution",
+        "position_error",
+        "rotation_error",
+        "goalset_index",
+        "feasible",
+        "optimized_seeds",
+        "total_cost_reshaped",
+        "seed_rank",
+        "seed_cost",
+    ):
         val = getattr(result, attr, None)
         if val is not None:
             setattr(result, attr, val[:batch_size])
@@ -106,6 +174,34 @@ class IKSolver:
         self.core = SolverCore(config.core_cfg, scene_collision_checker)
 
         self.seed_ik_solver = None
+        self._result_convergence_names: tuple[str, ...] = ()
+        self._result_convergence_layout: Optional[_IKConvergenceLayout] = None
+        self._result_batch_offsets: Optional[torch.Tensor] = None
+        self._result_batch_offset_shape = (-1, -1)
+
+        robot_model = self.auxiliary_rollout.transition_model.robot_model
+        locked_joint_state = robot_model.lock_jointstate
+        self._result_processor = WarpIKResultProcessor(
+            IKResultProcessorConfig(
+                device_cfg=self.device_cfg,
+                action_dim=self.action_dim,
+                joint_names=self.joint_names,
+                full_joint_names=robot_model.all_articulated_joint_names,
+                locked_joint_names=(
+                    [] if locked_joint_state is None else locked_joint_state.joint_names
+                ),
+                locked_joint_position=(
+                    None if locked_joint_state is None else locked_joint_state.position
+                ),
+                position_tolerance=self.config.position_tolerance,
+                orientation_tolerance=self.config.orientation_tolerance,
+                position_rank_weight=self.config.position_rank_weight,
+                orientation_rank_weight=self.config.orientation_rank_weight,
+                cspace_rank_weight=self.config.cspace_rank_weight,
+                success_requires_convergence=self.config.success_requires_convergence,
+                use_cuda_graph=self.config.use_cuda_graph,
+            )
+        )
 
         # create an instance of seed ik solver:
         seed_solver_num_seeds = config.seed_solver_num_seeds
@@ -259,11 +355,19 @@ class IKSolver:
     def debug_dump(self, file_path: str):
         return self.core.debug_dump(file_path)
 
-    def prepare_action_seeds(self, batch_size, num_seeds, seed_config=None, current_state=None, seed_traj=None):
-        return self.core.prepare_action_seeds(batch_size, num_seeds, seed_config, current_state, seed_traj)
+    def prepare_action_seeds(
+        self, batch_size, num_seeds, seed_config=None, current_state=None, seed_traj=None
+    ):
+        return self.core.prepare_action_seeds(
+            batch_size, num_seeds, seed_config, current_state, seed_traj
+        )
 
-    def prepare_trajectory_seeds(self, batch_size, num_seeds, current_state, seed_config=None, seed_traj=None):
-        return self.core.prepare_trajectory_seeds(batch_size, num_seeds, current_state, seed_config, seed_traj)
+    def prepare_trajectory_seeds(
+        self, batch_size, num_seeds, current_state, seed_config=None, seed_traj=None
+    ):
+        return self.core.prepare_trajectory_seeds(
+            batch_size, num_seeds, current_state, seed_config, seed_traj
+        )
 
     def enable_tool_pose_tracking(self, tool_frames=None):
         """Enable tool-pose cost terms for the specified (or all) tool frames."""
@@ -281,10 +385,12 @@ class IKSolver:
         self.core.disable_joint_position_tracking()
 
     def reset_shape(self):
+        self._result_processor.reset_shape()
         self.core.reset_shape()
 
     def reset_cuda_graph(self):
         self.core.reset_cuda_graph()
+        self._result_processor.reset_cuda_graph()
 
     # -------------------------------------------------------------------
     # IK-specific: tool pose criteria also updates seed solver
@@ -295,12 +401,23 @@ class IKSolver:
             self.seed_ik_solver.update_tool_pose_criteria(tool_pose_criteria)
         self.core.update_tool_pose_criteria(tool_pose_criteria)
 
+    def update_tool_relative_transform_criteria(
+        self, criteria: Dict[str, ToolRelativeTransformCriteria]
+    ) -> None:
+        self.core.update_tool_relative_transform_criteria(criteria)
+
+    def update_tool_velocity_limit_criteria(
+        self, criteria: Dict[str, ToolVelocityLimitCriteria]
+    ) -> None:
+        self.core.update_tool_velocity_limit_criteria(criteria)
+
     def reset_seed(self):
         if self.config.use_lm_seed:
             self.seed_ik_solver.reset_seed()
         self.core.reset_seed()
 
     def destroy(self):
+        self._result_processor.reset_cuda_graph()
         if self.seed_ik_solver is not None:
             self.seed_ik_solver.destroy()
         self.core.destroy()
@@ -318,6 +435,7 @@ class IKSolver:
         use_implicit_goal: bool = False,
         seed_goal_state: Optional[JointState] = None,
         goal_state: Optional[JointState] = None,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
     ):
         goal_tool_poses = goal_tool_poses.reorder_links(self.kinematics.tool_frames)
         goal_buffer, update_reference = self.core.prepare_goal_buffer(
@@ -327,11 +445,21 @@ class IKSolver:
             use_implicit_goal=use_implicit_goal,
             seed_goal_state=seed_goal_state,
             goal_state=goal_state,
+            tool_relative_transform_target=tool_relative_transform_target,
         )
         return goal_buffer, update_reference
 
-    def _update_rollout_params(self, goal_buffer, include_auxiliary_rollout=True):
-        self.core.update_rollout_params(goal_buffer, include_auxiliary_rollout)
+    def _update_rollout_params(
+        self,
+        goal_buffer: GoalRegistry,
+        include_auxiliary_rollout: bool = True,
+        include_optimizer_rollouts: bool = True,
+    ) -> None:
+        self.core.update_rollout_params(
+            goal_buffer,
+            include_auxiliary_rollout=include_auxiliary_rollout,
+            include_optimizer_rollouts=include_optimizer_rollouts,
+        )
 
     @property
     def problem_batch_size(self) -> int:
@@ -341,9 +469,7 @@ class IKSolver:
     # IK-specific methods
     # -------------------------------------------------------------------
 
-    def _fill_current_state_dt(
-        self, current_state: Optional[JointState]
-    ) -> Optional[JointState]:
+    def _fill_current_state_dt(self, current_state: Optional[JointState]) -> Optional[JointState]:
         """Fill ``current_state.dt`` from ``config.optimization_dt`` when not already set."""
         if (
             current_state is not None
@@ -369,6 +495,8 @@ class IKSolver:
         seed_config=None,
         return_seeds: int = 1,
         run_optimizer: bool = True,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
+        use_specialized_result_processor: bool = True,
     ) -> IKSolverResult:
         goal_tool_poses = goal_tool_poses.reorder_links(self.kinematics.tool_frames)
         total_timer = CudaEventTimer().start()
@@ -384,25 +512,43 @@ class IKSolver:
             solve_state=solve_state,
             goal_tool_poses=goal_tool_poses,
             current_state=current_state,
+            tool_relative_transform_target=tool_relative_transform_target,
         )
 
         coord_position_seed = self.prepare_action_seeds(
             solve_state.batch_size, num_seeds, seed_config=seed_config
         )
 
-        self._update_rollout_params(goal_buffer, include_auxiliary_rollout=False)
+        self._update_rollout_params(
+            goal_buffer,
+            include_auxiliary_rollout=False,
+            include_optimizer_rollouts=False,
+        )
 
         if self.config.exit_early or not run_optimizer:
             metrics_result = self.metrics_rollout.compute_metrics_from_action(coord_position_seed)
             ik_result = self._get_result(
-                coord_position_seed, metrics_result, num_seeds, return_seeds
+                coord_position_seed,
+                metrics_result,
+                num_seeds,
+                return_seeds,
+                use_specialized_result_processor=use_specialized_result_processor,
             )
             success_ratio = torch.count_nonzero(ik_result.success) / ik_result.success.shape[0]
-            if success_ratio >= self.config.exit_early_batch_success_threshold or not run_optimizer:
+            if (
+                success_ratio >= self.config.exit_early_batch_success_threshold
+                or not run_optimizer
+            ):
                 self._compute_solution_velocity(ik_result, current_state, return_seeds)
                 ik_result.total_time = total_timer.stop()
                 return ik_result
 
+        self.core.update_rollout_params(
+            goal_buffer,
+            include_auxiliary_rollout=False,
+            include_optimizer_rollouts=True,
+            include_metrics_rollout=False,
+        )
         opt_timer = CudaEventTimer().start()
         self.optimizer.reinitialize(coord_position_seed)
         opt_result = self.optimizer.optimize(coord_position_seed)
@@ -410,7 +556,13 @@ class IKSolver:
 
         metrics_result = self.metrics_rollout.compute_metrics_from_action(opt_result)
 
-        ik_result = self._get_result(opt_result, metrics_result, num_seeds, return_seeds)
+        ik_result = self._get_result(
+            opt_result,
+            metrics_result,
+            num_seeds,
+            return_seeds,
+            use_specialized_result_processor=use_specialized_result_processor,
+        )
         self._compute_solution_velocity(ik_result, current_state, return_seeds)
         ik_result.total_time = total_timer.stop()
         ik_result.solve_time = opt_time
@@ -441,125 +593,162 @@ class IKSolver:
         return sol
 
     @profiler.record_function("ik_solver/_get_result")
-    @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def _get_result(
         self,
         opt_result: torch.Tensor,
         metrics_result: RolloutMetrics,
         num_seeds: int,
         return_seeds: int,
+        use_specialized_result_processor: bool = True,
     ) -> IKSolverResult:
-        feasible = metrics_result.costs_and_constraints.get_feasible(
-            include_all_hybrid=False,
-            sum_horizon=True,
+        """Select and assemble IK results with the shape-managed processor."""
+        result_processor = getattr(self, "_result_processor", None)
+        if use_specialized_result_processor and result_processor is not None:
+            result = result_processor.process(
+                opt_result,
+                metrics_result,
+                num_seeds,
+                return_seeds,
+            )
+            if result is not None:
+                return result
+        return self._get_result_torch(opt_result, metrics_result, num_seeds, return_seeds)
+
+    @profiler.record_function("ik_solver/_get_result_torch")
+    def _get_result_torch(
+        self,
+        opt_result: torch.Tensor,
+        metrics_result: RolloutMetrics,
+        num_seeds: int,
+        return_seeds: int,
+    ) -> IKSolverResult:
+        problem_count = opt_result.shape[0]
+        batch_size = problem_count // num_seeds
+        pose_summary = _parse_pose_convergence(
+            metrics_result.convergence,
+            self.config.position_tolerance,
+            self.config.orientation_tolerance,
         )
-
-        converge_list = []
-        cost_list = []
-        goalset_index_list = []
-        pose_cost_list = []
-        for k in range(len(metrics_result.convergence.names)):
-            metric_name = metrics_result.convergence.names[k]
-            metric_values = metrics_result.convergence.values[k]
-
-            if "position_tolerance" in metric_name:
-                pose_cost_list.append(metric_values)
-                converged = metric_values < self.config.position_tolerance
-                converge_list.append(converged)
-            elif "orientation_tolerance" in metric_name:
-                pose_cost_list.append(metric_values)
-                converged = metric_values < self.config.orientation_tolerance
-                converge_list.append(converged)
-            elif "goalset_index" in metric_name:
-                goalset_index_list.append(metric_values)
-            elif "start_cspace_dist_tolerance" in metric_name:
-                cost_list.append(metric_values.view(-1, 1))
-
-        converged_all_links = torch.cat(converge_list, dim=-1)
-        converged = torch.all(converged_all_links, dim=-1).squeeze(-1)
-
-        if isinstance(feasible, bool):
-            success = converged
-            feasible_tensor = torch.ones_like(converged) if feasible else torch.zeros_like(converged)
+        candidate_count = opt_result.shape[0]
+        converged = (
+            pose_summary.converged
+            if pose_summary.converged is not None
+            else torch.ones(candidate_count, dtype=torch.bool, device=opt_result.device)
+        )
+        feasible_tensor = self._get_result_feasibility(metrics_result, problem_count)
+        if self.config.success_requires_convergence:
+            success = torch.logical_and(converged, feasible_tensor)
         else:
-            if self.config.success_requires_convergence:
-                success = torch.logical_and(converged, feasible)
+            success = feasible_tensor
+
+        cost_sum = torch.zeros(
+            candidate_count,
+            dtype=opt_result.dtype,
+            device=opt_result.device,
+        )
+        for metric_name, metric_values in zip(
+            metrics_result.convergence.names,
+            metrics_result.convergence.values,
+        ):
+            if metric_values.ndim >= 3:
+                final_values = metric_values[:, -1]
+            elif metric_values.ndim == 2:
+                final_values = metric_values[:, -1:]
             else:
-                success = feasible
-            feasible_tensor = feasible
+                final_values = metric_values
+            final_cost = final_values.reshape(candidate_count, -1).sum(dim=-1)
+            if metric_name.endswith("_position_tolerance"):
+                cost_sum += getattr(self.config, "position_rank_weight", 1.0) * final_cost
+            elif metric_name.endswith("_orientation_tolerance"):
+                cost_sum += getattr(self.config, "orientation_rank_weight", 1.0) * final_cost
+            if metric_name == "start_cspace_dist_tolerance":
+                cost_sum += getattr(self.config, "cspace_rank_weight", 1.0) * final_cost
+        cost_sum = torch.where(success, cost_sum, cost_sum + 1e16)
 
-        goalset_index = (
-            torch.cat(goalset_index_list, dim=-1) if goalset_index_list else None
+        _, topk_abs_idx = stable_topk(
+            cost_sum.view(batch_size, num_seeds),
+            k=return_seeds,
+            largest=False,
+            dim=-1,
         )
-        pose_cost = torch.cat(pose_cost_list, dim=-1).unsqueeze(dim=1)
+        topk_abs_idx.add_(self._get_result_batch_offsets(batch_size, num_seeds, opt_result.device))
+        flat_indices = topk_abs_idx.view(-1)
 
-        if len(cost_list) > 0:
-            cost = torch.cat(cost_list, dim=-1).unsqueeze(dim=1) + pose_cost.sum(dim=-1)
-            cost = cost.squeeze(-1)
-        else:
-            cost = pose_cost.sum(dim=-1).squeeze(-1)
-        cost_sum = cost
-
-        cost_sum[~success] += 1e16
-        cost_sum_reshaped = cost_sum.view(-1, num_seeds)
-        batch_size = cost_sum_reshaped.shape[0]
-
-        topk_values, topk_relative_idx = stable_topk(
-            cost_sum_reshaped, k=return_seeds, largest=False, dim=-1
+        q_sol = (
+            opt_result.view(-1, self.action_dim)
+            .index_select(0, flat_indices)
+            .view(batch_size, return_seeds, self.action_dim)
         )
-
-        topk_abs_idx = (
-            topk_relative_idx + num_seeds * self.goal_registry_manager.batch_helper
-        )
-
-        opt_result_flat = opt_result.view(-1, self.action_dim)
-        q_sol = opt_result_flat[topk_abs_idx.view(-1)].view(batch_size, return_seeds, self.action_dim)
-        success_topk = success.view(-1)[topk_abs_idx.view(-1)].view(batch_size, return_seeds)
-        feasible_topk = feasible_tensor.view(-1)[topk_abs_idx.view(-1)].view(
+        success_topk = success.index_select(0, flat_indices).view(batch_size, return_seeds)
+        feasible_topk = feasible_tensor.index_select(0, flat_indices).view(
             batch_size, return_seeds
         )
         all_state = metrics_result.state
-        num_links = len(all_state.cuda_robot_model_state.tool_poses.tool_frames)
+        all_kinematics = all_state.cuda_robot_model_state
+        num_links = len(all_kinematics.tool_poses.tool_frames)
+        num_spheres = all_kinematics.robot_spheres.shape[-2]
         solution_state = RobotState(
             cuda_robot_model_state=KinematicsState(
                 tool_poses=ToolPose(
-                    tool_frames=all_state.cuda_robot_model_state.tool_poses.tool_frames,
-                    position=all_state.cuda_robot_model_state.tool_poses.position.view(
-                        -1, num_links, 3
-                    )[topk_abs_idx.view(-1)].view(batch_size, return_seeds, num_links, 3),
-                    quaternion=all_state.cuda_robot_model_state.tool_poses.quaternion.view(
-                        -1, num_links, 4
-                    )[topk_abs_idx.view(-1)].view(batch_size, return_seeds, num_links, 4),
+                    tool_frames=all_kinematics.tool_poses.tool_frames,
+                    position=all_kinematics.tool_poses.position.view(-1, num_links, 3)
+                    .index_select(0, flat_indices)
+                    .view(batch_size, return_seeds, num_links, 3),
+                    quaternion=all_kinematics.tool_poses.quaternion.view(-1, num_links, 4)
+                    .index_select(0, flat_indices)
+                    .view(batch_size, return_seeds, num_links, 4),
                 ),
-                robot_spheres=all_state.cuda_robot_model_state.robot_spheres.view(-1, 4)[
-                    topk_abs_idx.view(-1)
-                ].view(batch_size, return_seeds, -1, 4),
-                robot_com=all_state.cuda_robot_model_state.robot_com.view(-1, 4)[
-                    topk_abs_idx.view(-1)
-                ].view(batch_size, return_seeds, -1, 4),
+                robot_spheres=all_kinematics.robot_spheres.view(-1, num_spheres, 4)
+                .index_select(0, flat_indices)
+                .view(batch_size, return_seeds, num_spheres, 4),
+                robot_com=all_kinematics.robot_com.view(-1, 4)
+                .index_select(0, flat_indices)
+                .view(batch_size, return_seeds, -1, 4),
             ),
             joint_state=JointState.from_position(q_sol, joint_names=self.joint_names),
         )
 
-        pose_error_flat = pose_cost.view(-1, pose_cost.shape[-1])
-        pose_error_topk = pose_error_flat[topk_abs_idx.view(-1)]
-        num_links = int(pose_error_topk.shape[-1] / 2)
-        pose_error_topk = pose_error_topk.view(batch_size, return_seeds, num_links, 2)
-
         goalset_index_topk = None
-        if goalset_index is not None:
-            goalset_index_flat = goalset_index.view(-1, goalset_index.shape[-1])
-            goalset_index_topk = goalset_index_flat[topk_abs_idx.view(-1)].view(
-                batch_size, return_seeds, num_links
+        if pose_summary.absolute_goalset_index is not None:
+            goalset_width = pose_summary.absolute_goalset_index.shape[-1]
+            goalset_index_topk = pose_summary.absolute_goalset_index[topk_abs_idx.view(-1)].view(
+                batch_size,
+                return_seeds,
+                goalset_width,
             )
 
-        position_error = torch.max(pose_error_topk[..., 0], dim=-1)[0]
-        rotation_error = torch.max(pose_error_topk[..., 1], dim=-1)[0]
+        if pose_summary.absolute_position_error is not None:
+            position_error = torch.max(
+                pose_summary.absolute_position_error[topk_abs_idx.view(-1)].view(
+                    batch_size,
+                    return_seeds,
+                    -1,
+                ),
+                dim=-1,
+            )[0]
+        else:
+            position_error = torch.zeros(
+                (batch_size, return_seeds),
+                dtype=opt_result.dtype,
+                device=opt_result.device,
+            )
+        if pose_summary.absolute_rotation_error is not None:
+            rotation_error = torch.max(
+                pose_summary.absolute_rotation_error[topk_abs_idx.view(-1)].view(
+                    batch_size,
+                    return_seeds,
+                    -1,
+                ),
+                dim=-1,
+            )[0]
+        else:
+            rotation_error = torch.zeros_like(position_error)
 
-        js_solution = solution_state.joint_state
-        js_solution = self.auxiliary_rollout.transition_model.get_full_dof_from_solution(
-            js_solution
-        )
+        transition_model = self.auxiliary_rollout.transition_model
+        if hasattr(transition_model, "get_full_dof_from_position"):
+            js_solution = transition_model.get_full_dof_from_position(q_sol)
+        else:
+            js_solution = transition_model.get_full_dof_from_solution(solution_state.joint_state)
 
         ik_result = IKSolverResult(
             success=success_topk,
@@ -577,13 +766,100 @@ class IKSolver:
             debug_info={
                 "seed_idx": topk_abs_idx,
             },
-            optimized_seeds=opt_result.view(
-                batch_size, num_seeds, self.action_dim
-            ),
+            optimized_seeds=opt_result.view(batch_size, num_seeds, self.action_dim),
             solution_state=solution_state,
         )
 
         return ik_result
+
+    def _get_result_convergence_layout(
+        self,
+        metrics_result: RolloutMetrics,
+    ) -> _IKConvergenceLayout:
+        """Return cached field indices for a stable convergence collection."""
+        names = tuple(metrics_result.convergence.names)
+        if names != self._result_convergence_names:
+            self._result_convergence_names = names
+            self._result_convergence_layout = _IKConvergenceLayout(
+                position_indices=tuple(
+                    index for index, name in enumerate(names) if "position_tolerance" in name
+                ),
+                orientation_indices=tuple(
+                    index for index, name in enumerate(names) if "orientation_tolerance" in name
+                ),
+                goalset_indices=tuple(
+                    index for index, name in enumerate(names) if "goalset_index" in name
+                ),
+                cspace_indices=tuple(
+                    index
+                    for index, name in enumerate(names)
+                    if "start_cspace_dist_tolerance" in name
+                ),
+            )
+        layout = self._result_convergence_layout
+        if layout is None or not layout.position_indices or not layout.orientation_indices:
+            log_and_raise("IK metrics require position and orientation convergence values")
+        return layout
+
+    @staticmethod
+    def _get_result_convergence_values(
+        metrics_result: RolloutMetrics,
+        indices: tuple[int, ...],
+        problem_count: int,
+    ) -> torch.Tensor:
+        """Return selected convergence fields flattened after the problem dimension."""
+        values = metrics_result.convergence.values
+        if len(indices) == 1:
+            selected = values[indices[0]]
+        else:
+            selected = torch.cat([values[index] for index in indices], dim=-1)
+        return selected.view(problem_count, -1)
+
+    def _get_result_feasibility(
+        self,
+        metrics_result: RolloutMetrics,
+        problem_count: int,
+    ) -> torch.Tensor:
+        """Reduce the cached per-timestep feasibility for each IK seed."""
+        hybrid_values = metrics_result.costs_and_constraints.hybrid_costs_constraints.values
+        feasible = metrics_result.feasible
+        if feasible is None or hybrid_values:
+            feasible = metrics_result.costs_and_constraints.get_feasible(
+                include_all_hybrid=False,
+                sum_horizon=True,
+            )
+        if isinstance(feasible, bool):
+            return torch.full(
+                (problem_count,),
+                feasible,
+                device=self.device_cfg.device,
+                dtype=torch.bool,
+            )
+        feasible_view = feasible.view(problem_count, -1)
+        return (
+            feasible_view[:, 0]
+            if feasible_view.shape[-1] == 1
+            else torch.all(feasible_view, dim=-1)
+        )
+
+    def _get_result_batch_offsets(
+        self,
+        batch_size: int,
+        num_seeds: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Return cached flat-index offsets with shape ``[batch_size, 1]``."""
+        shape = (batch_size, num_seeds)
+        if (
+            getattr(self, "_result_batch_offsets", None) is None
+            or shape != getattr(self, "_result_batch_offset_shape", None)
+            or self._result_batch_offsets.device != device
+        ):
+            self._result_batch_offset_shape = shape
+            self._result_batch_offsets = (
+                torch.arange(batch_size, device=device, dtype=torch.long) * num_seeds
+            ).view(-1, 1)
+        return self._result_batch_offsets
 
     def _compute_solution_velocity(
         self,
@@ -616,10 +892,7 @@ class IKSolver:
             ik_result.js_solution.velocity = active_vel
         else:
             full_vel = torch.zeros_like(ik_result.js_solution.position)
-            active_indices = [
-                ik_result.js_solution.joint_names.index(j)
-                for j in self.joint_names
-            ]
+            active_indices = [ik_result.js_solution.joint_names.index(j) for j in self.joint_names]
             full_vel[..., active_indices] = active_vel
             ik_result.js_solution.velocity = full_vel
 
@@ -635,8 +908,65 @@ class IKSolver:
         seed_config=None,
         return_seeds: int = 1,
         run_optimizer: bool = True,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
     ) -> IKSolverResult:
-        """Solve IK for target tool poses.
+        """Solve IK for target tool poses and return ranked solutions."""
+        return self._solve_pose(
+            goal_tool_poses=goal_tool_poses,
+            current_state=current_state,
+            seed_config=seed_config,
+            return_seeds=return_seeds,
+            run_optimizer=run_optimizer,
+            tool_relative_transform_target=tool_relative_transform_target,
+            use_specialized_result_processor=True,
+        )
+
+    @profiler.record_function("ik_solver/solve_goalset")
+    def solve_goalset(
+        self,
+        goal_tool_poses: GoalToolPose,
+        current_state: Optional[JointState] = None,
+        seed_config: Optional[torch.Tensor] = None,
+        return_seeds: int = 1,
+        run_optimizer: bool = True,
+    ) -> IKSolverResult:
+        """Solve and rank goalset IK with the low-overhead result selector.
+
+        Args:
+            goal_tool_poses: Target poses shaped as
+                ``[batch, 1, num_links, num_goalset, 3/4]``.
+            current_state: Current joints shaped as ``[batch, dof]``. When
+                supplied, configured c-space ranking favors nearby solutions.
+            seed_config: Optional IK seeds shaped as ``[batch, num_seeds, dof]``.
+            return_seeds: Number of ranked solutions returned per batch row.
+            run_optimizer: Run IK optimization instead of evaluating seeds only.
+
+        Returns:
+            Ranked IK solutions with ``solution`` shaped as
+            ``[batch, return_seeds, dof]``.
+        """
+        if seed_config is None and current_state is not None:
+            seed_config = current_state.position.unsqueeze(1)
+        return self._solve_pose(
+            goal_tool_poses=goal_tool_poses,
+            current_state=current_state,
+            seed_config=seed_config,
+            return_seeds=return_seeds,
+            run_optimizer=run_optimizer,
+            use_specialized_result_processor=False,
+        )
+
+    def _solve_pose(
+        self,
+        goal_tool_poses: GoalToolPose,
+        current_state: Optional[JointState] = None,
+        seed_config: Optional[torch.Tensor] = None,
+        return_seeds: int = 1,
+        run_optimizer: bool = True,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
+        use_specialized_result_processor: bool = True,
+    ) -> IKSolverResult:
+        """Solve IK with explicit internal result-processor selection.
 
         Args:
             goal_tool_poses: Target poses for tool links.
@@ -644,6 +974,11 @@ class IKSolver:
             seed_config: Optional initial seeds.
             return_seeds: Number of top solutions to return per problem.
             run_optimizer: When False, skip the main optimizer.
+            tool_relative_transform_target: Optional target transforms relative
+                to one moving tool frame. One target group is shared by every
+                problem; otherwise provide one group per problem.
+            use_specialized_result_processor: Use the Warp CUDA-graph result
+                selector instead of the lightweight Torch selector.
 
         Returns:
             IKSolverResult with solutions ranked by cost.
@@ -676,9 +1011,18 @@ class IKSolver:
 
         actual_batch_size = batch_size
         needs_pad = batch_size < max_batch
+        tool_relative_transform_target = _pad_tool_relative_transform_target(
+            tool_relative_transform_target,
+            batch_size=batch_size,
+            max_batch=max_batch,
+        )
         if needs_pad:
             goal_tool_poses, current_state, seed_config = _pad_batch_inputs(
-                goal_tool_poses, current_state, seed_config, batch_size, max_batch,
+                goal_tool_poses,
+                current_state,
+                seed_config,
+                batch_size,
+                max_batch,
             )
         batch_size = max_batch
 
@@ -698,31 +1042,23 @@ class IKSolver:
             tool_frames=goal_tool_poses.tool_frames,
         )
 
-        additional_time = 0.0
+        seed_solve_time = 0.0
         current_state = self._fill_current_state_dt(current_state)
 
         if seed_config is None and current_state is not None:
-            seed_config = current_state.position.clone().view(batch_size, 1, -1)
+            seed_config = current_state.position.view(batch_size, 1, -1)
 
         if self.config.use_lm_seed and run_optimizer:
-            if batch_size == 1:
-                seed_result = self.seed_ik_solver.solve_single(
-                    goal_tool_poses=goal_tool_poses,
-                    seed_config=seed_config,
-                    return_seeds=self.config.num_seeds,
-                    current_state=current_state,
-                )
-            else:
-                seed_result = self.seed_ik_solver.solve_batch(
-                    goal_tool_poses=goal_tool_poses,
-                    seed_config=seed_config,
-                    return_seeds=self.config.num_seeds,
-                    current_state=current_state,
-                )
+            seed_result = self.seed_ik_solver.solve_seed_configs(
+                goal_tool_poses=goal_tool_poses,
+                num_seed_configs=self.config.num_seeds,
+                seed_config=seed_config,
+                current_state=current_state,
+            )
             seed_config = seed_result.js_solution.position.view(
                 batch_size, self.config.num_seeds, self.action_dim
             )
-            additional_time = seed_result.solve_time
+            seed_solve_time = seed_result.solve_time
 
         if seed_config is not None:
             if seed_config.shape[0] != batch_size:
@@ -745,9 +1081,11 @@ class IKSolver:
             current_state=current_state,
             return_seeds=return_seeds,
             run_optimizer=run_optimizer,
+            tool_relative_transform_target=tool_relative_transform_target,
+            use_specialized_result_processor=use_specialized_result_processor,
         )
-        result.solve_time = timer.stop() + additional_time
-        result.total_time = result.solve_time
+        result.solve_time += seed_solve_time
+        result.total_time = timer.stop()
 
         if needs_pad:
             result = _slice_batch_result(result, actual_batch_size)

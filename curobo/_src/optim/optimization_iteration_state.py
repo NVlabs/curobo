@@ -41,6 +41,15 @@ class OptimizationIterationState:
     #: step direction tensor. Shape: (num_problems, action_dim)
     step_direction: Optional[torch.Tensor] = None
 
+    #: Selected exploration probe, or -1 for the cached baseline. Shape: (num_problems)
+    line_search_index: Optional[torch.Tensor] = None
+
+    #: Line-search outcome code. Shape: (num_problems). Type: int32
+    line_search_status: Optional[torch.Tensor] = None
+
+    #: Whether the new point may form an L-BFGS curvature pair. Shape: (num_problems)
+    curvature_update_valid: Optional[torch.Tensor] = None
+
     #: best action tensor. Shape: (num_problems, action_horizon, action_dim)
     best_action: Optional[torch.Tensor] = None
 
@@ -96,16 +105,27 @@ class OptimizationIterationState:
             log_and_raise(
                 f"Step direction tensor must have shape (num_problems, action_horizon, action_dim). Got {self.step_direction.shape}"
             )
+        for name, value in (
+            ("line_search_index", self.line_search_index),
+            ("line_search_status", self.line_search_status),
+            ("curvature_update_valid", self.curvature_update_valid),
+        ):
+            if value is not None and len(value.shape) != 1:
+                log_and_raise(f"{name} must have shape (num_problems). Got {value.shape}")
         if self.cost is not None and len(self.cost.shape) != 1:
             log_and_raise(f"Cost tensor must have shape (num_problems). Got {self.cost.shape}")
         if self.best_cost is not None and len(self.best_cost.shape) != 1:
-            log_and_raise(f"Best cost tensor must have shape (num_problems). Got {self.best_cost.shape}")
+            log_and_raise(
+                f"Best cost tensor must have shape (num_problems). Got {self.best_cost.shape}"
+            )
         if self.best_iteration is not None and len(self.best_iteration.shape) != 1:
             log_and_raise(
                 f"Best iteration tensor must have shape (num_problems). Got {self.best_iteration.shape}"
             )
         if self.converged is not None and len(self.converged.shape) != 1:
-            log_and_raise(f"Converged tensor must have shape (num_problems). Got {self.converged.shape}")
+            log_and_raise(
+                f"Converged tensor must have shape (num_problems). Got {self.converged.shape}"
+            )
 
     @profiler.record_function("iteration_state/clone")
     def clone(self) -> OptimizationIterationState:
@@ -118,15 +138,32 @@ class OptimizationIterationState:
                 self.exploration_action.clone() if self.exploration_action is not None else None
             ),
             exploration_gradient=(
-                self.exploration_gradient.clone() if self.exploration_gradient is not None else None
+                self.exploration_gradient.clone()
+                if self.exploration_gradient is not None
+                else None
             ),
             exploration_cost=(
                 self.exploration_cost.clone() if self.exploration_cost is not None else None
             ),
-            step_direction=self.step_direction.clone() if self.step_direction is not None else None,
+            step_direction=self.step_direction.clone()
+            if self.step_direction is not None
+            else None,
+            line_search_index=(
+                self.line_search_index.clone() if self.line_search_index is not None else None
+            ),
+            line_search_status=(
+                self.line_search_status.clone() if self.line_search_status is not None else None
+            ),
+            curvature_update_valid=(
+                self.curvature_update_valid.clone()
+                if self.curvature_update_valid is not None
+                else None
+            ),
             best_action=self.best_action.clone() if self.best_action is not None else None,
             best_cost=self.best_cost.clone() if self.best_cost is not None else None,
-            best_iteration=self.best_iteration.clone() if self.best_iteration is not None else None,
+            best_iteration=self.best_iteration.clone()
+            if self.best_iteration is not None
+            else None,
             current_iteration=(
                 self.current_iteration.clone() if self.current_iteration is not None else None
             ),
@@ -146,7 +183,9 @@ class OptimizationIterationState:
         """
         if self.action is not None and other.action is not None:
             if self.action.shape != other.action.shape:
-                log_and_raise(f"Action shape mismatch: {self.action.shape} != {other.action.shape}")
+                log_and_raise(
+                    f"Action shape mismatch: {self.action.shape} != {other.action.shape}"
+                )
             self.action.copy_(other.action)
 
         if self.cost is not None and other.cost is not None:
@@ -166,6 +205,20 @@ class OptimizationIterationState:
                     f"Step direction shape mismatch: {self.step_direction.shape} != {other.step_direction.shape}"
                 )
             self.step_direction.copy_(other.step_direction)
+
+        for name in (
+            "line_search_index",
+            "line_search_status",
+            "curvature_update_valid",
+        ):
+            current_value = getattr(self, name)
+            other_value = getattr(other, name)
+            if current_value is not None and other_value is not None:
+                if current_value.shape != other_value.shape:
+                    log_and_raise(
+                        f"{name} shape mismatch: {current_value.shape} != {other_value.shape}"
+                    )
+                current_value.copy_(other_value)
 
         if self.exploration_action is not None and other.exploration_action is not None:
             if self.exploration_action.shape != other.exploration_action.shape:
@@ -230,5 +283,7 @@ class OptimizationIterationState:
 
         if self.jacobian is not None and other.jacobian is not None:
             if self.jacobian.shape != other.jacobian.shape:
-                log_and_raise(f"Jacobian shape mismatch: {self.jacobian.shape} != {other.jacobian.shape}")
+                log_and_raise(
+                    f"Jacobian shape mismatch: {self.jacobian.shape} != {other.jacobian.shape}"
+                )
             self.jacobian.copy_(other.jacobian)

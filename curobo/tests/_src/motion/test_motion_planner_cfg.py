@@ -49,9 +49,11 @@ class TestMotionPlannerCfgDataclassDefinition:
         """Test dataclass has trajopt_solver_config field."""
         assert "trajopt_solver_config" in MotionPlannerCfg.__dataclass_fields__
 
-    def test_has_graph_planner_config_field(self):
-        """Test dataclass has graph_planner_config field."""
-        assert "graph_planner_config" in MotionPlannerCfg.__dataclass_fields__
+    def test_has_algorithm_specific_graph_planner_config_fields(self):
+        """Keep PRM and RRT construction configurations mutually explicit."""
+        assert "prm_graph_planner_config" in MotionPlannerCfg.__dataclass_fields__
+        assert "rrt_graph_planner_config" in MotionPlannerCfg.__dataclass_fields__
+        assert "constrained_rrt_planner_config" in MotionPlannerCfg.__dataclass_fields__
 
     def test_has_scene_collision_cfg_field(self):
         """Test dataclass has scene_collision_cfg field."""
@@ -72,9 +74,7 @@ class TestMotionPlannerCfgCreateMethod:
 
     def test_create_is_static_method(self):
         """Test create is a static method."""
-        assert isinstance(
-            MotionPlannerCfg.__dict__["create"], staticmethod
-        )
+        assert isinstance(MotionPlannerCfg.__dict__["create"], staticmethod)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_creates_config(self, cuda_device_cfg):
@@ -117,8 +117,9 @@ class TestMotionPlannerCfgCreateMethod:
             device_cfg=cuda_device_cfg,
             use_cuda_graph=False,
         )
-        assert config.graph_planner_config is not None
-        assert isinstance(config.graph_planner_config, PRMGraphPlannerCfg)
+        assert config.prm_graph_planner_config is not None
+        assert isinstance(config.prm_graph_planner_config, PRMGraphPlannerCfg)
+        assert config.rrt_graph_planner_config is None
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_with_scene_model(self, cuda_device_cfg):
@@ -216,6 +217,47 @@ class TestMotionPlannerCfgCreateMethod:
         assert config.ik_solver_config.orientation_tolerance == 0.1
         assert config.trajopt_solver_config.orientation_tolerance == 0.1
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_forwards_ik_rank_weights(self, cuda_device_cfg) -> None:
+        """Test IK ranking weights do not alter the TrajOpt configuration."""
+        config = MotionPlannerCfg.create(
+            robot="franka.yml",
+            device_cfg=cuda_device_cfg,
+            ik_position_rank_weight=3.0,
+            ik_orientation_rank_weight=4.0,
+            ik_cspace_rank_weight=0.5,
+            use_cuda_graph=False,
+        )
+
+        assert config.ik_solver_config.position_rank_weight == 3.0
+        assert config.ik_solver_config.orientation_rank_weight == 4.0
+        assert config.ik_solver_config.cspace_rank_weight == 0.5
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_supports_trajopt_only_metrics_rollout(self, cuda_device_cfg):
+        trajopt_metrics = {
+            "rollout": {
+                "constraint_cfg": {
+                    "tool_velocity_limit_cfg": {"weight": [1.0, 1.0]},
+                }
+            }
+        }
+
+        config = MotionPlannerCfg.create(
+            robot="franka.yml",
+            device_cfg=cuda_device_cfg,
+            use_cuda_graph=False,
+            trajopt_metrics_rollout=trajopt_metrics,
+        )
+
+        ik_metrics = config.ik_solver_config.metrics_rollout_config
+        trajopt_metrics_cfg = config.trajopt_solver_config.metrics_rollout_config
+        assert ik_metrics.constraint_cfg.tool_velocity_limit_cfg is None
+        assert ik_metrics.transition_model_cfg.compute_jacobian is False
+        assert trajopt_metrics_cfg.constraint_cfg.tool_velocity_limit_cfg is not None
+        assert trajopt_metrics_cfg.transition_model_cfg.compute_jacobian is True
+        assert "transition_model_cfg" not in trajopt_metrics["rollout"]
+
 
 class TestMotionPlannerCfgDirectConstruction:
     """Test MotionPlannerCfg direct construction."""
@@ -252,11 +294,53 @@ class TestMotionPlannerCfgDirectConstruction:
         """Test direct construction uses defaults for optional fields."""
         fields = MotionPlannerCfg.__dataclass_fields__
 
-        # graph_planner_config should have a default
-        assert fields["graph_planner_config"].default is None
+        assert fields["prm_graph_planner_config"].default is None
+        assert fields["rrt_graph_planner_config"].default is None
+        assert fields["constrained_rrt_planner_config"].default is None
 
         # scene_collision_cfg should have a default
         assert fields["scene_collision_cfg"].default is None
+
+    @pytest.mark.parametrize(
+        "field", ("always_run_trajopt", "run_trajopt_on_graph_seed", "enable_trajopt")
+    )
+    def test_trajopt_policy_flags_require_booleans(self, field):
+        """Reject ambiguous truthy values for TrajOpt policy controls."""
+        with pytest.raises(ValueError, match=f"{field} must be a boolean"):
+            MotionPlannerCfg(
+                ik_solver_config=None,
+                trajopt_solver_config=None,
+                **{field: "false"},
+            )
+
+    def test_direct_construction_preserves_legacy_positional_order(self):
+        """Keep new planner selectors after the original positional fields."""
+        ik_config = object()
+        trajopt_config = object()
+        graph_config = object.__new__(PRMGraphPlannerCfg)
+        scene_config = object()
+        device_config = object()
+
+        config = MotionPlannerCfg(
+            ik_config,
+            trajopt_config,
+            graph_config,
+            scene_config,
+            device_config,
+        )
+
+        assert config.ik_solver_config is ik_config
+        assert config.trajopt_solver_config is trajopt_config
+        assert config.prm_graph_planner_config is graph_config
+        assert config.scene_collision_cfg is scene_config
+        assert config.device_cfg is device_config
+        assert config.graph_planner_algorithm == "prm"
+        assert config.rrt_graph_planner_config is None
+        assert config.constrained_rrt_planner_config is None
+        assert config.fit_graph_seed_to_bspline is True
+        assert config.always_run_trajopt is True
+        assert config.run_trajopt_on_graph_seed is True
+        assert config.enable_trajopt is True
 
 
 class TestMotionPlannerCfgDefaults:
@@ -265,38 +349,99 @@ class TestMotionPlannerCfgDefaults:
     def test_default_num_ik_seeds_parameter(self):
         """Test default num_ik_seeds parameter in create."""
         import inspect
+
         sig = inspect.signature(MotionPlannerCfg.create)
         assert sig.parameters["num_ik_seeds"].default is None
 
     def test_default_num_trajopt_seeds_parameter(self):
         """Test default num_trajopt_seeds parameter in create."""
         import inspect
+
         sig = inspect.signature(MotionPlannerCfg.create)
         assert sig.parameters["num_trajopt_seeds"].default is None
 
     def test_default_position_tolerance_parameter(self):
         """Test default position_tolerance parameter in create."""
         import inspect
+
         sig = inspect.signature(MotionPlannerCfg.create)
         assert sig.parameters["position_tolerance"].default == 0.005
 
     def test_default_orientation_tolerance_parameter(self):
         """Test default orientation_tolerance parameter in create."""
         import inspect
+
         sig = inspect.signature(MotionPlannerCfg.create)
         assert sig.parameters["orientation_tolerance"].default == 0.05
 
     def test_default_use_cuda_graph_parameter(self):
         """Test default use_cuda_graph parameter in create."""
         import inspect
+
         sig = inspect.signature(MotionPlannerCfg.create)
-        assert sig.parameters["use_cuda_graph"].default == True
+        assert sig.parameters["use_cuda_graph"].default is True
 
     def test_default_random_seed_parameter(self):
         """Test default random_seed parameter in create."""
         import inspect
+
         sig = inspect.signature(MotionPlannerCfg.create)
         assert sig.parameters["random_seed"].default == 123
+
+    def test_graph_planner_parameters_are_appended(self):
+        """Do not shift existing positional parameters in the create factory."""
+        import inspect
+
+        parameter_names = list(inspect.signature(MotionPlannerCfg.create).parameters)
+        assert parameter_names[-10:-4] == [
+            "graph_planner_algorithm",
+            "rrt_planner_config",
+            "fit_graph_seed_to_bspline",
+            "always_run_trajopt",
+            "run_trajopt_on_graph_seed",
+            "enable_trajopt",
+        ]
+        assert parameter_names[-4:] == [
+            "ik_metrics_rollout",
+            "trajopt_metrics_rollout",
+            "create_constrained_rrt",
+            "constrained_rrt_planner_config",
+        ]
+
+    def test_default_create_constrained_rrt_parameter(self):
+        """Create the dedicated constrained RRT by default."""
+        import inspect
+
+        sig = inspect.signature(MotionPlannerCfg.create)
+        assert sig.parameters["create_constrained_rrt"].default is True
+
+    def test_default_graph_seed_bspline_fit_parameter(self):
+        """Fit fixed-horizon graph samples to B-spline knots by default."""
+        import inspect
+
+        sig = inspect.signature(MotionPlannerCfg.create)
+        assert sig.parameters["fit_graph_seed_to_bspline"].default is True
+
+    def test_default_always_run_trajopt_parameter(self):
+        """Preserve TrajOpt refinement unless the validated fast path is enabled."""
+        import inspect
+
+        sig = inspect.signature(MotionPlannerCfg.create)
+        assert sig.parameters["always_run_trajopt"].default is True
+
+    def test_default_run_trajopt_on_graph_seed_parameter(self):
+        """Refine feasible graph paths by default because they can be long."""
+        import inspect
+
+        sig = inspect.signature(MotionPlannerCfg.create)
+        assert sig.parameters["run_trajopt_on_graph_seed"].default is True
+
+    def test_default_enable_trajopt_parameter(self):
+        """Keep trajectory optimization enabled by default."""
+        import inspect
+
+        sig = inspect.signature(MotionPlannerCfg.create)
+        assert sig.parameters["enable_trajopt"].default is True
 
 
 class TestMotionPlannerCfgTypeAnnotations:

@@ -6,6 +6,12 @@
 ## Latest Commit
 
 ### New Features
+- Add deferred fused-feature rendering with `Mapper.render_features()`. Compact int32 block and
+  int16 node images support full images, absolute-coordinate patches, batched cameras, optional
+  semantic filtering, and fp16/fp32 materialization of contiguous feature-channel slices.
+- Add reusable semantic filtering for mapper outputs. `SemanticFilter` supports cosine similarity,
+  argmax equality, or both for one-hot and latent feature grids, with `only` and `exclude` modes
+  applied before occupied-voxel, render, ESDF, mesh, and textured-mesh generation.
 - Add feature-aware volumetric mapping. `CameraObservation` can carry an
   optional channels-last `feature_grid`; `MapperCfg.feature_dim` enables
   RGB and neural-feature fusion into per-block accumulators.

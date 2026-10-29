@@ -54,6 +54,11 @@ class MultiStageOptimizer:
         self.device_cfg = self.config.device_cfg
         self.opt_dt = 0.0
         self._enabled = True
+        self._stage_reinitialize_args: tuple[Optional[torch.Tensor], bool, bool] = (
+            None,
+            True,
+            False,
+        )
 
     # -- Properties --
 
@@ -143,6 +148,7 @@ class MultiStageOptimizer:
             ``(num_problems, action_horizon, action_dim)``.
         """
         current_state = iteration_state
+        enabled_stage_index = 0
         for i, optimizer in enumerate(self.optimizers):
             log_info(
                 f"Running optimizer {i + 1}/{len(self.optimizers)}: "
@@ -169,7 +175,17 @@ class MultiStageOptimizer:
                     optimizer.action_dim,
                 )
 
+                if enabled_stage_index > 0:
+                    mask, clear_optimizer_state, reset_num_iters = self._stage_reinitialize_args
+                    optimizer.reinitialize(
+                        action,
+                        mask=mask,
+                        clear_optimizer_state=clear_optimizer_state,
+                        reset_num_iters=reset_num_iters,
+                    )
+
                 optimized_action = optimizer.optimize(action)
+                enabled_stage_index += 1
 
                 current_state = OptimizationIterationState(
                     action=optimized_action.view(
@@ -183,6 +199,7 @@ class MultiStageOptimizer:
                         optimizer.action_dim,
                     ),
                 )
+        self._stage_reinitialize_args = (None, True, False)
         return current_state
 
     # -- Lifecycle --
@@ -194,14 +211,17 @@ class MultiStageOptimizer:
         clear_optimizer_state: bool = True,
         reset_num_iters: bool = False,
     ):
+        self._stage_reinitialize_args = (mask, clear_optimizer_state, reset_num_iters)
         for optimizer in self.optimizers:
-            if optimizer.enabled:
-                optimizer.reinitialize(
-                    action,
-                    mask=mask,
-                    clear_optimizer_state=clear_optimizer_state,
-                    reset_num_iters=reset_num_iters,
-                )
+            if not optimizer.enabled:
+                continue
+            optimizer.reinitialize(
+                action,
+                mask=mask,
+                clear_optimizer_state=clear_optimizer_state,
+                reset_num_iters=reset_num_iters,
+            )
+            break
 
     def shift(self, shift_steps: int = 0) -> bool:
         return self._shift(shift_steps)

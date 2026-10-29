@@ -14,11 +14,12 @@ launchers used by
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import warp as wp
 
+from curobo._src.perception.mapper.kernel.warp_types import PreparedSemanticFilterWarp
 from curobo._src.perception.mapper.storage import BlockSparseTSDF
 from curobo._src.util.warp import get_warp_device_stream
 from curobo.logging import log_and_raise
@@ -50,6 +51,7 @@ def seed_esdf_sites_from_block_sparse_warp(
     esdf_voxel_size_tensor: torch.Tensor,
     esdf_grid_shape: Tuple[int, int, int],
     minimum_tsdf_weight: float = 0.1,
+    semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
 ) -> None:
     """Seed ESDF sites from block-sparse TSDF (surface + truncation boundary).
 
@@ -72,16 +74,21 @@ def seed_esdf_sites_from_block_sparse_warp(
 
     kernels = tsdf.kernels
 
+    kernel = kernels.seed_esdf_sites_from_block_sparse_kernel
+    inputs = [
+        warp_data,
+        wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
+        wp.from_torch(esdf_origin, dtype=wp.float32),
+        wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
+        wp.float32(minimum_tsdf_weight),
+    ]
+    if semantic_filter is not None:
+        kernel = kernels.seed_esdf_sites_from_block_sparse_semantic_kernel
+        inputs.insert(1, semantic_filter)
     wp.launch(
-        kernel=kernels.seed_esdf_sites_from_block_sparse_kernel,
+        kernel=kernel,
         dim=(num_allocated, block_voxels),
-        inputs=[
-            warp_data,
-            wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
-            wp.from_torch(esdf_origin, dtype=wp.float32),
-            wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
-            wp.float32(minimum_tsdf_weight),
-        ],
+        inputs=inputs,
         device=wp.device_from_torch(device),
         stream=stream,
     )
@@ -94,6 +101,7 @@ def seed_esdf_sites_gather_warp(
     esdf_voxel_size_tensor: torch.Tensor,
     esdf_grid_shape: Tuple[int, int, int],
     minimum_tsdf_weight: float = 0.1,
+    semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
 ) -> None:
     """Gather-based ESDF site seeding. CUDA-graph safe (fixed launch dim).
 
@@ -114,16 +122,21 @@ def seed_esdf_sites_gather_warp(
     # Launches against the gather seed kernel in the owning bundle.
     kernels = tsdf.kernels
 
+    kernel = kernels.seed_esdf_sites_gather_kernel
+    inputs = [
+        warp_data,
+        wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
+        wp.from_torch(esdf_origin, dtype=wp.float32),
+        wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
+        wp.float32(minimum_tsdf_weight),
+    ]
+    if semantic_filter is not None:
+        kernel = kernels.seed_esdf_sites_gather_semantic_kernel
+        inputs.insert(1, semantic_filter)
     wp.launch(
-        kernel=kernels.seed_esdf_sites_gather_kernel,
+        kernel=kernel,
         dim=n_esdf_voxels,
-        inputs=[
-            warp_data,
-            wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
-            wp.from_torch(esdf_origin, dtype=wp.float32),
-            wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
-            wp.float32(minimum_tsdf_weight),
-        ],
+        inputs=inputs,
         device=wp.device_from_torch(device),
         stream=stream,
         block_dim=256,

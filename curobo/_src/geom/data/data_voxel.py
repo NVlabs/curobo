@@ -16,7 +16,7 @@ convert to float32 at runtime for computation.
 from __future__ import annotations
 
 # Standard Library
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 # Third Party
@@ -69,6 +69,9 @@ class VoxelData:
     #: Enable flag per voxel grid. 1 = active, 0 = disabled.
     enable: torch.Tensor
 
+    #: Unsigned collision-layer membership [num_envs, max_n].
+    obstacle_layers: torch.Tensor = field(init=False)
+
     #: ESDF feature values per voxel (float16).
     features: torch.Tensor
 
@@ -93,6 +96,10 @@ class VoxelData:
     # -------------------------------------------------------------------------
     # Factory Methods
     # -------------------------------------------------------------------------
+
+    def __post_init__(self) -> None:
+        """Allocate common-layer metadata once alongside obstacle storage."""
+        self.obstacle_layers = torch.ones_like(self.enable, dtype=torch.uint32)
 
     @classmethod
     def create_cache(
@@ -406,6 +413,7 @@ class VoxelData:
             voxel_grids: List of VoxelGrid objects to load.
             env_idx: Environment index to load into.
         """
+        self.obstacle_layers[env_idx].fill_(1)
         import numpy as np
 
         num_voxels = len(voxel_grids)
@@ -632,6 +640,8 @@ class VoxelData:
         Args:
             env_idx: Environment to clear. If None, clears all environments.
         """
+        layers = self.obstacle_layers if env_idx is None else self.obstacle_layers[env_idx]
+        layers.fill_(1)
         if env_idx is not None:
             self.enable[env_idx, :] = 0
             self.count[env_idx] = 0
@@ -1163,6 +1173,45 @@ def compute_local_sdf(
     )
 
     return result[0]
+
+
+def compute_swept_sphere_clearance_lower_bound(
+    obs_set: VoxelDataWarp,
+    env_idx: wp.int32,
+    local_idx: wp.int32,
+    current_world: wp.vec3,
+    sweep_min_world: wp.vec3,
+    sweep_max_world: wp.vec3,
+    radius_adjusted: wp.float32,
+    sweep_reach: wp.float32,
+) -> wp.float32:
+    """Return an ESDF lower bound over the swept-sphere query region.
+
+    A signed distance field is 1-Lipschitz, so subtracting the maximum
+    center displacement and adjusted sphere radius from the current distance
+    gives a conservative swept-clearance lower bound.
+    """
+    flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+    inv_t = load_transform_from_inv_pose(obs_set.inv_pose, flat_idx)
+    local_current = wp.transform_point(inv_t, current_world)
+    grid_dims = wp.vec3i(
+        wp.int32(obs_set.params[flat_idx, 0]),
+        wp.int32(obs_set.params[flat_idx, 1]),
+        wp.int32(obs_set.params[flat_idx, 2]),
+    )
+    voxel_size = obs_set.params[flat_idx, 3]
+    layer_start_idx = flat_idx * obs_set.n_voxels_per_layer
+    current_sdf = sample_voxel_sdf_with_grad(
+        obs_set.features,
+        layer_start_idx,
+        local_current,
+        grid_dims,
+        voxel_size,
+        obs_set.max_dist,
+    )[0]
+    if current_sdf >= obs_set.max_dist:
+        return wp.float32(0.0)
+    return current_sdf - radius_adjusted - sweep_reach
 
 
 def compute_local_sdf_with_grad(

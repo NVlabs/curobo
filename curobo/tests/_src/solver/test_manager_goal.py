@@ -14,6 +14,7 @@ from curobo._src.solver.solve_mode import SolveMode
 from curobo._src.solver.solve_state import SolveState
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose
 
 
@@ -55,7 +56,9 @@ def sample_goal_poses(cpu_device_cfg):
     num_links = 1
     num_goalset = 1
 
-    position = torch.randn(batch_size, 1, num_links, num_goalset, 3, **cpu_device_cfg.as_torch_dict())
+    position = torch.randn(
+        batch_size, 1, num_links, num_goalset, 3, **cpu_device_cfg.as_torch_dict()
+    )
     quaternion = torch.zeros(
         batch_size, 1, num_links, num_goalset, 4, **cpu_device_cfg.as_torch_dict()
     )
@@ -63,6 +66,21 @@ def sample_goal_poses(cpu_device_cfg):
 
     return GoalToolPose(
         tool_frames=["ee_link"],
+        position=position,
+        quaternion=quaternion,
+    )
+
+
+@pytest.fixture
+def sample_relative_transform_target(cpu_device_cfg):
+    """Create one relative-transform target group per sample problem."""
+    position = torch.zeros((4, 2, 3), **cpu_device_cfg.as_torch_dict())
+    position[:, 1, 0] = 0.2
+    quaternion = torch.zeros((4, 2, 4), **cpu_device_cfg.as_torch_dict())
+    quaternion[..., 0] = 1.0
+    return ToolRelativeTransformTarget(
+        reference_tool_frame="reference",
+        tool_frames=["reference", "tool"],
         position=position,
         quaternion=quaternion,
     )
@@ -86,6 +104,28 @@ class TestGoalManagerInitialization:
 
 class TestGoalManagerCreateGoalBuffer:
     """Test GoalManager.create_goal_buffer method."""
+
+    def test_goal_updates_preserve_caller_poses(
+        self, goal_manager, sample_solve_state, sample_goal_poses
+    ) -> None:
+        """Updating a cached solver goal must preserve the previous caller's pose."""
+        expected = sample_goal_poses.clone()
+        buffer, _ = goal_manager.update_goal_buffer(
+            sample_solve_state, goal_tool_poses=sample_goal_poses
+        )
+        position_address = buffer.link_goal_poses.position.data_ptr()
+        next_goal = sample_goal_poses.clone()
+        next_goal.position[..., 2] += 0.12
+        next_goal.quaternion[..., 0] = 0.0
+        next_goal.quaternion[..., 1] = 1.0
+        updated, changed = goal_manager.update_goal_buffer(
+            sample_solve_state, goal_tool_poses=next_goal
+        )
+        assert not changed
+        assert updated.link_goal_poses.position.data_ptr() == position_address
+        torch.testing.assert_close(updated.link_goal_poses.position, next_goal.position)
+        torch.testing.assert_close(sample_goal_poses.position, expected.position)
+        torch.testing.assert_close(sample_goal_poses.quaternion, expected.quaternion)
 
     def test_create_goal_buffer_minimal(self, goal_manager, sample_solve_state):
         """Test creating goal buffer with minimal args."""
@@ -138,6 +178,24 @@ class TestGoalManagerCreateGoalBuffer:
 
         assert buffer.goal_js is not None
 
+    def test_create_goal_buffer_with_relative_transform_target(
+        self,
+        goal_manager,
+        sample_solve_state,
+        sample_relative_transform_target,
+    ):
+        buffer = goal_manager.create_goal_buffer(
+            sample_solve_state,
+            tool_relative_transform_target=sample_relative_transform_target,
+        )
+
+        assert buffer.tool_relative_transform_target is sample_relative_transform_target
+        assert buffer.idxs_tool_relative_transform_target.shape == (4 * 32, 1)
+        torch.testing.assert_close(
+            buffer.idxs_tool_relative_transform_target[:32],
+            torch.zeros((32, 1), dtype=torch.int32),
+        )
+
 
 class TestGoalManagerUpdateGoalBuffer:
     """Test GoalManager.update_goal_buffer method."""
@@ -173,13 +231,138 @@ class TestGoalManagerUpdateGoalBuffer:
         # Should reuse buffer
         assert buffer2 is buffer1 or not update_reference
 
+    def test_update_relative_transform_target_reuses_storage(
+        self,
+        goal_manager,
+        sample_solve_state,
+        sample_relative_transform_target,
+    ):
+        buffer, _ = goal_manager.update_goal_buffer(
+            sample_solve_state,
+            tool_relative_transform_target=sample_relative_transform_target,
+        )
+        position_ptr = buffer.tool_relative_transform_target.position.data_ptr()
+        updated = sample_relative_transform_target.clone()
+        updated.position[:, 1, 1] = 0.1
+
+        result = goal_manager.update_tool_relative_transform_target(updated)
+
+        assert result is buffer
+        assert result.tool_relative_transform_target.position.data_ptr() == position_ptr
+        torch.testing.assert_close(
+            result.tool_relative_transform_target.position,
+            updated.position,
+        )
+
+    def test_removing_relative_transform_target_rebuilds_buffer(
+        self,
+        goal_manager,
+        sample_solve_state,
+        sample_relative_transform_target,
+    ):
+        original, _ = goal_manager.update_goal_buffer(
+            sample_solve_state,
+            tool_relative_transform_target=sample_relative_transform_target,
+        )
+
+        updated, update_reference = goal_manager.update_goal_buffer(
+            sample_solve_state,
+            tool_relative_transform_target=None,
+        )
+
+        assert update_reference is True
+        assert updated is not original
+        assert updated.tool_relative_transform_target is None
+
+    def test_incremental_state_update_preserves_relative_transform_target(
+        self,
+        goal_manager,
+        sample_solve_state,
+        sample_relative_transform_target,
+        cpu_device_cfg,
+    ):
+        current_state = JointState.from_position(
+            torch.zeros((4, 7), **cpu_device_cfg.as_torch_dict())
+        )
+        buffer, _ = goal_manager.update_goal_buffer(
+            sample_solve_state,
+            current_js=current_state,
+            tool_relative_transform_target=sample_relative_transform_target,
+        )
+        target_ptr = buffer.tool_relative_transform_target.position.data_ptr()
+
+        updated_state = JointState.from_position(
+            torch.ones((4, 7), **cpu_device_cfg.as_torch_dict())
+        )
+        result = goal_manager.update_current_state(updated_state)
+
+        assert result is buffer
+        assert result.tool_relative_transform_target.position.data_ptr() == target_ptr
+        torch.testing.assert_close(result.current_js.position, updated_state.position)
+
+
+class TestGoalManagerUpdateSeedGoalDt:
+    """Test the focused per-seed trajectory dt update."""
+
+    def test_updates_only_seed_goal_dt(
+        self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg
+    ):
+        """The focused update reuses the buffer without touching other goal tensors."""
+        seed_goal = JointState.from_position(
+            torch.randn(4, 32, 7, **cpu_device_cfg.as_torch_dict())
+        )
+        seed_goal.dt = torch.full((4, 32), 0.02, **cpu_device_cfg.as_torch_dict())
+        current_state = JointState.from_position(
+            torch.randn(4, 7, **cpu_device_cfg.as_torch_dict())
+        )
+        goal_buffer, _ = goal_manager.update_goal_buffer(
+            sample_solve_state,
+            goal_tool_poses=sample_goal_poses,
+            current_js=current_state,
+            seed_goal_js=seed_goal,
+        )
+        current_version = goal_buffer.current_js.position._version
+        pose_version = goal_buffer.link_goal_poses.position._version
+        seed_position_version = goal_buffer.seed_goal_js.position._version
+        dt_version = goal_buffer.seed_goal_js.dt._version
+        updated_dt = torch.full_like(goal_buffer.seed_goal_js.dt, 0.04)
+
+        returned_buffer = goal_manager.update_seed_goal_dt(updated_dt)
+
+        assert returned_buffer is goal_buffer
+        torch.testing.assert_close(goal_buffer.seed_goal_js.dt, updated_dt)
+        assert goal_buffer.current_js.position._version == current_version
+        assert goal_buffer.link_goal_poses.position._version == pose_version
+        assert goal_buffer.seed_goal_js.position._version == seed_position_version
+        assert goal_buffer.seed_goal_js.dt._version == dt_version + 1
+
+    def test_requires_initialized_seed_goal(self, goal_manager):
+        """The focused update requires an initialized seed-goal dt buffer."""
+        with pytest.raises(ValueError, match="Goal buffer has not been initialized"):
+            goal_manager.update_seed_goal_dt(torch.ones(1))
+
+    def test_rejects_shape_change(
+        self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg
+    ):
+        """Changing the per-seed dt shape requires a full goal-buffer update."""
+        seed_goal = JointState.from_position(
+            torch.randn(4, 32, 7, **cpu_device_cfg.as_torch_dict())
+        )
+        seed_goal.dt = torch.full((4, 32), 0.02, **cpu_device_cfg.as_torch_dict())
+        goal_manager.update_goal_buffer(
+            sample_solve_state,
+            goal_tool_poses=sample_goal_poses,
+            seed_goal_js=seed_goal,
+        )
+
+        with pytest.raises(ValueError, match="dt.shape"):
+            goal_manager.update_seed_goal_dt(torch.ones(4, 1))
+
 
 class TestGoalManagerBatchHelper:
     """Test GoalManager batch helper property."""
 
-    def test_batch_helper_after_update(
-        self, goal_manager, sample_solve_state, sample_goal_poses
-    ):
+    def test_batch_helper_after_update(self, goal_manager, sample_solve_state, sample_goal_poses):
         """Test batch_helper is set after update."""
         goal_manager.update_goal_buffer(
             sample_solve_state,
@@ -187,7 +370,7 @@ class TestGoalManagerBatchHelper:
         )
 
         # batch_helper should be a tensor for indexing
-        assert hasattr(goal_manager, 'batch_helper')
+        assert hasattr(goal_manager, "batch_helper")
 
 
 class TestGoalManagerSingleBatch:
@@ -515,9 +698,7 @@ class TestGoalManagerPropertyErrors:
 
     def test_update_goal_state_buffer_not_init(self, goal_manager, cpu_device_cfg):
         """Test update_goal_state raises when buffer not init (line 300)."""
-        goal_state = JointState.from_position(
-            torch.randn(4, 7, **cpu_device_cfg.as_torch_dict())
-        )
+        goal_state = JointState.from_position(torch.randn(4, 7, **cpu_device_cfg.as_torch_dict()))
         with pytest.raises(ValueError, match="Goal buffer has not been initialized"):
             goal_manager.update_goal_state(goal_state)
 
@@ -542,13 +723,17 @@ class TestGoalManagerBatchSizeGetters:
         goal_manager.update_goal_buffer(sample_solve_state, goal_tool_poses=sample_goal_poses)
         assert goal_manager.get_batch_size() == 4
 
-    def test_get_ik_batch_size_after_init(self, goal_manager, sample_solve_state, sample_goal_poses):
+    def test_get_ik_batch_size_after_init(
+        self, goal_manager, sample_solve_state, sample_goal_poses
+    ):
         """Test get_ik_batch_size after initialization (line 359)."""
         goal_manager.update_goal_buffer(sample_solve_state, goal_tool_poses=sample_goal_poses)
         result = goal_manager.get_ik_batch_size()
         assert result >= 0
 
-    def test_get_trajopt_batch_size_after_init(self, goal_manager, sample_solve_state, sample_goal_poses):
+    def test_get_trajopt_batch_size_after_init(
+        self, goal_manager, sample_solve_state, sample_goal_poses
+    ):
         """Test get_trajopt_batch_size after initialization (line 365).
 
         Note: Returns 0 when num_trajopt_seeds is None (now handles None gracefully).
@@ -558,7 +743,9 @@ class TestGoalManagerBatchSizeGetters:
         # Returns 0 when num_trajopt_seeds is not set
         assert result == 0
 
-    def test_get_trajopt_batch_size_with_seeds(self, goal_manager, sample_goal_poses, cpu_device_cfg):
+    def test_get_trajopt_batch_size_with_seeds(
+        self, goal_manager, sample_goal_poses, cpu_device_cfg
+    ):
         """Test get_trajopt_batch_size with num_trajopt_seeds set."""
         solve_state = SolveState(
             solve_type=SolveMode.BATCH,
@@ -701,6 +888,48 @@ class TestGoalManagerPaddedGoalset:
         )
         assert result is None
 
+    def test_padded_goalset_mismatched_seed_count_returns_none(self, cpu_device_cfg):
+        """Test padding rejects a goal buffer with a different seed count."""
+        current_goal_buffer = GoalRegistry.create_idx(
+            pose_batch_size=1,
+            multi_env=False,
+            num_seeds=2,
+            device_cfg=cpu_device_cfg,
+        )
+        position = torch.zeros(1, 1, 1, 2, 3, **cpu_device_cfg.as_torch_dict())
+        quaternion = torch.zeros(1, 1, 1, 2, 4, **cpu_device_cfg.as_torch_dict())
+        quaternion[..., 0] = 1.0
+        current_goal_buffer.link_goal_poses = GoalToolPose(
+            tool_frames=["ee_link"],
+            position=position,
+            quaternion=quaternion,
+        )
+        new_goal_poses = GoalToolPose(
+            tool_frames=["ee_link"],
+            position=position[..., :1, :],
+            quaternion=quaternion[..., :1, :],
+        )
+
+        result = GoalManager._get_padded_goalset_for_links(
+            solve_state=SolveState(
+                solve_type=SolveMode.SINGLE,
+                batch_size=1,
+                num_envs=1,
+                num_trajopt_seeds=1,
+            ),
+            current_solve_state=SolveState(
+                solve_type=SolveMode.SINGLE,
+                batch_size=1,
+                num_envs=1,
+                num_goalset=2,
+                num_trajopt_seeds=2,
+            ),
+            current_goal_buffer=current_goal_buffer,
+            links_goal_pose=new_goal_poses,
+        )
+
+        assert result is None
+
     def test_padded_goalset_to_goalset(self, goal_manager, cpu_device_cfg):
         """Test padding from larger GOALSET to smaller GOALSET (lines 455-489)."""
         large_n_goalset = 8
@@ -820,9 +1049,7 @@ class TestGoalManagerPaddedGoalset:
             num_ik_seeds=32,
         )
 
-        position = torch.randn(
-            batch_size, 1, 1, num_goalset, 3, **cpu_device_cfg.as_torch_dict()
-        )
+        position = torch.randn(batch_size, 1, 1, num_goalset, 3, **cpu_device_cfg.as_torch_dict())
         quaternion = torch.zeros(
             batch_size, 1, 1, num_goalset, 4, **cpu_device_cfg.as_torch_dict()
         )
@@ -845,9 +1072,7 @@ class TestGoalManagerPaddedGoalset:
         )
 
         batch_position = torch.randn(batch_size, 1, 1, 1, 3, **cpu_device_cfg.as_torch_dict())
-        batch_quaternion = torch.zeros(
-            batch_size, 1, 1, 1, 4, **cpu_device_cfg.as_torch_dict()
-        )
+        batch_quaternion = torch.zeros(batch_size, 1, 1, 1, 4, **cpu_device_cfg.as_torch_dict())
         batch_quaternion[..., 0] = 1.0
 
         batch_poses = GoalToolPose(
@@ -866,7 +1091,9 @@ class TestGoalManagerPaddedGoalset:
 class TestGoalManagerUpdateGoalBufferNewFields:
     """Test update_goal_buffer when new fields are added (lines 137-140)."""
 
-    def test_update_goal_buffer_adds_goal_js(self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg):
+    def test_update_goal_buffer_adds_goal_js(
+        self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg
+    ):
         """Test update recreates buffer when goal_js is added (line 137)."""
         # First call without goal_js
         buffer1, _ = goal_manager.update_goal_buffer(
@@ -876,9 +1103,7 @@ class TestGoalManagerUpdateGoalBufferNewFields:
         assert buffer1.goal_js is None
 
         # Second call with goal_js
-        goal_js = JointState.from_position(
-            torch.randn(4, 7, **cpu_device_cfg.as_torch_dict())
-        )
+        goal_js = JointState.from_position(torch.randn(4, 7, **cpu_device_cfg.as_torch_dict()))
         buffer2, update_reference = goal_manager.update_goal_buffer(
             sample_solve_state,
             goal_tool_poses=sample_goal_poses,
@@ -887,7 +1112,9 @@ class TestGoalManagerUpdateGoalBufferNewFields:
 
         assert update_reference is True
 
-    def test_update_goal_buffer_adds_current_js(self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg):
+    def test_update_goal_buffer_adds_current_js(
+        self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg
+    ):
         """Test update recreates buffer when current_js is added (line 139)."""
         # First call without current_js
         buffer1, _ = goal_manager.update_goal_buffer(
@@ -896,9 +1123,7 @@ class TestGoalManagerUpdateGoalBufferNewFields:
         )
 
         # Second call with current_js
-        current_js = JointState.from_position(
-            torch.randn(4, 7, **cpu_device_cfg.as_torch_dict())
-        )
+        current_js = JointState.from_position(torch.randn(4, 7, **cpu_device_cfg.as_torch_dict()))
         buffer2, update_reference = goal_manager.update_goal_buffer(
             sample_solve_state,
             goal_tool_poses=sample_goal_poses,
@@ -907,7 +1132,9 @@ class TestGoalManagerUpdateGoalBufferNewFields:
 
         assert update_reference is True
 
-    def test_update_goal_buffer_adds_seed_goal_js(self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg):
+    def test_update_goal_buffer_adds_seed_goal_js(
+        self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg
+    ):
         """Test update recreates buffer when seed_goal_js is added (line 140)."""
         num_seeds = 32
         dof = 7
@@ -929,7 +1156,9 @@ class TestGoalManagerUpdateGoalBufferNewFields:
 
         assert update_reference is True
 
-    def test_update_goal_buffer_use_implicit_goal(self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg):
+    def test_update_goal_buffer_use_implicit_goal(
+        self, goal_manager, sample_solve_state, sample_goal_poses, cpu_device_cfg
+    ):
         """Test update_goal_buffer with use_implicit_goal (lines 181-182)."""
         num_seeds = 32
         dof = 7
@@ -946,4 +1175,3 @@ class TestGoalManagerUpdateGoalBufferNewFields:
         )
 
         assert buffer is not None
-

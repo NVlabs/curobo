@@ -191,7 +191,7 @@ html_extra_path = ["_html_extra"]
 
 html_css_files = ["custom_furo.css"]
 html_js_files = ["version-switcher.js"]
-html_logo = "_static/logo-light-mode.png"
+html_logo = None
 
 # Furo's default sidebar plus our custom external links block.
 html_sidebars = {
@@ -270,7 +270,6 @@ if html_theme == "sphinx_rtd_theme":
         "sticky_navigation": True,
     }
 elif html_theme == "furo":
-    html_logo = None
     html_theme_options = {
         # "top_of_page_button": None,
         "source_repository": repo_url,
@@ -301,8 +300,6 @@ elif html_theme == "furo":
             "color-brand-content": "#76b900",
             "color-sidebar-background": "#000000",
         },
-        "light_logo": "logo-light-mode.png",
-        "dark_logo": "logo-dark-mode.png",
         "footer_icons": [
             {
                 "name": "GitHub",

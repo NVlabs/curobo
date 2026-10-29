@@ -4,7 +4,7 @@
 """Aggregate GPU data storage for all scene obstacle types.
 
 This module provides:
-- SceneData: Container holding CuboidData, MeshData, and VoxelData
+- SceneData: Container holding analytic primitives, meshes, and voxels
 - SceneDataWarp: Warp struct for kernel access to all obstacle types
 """
 
@@ -14,14 +14,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Union
 
+import torch
+
 # Third Party
 import warp as wp
 
 # CuRobo
+from curobo._src.geom.data.data_capsule import CapsuleData, CapsuleDataWarp
+from curobo._src.geom.data.data_collision_layers import layer_bits_to_int32
 from curobo._src.geom.data.data_cuboid import CuboidData, CuboidDataWarp
+from curobo._src.geom.data.data_cylinder import CylinderData, CylinderDataWarp
 from curobo._src.geom.data.data_mesh import MeshData, MeshDataWarp
 from curobo._src.geom.data.data_voxel import VoxelData, VoxelDataWarp
-from curobo._src.geom.types import Cuboid, Mesh, Obstacle, SceneCfg, VoxelGrid
+from curobo._src.geom.types import Capsule, Cuboid, Cylinder, Mesh, Obstacle, SceneCfg, VoxelGrid
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
 from curobo._src.util.logging import log_and_raise
@@ -36,8 +41,8 @@ class SceneData:
     """Aggregate GPU tensor storage for all scene obstacle types.
 
     This dataclass holds references to individual data storage for each obstacle
-    type (cuboids, meshes, voxels). It provides a unified interface for managing
-    scene obstacles while delegating to the appropriate type-specific storage.
+    type (capsules, cuboids, cylinders, meshes, voxels). It provides a unified interface
+    for managing scene obstacles while delegating to the appropriate type-specific storage.
 
     Use this as the primary container for scene data. It can be passed to
     collision checkers, TSDF integrators, or visualizers.
@@ -50,6 +55,12 @@ class SceneData:
 
     #: Cuboid (OBB) tensor storage. None if no cuboids configured.
     cuboids: Optional[CuboidData] = None
+
+    #: Capsule tensor storage. None if no capsules are configured.
+    capsules: Optional[CapsuleData] = None
+
+    #: Finite-cylinder tensor storage. None if no cylinders are configured.
+    cylinders: Optional[CylinderData] = None
 
     #: Mesh tensor storage with Warp BVH. None if no meshes configured.
     meshes: Optional[MeshData] = None
@@ -69,11 +80,17 @@ class SceneData:
     # -------------------------------------------------------------------------
     # Factory Methods
     # -------------------------------------------------------------------------
-    def get_valid_data(self) -> List[Union[CuboidData, MeshData, VoxelData]]:
+    def get_valid_data(
+        self,
+    ) -> List[Union[CuboidData, CapsuleData, CylinderData, MeshData, VoxelData]]:
         """Return initialized type-specific obstacle storage."""
         valid_data = []
         if self.cuboids is not None:
             valid_data.append(self.cuboids)
+        if self.capsules is not None:
+            valid_data.append(self.capsules)
+        if self.cylinders is not None:
+            valid_data.append(self.cylinders)
         if self.meshes is not None:
             valid_data.append(self.meshes)
         if self.voxels is not None:
@@ -82,7 +99,7 @@ class SceneData:
 
     def _get_obstacle_data(
         self, name: str, env_idx: int
-    ) -> Optional[Union[CuboidData, MeshData, VoxelData]]:
+    ) -> Optional[Union[CuboidData, CapsuleData, CylinderData, MeshData, VoxelData]]:
         """Find the type-specific storage containing an obstacle."""
         for obstacle_data in self.get_valid_data():
             if obstacle_data.has_name(name, env_idx):
@@ -98,6 +115,8 @@ class SceneData:
         mesh_cache: Optional[int] = None,
         mesh_max_dist: float = 0.1,
         voxel_cache: Optional[dict] = None,
+        capsule_cache: Optional[int] = None,
+        cylinder_cache: Optional[int] = None,
     ) -> SceneData:
         """Create an empty cache for scene obstacles.
 
@@ -111,16 +130,26 @@ class SceneData:
                 - layers: Maximum number of voxel grids
                 - dims: Grid dimensions [x, y, z] in meters
                 - voxel_size: Size of each voxel in meters
+            capsule_cache: Maximum number of capsules per environment. None to skip.
+            cylinder_cache: Maximum number of cylinders per environment. None to skip.
 
         Returns:
             Empty SceneData with allocated GPU buffers.
         """
         cuboids = None
+        capsules = None
+        cylinders = None
         meshes = None
         voxels = None
 
         if cuboid_cache is not None and cuboid_cache > 0:
             cuboids = CuboidData.create_cache(cuboid_cache, num_envs, device_cfg)
+
+        if capsule_cache is not None and capsule_cache > 0:
+            capsules = CapsuleData.create_cache(capsule_cache, num_envs, device_cfg)
+
+        if cylinder_cache is not None and cylinder_cache > 0:
+            cylinders = CylinderData.create_cache(cylinder_cache, num_envs, device_cfg)
 
         if mesh_cache is not None and mesh_cache > 0:
             meshes = MeshData.create_cache(mesh_cache, num_envs, device_cfg, mesh_max_dist)
@@ -136,6 +165,8 @@ class SceneData:
 
         return cls(
             cuboids=cuboids,
+            capsules=capsules,
+            cylinders=cylinders,
             meshes=meshes,
             voxels=voxels,
             num_envs=num_envs,
@@ -153,6 +184,8 @@ class SceneData:
         mesh_cache: Optional[int] = None,
         mesh_max_dist: float = 0.1,
         voxel_cache: Optional[dict] = None,
+        capsule_cache: Optional[int] = None,
+        cylinder_cache: Optional[int] = None,
     ) -> SceneData:
         """Create SceneData from a scene configuration.
 
@@ -165,11 +198,15 @@ class SceneData:
             mesh_cache: Max meshes. If None, uses len(scene_cfg.mesh).
             mesh_max_dist: Maximum query distance for mesh SDF.
             voxel_cache: Voxel cache config. If None, derives from scene_cfg.voxel.
+            capsule_cache: Max capsules. If None, uses len(scene_cfg.capsule).
+            cylinder_cache: Max cylinders. If None, uses len(scene_cfg.cylinder).
 
         Returns:
             SceneData populated with obstacles from the scene config.
         """
         cuboids = None
+        capsules = None
+        cylinders = None
         meshes = None
         voxels = None
 
@@ -181,6 +218,22 @@ class SceneData:
             )
         elif cuboid_cache is not None and cuboid_cache > 0:
             cuboids = CuboidData.create_cache(cuboid_cache, num_envs, device_cfg)
+
+        if scene_cfg.capsule and len(scene_cfg.capsule) > 0:
+            max_capsules = capsule_cache or len(scene_cfg.capsule)
+            capsules = CapsuleData.from_scene_cfg(
+                scene_cfg, device_cfg, env_idx, num_envs, max_capsules
+            )
+        elif capsule_cache is not None and capsule_cache > 0:
+            capsules = CapsuleData.create_cache(capsule_cache, num_envs, device_cfg)
+
+        if scene_cfg.cylinder and len(scene_cfg.cylinder) > 0:
+            max_cylinders = cylinder_cache or len(scene_cfg.cylinder)
+            cylinders = CylinderData.from_scene_cfg(
+                scene_cfg, device_cfg, env_idx, num_envs, max_cylinders
+            )
+        elif cylinder_cache is not None and cylinder_cache > 0:
+            cylinders = CylinderData.create_cache(cylinder_cache, num_envs, device_cfg)
 
         # Handle meshes
         if scene_cfg.mesh and len(scene_cfg.mesh) > 0:
@@ -205,6 +258,8 @@ class SceneData:
 
         return cls(
             cuboids=cuboids,
+            capsules=capsules,
+            cylinders=cylinders,
             meshes=meshes,
             voxels=voxels,
             num_envs=num_envs,
@@ -221,6 +276,8 @@ class SceneData:
         mesh_cache: Optional[int] = None,
         mesh_max_dist: float = 0.1,
         voxel_cache: Optional[dict] = None,
+        capsule_cache: Optional[int] = None,
+        cylinder_cache: Optional[int] = None,
     ) -> SceneData:
         """Create SceneData from a list of scene configurations.
 
@@ -233,12 +290,16 @@ class SceneData:
             mesh_cache: Max meshes per env. If None, uses max across scenes.
             mesh_max_dist: Maximum query distance for mesh SDF.
             voxel_cache: Voxel cache config.
+            capsule_cache: Max capsules per env. If None, uses max across scenes.
+            cylinder_cache: Max cylinders per env. If None, uses max across scenes.
 
         Returns:
             SceneData populated with obstacles from all scene configs.
         """
         num_envs = len(scene_cfg_list)
         cuboids = None
+        capsules = None
+        cylinders = None
         meshes = None
         voxels = None
 
@@ -246,6 +307,16 @@ class SceneData:
         cuboid_counts = [len(cfg.cuboid) if cfg.cuboid else 0 for cfg in scene_cfg_list]
         if max(cuboid_counts) > 0 or (cuboid_cache is not None and cuboid_cache > 0):
             cuboids = CuboidData.from_batch_scene_cfg(scene_cfg_list, device_cfg, cuboid_cache)
+
+        capsule_counts = [len(cfg.capsule) if cfg.capsule else 0 for cfg in scene_cfg_list]
+        if max(capsule_counts) > 0 or (capsule_cache is not None and capsule_cache > 0):
+            capsules = CapsuleData.from_batch_scene_cfg(scene_cfg_list, device_cfg, capsule_cache)
+
+        cylinder_counts = [len(cfg.cylinder) if cfg.cylinder else 0 for cfg in scene_cfg_list]
+        if max(cylinder_counts) > 0 or (cylinder_cache is not None and cylinder_cache > 0):
+            cylinders = CylinderData.from_batch_scene_cfg(
+                scene_cfg_list, device_cfg, cylinder_cache
+            )
 
         # Check if any scene has meshes
         mesh_counts = [len(cfg.mesh) if cfg.mesh else 0 for cfg in scene_cfg_list]
@@ -269,6 +340,8 @@ class SceneData:
 
         return cls(
             cuboids=cuboids,
+            capsules=capsules,
+            cylinders=cylinders,
             meshes=meshes,
             voxels=voxels,
             num_envs=num_envs,
@@ -286,7 +359,7 @@ class SceneData:
         Automatically routes to the appropriate storage based on obstacle type.
 
         Args:
-            obstacle: Obstacle to add (Cuboid, Mesh, or VoxelGrid).
+            obstacle: Obstacle to add (Capsule, Cuboid, Cylinder, Mesh, or VoxelGrid).
             env_idx: Environment index to add to.
 
         Returns:
@@ -299,6 +372,14 @@ class SceneData:
             if self.cuboids is None:
                 log_and_raise("Cuboid cache not initialized")
             return self.cuboids.add(obstacle, env_idx)
+        elif isinstance(obstacle, Capsule):
+            if self.capsules is None:
+                log_and_raise("Capsule cache not initialized")
+            return self.capsules.add(obstacle, env_idx)
+        elif isinstance(obstacle, Cylinder):
+            if self.cylinders is None:
+                log_and_raise("Cylinder cache not initialized")
+            return self.cylinders.add(obstacle, env_idx)
         elif isinstance(obstacle, Mesh):
             if self.meshes is None:
                 log_and_raise("Mesh cache not initialized")
@@ -310,6 +391,16 @@ class SceneData:
             return 0
         else:
             log_and_raise(f"Unsupported obstacle type: {type(obstacle)}")
+
+    def set_obstacle_layers(self, name: str, layers: int, env_idx: int = 0) -> None:
+        """Set uint32 layer membership for one named obstacle without reallocating."""
+        bits = layer_bits_to_int32(layers)
+        if not 0 <= env_idx < self.num_envs:
+            log_and_raise("obstacle environment index is out of range")
+        data = self._get_obstacle_data(name, env_idx)
+        if data is None:
+            log_and_raise(f"Obstacle not found: {name}")
+        data.obstacle_layers.view(torch.int32)[env_idx, data.get_idx(name, env_idx)] = bits
 
     def update_obstacle_pose(
         self,
@@ -367,6 +458,10 @@ class SceneData:
         names = []
         if self.cuboids is not None:
             names.extend(self.cuboids.get_names(env_idx))
+        if self.capsules is not None:
+            names.extend(self.capsules.get_names(env_idx))
+        if self.cylinders is not None:
+            names.extend(self.cylinders.get_names(env_idx))
         if self.meshes is not None:
             names.extend(self.meshes.get_names(env_idx))
         if self.voxels is not None:
@@ -385,6 +480,10 @@ class SceneData:
         """
         if self.cuboids is not None:
             self.cuboids.clear(env_idx)
+        if self.capsules is not None:
+            self.capsules.clear(env_idx)
+        if self.cylinders is not None:
+            self.cylinders.clear(env_idx)
         if self.meshes is not None:
             self.meshes.clear(env_idx)
         if self.voxels is not None:
@@ -409,6 +508,12 @@ class SceneData:
         if scene_cfg.cuboid:
             for cuboid in scene_cfg.cuboid:
                 self.add_obstacle(cuboid, env_idx)
+        if scene_cfg.capsule:
+            for capsule in scene_cfg.capsule:
+                self.add_obstacle(capsule, env_idx)
+        if scene_cfg.cylinder:
+            for cylinder in scene_cfg.cylinder:
+                self.add_obstacle(cylinder, env_idx)
         if scene_cfg.mesh:
             for mesh in scene_cfg.mesh:
                 self.add_obstacle(mesh, env_idx)
@@ -424,6 +529,14 @@ class SceneData:
         """Check if cuboid data is available."""
         return self.cuboids is not None
 
+    def has_capsules(self) -> bool:
+        """Check if capsule data is available."""
+        return self.capsules is not None
+
+    def has_cylinders(self) -> bool:
+        """Check if cylinder data is available."""
+        return self.cylinders is not None
+
     def has_meshes(self) -> bool:
         """Check if mesh data is available."""
         return self.meshes is not None
@@ -436,10 +549,12 @@ class SceneData:
         """Get a dictionary of active obstacle types.
 
         Returns:
-            Dict with keys 'cuboid', 'mesh', 'voxel' and boolean values.
+            Dictionary of obstacle-type availability flags.
         """
         return {
             "cuboid": self.has_cuboids(),
+            "capsule": self.has_capsules(),
+            "cylinder": self.has_cylinders(),
             "mesh": self.has_meshes(),
             "voxel": self.has_voxels(),
         }
@@ -464,6 +579,18 @@ class SceneData:
             s.has_cuboids = True
         else:
             s.has_cuboids = False
+
+        if self.capsules is not None:
+            s.capsules = self.capsules.to_warp()
+            s.has_capsules = True
+        else:
+            s.has_capsules = False
+
+        if self.cylinders is not None:
+            s.cylinders = self.cylinders.to_warp()
+            s.has_cylinders = True
+        else:
+            s.has_cylinders = False
 
         if self.meshes is not None:
             s.meshes = self.meshes.to_warp(mesh_max_dist)
@@ -492,18 +619,26 @@ class SceneDataWarp:
 
     Attributes:
         cuboids: Cuboid data (valid if has_cuboids is True).
+        capsules: Capsule data (valid if has_capsules is True).
+        cylinders: Cylinder data (valid if has_cylinders is True).
         meshes: Mesh data (valid if has_meshes is True).
         voxels: Voxel data (valid if has_voxels is True).
         has_cuboids: Whether cuboid data is present.
+        has_capsules: Whether capsule data is present.
+        has_cylinders: Whether cylinder data is present.
         has_meshes: Whether mesh data is present.
         has_voxels: Whether voxel data is present.
         num_envs: Number of environments.
     """
 
     cuboids: CuboidDataWarp
+    capsules: CapsuleDataWarp
+    cylinders: CylinderDataWarp
     meshes: MeshDataWarp
     voxels: VoxelDataWarp
     has_cuboids: wp.bool
+    has_capsules: wp.bool
+    has_cylinders: wp.bool
     has_meshes: wp.bool
     has_voxels: wp.bool
     num_envs: wp.int32

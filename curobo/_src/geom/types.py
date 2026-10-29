@@ -6,9 +6,8 @@
 from __future__ import annotations
 
 # Standard Library
-import struct
-import zlib
 from dataclasses import dataclass, field
+from io import BytesIO
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 # Third Party
@@ -16,11 +15,12 @@ import numpy as np
 import torch
 import trimesh
 import trimesh.scene
+from PIL import Image
 
 # CuRobo
+from curobo._src.geom.mesh_triangulation import triangulate_mesh_faces
 from curobo._src.geom.sphere_fit.fit_spheres import fit_spheres_to_mesh
 from curobo._src.geom.sphere_fit.types import SphereFitType
-from curobo._src.geom.mesh_triangulation import triangulate_mesh_faces
 from curobo._src.types.camera import CameraObservation
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
@@ -105,30 +105,9 @@ class _ArrayTextureImage:
 
     def _to_png(self) -> bytes:
         """Encode the backing image as a PNG byte stream."""
-        if self.mode == "L":
-            color_type = 0
-        elif self.mode == "RGB":
-            color_type = 2
-        elif self.mode == "RGBA":
-            color_type = 6
-        else:
-            log_and_raise("Texture image mode " + self.mode + " cannot be encoded as PNG")
-
-        header = struct.pack(">IIBBBBB", self.width, self.height, 8, color_type, 0, 0, 0)
-        raw_rows = b"".join(b"\x00" + np.ascontiguousarray(row).tobytes() for row in self._image)
-        compressed = zlib.compress(raw_rows)
-        return (
-            b"\x89PNG\r\n\x1a\n"
-            + self._png_chunk(b"IHDR", header)
-            + self._png_chunk(b"IDAT", compressed)
-            + self._png_chunk(b"IEND", b"")
-        )
-
-    @staticmethod
-    def _png_chunk(name: bytes, data: bytes) -> bytes:
-        """Create a PNG chunk."""
-        checksum = zlib.crc32(name + data) & 0xFFFFFFFF
-        return struct.pack(">I", len(data)) + name + data + struct.pack(">I", checksum)
+        with BytesIO() as buffer:
+            Image.fromarray(self._image).save(buffer, format="PNG")
+            return buffer.getvalue()
 
 
 @dataclass
@@ -1237,11 +1216,7 @@ class SceneCfg(Sequence):
                 types.
         """
         sphere_obb = []
-        capsule_obb = []
         cuboid_obb = []
-        cylinder_obb = []
-        if current_world.capsule is not None and len(current_world.capsule) > 0:
-            capsule_obb = [x.get_mesh(process=process) for x in current_world.capsule]
 
         if current_world.sphere is not None and len(current_world.sphere) > 0:
             sphere_obb = [x.get_mesh(process=process) for x in current_world.sphere]
@@ -1249,12 +1224,11 @@ class SceneCfg(Sequence):
         if current_world.cuboid is not None and len(current_world.cuboid) > 0:
             cuboid_obb = current_world.cuboid
 
-        if current_world.cylinder is not None and len(current_world.cylinder) > 0:
-            cylinder_obb = [x.get_mesh(process=process) for x in current_world.cylinder]
-
         return SceneCfg(
-            mesh=current_world.mesh + sphere_obb + capsule_obb + cylinder_obb,
+            mesh=current_world.mesh + sphere_obb,
             cuboid=cuboid_obb,
+            capsule=current_world.capsule,
+            cylinder=current_world.cylinder,
             voxel=current_world.voxel,
         )
 
@@ -1341,7 +1315,12 @@ class SceneCfg(Sequence):
 
     def get_cache_dict(self) -> Dict[str, int]:
         """Computes the number of obstacles in each type."""
-        cache = {"obb": len(self.cuboid), "mesh": len(self.mesh)}
+        cache = {
+            "obb": len(self.cuboid),
+            "capsule": len(self.capsule),
+            "cylinder": len(self.cylinder),
+            "mesh": len(self.mesh),
+        }
         return cache
 
     def add_obstacle(self, obstacle: Obstacle):

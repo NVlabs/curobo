@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard Library
 from dataclasses import dataclass
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 # Third Party
 import torch
@@ -37,3 +37,6 @@ class GraphPlannerResult:
 
     #: Debug info
     debug_info: Optional[Any] = None
+
+    #: Optional CUDA-event component timings in seconds.
+    component_times: Optional[Dict[str, float]] = None

@@ -20,13 +20,13 @@ from curobo._src.solver.solver_core_cfg import (
     create_solver_core_cfg,
     resolve_yaml_configs,
 )
+from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType
 from curobo._src.transition.robot_state_transition_cfg import (
     RobotStateTransitionCfg,
 )
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
 from curobo._src.util.logging import log_and_raise
-from curobo._src.util.trajectory import TrajInterpolationType
 
 
 @dataclass
@@ -78,6 +78,9 @@ class TrajOptSolverCfg:
     #: values can significantly increase GPU memory usage because position,
     #: velocity, acceleration, and jerk are allocated for each batched seed trajectory.
     interpolation_buffer_size: int = 1000
+
+    #: Optimize timing for every candidate before final validation and selection by duration.
+    enable_timeopt: bool = False
 
     # Convenience accessors into core_cfg
     @property
@@ -146,6 +149,7 @@ class TrajOptSolverCfg:
         max_goalset: int = 1,
         interpolation_dt: float = 0.025,
         interpolation_buffer_size: int = 1000,
+        enable_timeopt: bool = False,
     ) -> TrajOptSolverCfg:
         """Create TrajOptSolverCfg from flexible inputs.
 
@@ -188,6 +192,8 @@ class TrajOptSolverCfg:
                 waypoints to preallocate. Larger values can significantly
                 increase GPU memory usage because state buffers are allocated
                 for every batched seed trajectory.
+            enable_timeopt: Apply fixed-path velocity, acceleration, jerk, and
+                torque timeopt to every seed before final selection. Requires cubic B-splines.
 
         Returns:
             Configured TrajOptSolverCfg instance.
@@ -254,4 +260,5 @@ class TrajOptSolverCfg:
             interpolation_dt=interpolation_dt,
             interpolation_type=interpolation_type,
             interpolation_buffer_size=interpolation_buffer_size,
+            enable_timeopt=enable_timeopt,
         )

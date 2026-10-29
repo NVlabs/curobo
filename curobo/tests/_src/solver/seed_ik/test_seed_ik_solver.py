@@ -11,6 +11,7 @@ import torch
 from curobo._src.solver.seed_ik.seed_ik_solver import SeedIKSolver
 from curobo._src.solver.seed_ik.seed_ik_solver_cfg import SeedIKSolverCfg
 from curobo._src.solver.solver_ik_result import IKSolverResult
+from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
 from curobo._src.types.tool_pose import GoalToolPose
@@ -138,6 +139,86 @@ class TestSeedIKSolverInitialization:
     def test_init_has_iteration_state_manager(self, seed_ik_solver):
         """Test solver has iteration state manager."""
         assert hasattr(seed_ik_solver, "_iteration_state_manager")
+
+    def test_pose_jacobian_scaling(self, seed_ik_solver: SeedIKSolver) -> None:
+        """Scale pose Jacobian rows consistently with the scalar pose cost."""
+        row_scale = seed_ik_solver.error_calculator._pose_jacobian_row_scale
+        expected_link_scale = torch.tensor(
+            [1.0, 1.0, 1.0, 2.0**0.5, 2.0**0.5, 2.0**0.5],
+            device=row_scale.device,
+            dtype=row_scale.dtype,
+        )
+        expected = expected_link_scale.repeat(seed_ik_solver.num_links).view(1, -1, 1)
+
+        torch.testing.assert_close(row_scale, expected)
+
+
+@pytest.mark.parametrize(
+    ("use_backward", "use_cuda_graph"),
+    [(True, False), (False, False), (True, True), (False, True)],
+)
+def test_orientation_only_lm_converges(
+    cuda_device_cfg: DeviceCfg, use_backward: bool, use_cuda_graph: bool
+) -> None:
+    """Solve reachable orientation-only IK with either LM gradient path."""
+    config = SeedIKSolverCfg.create(
+        robot="franka.yml",
+        device_cfg=cuda_device_cfg,
+        num_seeds=1,
+        max_iterations=32,
+        inner_iterations=4,
+        use_cuda_graph=use_cuda_graph,
+        use_backward=use_backward,
+        position_weight=0.0,
+        orientation_weight=1.0,
+        position_tolerance=100.0,
+        orientation_tolerance=1.0e-3,
+    )
+    solver = SeedIKSolver(config)
+    batch_size = 4
+    default = solver.default_joint_position.unsqueeze(0).expand(batch_size, -1)
+    target_offsets = cuda_device_cfg.to_device(
+        [
+            [0.10, -0.12, 0.08, -0.15, 0.07, 0.11, -0.09],
+            [-0.08, 0.15, -0.11, 0.09, -0.13, 0.06, 0.12],
+            [0.14, 0.07, -0.09, -0.12, 0.10, -0.08, 0.05],
+            [-0.11, -0.06, 0.13, 0.10, -0.07, 0.09, -0.14],
+        ]
+    )
+    start_offsets = cuda_device_cfg.to_device(
+        [
+            [-0.30, 0.28, -0.24, 0.31, -0.27, 0.23, 0.26],
+            [0.26, -0.32, 0.29, -0.25, 0.22, -0.28, -0.20],
+            [-0.24, -0.27, 0.31, 0.25, -0.29, 0.21, -0.23],
+            [0.29, 0.24, -0.26, -0.30, 0.27, -0.22, 0.28],
+        ]
+    )
+    limits = solver.joint_limits.position
+    target = torch.clamp(default + target_offsets, min=limits[0], max=limits[1])
+    start = torch.clamp(target + start_offsets, min=limits[0], max=limits[1])
+
+    target_state = solver.kinematics.compute_kinematics(JointState.from_position(target))
+    goal = GoalToolPose(
+        tool_frames=solver.tool_frames,
+        position=target_state.tool_poses.position.clone().unsqueeze(3),
+        quaternion=target_state.tool_poses.quaternion.clone().unsqueeze(3),
+    )
+    start_state = solver.kinematics.compute_kinematics(JointState.from_position(start))
+    target_quaternion = goal.quaternion.squeeze(3)
+    quaternion_dot = torch.abs(
+        torch.sum(start_state.tool_poses.quaternion * target_quaternion, dim=-1)
+    ).clamp(max=1.0)
+    initial_orientation_error = 2.0 * torch.acos(quaternion_dot)
+
+    result = solver.solve_batch(
+        goal_tool_poses=goal,
+        seed_config=start.unsqueeze(1),
+        return_seeds=1,
+    )
+
+    assert torch.mean(initial_orientation_error) > 0.25
+    assert torch.all(result.success)
+    assert torch.max(result.rotation_error) < 1.0e-3
 
 
 class TestSeedIKSolverProperties:
@@ -537,6 +618,62 @@ class TestSeedIKSolverSelectTopSolutions:
         assert top_success.shape == (batch_size, return_seeds)
         assert top_pos.shape == (batch_size, return_seeds)
         assert top_ori.shape == (batch_size, return_seeds)
+        torch.testing.assert_close(top_sol[0], solutions[0, [0, 2]])
+        torch.testing.assert_close(top_sol[1], solutions[1, [0, 1]])
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_solve_seed_configs_skips_ranking(
+        self,
+        seed_ik_solver: SeedIKSolver,
+        sample_goal_pose: GoalToolPose,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Return all optimized seeds without invoking solution ranking."""
+
+        def fail_if_called(*args: object, **kwargs: object) -> None:
+            pytest.fail("solve_seed_configs should not rank solutions")
+
+        monkeypatch.setattr(seed_ik_solver, "_select_top_solutions", fail_if_called)
+
+        result = seed_ik_solver.solve_seed_configs(
+            goal_tool_poses=sample_goal_pose,
+            num_seed_configs=seed_ik_solver.config.num_seeds,
+        )
+
+        assert result.solution.shape == (
+            sample_goal_pose.batch_size,
+            seed_ik_solver.config.num_seeds,
+            seed_ik_solver.dof,
+        )
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_solve_seed_configs_ranks_requested_subset(
+        self,
+        seed_ik_solver: SeedIKSolver,
+        sample_goal_pose: GoalToolPose,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rank LM output when downstream IK requests fewer configurations."""
+        original_select = seed_ik_solver._select_top_solutions
+        select_calls = 0
+
+        def track_selection(
+            *args: object,
+            **kwargs: object,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            nonlocal select_calls
+            select_calls += 1
+            return original_select(*args, **kwargs)
+
+        monkeypatch.setattr(seed_ik_solver, "_select_top_solutions", track_selection)
+
+        result = seed_ik_solver.solve_seed_configs(
+            goal_tool_poses=sample_goal_pose,
+            num_seed_configs=2,
+        )
+
+        assert select_calls == 1
+        assert result.solution.shape == (sample_goal_pose.batch_size, 2, seed_ik_solver.dof)
 
 
 class TestSeedIKSolverUpdateToolPoseCriteria:
@@ -583,4 +720,3 @@ class TestSeedIKSolverEdgeCases:
 
         result = seed_ik_solver.solve_batch(goal_tool_poses=goal_poses)
         assert result.solution.shape[0] == 1
-

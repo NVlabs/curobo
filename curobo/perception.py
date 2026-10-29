@@ -53,9 +53,15 @@ Example (robot pose estimation):
 """
 
 from curobo._src.perception.filter_depth import FilterDepth
+from curobo._src.perception.mapper.extractor_points import OccupiedPoints
+from curobo._src.perception.mapper.filter_semantic import SemanticFilter
 from curobo._src.perception.mapper.mapper import Mapper
 from curobo._src.perception.mapper.mapper_cfg import MapperCfg
-from curobo._src.perception.mapper.storage import MatchedVoxels, OccupiedVoxels
+from curobo._src.perception.mapper.storage import (
+    MatchedVoxels,
+    OccupiedVoxels,
+    RenderedFeatures,
+)
 from curobo._src.perception.pose_estimation.mesh_robot import RobotMesh
 from curobo._src.perception.pose_estimation.pose_detector import PoseDetector
 from curobo._src.perception.pose_estimation.pose_detector_cfg import DetectorCfg
@@ -70,9 +76,12 @@ __all__ = [
     "MapperCfg",
     "MatchedVoxels",
     "OccupiedVoxels",
+    "OccupiedPoints",
     "PoseDetector",
     "RobotMesh",
     "RobotSegmenter",
+    "RenderedFeatures",
+    "SemanticFilter",
     "SDFDetectorCfg",
     "SDFPoseDetector",
 ]

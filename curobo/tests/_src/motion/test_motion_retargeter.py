@@ -31,7 +31,7 @@ TOOL_FRAMES = [
 
 def _criteria():
     return {
-        name: ToolPoseCriteria.track_position_and_orientation(
+        name: ToolPoseCriteria.track_pose(
             xyz=[1.0, 1.0, 1.0], rpy=[0.5, 0.5, 0.5],
         )
         for name in TOOL_FRAMES

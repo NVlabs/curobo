@@ -55,10 +55,9 @@ class TestSharedKinematicsParams:
 
         kparams.link_spheres[0, sph_idx[0], 3] = 0.123
 
-        trajopt_val = (
-            planner.trajopt_solver.kinematics.config.kinematics_config
-            .link_spheres[0, sph_idx[0], 3].item()
-        )
+        trajopt_val = planner.trajopt_solver.kinematics.config.kinematics_config.link_spheres[
+            0, sph_idx[0], 3
+        ].item()
         assert trajopt_val == pytest.approx(0.123, abs=1e-6)
 
         kparams.link_spheres[0, sph_idx[0], 3] = original
@@ -77,3 +76,13 @@ class TestSharedKinematicsParams:
         graph_kparams = planner.graph_planner.kinematics.config.kinematics_config
         trajopt_kparams = planner.trajopt_solver.kinematics.config.kinematics_config
         assert graph_kparams is trajopt_kparams
+
+    def test_constrained_rrt_rollouts_share_kinematics_params(self, planner):
+        """Every dedicated RRT rollout must observe attachment and sphere mutations."""
+        constrained_rrt = planner.constrained_rrt_planner
+        assert constrained_rrt is not None
+        trajopt_kparams = planner.trajopt_solver.kinematics.config.kinematics_config
+
+        for rollout in constrained_rrt.get_all_rollout_instances():
+            rollout_kparams = rollout.transition_model.robot_model.config.kinematics_config
+            assert rollout_kparams is trajopt_kparams

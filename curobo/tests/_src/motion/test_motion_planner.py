@@ -3,18 +3,62 @@
 #
 """Unit tests for MotionPlanner class."""
 
+# Standard Library
+from dataclasses import replace
+from inspect import signature
+from types import SimpleNamespace
+from typing import Any, Callable
+
 # Third Party
 import pytest
 import torch
 
-# CuRobo
-from curobo._src.motion.motion_planner import MotionPlanner
+from curobo._src.cost.tool_pose_criteria import PoseErrorFrame, ToolPoseCriteria
+from curobo._src.motion.motion_planner import MotionPlanner, _fit_linear_seed_trajectories
 from curobo._src.motion.motion_planner_cfg import MotionPlannerCfg
+from curobo._src.motion.planner_grasp import (
+    GraspPhasePlanner,
+    get_result_goal_configuration,
+)
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
+from curobo._src.trajectory.trajectory_seed_fitter import (
+    BSplineTimeOptimalSeedFitter,
+)
+from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
 from curobo._src.types.tool_pose import GoalToolPose
+
+
+def test_default_refinement_budget() -> None:
+    from curobo._src.motion.motion_planner_batch import BatchMotionPlanner
+    from curobo._src.solver.solver_trajopt import TrajOptSolver
+    from curobo._src.util.config_io import join_path, load_yaml
+    from curobo.content import get_task_configs_path
+
+    config = load_yaml(join_path(get_task_configs_path(), "trajopt/lbfgs_bspline_trajopt.yml"))
+    assert config["optimizer"]["num_iters"] == 25
+    for method in (
+        MotionPlanner.plan_pose,
+        BatchMotionPlanner.plan_pose,
+        MotionPlanner.plan_cspace,
+        BatchMotionPlanner.plan_cspace,
+        TrajOptSolver.solve_pose,
+        TrajOptSolver.solve_cspace,
+    ):
+        assert signature(method).parameters["finetune_attempts"].default == 2
+    for method in (
+        BatchMotionPlanner.plan_pose,
+        TrajOptSolver.solve_pose,
+        TrajOptSolver.solve_cspace,
+    ):
+        params = signature(method).parameters
+        assert params["time_optimal_iters"].default == 25
+        assert params["finetune_iters"].default == 25
+        assert params["finetune_dt_scale"].default == 0.6
+    for method in (TrajOptSolver.solve_pose, TrajOptSolver.solve_cspace):
+        assert signature(method).parameters["initial_dt_scale"].default == 1.25
 
 
 @pytest.fixture(scope="module")
@@ -99,10 +143,6 @@ class TestMotionPlannerClassDefinition:
         """Test plan_pose method exists."""
         assert hasattr(MotionPlanner, "plan_pose")
 
-    def test_plan_pose_method_exists(self):
-        """Test plan_pose method exists."""
-        assert hasattr(MotionPlanner, "plan_pose")
-
     def test_plan_cspace_method_exists(self):
         """Test plan_cspace method exists."""
         assert hasattr(MotionPlanner, "plan_cspace")
@@ -133,20 +173,25 @@ class TestMotionPlannerInitialization:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_init_creates_ik_solver(self, motion_planner):
         """Test MotionPlanner creates IK solver."""
-        assert hasattr(motion_planner, 'ik_solver')
+        assert hasattr(motion_planner, "ik_solver")
         assert motion_planner.ik_solver is not None
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_init_creates_trajopt_solver(self, motion_planner):
         """Test MotionPlanner creates TrajOpt solver."""
-        assert hasattr(motion_planner, 'trajopt_solver')
+        assert hasattr(motion_planner, "trajopt_solver")
         assert motion_planner.trajopt_solver is not None
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_init_creates_graph_planner(self, motion_planner):
         """Test MotionPlanner creates graph planner."""
-        assert hasattr(motion_planner, 'graph_planner')
+        assert hasattr(motion_planner, "graph_planner")
         assert motion_planner.graph_planner is not None
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_init_creates_uniform_time_seed_fitter(self, motion_planner):
+        """Use the fixed-iteration IRLS fitter for B-spline seeds."""
+        assert isinstance(motion_planner.graph_seed_fitter, BSplineTimeOptimalSeedFitter)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_init_without_scene_no_collision_checker(self, motion_planner):
@@ -199,7 +244,7 @@ class TestMotionPlannerProperties:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_kinematics_property(self, motion_planner):
         """Test kinematics property exists."""
-        assert hasattr(motion_planner, 'kinematics')
+        assert hasattr(motion_planner, "kinematics")
         assert motion_planner.kinematics is not None
 
 
@@ -212,12 +257,10 @@ class TestMotionPlannerComputeKinematics:
         result = motion_planner.compute_kinematics(sample_start_state)
 
         assert result is not None
-        assert hasattr(result, 'tool_poses')
+        assert hasattr(result, "tool_poses")
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_compute_kinematics_link_poses_has_position(
-        self, motion_planner, sample_start_state
-    ):
+    def test_compute_kinematics_link_poses_has_position(self, motion_planner, sample_start_state):
         """Test compute_kinematics link_poses has position."""
         result = motion_planner.compute_kinematics(sample_start_state)
 
@@ -253,15 +296,62 @@ class TestMotionPlannerWarmup:
 class TestMotionPlannerPlanSinglePose:
     """Test MotionPlanner.plan_pose method."""
 
+    def test_linear_fitter_preserves_moving_start_state(self) -> None:
+        """Forward velocity and acceleration to every fitted IK lane."""
+
+        class CapturingFitter:
+            config = SimpleNamespace(rollout_horizon=5)
+
+            def __init__(self) -> None:
+                self.start_state: JointState | None = None
+
+            def fit(
+                self,
+                target_position: torch.Tensor,
+                start_state: JointState,
+                goal_position: torch.Tensor,
+            ) -> torch.Tensor:
+                self.start_state = start_state
+                return target_position[:, :4].clone()
+
+        start_state = JointState(
+            position=torch.tensor([[0.0, 1.0]], dtype=torch.float32),
+            velocity=torch.tensor([[0.2, -0.3]], dtype=torch.float32),
+            acceleration=torch.tensor([[0.4, -0.5]], dtype=torch.float32),
+            jerk=torch.zeros((1, 2), dtype=torch.float32),
+        )
+        goals = torch.tensor(
+            [[[1.0, 2.0], [2.0, 3.0]]],
+            dtype=torch.float32,
+        )
+        fitter = CapturingFitter()
+
+        fitted = _fit_linear_seed_trajectories(
+            start_state,
+            goals,
+            action_horizon=4,
+            seed_fitter=fitter,
+        )
+
+        assert fitted.shape == (1, 2, 4, 2)
+        assert fitter.start_state is not None
+        torch.testing.assert_close(
+            fitter.start_state.velocity,
+            start_state.velocity.repeat_interleave(2, dim=0),
+        )
+        torch.testing.assert_close(
+            fitter.start_state.acceleration,
+            start_state.acceleration.repeat_interleave(2, dim=0),
+        )
+
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_plan_pose_returns_result(
-        self, motion_planner, sample_start_state, sample_goal_pose
-    ):
+    def test_plan_pose_returns_result(self, motion_planner, sample_start_state, sample_goal_pose):
         """Test plan_pose returns TrajOptSolverResult."""
         # Get tool frame and create goal
         tool_frames = motion_planner.trajopt_solver.kinematics.tool_frames
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: sample_goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: sample_goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -280,7 +370,8 @@ class TestMotionPlannerPlanSinglePose:
         """Test plan_pose result has success field."""
         tool_frames = motion_planner.trajopt_solver.kinematics.tool_frames
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: sample_goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: sample_goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -290,7 +381,7 @@ class TestMotionPlannerPlanSinglePose:
         )
 
         if result is not None:
-            assert hasattr(result, 'success')
+            assert hasattr(result, "success")
             assert isinstance(result.success, torch.Tensor)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -300,7 +391,8 @@ class TestMotionPlannerPlanSinglePose:
         """Test plan_pose result has timing information."""
         tool_frames = motion_planner.trajopt_solver.kinematics.tool_frames
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: sample_goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: sample_goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -310,8 +402,8 @@ class TestMotionPlannerPlanSinglePose:
         )
 
         if result is not None:
-            assert hasattr(result, 'total_time')
-            assert hasattr(result, 'solve_time')
+            assert hasattr(result, "total_time")
+            assert hasattr(result, "solve_time")
             assert result.total_time >= 0.0
             assert result.solve_time >= 0.0
 
@@ -328,7 +420,9 @@ class TestMotionPlannerPlanSinglePose:
         position[0, 0, 0, 0, :] = torch.tensor([0.4, 0.0, 0.4], **cuda_device_cfg.as_torch_dict())
 
         quaternion = torch.zeros((1, 1, num_links, 1, 4), **cuda_device_cfg.as_torch_dict())
-        quaternion[0, 0, 0, 0, :] = torch.tensor([1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict())
+        quaternion[0, 0, 0, 0, :] = torch.tensor(
+            [1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict()
+        )
 
         goal_tool_pose = GoalToolPose(
             tool_frames=tool_frames,
@@ -352,7 +446,8 @@ class TestMotionPlannerPlanSinglePose:
         """Test plan_pose with use_implicit_goal=True."""
         tool_frames = motion_planner.trajopt_solver.kinematics.tool_frames
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: sample_goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: sample_goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -379,9 +474,7 @@ class TestMotionPlannerWithSceneCollision:
     """Test MotionPlanner with scene collision."""
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_plan_with_scene_collision(
-        self, motion_planner_with_scene, sample_goal_pose
-    ):
+    def test_plan_with_scene_collision(self, motion_planner_with_scene, sample_goal_pose):
         """Test planning with scene collision works."""
         default_js = motion_planner_with_scene.default_joint_state.clone()
         start_state = JointState.from_position(
@@ -391,7 +484,8 @@ class TestMotionPlannerWithSceneCollision:
 
         tool_frames = motion_planner_with_scene.trajopt_solver.kinematics.tool_frames
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: sample_goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: sample_goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner_with_scene.plan_pose(
@@ -473,7 +567,7 @@ class TestMotionPlannerPlanGrasp:
         )
 
         # Result should have status field (may be None if successful)
-        assert hasattr(result, 'status')
+        assert hasattr(result, "status")
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_grasp_result_has_goalset_result(
@@ -508,7 +602,7 @@ class TestMotionPlannerPlanGrasp:
         )
 
         # Result should have goalset_result from plan_pose
-        assert hasattr(result, 'goalset_result')
+        assert hasattr(result, "goalset_result")
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_grasp_with_custom_approach_offset(
@@ -542,6 +636,132 @@ class TestMotionPlannerPlanGrasp:
         )
 
         assert isinstance(result, GraspPlanResult)
+
+
+class TestMotionPlannerGraspUpdateCache:
+    """Test fixed-address grasp criteria and collision preset reuse."""
+
+    @staticmethod
+    def _make_phase_planner(
+        criteria_updates: list[dict[str, ToolPoseCriteria]],
+        collision_updates: list[tuple[str, tuple[str, ...]]],
+        *,
+        constrained_rrt_planner: object | None = None,
+        ik_solver: object | None = None,
+        plan_pose: Callable[..., object] | None = None,
+    ) -> GraspPhasePlanner:
+        """Create one CPU-only grasp-phase planner for cache tests."""
+        config = SimpleNamespace(
+            device_cfg=DeviceCfg(device=torch.device("cpu")),
+            trajopt_solver_config=SimpleNamespace(use_cuda_graph=False),
+            ik_solver_config=SimpleNamespace(
+                position_tolerance=0.005,
+                orientation_tolerance=0.05,
+                multi_env=False,
+            ),
+        )
+        return GraspPhasePlanner(
+            config=config,
+            batch_size=1,
+            kinematics=SimpleNamespace(),
+            ik_solver=ik_solver or SimpleNamespace(),
+            trajopt_solver=SimpleNamespace(config=SimpleNamespace(num_seeds=1)),
+            constrained_rrt_planner=constrained_rrt_planner,
+            constrained_rrt_seed_fitter=None,
+            plan_pose=plan_pose or (lambda *_args, **_kwargs: None),
+            update_tool_pose_criteria=lambda criteria: criteria_updates.append(criteria),
+            disable_link_collision=lambda links: collision_updates.append(
+                ("disable", tuple(links))
+            ),
+            enable_link_collision=lambda links: collision_updates.append(("enable", tuple(links))),
+        )
+
+    def test_grasp_updates_reuse_fixed_preset_executors(self) -> None:
+        """Reuse one executor for each criteria and collision preset."""
+        criteria_updates: list[dict[str, ToolPoseCriteria]] = []
+        collision_updates: list[tuple[str, tuple[str, ...]]] = []
+        phase_planner = self._make_phase_planner(criteria_updates, collision_updates)
+
+        phase_planner.activate_tool_pose_criteria(
+            ["ee_link"],
+            axis="x",
+            in_tool_frame=False,
+        )
+        criteria_key = ("tool_pose", ("ee_link",), "x", False)
+        criteria_executor = phase_planner._update_executors[criteria_key]
+        criteria = criteria_updates[-1]["ee_link"]
+        criteria_update_count = len(criteria_updates)
+        phase_planner.activate_tool_pose_criteria(
+            ["ee_link"],
+            axis="x",
+            in_tool_frame=False,
+        )
+
+        assert phase_planner._update_executors[criteria_key] is criteria_executor
+        assert len(criteria_updates) == criteria_update_count
+        assert criteria_updates[-1]["ee_link"] is criteria
+        torch.testing.assert_close(
+            criteria.path_position_projector,
+            torch.diag(torch.tensor([0.0, 1.0, 1.0])),
+        )
+        assert criteria.error_frame.item() == PoseErrorFrame.WORLD
+        torch.testing.assert_close(
+            criteria.path_tolerance,
+            torch.tensor([0.005, 0.05]),
+        )
+
+        phase_planner.activate_collision(["ee_link"], enable=False)
+        collision_key = ("collision", ("ee_link",), False)
+        collision_executor = phase_planner._update_executors[collision_key]
+        phase_planner.activate_collision(["ee_link"], enable=False)
+
+        assert phase_planner._update_executors[collision_key] is collision_executor
+        assert collision_updates[-1] == ("disable", ("ee_link",))
+        phase_planner.destroy()
+
+    def test_grasp_linear_phase_keeps_trajopt_fallback(self) -> None:
+        """Fall back to TrajOpt after a projected-RRT attempt fails."""
+        endpoint_calls: list[bool] = []
+        rrt_calls: list[bool] = []
+        criteria_calls: list[dict[str, ToolPoseCriteria]] = []
+        collision_calls: list[tuple[str, tuple[str, ...]]] = []
+        trajopt_result = SimpleNamespace(success=torch.tensor([True]))
+
+        def solve_goalset(*_args: object, **_kwargs: object) -> SimpleNamespace:
+            endpoint_calls.append(True)
+            return SimpleNamespace(
+                solution=torch.zeros(1, 1, 7),
+                success=torch.tensor([[True]]),
+            )
+
+        phase_planner = self._make_phase_planner(
+            criteria_calls,
+            collision_calls,
+            constrained_rrt_planner=object(),
+            ik_solver=SimpleNamespace(solve_goalset=solve_goalset),
+            plan_pose=lambda *_args, **_kwargs: trajopt_result,
+        )
+
+        def plan_rrt(*_args: object) -> None:
+            rrt_calls.append(True)
+            return None
+
+        phase_planner._plan_rrt_phase = plan_rrt
+        result = phase_planner.plan_linear_phase(
+            SimpleNamespace(tool_frames=["ee_link"]),
+            SimpleNamespace(),
+            axis="z",
+            in_tool_frame=True,
+            use_rrt=True,
+            finetune_attempts=0,
+        )
+
+        assert result is trajopt_result
+        assert len(endpoint_calls) == 1
+        assert len(rrt_calls) == 1
+        assert ("tool_pose", ("ee_link",), "z", True) in phase_planner._update_executors
+        assert ("tool_pose", ("ee_link",), None, True) in phase_planner._update_executors
+        phase_planner.destroy()
 
 
 class TestMotionPlannerUpdateMethods:
@@ -587,6 +807,80 @@ class TestMotionPlannerUpdateMethods:
 class TestMotionPlannerPlanSingleGoalset:
     """Test MotionPlanner.plan_pose method."""
 
+    def test_plan_pose_reuses_ik_once_for_graph_fallback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reuse direct-attempt IK for RRT, then refresh it after RRT failure."""
+
+        class CapturingIkSolver:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def solve_pose(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+                self.calls += 1
+                return SimpleNamespace(
+                    solution=torch.ones((1, 2, 2), dtype=torch.float32),
+                    success=torch.ones((1, 2), dtype=torch.bool),
+                    total_time=0.1,
+                    solve_time=0.05,
+                )
+
+        class CapturingTrajoptSolver:
+            def __init__(self) -> None:
+                self.config = SimpleNamespace(num_seeds=2)
+                self.action_horizon = 4
+                self.calls = 0
+
+            def solve_pose(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+                self.calls += 1
+                return SimpleNamespace(
+                    success=torch.tensor([[self.calls == 3]], dtype=torch.bool),
+                    total_time=0.2,
+                    solve_time=0.15,
+                    debug_info={},
+                    trajectory_source=None,
+                )
+
+        planner = object.__new__(MotionPlanner)
+        planner._destroyed = True
+        planner._warming_up = False
+        planner.config = SimpleNamespace()
+        planner.ik_solver = CapturingIkSolver()
+        planner.trajopt_solver = CapturingTrajoptSolver()
+        planner.graph_planner = object()
+        planner.graph_seed_fitter = None
+        graph_calls = []
+
+        def graph_seed(*args: Any, **kwargs: Any) -> torch.Tensor:
+            graph_calls.append(None)
+            return torch.ones((1, 2, 4, 2), dtype=torch.float32)
+
+        planner._get_graph_seed_trajectories = graph_seed
+        monkeypatch.setattr(
+            "curobo._src.motion.motion_planner._fit_linear_seed_trajectories",
+            lambda *args, **kwargs: torch.zeros((1, 2, 4, 2), dtype=torch.float32),
+        )
+        monkeypatch.setattr(
+            "curobo._src.motion.motion_planner._should_evaluate_seed_before_trajopt",
+            lambda *args, **kwargs: False,
+        )
+
+        result = planner._plan_pose_single(
+            object(),
+            JointState.from_position(torch.zeros((1, 2), dtype=torch.float32)),
+            use_implicit_goal=True,
+            max_attempts=3,
+            enable_graph_attempt=1,
+        )
+
+        assert result is not None
+        assert bool(result.success.item())
+        assert planner.ik_solver.calls == 2
+        assert planner.trajopt_solver.calls == 3
+        assert len(graph_calls) == 2
+        assert planner.last_planning_attempts == 3
+
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_pose_method_callable(self, motion_planner):
         """Test plan_pose method is callable."""
@@ -594,13 +888,12 @@ class TestMotionPlannerPlanSingleGoalset:
         assert callable(motion_planner.plan_pose)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_plan_pose_with_dict_input(
-        self, motion_planner, sample_start_state, sample_goal_pose
-    ):
+    def test_plan_pose_with_dict_input(self, motion_planner, sample_start_state, sample_goal_pose):
         """Test plan_pose with GoalToolPose built via from_poses."""
         tool_frames = motion_planner.trajopt_solver.kinematics.tool_frames
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: sample_goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: sample_goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -639,6 +932,31 @@ class TestMotionPlannerPlanCspace:
         assert result is None or isinstance(result, TrajOptSolverResult)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_plan_cspace_returns_valid_fitted_seed_without_trajopt(
+        self,
+        motion_planner_config,
+    ):
+        """Return a retimed, densely validated linear fit when refinement is optional."""
+        config = replace(motion_planner_config, always_run_trajopt=False)
+        with MotionPlanner(config) as planner:
+            start_state = planner.default_joint_state.clone().unsqueeze(0)
+            goal_state = start_state.clone()
+            goal_state.position[..., 0] += 0.1
+
+            result = planner.plan_cspace(
+                current_state=start_state,
+                goal_state=goal_state,
+                max_attempts=1,
+                enable_graph_attempt=1,
+            )
+
+        assert result is not None
+        assert bool(result.success.item())
+        assert result.trajectory_source == "linear_fit"
+        assert result.debug_info["trajectory_source"] == "linear_fit"
+        assert result.solve_time == 0.0
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_cspace_result_has_success(self, motion_planner, sample_start_state):
         """Test plan_cspace result has success field."""
         goal_state = sample_start_state.clone()
@@ -651,7 +969,7 @@ class TestMotionPlannerPlanCspace:
         )
 
         if result is not None:
-            assert hasattr(result, 'success')
+            assert hasattr(result, "success")
             assert isinstance(result.success, torch.Tensor)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -667,8 +985,8 @@ class TestMotionPlannerPlanCspace:
         )
 
         if result is not None:
-            assert hasattr(result, 'total_time')
-            assert hasattr(result, 'solve_time')
+            assert hasattr(result, "total_time")
+            assert hasattr(result, "solve_time")
             assert result.total_time >= 0.0
             assert result.solve_time >= 0.0
 
@@ -742,6 +1060,7 @@ class TestMotionPlannerUpdateInertial:
     def test_update_link_inertial_method_signature(self):
         """Test update_link_inertial method signature."""
         import inspect
+
         sig = inspect.signature(MotionPlanner.update_link_inertial)
         params = list(sig.parameters.keys())
         assert "link_name" in params
@@ -752,9 +1071,45 @@ class TestMotionPlannerUpdateInertial:
     def test_update_links_inertial_method_signature(self):
         """Test update_links_inertial method signature."""
         import inspect
+
         sig = inspect.signature(MotionPlanner.update_links_inertial)
         params = list(sig.parameters.keys())
         assert "link_properties" in params
+
+    def test_updates_are_propagated_to_rrt_planners(self):
+        """Keep IK, RRT, constrained RRT, and TrajOpt inertial models aligned."""
+
+        class CapturingComponent:
+            def __init__(self) -> None:
+                self.single_calls = []
+                self.batch_calls = []
+
+            def update_link_inertial(self, link_name, mass, com, inertia) -> None:
+                self.single_calls.append((link_name, mass, com, inertia))
+
+            def update_links_inertial(self, link_properties) -> None:
+                self.batch_calls.append(link_properties)
+
+        planner = object.__new__(MotionPlanner)
+        planner._destroyed = True
+        planner.config = SimpleNamespace(graph_planner_algorithm="rrt")
+        planner.ik_solver = CapturingComponent()
+        planner.graph_planner = CapturingComponent()
+        planner.constrained_rrt_planner = CapturingComponent()
+        planner.trajopt_solver = CapturingComponent()
+
+        planner.update_link_inertial("attached_object", mass=3.0)
+        properties = {"attached_object": {"mass": 2.0}}
+        planner.update_links_inertial(properties)
+
+        for component in (
+            planner.ik_solver,
+            planner.graph_planner,
+            planner.constrained_rrt_planner,
+            planner.trajopt_solver,
+        ):
+            assert component.single_calls == [("attached_object", 3.0, None, None)]
+            assert component.batch_calls == [properties]
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_update_link_inertial_raises_without_dynamics(self, motion_planner):
@@ -777,7 +1132,8 @@ class TestMotionPlannerMultipleAttempts:
         """Test plan_pose with multiple attempts triggers graph planner."""
         tool_frames = motion_planner.trajopt_solver.kinematics.tool_frames
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: sample_goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: sample_goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         # Use max_attempts > enable_graph_attempt to trigger graph planning
@@ -802,7 +1158,8 @@ class TestMotionPlannerMultipleAttempts:
         quaternion = torch.tensor([[0.707, 0.707, 0.0, 0.0]], **cuda_device_cfg.as_torch_dict())
         goal_pose = Pose(position=position, quaternion=quaternion)
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -854,7 +1211,11 @@ class TestMotionPlannerGoalsetWarmupAndPlanning:
         assert result is True
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_plan_pose_after_goalset_warmup(self, goalset_planner, cuda_device_cfg):
+    def test_plan_pose_single_goal_after_goalset_warmup(
+        self,
+        goalset_planner,
+        cuda_device_cfg,
+    ):
         """Test plan_pose (num_goalset=1) works after goalset warmup."""
         planner = goalset_planner
         start = JointState.from_position(
@@ -870,7 +1231,9 @@ class TestMotionPlannerGoalsetWarmupAndPlanning:
         )
 
         result = planner.plan_pose(
-            current_state=start, goal_tool_poses=goal_tool_poses, max_attempts=1,
+            current_state=start,
+            goal_tool_poses=goal_tool_poses,
+            max_attempts=1,
         )
         assert result is None or isinstance(result, TrajOptSolverResult)
 
@@ -902,7 +1265,9 @@ class TestMotionPlannerGoalsetWarmupAndPlanning:
         )
 
         result = planner.plan_pose(
-            current_state=start, goal_tool_poses=goal_tool_pose, max_attempts=1,
+            current_state=start,
+            goal_tool_poses=goal_tool_pose,
+            max_attempts=1,
         )
         assert result is None or isinstance(result, TrajOptSolverResult)
 
@@ -924,7 +1289,9 @@ class TestMotionPlannerGoalsetWarmupAndPlanning:
             ordered_tool_frames=tool_frames,
         )
         r1 = planner.plan_pose(
-            current_state=start, goal_tool_poses=goal_tool_poses1, max_attempts=1,
+            current_state=start,
+            goal_tool_poses=goal_tool_poses1,
+            max_attempts=1,
         )
         assert r1 is None or isinstance(r1, TrajOptSolverResult)
 
@@ -939,12 +1306,16 @@ class TestMotionPlannerGoalsetWarmupAndPlanning:
             position=pos2.unsqueeze(1).unsqueeze(1),
             quaternion=quat2.unsqueeze(1).unsqueeze(1),
         )
-        r2 = planner.plan_pose(current_state=start, goal_tool_poses=goal_tool_pose2, max_attempts=1)
+        r2 = planner.plan_pose(
+            current_state=start, goal_tool_poses=goal_tool_pose2, max_attempts=1
+        )
         assert r2 is None or isinstance(r2, TrajOptSolverResult)
 
         # plan_pose again (num_goalset=1)
         r3 = planner.plan_pose(
-            current_state=start, goal_tool_poses=goal_tool_poses1, max_attempts=1,
+            current_state=start,
+            goal_tool_poses=goal_tool_poses1,
+            max_attempts=1,
         )
         assert r3 is None or isinstance(r3, TrajOptSolverResult)
 
@@ -1078,7 +1449,8 @@ class TestMotionPlannerIKFailurePaths:
         quaternion = torch.tensor([[1.0, 0.0, 0.0, 0.0]], **cuda_device_cfg.as_torch_dict())
         unreachable_pose = Pose(position=position, quaternion=quaternion)
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: unreachable_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: unreachable_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -1090,6 +1462,10 @@ class TestMotionPlannerIKFailurePaths:
 
         # Should return None or unsuccessful result due to IK failure
         assert result is None or not result.success.any()
+        assert motion_planner.last_graph_calls == 0
+        assert motion_planner.last_graph_time == 0.0
+        assert not motion_planner.last_graph_success
+        assert motion_planner.last_graph_call_telemetry == []
 
 
 class TestMotionPlannerGraphPlannerPath:
@@ -1102,7 +1478,8 @@ class TestMotionPlannerGraphPlannerPath:
         """Test graph planner is triggered when enable_graph_attempt=0."""
         tool_frames = motion_planner.trajopt_solver.kinematics.tool_frames
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: sample_goal_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: sample_goal_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         # Set enable_graph_attempt=0 to trigger graph on first attempt (line 138)
@@ -1115,6 +1492,13 @@ class TestMotionPlannerGraphPlannerPath:
 
         # May succeed or fail
         assert result is None or isinstance(result, TrajOptSolverResult)
+        assert motion_planner.last_graph_calls >= 1
+        assert motion_planner.last_graph_time >= 0.0
+        telemetry = motion_planner.last_graph_call_telemetry
+        assert len(telemetry) == motion_planner.last_graph_calls
+        assert sum(record.solve_time for record in telemetry) == pytest.approx(
+            motion_planner.last_graph_time
+        )
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_pose_graph_failure_continues(
@@ -1128,7 +1512,8 @@ class TestMotionPlannerGraphPlannerPath:
         quaternion = torch.tensor([[0.5, 0.5, 0.5, 0.5]], **cuda_device_cfg.as_torch_dict())
         edge_pose = Pose(position=position, quaternion=quaternion)
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: edge_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: edge_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -1184,9 +1569,7 @@ class TestMotionPlannerPlanGraspAdvanced:
     """Test MotionPlanner.plan_grasp advanced paths."""
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_plan_grasp_with_dict_input(
-        self, motion_planner, sample_start_state, cuda_device_cfg
-    ):
+    def test_plan_grasp_with_dict_input(self, motion_planner, sample_start_state, cuda_device_cfg):
         """Test plan_grasp with GoalToolPose from from_poses (num_goalset=1)."""
         from curobo._src.motion.motion_planner_result import GraspPlanResult
 
@@ -1197,7 +1580,8 @@ class TestMotionPlannerPlanGraspAdvanced:
 
         grasp_pose = Pose(position=position, quaternion=quaternion)
         grasp_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: grasp_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: grasp_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_grasp(
@@ -1224,9 +1608,7 @@ class TestMotionPlannerPlanGraspAdvanced:
         quaternion = torch.zeros((1, num_goalset, 4), **cuda_device_cfg.as_torch_dict())
 
         for i in range(num_goalset):
-            position[0, i, :] = torch.tensor(
-                [10.0, 10.0, 10.0], **cuda_device_cfg.as_torch_dict()
-            )
+            position[0, i, :] = torch.tensor([10.0, 10.0, 10.0], **cuda_device_cfg.as_torch_dict())
             quaternion[0, i, :] = torch.tensor(
                 [1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict()
             )
@@ -1361,6 +1743,244 @@ class TestMotionPlannerPlanGraspFullWorkflow:
         )
 
         assert isinstance(result, GraspPlanResult)
+        assert motion_planner.last_graph_calls == 0
+        assert result.grasp_trajectory.control_space in ControlSpace.bspline_types()
+        assert result.lift_trajectory.control_space in ControlSpace.bspline_types()
+        action_horizon = motion_planner.trajopt_solver.action_horizon
+        assert result.grasp_trajectory.knot.shape[-2] == action_horizon
+        assert result.lift_trajectory.knot.shape[-2] == action_horizon
+        assert result.grasp_interpolated_trajectory.position.ndim == 4
+        assert result.lift_interpolated_trajectory.position.ndim == 4
+        assert result.grasp_interpolated_last_tstep.shape == (1, 1)
+        assert result.lift_interpolated_last_tstep.shape == (1, 1)
+        assert result.grasp_interpolated_last_tstep.item() > 1
+        assert result.lift_interpolated_last_tstep.item() > 1
+        approach_end = result.approach_interpolated_trajectory.position[
+            0,
+            0,
+            result.approach_interpolated_last_tstep.item() - 1,
+        ]
+        grasp_start = result.grasp_interpolated_trajectory.position[0, 0, 0]
+        grasp_end = result.grasp_interpolated_trajectory.position[
+            0,
+            0,
+            result.grasp_interpolated_last_tstep.item() - 1,
+        ]
+        lift_start = result.lift_interpolated_trajectory.position[0, 0, 0]
+        torch.testing.assert_close(approach_end, grasp_start)
+        torch.testing.assert_close(grasp_end, lift_start)
+        grasp_state = JointState.from_position(
+            grasp_end.unsqueeze(0),
+            joint_names=result.grasp_interpolated_trajectory.joint_names,
+        )
+        actual_grasp = motion_planner.compute_kinematics(
+            motion_planner.kinematics.get_active_js(grasp_state)
+        ).tool_poses.get_link_pose(tool_frames[0])
+        selected_index = int(result.goalset_index.item())
+        expected_grasp = torch.tensor(
+            [[0.4 + selected_index * 0.02, 0.0, 0.35]],
+            **cuda_device_cfg.as_torch_dict(),
+        )
+        assert torch.linalg.vector_norm(actual_grasp.position - expected_grasp) < 0.005
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_plan_grasp_defaults_to_ik_goalset_selection(
+        self,
+        motion_planner,
+        sample_start_state,
+        cuda_device_cfg,
+        monkeypatch,
+    ) -> None:
+        """Use IK-only goal selection before the full approach pose plan."""
+        tool_frames = motion_planner.trajopt_solver.kinematics.tool_frames
+        num_goalset = 3
+        position = torch.zeros((1, num_goalset, 3), **cuda_device_cfg.as_torch_dict())
+        quaternion = torch.zeros((1, num_goalset, 4), **cuda_device_cfg.as_torch_dict())
+        position[..., 0] = 0.5
+        position[0, :, 1] = torch.linspace(
+            -0.15,
+            0.15,
+            num_goalset,
+            **cuda_device_cfg.as_torch_dict(),
+        )
+        position[..., 2] = 0.3
+        quaternion[..., 0] = 1.0
+        goal_tool_pose = GoalToolPose(
+            tool_frames=tool_frames,
+            position=position.unsqueeze(1).unsqueeze(1),
+            quaternion=quaternion.unsqueeze(1).unsqueeze(1),
+        )
+        original_plan_pose = motion_planner.plan_pose
+        plan_pose_calls: list[bool] = []
+
+        def count_plan_pose_calls(
+            *args: object,
+            **kwargs: object,
+        ) -> TrajOptSolverResult | None:
+            plan_pose_calls.append(True)
+            return original_plan_pose(*args, **kwargs)
+
+        monkeypatch.setattr(motion_planner, "plan_pose", count_plan_pose_calls)
+
+        result = motion_planner.plan_grasp(
+            current_state=sample_start_state,
+            grasp_poses=goal_tool_pose,
+            grasp_approach_axis="z",
+            grasp_approach_offset=0.1,
+            grasp_lift_axis="z",
+            grasp_lift_offset=0.1,
+            plan_approach_to_grasp=False,
+            plan_grasp_to_lift=False,
+        )
+
+        assert result.success.any()
+        assert result.goalset_result.solution.shape[1] == 1
+        assert len(plan_pose_calls) == 1
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_plan_grasp_trajopt_phase_passes(
+        self,
+        motion_planner,
+        sample_start_state,
+        cuda_device_cfg,
+        monkeypatch,
+    ) -> None:
+        """Use one TrajOpt pass by default and opt into the second pass."""
+        tool_frames = motion_planner.tool_frames
+        position = torch.tensor([[0.5, 0.0, 0.3]], **cuda_device_cfg.as_torch_dict())
+        quaternion = torch.tensor([[1.0, 0.0, 0.0, 0.0]], **cuda_device_cfg.as_torch_dict())
+        grasp_tool_pose = GoalToolPose.from_poses(
+            {tool_frames[0]: Pose(position=position, quaternion=quaternion)},
+            ordered_tool_frames=tool_frames,
+        )
+        original_plan_pose = motion_planner.plan_pose
+        plan_pose_calls: list[dict[str, object]] = []
+
+        def count_plan_pose_calls(
+            *args: object,
+            **kwargs: object,
+        ) -> TrajOptSolverResult | None:
+            plan_pose_calls.append(kwargs)
+            return original_plan_pose(*args, **kwargs)
+
+        def reject_rrt(*args: object, **kwargs: object) -> None:
+            raise AssertionError("projected RRT must be bypassed on the explicit TrajOpt path")
+
+        monkeypatch.setattr(motion_planner, "plan_pose", count_plan_pose_calls)
+        monkeypatch.setattr(motion_planner._grasp_phase_planner, "_plan_rrt_phase", reject_rrt)
+
+        result = motion_planner.plan_grasp(
+            current_state=sample_start_state,
+            grasp_poses=grasp_tool_pose,
+            grasp_approach_offset=0.1,
+            grasp_lift_offset=0.1,
+            use_trajopt_for_goalset_selection=True,
+        )
+
+        assert result.success.any()
+        assert len(plan_pose_calls) == 4
+        assert [call.get("finetune_attempts", 1) for call in plan_pose_calls] == [
+            1,
+            1,
+            0,
+            0,
+        ]
+
+        plan_pose_calls.clear()
+        result = motion_planner.plan_grasp(
+            current_state=sample_start_state,
+            grasp_poses=grasp_tool_pose,
+            grasp_approach_offset=0.1,
+            grasp_lift_offset=0.1,
+            use_trajopt_for_goalset_selection=True,
+            use_double_pass_trajopt_for_constrained_phases=True,
+        )
+
+        assert result.success.any()
+        assert len(plan_pose_calls) == 4
+        assert [call.get("finetune_attempts", 1) for call in plan_pose_calls] == [
+            1,
+            1,
+            1,
+            1,
+        ]
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_plan_grasp_rejects_conflicting_constrained_phase_flags(
+        self,
+        motion_planner,
+        sample_start_state,
+    ) -> None:
+        """Reject simultaneous RRT and double-pass TrajOpt selection."""
+        grasp_poses = motion_planner.compute_kinematics(sample_start_state).tool_poses.as_goal()
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            motion_planner.plan_grasp(
+                current_state=sample_start_state,
+                grasp_poses=grasp_poses,
+                use_rrt_for_constrained_phases=True,
+                use_double_pass_trajopt_for_constrained_phases=True,
+            )
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_plan_grasp_reuses_selected_grasp_configuration(
+        self,
+        motion_planner,
+        sample_start_state,
+        cuda_device_cfg,
+        monkeypatch,
+    ) -> None:
+        """Connect the approach endpoint to the grasp configuration already selected."""
+        tool_frames = motion_planner.tool_frames
+        position = torch.tensor([[0.5, 0.0, 0.3]], **cuda_device_cfg.as_torch_dict())
+        quaternion = torch.tensor([[1.0, 0.0, 0.0, 0.0]], **cuda_device_cfg.as_torch_dict())
+        grasp_tool_pose = GoalToolPose.from_poses(
+            {tool_frames[0]: Pose(position=position, quaternion=quaternion)},
+            ordered_tool_frames=tool_frames,
+        )
+        original_rrt_plan = motion_planner._grasp_phase_planner._plan_rrt_phase
+        rrt_starts: list[torch.Tensor] = []
+        rrt_goals: list[torch.Tensor] = []
+
+        def record_rrt_plan(
+            goal_tool_poses: GoalToolPose,
+            current_state: JointState,
+            goal_configuration: torch.Tensor,
+            goal_valid: torch.Tensor,
+            axis: str,
+            in_tool_frame: bool,
+        ) -> object:
+            rrt_starts.append(current_state.position.clone())
+            rrt_goals.append(goal_configuration.clone())
+            return original_rrt_plan(
+                goal_tool_poses,
+                current_state,
+                goal_configuration,
+                goal_valid,
+                axis,
+                in_tool_frame,
+            )
+
+        monkeypatch.setattr(
+            motion_planner._grasp_phase_planner,
+            "_plan_rrt_phase",
+            record_rrt_plan,
+        )
+
+        result = motion_planner.plan_grasp(
+            current_state=sample_start_state,
+            grasp_poses=grasp_tool_pose,
+            grasp_approach_offset=0.1,
+            plan_grasp_to_lift=False,
+            use_rrt_for_constrained_phases=True,
+        )
+
+        assert result.success.any()
+        assert len(rrt_starts) == 1
+        expected_goal = get_result_goal_configuration(
+            result.goalset_result,
+            motion_planner.kinematics,
+        )
+        assert torch.allclose(expected_goal, rrt_goals[0])
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_grasp_with_custom_axes(
@@ -1427,7 +2047,8 @@ class TestMotionPlannerPartialIKSuccess:
         quaternion = torch.tensor([[0.707, 0.0, 0.707, 0.0]], **cuda_device_cfg.as_torch_dict())
         edge_pose = Pose(position=position, quaternion=quaternion)
         goal_tool_poses = GoalToolPose.from_poses(
-            {tool_frames[0]: edge_pose}, ordered_tool_frames=tool_frames,
+            {tool_frames[0]: edge_pose},
+            ordered_tool_frames=tool_frames,
         )
 
         result = motion_planner.plan_pose(
@@ -1486,9 +2107,7 @@ class TestMotionPlannerPlanGraspFailurePaths:
             assert result.status is not None
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_plan_grasp_approach_fails(
-        self, motion_planner, sample_start_state, cuda_device_cfg
-    ):
+    def test_plan_grasp_approach_fails(self, motion_planner, sample_start_state, cuda_device_cfg):
         """Test plan_grasp when approach planning fails.
 
         Goalset succeeds but approach position is hard to reach.

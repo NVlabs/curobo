@@ -29,6 +29,10 @@ def wolfe_line_search(
     step_direction: torch.Tensor,  # should come from line search function
     strong_wolfe: bool,
     approx_wolfe: bool,
+    line_search_scale: torch.Tensor,
+    line_search_index: torch.Tensor,
+    line_search_status: torch.Tensor,
+    curvature_update_valid: torch.Tensor,
 ):
     """Perform Wolfe line search to find the optimal step size. Also updates the iteration state.
 
@@ -69,7 +73,8 @@ def wolfe_line_search(
         search_action=search_action,
         search_gradient=search_gradient,
         step_direction=step_direction,
-        line_search_scale=line_search_context.line_search_scale,
+        line_search_scale=line_search_scale,
+        beta=line_search_context.beta,
     )
     check_uint8_tensors(device, converged=iteration_state.converged)
     check_int32_tensors(
@@ -78,6 +83,8 @@ def wolfe_line_search(
         current_iteration=iteration_state.current_iteration,
         exploration_idx=exploration_idx,
         selected_idx=selected_idx,
+        line_search_index=line_search_index,
+        line_search_status=line_search_status,
     )
 
     # check shapes of inputs:
@@ -147,11 +154,13 @@ def wolfe_line_search(
         log_and_raise(
             f"step_direction must have shape ({num_problems}, {1}, {opt_dim}). Got {step_direction.shape}"
         )
-    if line_search_context.line_search_scale.shape != (1, n_linesearch, 1, 1):
+    if line_search_scale.shape != (n_linesearch,):
         log_and_raise(
-            f"line_search_scale must have shape ({1}, {n_linesearch}, {1}, {1}). Got {line_search_context.line_search_scale.shape}"
+            "line_search_scale must have shape "
+            + f"({n_linesearch},). Got {line_search_scale.shape}"
         )
-
+    if line_search_context.beta.shape != (num_problems,):
+        log_and_raise("line-search beta must contain one value per problem")
     optimization_cu.launch_line_search(
         iteration_state.best_cost,
         iteration_state.best_action,
@@ -173,7 +182,10 @@ def wolfe_line_search(
         search_action,
         search_gradient,
         step_direction,
-        line_search_context.line_search_scale,
+        line_search_scale,
+        line_search_index,
+        line_search_status,
+        curvature_update_valid,
         line_search_context.line_search_c_1,
         line_search_context.line_search_c_2,
         strong_wolfe,
@@ -181,7 +193,12 @@ def wolfe_line_search(
         n_linesearch,
         opt_dim,
         num_problems,
+        line_search_context.line_search_backtracking,
+        line_search_context.beta,
     )
+    iteration_state.line_search_index = line_search_index
+    iteration_state.line_search_status = line_search_status
+    iteration_state.curvature_update_valid = curvature_update_valid
     return iteration_state, exploration_idx, selected_idx
 
 
@@ -197,11 +214,26 @@ class LBFGScu(Function):
         grad_q,
         x_0,
         grad_0,
+        history_head,
+        history_count,
         epsilon=0.1,
         stable_mode=False,
         use_shared_buffers=True,
+        use_geometric_scaling=True,
+        optimization_step_max=None,
+        scale_step=False,
+        curvature_update_valid=None,
+        line_search_status=None,
     ):
+        if optimization_step_max is None:
+            optimization_step_max = step_vec
+        if curvature_update_valid is None:
+            curvature_update_valid = torch.ones(
+                step_vec.shape[0], dtype=torch.bool, device=step_vec.device
+            )
         device = step_vec.device
+        if line_search_status is None:
+            line_search_status = torch.zeros(step_vec.shape[0], dtype=torch.int32, device=device)
         check_float32_tensors(
             device,
             step_vec=step_vec,
@@ -212,8 +244,20 @@ class LBFGScu(Function):
             grad_q=grad_q,
             x_0=x_0,
             grad_0=grad_0,
+            optimization_step_max=optimization_step_max,
+        )
+        check_int32_tensors(
+            device,
+            history_head=history_head,
+            history_count=history_count,
+            line_search_status=line_search_status,
         )
         m, b, v_dim, _ = y_buffer.shape
+        if scale_step and optimization_step_max.numel() != v_dim:
+            log_and_raise(
+                "optimization_step_max must contain one value per optimization variable: "
+                + f"expected {v_dim}, got {optimization_step_max.numel()}"
+            )
         R = optimization_cu.launch_lbfgs_step(
             step_vec,  # .view(-1),
             rho_buffer,  # .view(-1),
@@ -223,12 +267,19 @@ class LBFGScu(Function):
             grad_q,  # .view(-1),
             x_0,
             grad_0,
+            history_head,
+            history_count,
             epsilon,
             b,
             m,
             v_dim,
             stable_mode,
             use_shared_buffers,
+            use_geometric_scaling,
+            optimization_step_max,
+            scale_step,
+            curvature_update_valid,
+            line_search_status,
         )
         step_v = R[0].view(step_vec.shape)
 
@@ -237,11 +288,98 @@ class LBFGScu(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+        return (None,) * len(ctx.needs_input_grad)
+
+
+class LBFGSCompactCu(Function):
+    """Launch the compact tensor-core L-BFGS direction operator."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        step_vec: torch.Tensor,
+        rho_buffer: torch.Tensor,
+        y_buffer: torch.Tensor,
+        s_buffer: torch.Tensor,
+        inverse_r_buffer: torch.Tensor,
+        matrix_workspace: torch.Tensor,
+        q: torch.Tensor,
+        grad_q: torch.Tensor,
+        x_0: torch.Tensor,
+        grad_0: torch.Tensor,
+        history_head: torch.Tensor,
+        history_count: torch.Tensor,
+        optimization_step_max: torch.Tensor,
+        epsilon: float,
+        shared_matrix_count: int,
+        scale_step: bool,
+        curvature_update_valid: torch.Tensor | None = None,
+        use_geometric_scaling: bool = True,
+        line_search_status: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Update compact L-BFGS state and return the next direction."""
+        device = step_vec.device
+        if curvature_update_valid is None:
+            curvature_update_valid = torch.ones(
+                step_vec.shape[0], dtype=torch.bool, device=step_vec.device
+            )
+        if line_search_status is None:
+            line_search_status = torch.zeros(
+                step_vec.shape[0], dtype=torch.int32, device=step_vec.device
+            )
+        check_float32_tensors(
+            device,
+            step_vec=step_vec,
+            rho_buffer=rho_buffer,
+            y_buffer=y_buffer,
+            s_buffer=s_buffer,
+            inverse_r_buffer=inverse_r_buffer,
+            matrix_workspace=matrix_workspace,
+            q=q,
+            grad_q=grad_q,
+            x_0=x_0,
+            grad_0=grad_0,
+            optimization_step_max=optimization_step_max,
         )
+        check_int32_tensors(
+            device,
+            history_head=history_head,
+            history_count=history_count,
+            line_search_status=line_search_status,
+        )
+        history_m, batch_size, v_dim, _ = y_buffer.shape
+        if scale_step and optimization_step_max.numel() != v_dim:
+            log_and_raise(
+                "optimization_step_max must contain one value per optimization variable: "
+                + f"expected {v_dim}, got {optimization_step_max.numel()}"
+            )
+        result = optimization_cu.launch_lbfgs_compact_step(
+            step_vec,
+            rho_buffer,
+            y_buffer,
+            s_buffer,
+            inverse_r_buffer,
+            matrix_workspace,
+            q,
+            grad_q,
+            x_0,
+            grad_0,
+            history_head,
+            history_count,
+            optimization_step_max,
+            epsilon,
+            batch_size,
+            history_m,
+            v_dim,
+            shared_matrix_count,
+            scale_step,
+            curvature_update_valid,
+            use_geometric_scaling,
+            line_search_status,
+        )
+        return result[0].view(step_vec.shape)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple:
+        """Return no gradients for the optimizer-state update."""
+        return (None,) * len(ctx.needs_input_grad)

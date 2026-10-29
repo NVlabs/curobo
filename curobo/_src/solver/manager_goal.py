@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 # Standard Library
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, cast
 
 # Third Party
 import torch
@@ -16,8 +16,27 @@ from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.solver.solve_state import SolveState
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose
 from curobo._src.util.logging import log_and_raise
+
+
+def _relative_targets_are_compatible(
+    current: ToolRelativeTransformTarget,
+    incoming: ToolRelativeTransformTarget,
+) -> bool:
+    """Return whether target values can be copied without changing captured storage."""
+    return (
+        current.reference_tool_frame == incoming.reference_tool_frame
+        and current.tool_frames == incoming.tool_frames
+        and current.position.shape == incoming.position.shape
+        and current.quaternion.shape == incoming.quaternion.shape
+        and current.device == incoming.device
+        and current.dtype == incoming.dtype
+    )
+
+
+_UNSET_RELATIVE_TARGET = object()
 
 
 class GoalManager:
@@ -46,6 +65,7 @@ class GoalManager:
         current_js: Optional[JointState] = None,
         seed_goal_js: Optional[JointState] = None,
         current_state_dt: Optional[torch.Tensor] = None,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
     ) -> GoalRegistry:
         """Create a goal buffer from goal pose and other problem targets.
 
@@ -58,6 +78,8 @@ class GoalManager:
             current_state_dt: Time since the current state was observed.
                 Shape: ``(n_problems,)``. When ``None`` and ``current_js.dt`` is set,
                 ``current_js.dt`` is used instead.
+            tool_relative_transform_target: Per-problem transforms expressed in one
+                moving reference tool frame.
 
         Returns:
             Goal buffer with the goal pose, goal state, and link poses.
@@ -71,12 +93,26 @@ class GoalManager:
             device_cfg=self.device_cfg,
             seed_goal_state=seed_goal_js,
             repeat_seed_idx_buffers=False,
+            tool_relative_transform_target=tool_relative_transform_target,
         )
 
         goal_buffer.goal_js = goal_js
 
         if goal_tool_poses is not None:
-            goal_buffer.link_goal_poses = goal_tool_poses
+            # Subsequent solves update this storage in place. Own the tensors
+            # so approach planning cannot overwrite the caller's grasp poses.
+            goal_buffer.link_goal_poses = goal_tool_poses.clone()
+
+        if tool_relative_transform_target is not None:
+            num_target_groups = tool_relative_transform_target.num_target_groups
+            if num_target_groups == 1:
+                goal_buffer.idxs_tool_relative_transform_target.zero_()
+            elif num_target_groups != solve_state.batch_size:
+                log_and_raise(
+                    "tool_relative_transform_target must have either one target group or "
+                    f"one per problem ({solve_state.batch_size}), got {num_target_groups}"
+                )
+            goal_buffer.tool_relative_transform_target = tool_relative_transform_target
 
         if current_js is not None:
             goal_buffer.current_js = current_js
@@ -98,6 +134,9 @@ class GoalManager:
         goal_js: Optional[JointState] = None,
         use_implicit_goal: bool = False,
         current_state_dt: Optional[torch.Tensor] = None,
+        tool_relative_transform_target: Union[
+            ToolRelativeTransformTarget, None, object
+        ] = _UNSET_RELATIVE_TARGET,
     ) -> Tuple[GoalRegistry, bool]:
         """Update the internal goal buffer.
 
@@ -111,11 +150,27 @@ class GoalManager:
             current_state_dt: Time since the current state was observed.
                 Shape: ``(n_problems,)``. When ``None`` and ``current_js.dt`` is set,
                 ``current_js.dt`` is used instead.
+            tool_relative_transform_target: Per-problem transforms expressed in one
+                moving reference tool frame. Omitting this argument preserves an
+                existing target; passing ``None`` removes it.
 
         Returns:
             Tuple of (goal buffer, whether reference was updated).
         """
         update_reference = False
+        target_was_supplied = tool_relative_transform_target is not _UNSET_RELATIVE_TARGET
+        effective_relative_target = cast(
+            Optional[ToolRelativeTransformTarget],
+            (
+                tool_relative_transform_target
+                if target_was_supplied
+                else (
+                    self._goal_buffer.tool_relative_transform_target
+                    if self._goal_buffer is not None
+                    else None
+                )
+            ),
+        )
 
         if (
             self._solve_state is None
@@ -124,6 +179,22 @@ class GoalManager:
             or (self._goal_buffer.link_goal_poses is None and goal_tool_poses is not None)
             or (self._goal_buffer.current_js is None and current_js is not None)
             or (self._goal_buffer.seed_goal_js is None and seed_goal_js is not None)
+            or (
+                self._goal_buffer.tool_relative_transform_target is None
+                and effective_relative_target is not None
+            )
+            or (
+                self._goal_buffer.tool_relative_transform_target is not None
+                and effective_relative_target is None
+            )
+            or (
+                self._goal_buffer.tool_relative_transform_target is not None
+                and effective_relative_target is not None
+                and not _relative_targets_are_compatible(
+                    self._goal_buffer.tool_relative_transform_target,
+                    effective_relative_target,
+                )
+            )
         ):
             update_reference = True
         elif self._solve_state != solve_state:
@@ -144,6 +215,7 @@ class GoalManager:
                 current_js=current_js,
                 seed_goal_js=seed_goal_js,
                 current_state_dt=current_state_dt,
+                tool_relative_transform_target=effective_relative_target,
             )
             self.update_batch_helper(solve_state.batch_size)
         else:
@@ -153,12 +225,10 @@ class GoalManager:
                 self._goal_buffer.goal_js.copy_(goal_js)
             if goal_tool_poses is not None:
                 if self._goal_buffer.link_goal_poses is not None:
-                    self._goal_buffer.link_goal_poses.position.copy_(
-                        goal_tool_poses.position
-                    )
-                    self._goal_buffer.link_goal_poses.quaternion.copy_(
-                        goal_tool_poses.quaternion
-                    )
+                    self._goal_buffer.link_goal_poses.position.copy_(goal_tool_poses.position)
+                    self._goal_buffer.link_goal_poses.quaternion.copy_(goal_tool_poses.quaternion)
+            if target_was_supplied and effective_relative_target is not None:
+                self._goal_buffer.tool_relative_transform_target.copy_(effective_relative_target)
             if seed_goal_js is not None:
                 self._goal_buffer.seed_goal_js.copy_(seed_goal_js)
             # Update current_state_dt in the existing buffer
@@ -198,6 +268,22 @@ class GoalManager:
             or (self._goal_buffer.goal_js is not None and goal.goal_js is None)
             or (self._goal_buffer.seed_goal_js is not None and goal.seed_goal_js is None)
             or (self._goal_buffer.seed_goal_js is None and goal.seed_goal_js is not None)
+            or (
+                self._goal_buffer.tool_relative_transform_target is None
+                and goal.tool_relative_transform_target is not None
+            )
+            or (
+                self._goal_buffer.tool_relative_transform_target is not None
+                and goal.tool_relative_transform_target is None
+            )
+            or (
+                self._goal_buffer.tool_relative_transform_target is not None
+                and goal.tool_relative_transform_target is not None
+                and not _relative_targets_are_compatible(
+                    self._goal_buffer.tool_relative_transform_target,
+                    goal.tool_relative_transform_target,
+                )
+            )
         ):
             update_reference = True
         elif self._solve_state != solve_state:
@@ -269,6 +355,46 @@ class GoalManager:
 
         return new_goal_buffer
 
+    def update_seed_goal_dt(self, dt: torch.Tensor) -> GoalRegistry:
+        """Update only the per-seed trajectory dt in the current goal buffer.
+
+        Args:
+            dt: Per-seed trajectory timesteps with the same shape as
+                ``goal_buffer.seed_goal_js.dt``.
+
+        Returns:
+            The existing goal buffer after updating its dt tensor in place.
+        """
+        if self._goal_buffer is None:
+            log_and_raise("Goal buffer has not been initialized.")
+        if self._goal_buffer.seed_goal_js is None:
+            log_and_raise("seed_goal_js is None in goal buffer")
+        goal_dt = self._goal_buffer.seed_goal_js.dt
+        if goal_dt is None:
+            log_and_raise("dt is None in seed_goal_js in goal buffer")
+        if dt.shape != goal_dt.shape:
+            log_and_raise(f"dt.shape: {dt.shape} != goal dt shape: {goal_dt.shape}")
+        goal_dt.copy_(dt)
+        return self._goal_buffer
+
+    def update_tool_relative_transform_target(
+        self,
+        target: ToolRelativeTransformTarget,
+    ) -> GoalRegistry:
+        """Update relative-transform target values without reallocating the goal buffer."""
+        if self._goal_buffer is None or self._solve_state is None:
+            log_and_raise("Goal buffer has not been initialized.")
+        if self._goal_buffer.tool_relative_transform_target is None:
+            log_and_raise("Relative-transform target has not been initialized.")
+
+        new_goal_buffer, update_reference = self.update_goal_buffer(
+            self._solve_state,
+            tool_relative_transform_target=target,
+        )
+        if update_reference:
+            log_and_raise("Relative-transform target does not match existing goal buffer.")
+        return new_goal_buffer
+
     def update_current_state(self, current_state: JointState) -> GoalRegistry:
         """Update the current state in the goal buffer."""
         if self._goal_buffer is None:
@@ -302,8 +428,6 @@ class GoalManager:
             log_and_raise("Goal state does not match existing goal buffer.")
 
         return new_goal_buffer
-
-
 
     @property
     def goal_buffer(self) -> GoalRegistry:
@@ -356,8 +480,9 @@ class GoalManager:
         planning) reuse that buffer by copying the new goals into the first slots
         and filling the remainder with copies of the first goal.
 
-        Returns None (forcing buffer reallocation) when the solve_type, batch_size,
-        or tool_frames change, or when the new num_goalset exceeds the current buffer.
+        Returns None (forcing buffer reallocation) when the solve_type, batch size,
+        seed count, or tool frames change, or when the new num_goalset exceeds the
+        current buffer.
 
         Args:
             solve_state: New problem's solve state.
@@ -376,6 +501,9 @@ class GoalManager:
             return None
 
         if solve_state.batch_size != current_solve_state.batch_size:
+            return None
+
+        if solve_state.num_seeds != current_solve_state.num_seeds:
             return None
 
         if set(links_goal_pose.tool_frames) != set(

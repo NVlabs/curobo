@@ -25,7 +25,6 @@ from curobo._src.optim.gradient.gradient_descent import (
 )
 from curobo._src.optim.gradient.gradient_descent import GradientDescentOptCfg
 from curobo._src.optim.gradient.lbfgs import LBFGSOpt, LBFGSOptCfg
-from curobo._src.optim.gradient.lsr1 import LSR1Opt
 from curobo._src.optim.optim_factory import create_optimization_config, create_optimizer
 from curobo._src.optim.particle.evolution_strategies import (
     EvolutionStrategies,
@@ -218,7 +217,6 @@ class TestCreateOptimizationConfig:
             ("gradient_descent", GradientDescentOptCfg),
             ("line_search_gradient_descent", GradientDescentOptCfg),
             ("conjugate_gradient", ConjugateGradientOptCfg),
-            ("lsr1", LBFGSOptCfg),
             ("scipy", ScipyOptCfg),
             ("torch", TorchOptCfg),
             ("mppi", MPPICfg),
@@ -332,6 +330,20 @@ class TestCreateOptimizationConfig:
         with pytest.raises(ValueError, match="Unsupported solver type"):
             create_optimization_config(config_dict, device_cfg)
 
+    def test_lsr1_solver_type_is_unsupported(self, device_cfg):
+        """Reject the removed L-SR1 solver type."""
+        with pytest.raises(ValueError, match="Unsupported solver type"):
+            create_optimization_config({"solver_type": "lsr1"}, device_cfg)
+
+    def test_removed_lbfgs_direction_switch_is_rejected(self, device_cfg):
+        """Reject configurations that request the removed tensor direction path."""
+        config_dict = {
+            "solver_type": "lbfgs",
+            "use_cuda_kernel_step_direction": False,
+        }
+        with pytest.raises(ValueError, match="was removed"):
+            create_optimization_config(config_dict, device_cfg)
+
     def test_create_config_preserves_device_cfg(self, device_cfg):
         """Test that tensor config is preserved."""
         config_dict = {
@@ -355,7 +367,6 @@ class TestCreateOptimizer:
             ("gradient_descent", GradientDescentOpt),
             ("line_search_gradient_descent", LineSearchGradientDescentOpt),
             ("conjugate_gradient", ConjugateGradientOpt),
-            ("lsr1", LSR1Opt),
             ("scipy", ScipyOpt),
             ("torch", TorchOpt),
             ("mppi", MPPI),
@@ -373,9 +384,8 @@ class TestCreateOptimizer:
         }
 
         # Add solver-specific parameters
-        if solver_type in ["lbfgs", "lsr1"]:
+        if solver_type == "lbfgs":
             config_dict["history"] = 5
-            config_dict["use_cuda_kernel_step_direction"] = False
         elif solver_type == "conjugate_gradient":
             config_dict["cg_method"] = "FR"
         elif solver_type in ["mppi", "es"]:
@@ -389,7 +399,7 @@ class TestCreateOptimizer:
         config = create_optimization_config(config_dict, device_cfg)
 
         # Create optimizer
-        if solver_type in ["lbfgs", "lsr1"]:
+        if solver_type == "lbfgs":
             rollout_list = [rollout_fn, rollout_fn]
         else:
             rollout_list = [rollout_fn]
@@ -404,7 +414,6 @@ class TestCreateOptimizer:
             num_iters=10,
             history=10,
             solver_type="lbfgs",
-            use_cuda_kernel_step_direction=False,
             device_cfg=device_cfg,
         )
 
@@ -437,20 +446,6 @@ class TestCreateOptimizer:
         optimizer = create_optimizer(config, [rollout_fn])
 
         assert isinstance(optimizer, ConjugateGradientOpt)
-
-    def test_create_optimizer_lsr1(self, device_cfg, rollout_fn):
-        """Test creating LSR1 optimizer."""
-        config = LBFGSOptCfg(
-            num_iters=10,
-            history=10,
-            solver_type="lsr1",
-            use_cuda_kernel_step_direction=False,
-            device_cfg=device_cfg,
-        )
-
-        optimizer = create_optimizer(config, [rollout_fn, rollout_fn])
-
-        assert isinstance(optimizer, LSR1Opt)
 
     def test_create_optimizer_mppi(self, device_cfg, rollout_fn):
         """Test creating MPPI optimizer."""
@@ -556,7 +551,6 @@ class TestFactoryIntegration:
             "solver_type": "lbfgs",
             "num_iters": 20,
             "history": 10,
-            "use_cuda_kernel_step_direction": False,
         }
 
         # Create config object
@@ -584,7 +578,7 @@ class TestFactoryIntegration:
 
     @pytest.mark.parametrize(
         "solver_type",
-        ["lbfgs", "gradient_descent", "conjugate_gradient", "lsr1", "mppi", "es"],
+        ["lbfgs", "gradient_descent", "conjugate_gradient", "mppi", "es"],
     )
     def test_all_gradient_solvers_can_optimize(self, device_cfg, rollout_fn, solver_type):
         """Test that all solver types can perform optimization."""
@@ -594,9 +588,8 @@ class TestFactoryIntegration:
         }
 
         # Add solver-specific parameters
-        if solver_type in ["lbfgs", "lsr1"]:
+        if solver_type == "lbfgs":
             config_dict["history"] = 5
-            config_dict["use_cuda_kernel_step_direction"] = False
             rollout_list = [rollout_fn, rollout_fn]
         elif solver_type == "conjugate_gradient":
             config_dict["cg_method"] = "FR"
@@ -624,4 +617,3 @@ class TestFactoryIntegration:
         # Should have valid output
         assert result.shape == initial_action.shape
         assert torch.all(torch.isfinite(result))
-

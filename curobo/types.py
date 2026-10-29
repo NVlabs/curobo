@@ -30,22 +30,18 @@ Example:
     ```
 """
 
-# State types
-# Camera types
+# CuRobo
+from curobo._src.cost.criteria_tool_relative_transform import ToolRelativeTransformCriteria
+from curobo._src.cost.criteria_tool_velocity_limit import ToolVelocityLimitCriteria
+from curobo._src.cost.tool_pose_criteria import PoseErrorFrame, ToolPoseCriteria
 from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_robot import RobotState
 from curobo._src.types.camera import CameraObservation
-from curobo._src.types.lidar import LidarObservation
-
-# Content path
 from curobo._src.types.content_path import ContentPath
-
-# Tensor configuration
 from curobo._src.types.device_cfg import DeviceCfg
-
-# Pose types
-from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
+from curobo._src.types.lidar import LidarObservation
 from curobo._src.types.pose import Pose
+from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 
 __all__ = [
@@ -54,7 +50,11 @@ __all__ = [
     "Pose",
     "ToolPose",
     "GoalToolPose",
+    "ToolRelativeTransformTarget",
+    "ToolRelativeTransformCriteria",
+    "ToolVelocityLimitCriteria",
     "ToolPoseCriteria",
+    "PoseErrorFrame",
     "CameraObservation",
     "LidarObservation",
     "ContentPath",

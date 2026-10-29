@@ -9,16 +9,15 @@ optimizer:
     visual_traj: null
   epsilon: 0.01
   fixed_iters: true
-  history: 27 # 27
+  history: 26 # 27
   inner_iters: 25
   last_best: 10
   line_search_scale:
-  - 0.0
-  - 0.1
+  - 0.01
   - 0.5
   - 1.0
   line_search_type: approx_wolfe
-  num_iters: 100
+  num_iters: 25
   num_problems: 1
   solver_name: lbfgs
   solver_type: lbfgs
@@ -27,13 +26,12 @@ optimizer:
   store_debug: false
   sync_cuda_time: true
   use_coo_sparse: true
-  use_cuda_kernel_step_direction: true
   use_cuda_kernel_line_search: true
   use_cuda_kernel_shared_buffers: true
   use_cuda_kernel_update_best: true
   return_best_action: true
   initial_step_scale: 0.001
-
+  use_geometric_scaling: True
 
 rollout:
   constraint_cfg:
@@ -73,15 +71,6 @@ rollout:
       cspace_non_terminal_weight_factor: 0.0
 
     tool_pose_cfg:
-      use_lie_group: false
-      _non_terminal_pose_axes_weight_factor:
-      - 0.0
-      - 0.0
-      - 0.0
-      - 0.0
-      - 0.0
-      - 0.0
-
       weight:
       - 1000000.0
       - 100000.0

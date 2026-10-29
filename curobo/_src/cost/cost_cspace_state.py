@@ -144,6 +144,7 @@ class StateCSpaceCost(BaseCSpaceCost):
             self.config.retime_weights,
             self.config.retime_regularization_weights,
             self.config.use_grad_input,
+            self.config.compute_effort,
         )
 
 

@@ -34,6 +34,17 @@ This example downloads C-RADIO v3-B through ``torch.hub`` on first use. The
 first run must be able to reach ``NVlabs/RADIO`` on GitHub, download the
 checkpoint, and install any missing RADIO dependencies.
 
+.. note::
+
+   The `C-RADIO v3-B model weights <https://huggingface.co/nvidia/C-RADIOv3-B>`_
+   are distributed under the `NVIDIA Open Model License Agreement
+   <https://developer.download.nvidia.com/licenses/nvidia-open-model-license-agreement-june-2024.pdf>`_.
+   Torch Hub also downloads RADIO source code under the separate
+   `NVIDIA Source Code License for RADIO
+   <https://github.com/NVlabs/RADIO/blob/main/LICENSE>`_, which has non-commercial
+   use terms. Neither the downloaded weights nor the RADIO source code is
+   bundled with cuRobo or covered by cuRobo's Apache 2.0 license.
+
 By the end of this tutorial you will have:
 
 - Loaded an RGB-D sequence from Sun3D
@@ -97,6 +108,17 @@ Step 1: Download the dataset
 This tutorial uses the same `Sun3D <http://sun3d.cs.princeton.edu/>`_ indoor
 RGB-D scene as the volumetric mapping tutorial. It contains color images, depth
 maps, camera intrinsics, and ground-truth camera poses.
+
+.. note::
+
+   The scene below is SUN3D data from Xiao, Owens, and Torralba (ICCV 2013),
+   repackaged by the `3DMatch project <https://3dmatch.cs.princeton.edu/>`_.
+   It is downloaded separately and is not bundled with cuRobo. The dataset is
+   licensed under `CC BY-NC-SA 4.0 <https://creativecommons.org/licenses/by-nc-sa/4.0/>`_.
+   The `SUN3D publication record at MIT
+   <https://dspace.mit.edu/entities/publication/2ec16fd3-1d8b-4424-9fcf-2c4288bfcf30>`_
+   lists the same license for the paper.
+   cuRobo's Apache 2.0 license applies to the example code, not the dataset.
 
 Quick start (downloads one scene, about 1400 MB):
 

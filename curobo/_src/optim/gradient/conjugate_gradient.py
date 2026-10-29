@@ -12,13 +12,13 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import torch
 import torch.autograd.profiler as profiler
 
 from curobo._src.optim.components.gradient_opt_core import GradientOptCore
-from curobo._src.optim.gradient.line_search_strategy import LineSearchType
+from curobo._src.optim.gradient.line_search_strategy import LineSearchStatus, LineSearchType
 from curobo._src.optim.optimization_iteration_state import OptimizationIterationState
 from curobo._src.rollout.rollout_protocol import Rollout
 from curobo._src.types.device_cfg import DeviceCfg
@@ -34,6 +34,8 @@ def jit_cg_compute_step_direction(
     prev_step: torch.Tensor,
     max_beta: float,
     method: str,
+    retry: Optional[torch.Tensor] = None,
+    retry_direction: Optional[torch.Tensor] = None,
 ):
     """Compute the conjugate gradient step direction using the specified beta method.
 
@@ -48,6 +50,8 @@ def jit_cg_compute_step_direction(
             (updated in-place).
         max_beta: maximum allowed value for the beta coefficient.
         method: one of ``"FR"``, ``"PR"``, or ``"DY"``.
+        retry: optional (b,) mask of problems retaining their direction and history.
+        retry_direction: optional (b, 1, n) retained direction for retries.
 
     Returns:
         Tuple of (step, prev_grad, prev_step) where step is (b, 1, n) search
@@ -60,9 +64,7 @@ def jit_cg_compute_step_direction(
     # via ``log_and_raise``; the ``else`` branch handles "DY" and keeps ``beta``
     # defined on every control-flow path (required by TorchScript).
     if method == "FR":  # Fletcher-Reeves
-        beta = (grad @ grad.transpose(-1, -2)) / (
-            prev_grad @ prev_grad.transpose(-1, -2)
-        )
+        beta = (grad @ grad.transpose(-1, -2)) / (prev_grad @ prev_grad.transpose(-1, -2))
     elif method == "PR":  # Polak-Ribiere
         beta = (grad @ (grad - prev_grad).transpose(-1, -2)) / (
             prev_grad @ prev_grad.transpose(-1, -2)
@@ -77,8 +79,14 @@ def jit_cg_compute_step_direction(
     step = -1.0 * grad + beta * prev_step
 
     step = step.view(batch, 1, n)
-    prev_step.copy_(step)
-    prev_grad.copy_(grad)
+    if retry is not None and retry_direction is not None:
+        mask = retry.view(-1, 1, 1)
+        prev_step.copy_(torch.where(mask, prev_step, step))
+        prev_grad.copy_(torch.where(mask, prev_grad, grad))
+        step = torch.where(mask, retry_direction.view_as(step), step)
+    else:
+        prev_step.copy_(step)
+        prev_grad.copy_(grad)
     return step, prev_grad, prev_step
 
 
@@ -143,6 +151,8 @@ class ConjugateGradientOptCfg:
     line_search_scale: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.7, 1.0])
     line_search_type: LineSearchType = LineSearchType.APPROX_WOLFE
     use_cuda_kernel_line_search: bool = True
+    #: Retry failed parallel probe fans without updating conjugate history.
+    line_search_backtracking: bool = False
     fix_terminal_action: bool = False
     line_search_wolfe_c_1: float = 1e-5
     line_search_wolfe_c_2: float = 0.9
@@ -162,15 +172,17 @@ class ConjugateGradientOptCfg:
         if self.num_particles is None:
             self.num_particles = len(self.line_search_scale)
         self.line_search_type = LineSearchType(self.line_search_type)
+        if len(self.line_search_scale) != self.num_particles:
+            log_and_raise("num_particles must match the number of line-search scales")
+        if any(scale <= 0.0 for scale in self.line_search_scale):
+            log_and_raise("line_search_scale must contain only positive values")
         if self.fixed_iters:
             self.cost_delta_threshold = 0.0
             self.cost_relative_threshold = 0.0
         if self.cost_relative_threshold >= 1.0:
             log_and_raise("cost_relative_threshold must be less than 1.0")
         if self.cg_method not in ["FR", "PR", "DY"]:
-            log_and_raise(
-                f"Invalid cg_method: {self.cg_method}, choose from ['FR', 'PR', 'DY']"
-            )
+            log_and_raise(f"Invalid cg_method: {self.cg_method}, choose from ['FR', 'PR', 'DY']")
 
     @property
     def num_rollout_instances(self):
@@ -240,14 +252,36 @@ class ConjugateGradientOpt:
             self._prev_step,
             self._core.config.max_beta,
             self._core.config.cg_method,
+            (
+                iteration_state.line_search_status == LineSearchStatus.BACKTRACK
+                if self._core.config.line_search_backtracking
+                else None
+            ),
+            iteration_state.step_direction if self._core.config.line_search_backtracking else None,
         )
         return dq.view(-1, self._core.action_horizon, self._core.action_dim)
 
     # -- Hooks --
 
     def _on_reinitialize(self, mask):
-        self._prev_step = None
-        self._prev_grad_q = None
+        if mask is None:
+            self._prev_step = None
+            self._prev_grad_q = None
+            return
+        if self._prev_step is not None:
+            self._prev_step.copy_(
+                torch.where(
+                    mask.view(-1, 1, 1), torch.zeros_like(self._prev_step), self._prev_step
+                )
+            )
+        if self._prev_grad_q is not None:
+            self._prev_grad_q.copy_(
+                torch.where(
+                    mask.view(-1, 1, 1),
+                    torch.zeros_like(self._prev_grad_q),
+                    self._prev_grad_q,
+                )
+            )
 
     def _on_shift(self, shift_steps):
         if self._prev_grad_q is not None and self._prev_step is not None:

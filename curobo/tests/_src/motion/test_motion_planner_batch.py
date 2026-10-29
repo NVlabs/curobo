@@ -3,6 +3,9 @@
 #
 """Unit tests for BatchMotionPlanner class."""
 
+from types import SimpleNamespace
+from typing import Any, Optional
+
 import pytest
 import torch
 
@@ -221,9 +224,9 @@ class TestBatchMotionPlannerPlanPose:
             current_state=current_states,
             max_attempts=3,
             success_ratio=0.5,
-            initial_iters=25,
-            time_optimal_iters=25,
-            finetune_iters=25,
+            initial_iters=50,
+            time_optimal_iters=50,
+            finetune_iters=50,
             finetune_attempts=2,
             finetune_dt_scale=0.75,
         )
@@ -274,14 +277,101 @@ class TestBatchMotionPlannerPlanCspace:
         goal_states.position[..., 0] += 0.1
 
         result = planner.plan_cspace(
-            goal_states, current_states, max_attempts=2, success_ratio=1.0,
+            goal_states,
+            current_states,
+            max_attempts=2,
+            success_ratio=1.0,
         )
         assert result is not None
         assert isinstance(result, TrajOptSolverResult)
 
+    def test_plan_cspace_retains_borrowed_result_across_attempts(self) -> None:
+        """First-success accumulation owns a graph result before it is replayed."""
+
+        class BorrowedResultSolver:
+            def __init__(self) -> None:
+                self.config = SimpleNamespace(num_seeds=1)
+                self.action_dim = 1
+                self.action_horizon = 1
+                self.call_count = 0
+                self.result = TrajOptSolverResult(
+                    success=torch.zeros((2, 1), dtype=torch.bool),
+                    solution=torch.zeros((2, 1, 1, 1)),
+                    batch_size=2,
+                    num_seeds=1,
+                )
+
+            def solve_cspace(self, *args, **kwargs) -> TrajOptSolverResult:
+                self.result.success.zero_()
+                self.result.solution.fill_(float(self.call_count + 1))
+                self.result.success[self.call_count, 0] = True
+                self.result.total_time = 1.0
+                self.call_count += 1
+                return self.result
+
+        planner = object.__new__(BatchMotionPlanner)
+        planner.config = SimpleNamespace(
+            ik_solver_config=SimpleNamespace(max_batch_size=2),
+            enable_trajopt=True,
+            always_run_trajopt=True,
+            run_trajopt_on_graph_seed=False,
+        )
+        planner.trajopt_solver = BorrowedResultSolver()
+        planner.graph_planner = None
+        current_state = JointState.from_position(torch.zeros((2, 1)))
+        goal_state = JointState.from_position(torch.ones((2, 1)))
+
+        result = planner.plan_cspace(
+            goal_state,
+            current_state,
+            max_attempts=2,
+            success_ratio=1.0,
+        )
+
+        assert result is not planner.trajopt_solver.result
+        torch.testing.assert_close(result.success, torch.ones((2, 1), dtype=torch.bool))
+        torch.testing.assert_close(result.solution[:, 0, 0, 0], torch.tensor([1.0, 2.0]))
+
 
 class TestBatchMotionPlannerWarmup:
     """Test BatchMotionPlanner.warmup."""
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_warmup_includes_configured_goalset(
+        self,
+        cuda_device_cfg,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        max_goalset = 3
+        config = MotionPlannerCfg.create(
+            robot="franka.yml",
+            device_cfg=cuda_device_cfg,
+            max_batch_size=2,
+            max_goalset=max_goalset,
+            num_ik_seeds=4,
+            num_trajopt_seeds=2,
+            create_constrained_rrt=False,
+            use_cuda_graph=True,
+        )
+        planner = BatchMotionPlanner(config)
+        observed_goalset_sizes: list[int] = []
+        plan_pose = planner.plan_pose
+
+        def record_goalset_size(
+            goal_tool_poses: GoalToolPose,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Optional[TrajOptSolverResult]:
+            observed_goalset_sizes.append(goal_tool_poses.num_goalset)
+            return plan_pose(goal_tool_poses, *args, **kwargs)
+
+        monkeypatch.setattr(planner, "plan_pose", record_goalset_size)
+        try:
+            assert planner.warmup(enable_graph=False, num_warmup_iterations=2)
+        finally:
+            planner.destroy()
+
+        assert observed_goalset_sizes == [max_goalset, 1, max_goalset, 1]
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_warmup_succeeds(self, cuda_device_cfg):
@@ -298,6 +388,17 @@ class TestBatchMotionPlannerWarmup:
 
 class TestBatchMotionPlannerPlanGrasp:
     """Test BatchMotionPlanner.plan_grasp."""
+
+    def test_constrained_phase_modes_are_explicit_and_mutually_exclusive(self) -> None:
+        planner = object.__new__(BatchMotionPlanner)
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            planner.plan_grasp(
+                None,
+                None,
+                use_rrt_for_constrained_phases=True,
+                use_double_pass_trajopt_for_constrained_phases=True,
+            )
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_grasp_returns_result(self, cuda_device_cfg):
@@ -317,11 +418,19 @@ class TestBatchMotionPlannerPlanGrasp:
 
         tool_frames = planner.tool_frames
         num_links = len(tool_frames)
-        positions = torch.zeros(batch_size, num_links, n_grasps, 3, **cuda_device_cfg.as_torch_dict())
-        quaternions = torch.zeros(batch_size, num_links, n_grasps, 4, **cuda_device_cfg.as_torch_dict())
+        positions = torch.zeros(
+            batch_size, num_links, n_grasps, 3, **cuda_device_cfg.as_torch_dict()
+        )
+        quaternions = torch.zeros(
+            batch_size, num_links, n_grasps, 4, **cuda_device_cfg.as_torch_dict()
+        )
         for i in range(n_grasps):
-            positions[:, 0, i, :] = torch.tensor([0.4 + i * 0.05, 0.0, 0.4], **cuda_device_cfg.as_torch_dict())
-            quaternions[:, 0, i, :] = torch.tensor([1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict())
+            positions[:, 0, i, :] = torch.tensor(
+                [0.4 + i * 0.05, 0.0, 0.4], **cuda_device_cfg.as_torch_dict()
+            )
+            quaternions[:, 0, i, :] = torch.tensor(
+                [1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict()
+            )
 
         from curobo._src.motion.motion_planner_result import GraspPlanResult
 
@@ -352,11 +461,19 @@ class TestBatchMotionPlannerPlanGrasp:
 
         tool_frames = planner.tool_frames
         num_links = len(tool_frames)
-        positions = torch.zeros(batch_size, num_links, n_grasps, 3, **cuda_device_cfg.as_torch_dict())
-        quaternions = torch.zeros(batch_size, num_links, n_grasps, 4, **cuda_device_cfg.as_torch_dict())
+        positions = torch.zeros(
+            batch_size, num_links, n_grasps, 3, **cuda_device_cfg.as_torch_dict()
+        )
+        quaternions = torch.zeros(
+            batch_size, num_links, n_grasps, 4, **cuda_device_cfg.as_torch_dict()
+        )
         for i in range(n_grasps):
-            positions[:, 0, i, :] = torch.tensor([0.4, i * 0.1, 0.4], **cuda_device_cfg.as_torch_dict())
-            quaternions[:, 0, i, :] = torch.tensor([1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict())
+            positions[:, 0, i, :] = torch.tensor(
+                [0.4, i * 0.1, 0.4], **cuda_device_cfg.as_torch_dict()
+            )
+            quaternions[:, 0, i, :] = torch.tensor(
+                [1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict()
+            )
 
         from curobo._src.motion.motion_planner_result import GraspPlanResult
 
@@ -366,8 +483,10 @@ class TestBatchMotionPlannerPlanGrasp:
             quaternion=quaternions[:, None],
         )
         result = planner.plan_grasp(
-            grasp_poses, current_states,
-            plan_approach_to_grasp=False, plan_grasp_to_lift=False,
+            grasp_poses,
+            current_states,
+            plan_approach_to_grasp=False,
+            plan_grasp_to_lift=False,
         )
         assert isinstance(result, GraspPlanResult)
         assert result.approach_success.shape[0] == batch_size
@@ -390,11 +509,19 @@ class TestBatchMotionPlannerPlanGrasp:
 
         tool_frames = planner.tool_frames
         num_links = len(tool_frames)
-        positions = torch.zeros(batch_size, num_links, n_grasps, 3, **cuda_device_cfg.as_torch_dict())
-        quaternions = torch.zeros(batch_size, num_links, n_grasps, 4, **cuda_device_cfg.as_torch_dict())
+        positions = torch.zeros(
+            batch_size, num_links, n_grasps, 3, **cuda_device_cfg.as_torch_dict()
+        )
+        quaternions = torch.zeros(
+            batch_size, num_links, n_grasps, 4, **cuda_device_cfg.as_torch_dict()
+        )
         for i in range(n_grasps):
-            positions[:, 0, i, :] = torch.tensor([0.4 + i * 0.05, 0.0, 0.4], **cuda_device_cfg.as_torch_dict())
-            quaternions[:, 0, i, :] = torch.tensor([1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict())
+            positions[:, 0, i, :] = torch.tensor(
+                [0.4 + i * 0.05, 0.0, 0.4], **cuda_device_cfg.as_torch_dict()
+            )
+            quaternions[:, 0, i, :] = torch.tensor(
+                [1.0, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict()
+            )
 
         from curobo._src.motion.motion_planner_result import GraspPlanResult
 
@@ -425,3 +552,42 @@ class TestBatchMotionPlannerResetSeed:
         )
         planner = BatchMotionPlanner(config)
         planner.reset_seed()
+
+
+class TestBatchMotionPlannerUpdateInertial:
+    """Test inertial-property propagation across batch-planning stages."""
+
+    def test_updates_are_propagated_to_rrt_planners(self) -> None:
+        """Keep IK, RRT, constrained RRT, and TrajOpt inertial models aligned."""
+
+        class CapturingComponent:
+            def __init__(self) -> None:
+                self.single_calls = []
+                self.batch_calls = []
+
+            def update_link_inertial(self, link_name, mass, com, inertia) -> None:
+                self.single_calls.append((link_name, mass, com, inertia))
+
+            def update_links_inertial(self, link_properties) -> None:
+                self.batch_calls.append(link_properties)
+
+        planner = object.__new__(BatchMotionPlanner)
+        planner._destroyed = True
+        planner.config = SimpleNamespace(graph_planner_algorithm="rrt")
+        planner.ik_solver = CapturingComponent()
+        planner.graph_planner = CapturingComponent()
+        planner.constrained_rrt_planner = CapturingComponent()
+        planner.trajopt_solver = CapturingComponent()
+
+        planner.update_link_inertial("attached_object", mass=3.0)
+        properties = {"attached_object": {"mass": 2.0}}
+        planner.update_links_inertial(properties)
+
+        for component in (
+            planner.ik_solver,
+            planner.graph_planner,
+            planner.constrained_rrt_planner,
+            planner.trajopt_solver,
+        ):
+            assert component.single_calls == [("attached_object", 3.0, None, None)]
+            assert component.batch_calls == [properties]

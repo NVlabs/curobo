@@ -41,21 +41,23 @@ from curobo._src.perception.mapper.checkpoint_blocks import (
     save_block_checkpoint,
     validate_block_metadata_for_target,
 )
+from curobo._src.perception.mapper.filter_semantic import SemanticFilter
 from curobo._src.perception.mapper.integrator_esdf import (
     BlockSparseESDFIntegrator,
     BlockSparseESDFIntegratorCfg,
 )
 from curobo._src.perception.mapper.mapper_cfg import MapperCfg
+from curobo._src.perception.mapper.extractor_points import OccupiedPoints
 from curobo._src.perception.mapper.storage import (
     BlockSparseTSDF,
     MatchedVoxels,
     OccupiedVoxels,
+    RenderedFeatures,
 )
 from curobo._src.types.camera import CameraObservation
 from curobo._src.types.lidar import LidarObservation
 from curobo._src.types.pose import Pose
 from curobo._src.util.logging import deprecated, log_and_raise
-
 
 # Per-element magnitude limit for CameraObservation.feature_grid. The
 # integration kernel atomic-adds into fp16 ``block_features``; inputs
@@ -154,6 +156,7 @@ class Mapper:
             roughness=config.roughness,
             feature_dim=config.feature_dim,
             feature_block_grid_size=config.feature_block_grid_size,
+            instance_grid_size=config.instance_grid_size,
             feature_grid_height=config.feature_grid_height,
             feature_grid_width=config.feature_grid_width,
             max_visible_blocks_per_integration=config.max_visible_blocks_per_integration,
@@ -229,7 +232,11 @@ class Mapper:
                 exception_type=TypeError,
             )
         if args:
-            if observation is not None or camera_observation is not None or lidar_observation is not None:
+            if (
+                observation is not None
+                or camera_observation is not None
+                or lidar_observation is not None
+            ):
                 log_and_raise(
                     "Positional observation cannot be combined with observation=, "
                     "camera_observation=, or lidar_observation=.",
@@ -283,16 +290,22 @@ class Mapper:
             self._last_voxel_grid = None
         return n_clear
 
+    def clear_instance_slot(self, instance_slot: int) -> None:
+        """Clear one retired compact instance slot from mapped categorical state."""
+        self._integrator.clear_instance_slot(instance_slot)
+
     def compute_esdf(
         self,
         esdf_origin: Optional[torch.Tensor] = None,
         esdf_voxel_size: Optional[float] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> VoxelGrid:
         """Compute ESDF from current TSDF and return as VoxelGrid.
 
         Args:
             esdf_origin: Override ESDF origin (for sliding window).
             esdf_voxel_size: Override ESDF voxel size (meters).
+            semantic_filter: Optional fused-feature filter applied before ESDF generation.
 
         Returns:
             VoxelGrid containing the signed distance field for collision checking.
@@ -303,7 +316,9 @@ class Mapper:
                 [esdf_voxel_size], device=self._device, dtype=torch.float32
             )
         self._integrator.compute_esdf(
-            esdf_origin=esdf_origin, esdf_voxel_size=esdf_voxel_size_tensor
+            esdf_origin=esdf_origin,
+            esdf_voxel_size=esdf_voxel_size_tensor,
+            semantic_filter=semantic_filter,
         )
         self._last_voxel_grid = self._integrator.get_voxel_grid()
         return self._last_voxel_grid
@@ -312,12 +327,14 @@ class Mapper:
         self,
         refine_iterations: int = 0,
         surface_only: bool = True,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Mesh:
         """Extract a triangle-soup mesh using GPU marching cubes.
 
         Args:
             refine_iterations: Newton-Raphson iterations for vertex refinement.
             surface_only: Only extract mesh near surface.
+            semantic_filter: Optional fused-feature filter applied before mesh generation.
 
         Returns:
             Mesh object with vertices, faces, and colors.
@@ -325,6 +342,7 @@ class Mapper:
         return self._integrator.extract_mesh(
             refine_iterations=refine_iterations,
             surface_only=surface_only,
+            semantic_filter=semantic_filter,
         )
 
     def extract_textured_mesh(
@@ -335,6 +353,7 @@ class Mapper:
         camera_min_distance: Optional[float] = None,
         camera_max_distance: Optional[float] = None,
         texture_depth_tolerance_m: Optional[float] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Mesh:
         """Extract a TSDF mesh with visibility-tested RGB texture.
 
@@ -350,6 +369,34 @@ class Mapper:
             camera_min_distance=camera_min_distance,
             camera_max_distance=camera_max_distance,
             texture_depth_tolerance_m=texture_depth_tolerance_m,
+            semantic_filter=semantic_filter,
+        )
+
+    def extract_occupied_points(
+        self,
+        sample_budget: int = 2000,
+        *,
+        instance_slot: Optional[int] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
+        voxel_selection: Optional[torch.Tensor] = None,
+        seed: int = 0,
+    ) -> OccupiedPoints:
+        """Sample observed surfaces into fixed-capacity CUDA buffers with a GPU count.
+
+        ``sample_budget`` is the number of proposals before near-zero pruning;
+        rejected points are not refilled. Optional filters intersect: an instance
+        slot, fused semantic features, and uint8 CUDA voxel_selection with shape
+        [max_blocks,block_size**3]. Geometry reads use the unfiltered TSDF.
+        Source voxel indices identify the nearest crossing endpoint. Results
+        are borrowed until the next same-budget query; copy persistent geometry.
+        Warm up the budget before CUDA graph capture. Voxel evidence is unchanged.
+        """
+        return self._integrator.extract_occupied_points(
+            sample_budget,
+            instance_slot=instance_slot,
+            semantic_filter=semantic_filter,
+            voxel_selection=voxel_selection,
+            seed=seed,
         )
 
     def extract_occupied_voxels(
@@ -363,6 +410,7 @@ class Mapper:
         camera_min_distance: Optional[float] = None,
         camera_max_distance: Optional[float] = None,
         texture_depth_tolerance_m: Optional[float] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> OccupiedVoxels:
         """Extract occupied voxel centers and per-voxel block indices.
 
@@ -380,6 +428,7 @@ class Mapper:
             camera_max_distance: Maximum camera-frame z used for texture projection.
             texture_depth_tolerance_m: Absolute visibility-depth tolerance. If
                 None, each sample uses the mapper default tolerance policy.
+            semantic_filter: Optional fused-feature filter applied before voxel generation.
 
         Returns:
             :class:`OccupiedVoxels` with voxel centers, per-voxel block
@@ -394,6 +443,7 @@ class Mapper:
             camera_min_distance=camera_min_distance,
             camera_max_distance=camera_max_distance,
             texture_depth_tolerance_m=texture_depth_tolerance_m,
+            semantic_filter=semantic_filter,
         )
 
     def extract_matching_feature_voxels(
@@ -531,7 +581,8 @@ class Mapper:
             :meth:`BlockSparseTSDF.get_stats` for the full block-pool key list.
         """
         return self._integrator.get_stats(
-            scan_pool=scan_pool, scan_hash=scan_hash,
+            scan_pool=scan_pool,
+            scan_hash=scan_hash,
         )
 
     def memory_usage_mb(self) -> float:
@@ -573,6 +624,7 @@ class Mapper:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Render depth and normals from current TSDF.
 
@@ -581,19 +633,56 @@ class Mapper:
                 or ``(N, 4)`` as ``[fx, fy, cx, cy]``.
             pose: Camera-to-world transform as :class:`Pose` with matching camera count.
             image_shape: (height, width) of output images.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             Tuple of ``(depth, normals, valid_mask)``. Unbatched single-camera
             inputs return ``(H, W)``, ``(H, W, 3)``, and ``(H, W)``; batched
             inputs return ``(N, H, W)``, ``(N, H, W, 3)``, and ``(N, H, W)``.
         """
-        return self._get_renderer().render(intrinsics, pose, image_shape)
+        return self._get_renderer().render(
+            intrinsics,
+            pose,
+            image_shape,
+            semantic_filter=semantic_filter,
+        )
+
+    def render_features(
+        self,
+        intrinsics: torch.Tensor,
+        pose: Pose,
+        image_shape: Tuple[int, int],
+        image_patch: Optional[Tuple[int, int, int, int]] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
+    ) -> RenderedFeatures:
+        """Raycast compact fused-feature references from the current TSDF.
+
+        Args:
+            intrinsics: Camera intrinsics ``(3, 3)``, ``(4,)``, ``(N, 3, 3)``,
+                or ``(N, 4)`` as ``[fx, fy, cx, cy]``.
+            pose: Camera-to-world transform as :class:`Pose` with matching camera count.
+            image_shape: Full ``(height, width)`` camera image shape.
+            image_patch: Optional absolute ``(top, left, height, width)`` region.
+            semantic_filter: Optional fused-feature filter applied during traversal.
+
+        Returns:
+            A :class:`RenderedFeatures` result. Its :meth:`RenderedFeatures.features`
+            method materializes only requested patches and channel slices.
+        """
+        return self._get_renderer().render_features(
+            intrinsics,
+            pose,
+            image_shape,
+            image_patch=image_patch,
+            semantic_filter=semantic_filter,
+        )
 
     def render_color(
         self,
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Render depth, normals, and color from current TSDF.
 
@@ -602,19 +691,26 @@ class Mapper:
                 or ``(N, 4)`` as ``[fx, fy, cx, cy]``.
             pose: Camera-to-world transform as :class:`Pose` with matching camera count.
             image_shape: (height, width) of output images.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             Tuple of (depth, normals, color, valid_mask).
             Unbatched single-camera inputs keep ``(H, W)`` and ``(H, W, 3)``
             shapes; batched inputs include a leading camera dimension.
         """
-        return self._get_renderer().render_color(intrinsics, pose, image_shape)
+        return self._get_renderer().render_color(
+            intrinsics,
+            pose,
+            image_shape,
+            semantic_filter=semantic_filter,
+        )
 
     def render_depth(
         self,
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render only depth image.
 
@@ -622,17 +718,24 @@ class Mapper:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as :class:`Pose`.
             image_shape: (height, width) of output images.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             depth: ``(H, W)`` or ``(N, H, W)`` in meters.
         """
-        return self._get_renderer().render_depth(intrinsics, pose, image_shape)
+        return self._get_renderer().render_depth(
+            intrinsics,
+            pose,
+            image_shape,
+            semantic_filter=semantic_filter,
+        )
 
     def render_color_only(
         self,
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render only color image.
 
@@ -640,11 +743,17 @@ class Mapper:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as Pose.
             image_shape: (height, width) of output images.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             color: ``(H, W, 3)`` or ``(N, H, W, 3)`` uint8 RGB.
         """
-        return self._get_renderer().render_color_only(intrinsics, pose, image_shape)
+        return self._get_renderer().render_color_only(
+            intrinsics,
+            pose,
+            image_shape,
+            semantic_filter=semantic_filter,
+        )
 
     def render_shaded(
         self,
@@ -654,6 +763,7 @@ class Mapper:
         light_direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
         ambient: float = 1.0,
         use_color: bool = True,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render Lambertian-shaded image.
 
@@ -664,12 +774,19 @@ class Mapper:
             light_direction: Light direction in camera frame.
             ambient: Ambient lighting factor (0-1).
             use_color: If True, use TSDF color. If False, use gray.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             shaded: ``(H, W, 3)`` or ``(N, H, W, 3)`` uint8 RGB shaded image.
         """
         return self._get_renderer().render_shaded(
-            intrinsics, pose, image_shape, light_direction, ambient, use_color
+            intrinsics,
+            pose,
+            image_shape,
+            light_direction,
+            ambient,
+            use_color,
+            semantic_filter=semantic_filter,
         )
 
     def render_depth_colormap(
@@ -677,6 +794,7 @@ class Mapper:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render depth as colormap for visualization.
 
@@ -684,12 +802,16 @@ class Mapper:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as Pose.
             image_shape: (height, width) of output images.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             colormap: ``(H, W, 3)`` or ``(N, H, W, 3)`` uint8 RGB colormap.
         """
         return self._get_renderer().render_depth_colormap(
-            intrinsics, pose, image_shape
+            intrinsics,
+            pose,
+            image_shape,
+            semantic_filter=semantic_filter,
         )
 
     def render_normal_colormap(
@@ -697,6 +819,7 @@ class Mapper:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render normals as colormap for visualization.
 
@@ -704,8 +827,14 @@ class Mapper:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as Pose.
             image_shape: (height, width) of output images.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             colormap: ``(H, W, 3)`` or ``(N, H, W, 3)`` uint8 RGB colormap.
         """
-        return self._get_renderer().render_normal_colormap(intrinsics, pose, image_shape)
+        return self._get_renderer().render_normal_colormap(
+            intrinsics,
+            pose,
+            image_shape,
+            semantic_filter=semantic_filter,
+        )

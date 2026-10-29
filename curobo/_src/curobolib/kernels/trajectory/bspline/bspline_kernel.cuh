@@ -152,6 +152,122 @@ namespace curobo{
 
 
     /**
+     * @brief Compute one absolute time-scaled dt requirement per trajectory timestep.
+     *
+     * One warp evaluates one (batch, timestep) pair. Lanes evaluate joints, reduce the
+     * velocity/acceleration/jerk scaling requirement across the warp, then lane zero applies
+     * epsilon and optional absolute dt bounds. A negative bound disables that clamp.
+     */
+    template<typename ScalarType, int Degree, BasisBackend BasisImpl = BasisBackend::FACTORED>
+    __global__ void bspline_time_scaled_dt_kernel(
+      ScalarType *out_dt_per_timestep,
+      const ScalarType *u_position,
+      const ScalarType *start_position,
+      const ScalarType *start_velocity,
+      const ScalarType *start_acceleration,
+      const ScalarType *start_jerk,
+      const ScalarType *goal_position,
+      const ScalarType *goal_velocity,
+      const ScalarType *goal_acceleration,
+      const ScalarType *goal_jerk,
+      const int32_t *start_idx,
+      const int32_t *goal_idx,
+      const ScalarType *traj_dt,
+      const uint8_t *use_implicit_goal_state,
+      const ScalarType *max_velocity,
+      const ScalarType *max_acceleration,
+      const ScalarType *max_jerk,
+      const float epsilon,
+      const float minimum_dt,
+      const float maximum_dt,
+      const int batch_size,
+      const int padded_horizon,
+      const int dof,
+      const int n_knots)
+    {
+      constexpr int warp_size = 32;
+      const int tid = blockDim.x * blockIdx.x + threadIdx.x;
+      const int warp_idx = tid / warp_size;
+      const int lane_idx = threadIdx.x % warp_size;
+      const int total_warps = batch_size * padded_horizon;
+      if (warp_idx >= total_warps)
+      {
+        return;
+      }
+
+      const int b_idx = warp_idx / padded_horizon;
+      const int h_idx = warp_idx % padded_horizon;
+      const int b_offset = start_idx[b_idx];
+      const int goal_offset = goal_idx[b_idx];
+      const float interpolated_dt = traj_dt[goal_offset];
+      float local_dt_scale = 0.0f;
+
+      for (int d_idx = lane_idx; d_idx < dof; d_idx += warp_size)
+      {
+        float velocity = 0.0f;
+        float acceleration = 0.0f;
+        float jerk = 0.0f;
+        interpolate_bspline_trajectory<ScalarType, Degree, BasisImpl>(
+          nullptr, nullptr, nullptr, nullptr, nullptr,
+          u_position,
+          start_position,
+          start_velocity,
+          start_acceleration,
+          start_jerk,
+          goal_position,
+          goal_velocity,
+          goal_acceleration,
+          goal_jerk,
+          interpolated_dt,
+          use_implicit_goal_state,
+          batch_size,
+          padded_horizon,
+          padded_horizon,
+          dof,
+          b_idx,
+          h_idx,
+          d_idx,
+          b_offset,
+          goal_offset,
+          n_knots,
+          &velocity,
+          &acceleration,
+          &jerk);
+
+        const float velocity_scale = fabsf(velocity) / max_velocity[d_idx];
+        const float acceleration_scale = sqrtf(
+          fabsf(acceleration) / max_acceleration[d_idx]);
+        const float jerk_scale = powf(fabsf(jerk) / max_jerk[d_idx], 1.0f / 3.0f);
+        local_dt_scale = fmaxf(
+          local_dt_scale,
+          fmaxf(velocity_scale, fmaxf(acceleration_scale, jerk_scale)));
+      }
+
+      #pragma unroll
+      for (int offset = warp_size / 2; offset > 0; offset /= 2)
+      {
+        local_dt_scale = fmaxf(
+          local_dt_scale,
+          __shfl_down_sync(0xffffffffu, local_dt_scale, offset));
+      }
+
+      if (lane_idx == 0)
+      {
+        float required_dt = interpolated_dt * local_dt_scale * (1.0f + epsilon);
+        if (minimum_dt >= 0.0f)
+        {
+          required_dt = fmaxf(required_dt, minimum_dt);
+        }
+        if (maximum_dt >= 0.0f)
+        {
+          required_dt = fminf(required_dt, maximum_dt);
+        }
+        out_dt_per_timestep[warp_idx] = required_dt;
+      }
+    }
+
+
+    /**
      * @brief CUDA kernel for B-spline interpolation with uniform time stepping and variable
      *        output horizon lengths.
      *

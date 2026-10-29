@@ -1,37 +1,23 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Standard Library
+"""Benchmark batched IK accuracy and solve time across supported robots."""
+
 import argparse
+from typing import Optional
 
-import curobo.runtime as runtime
-
-runtime.enable_torch_compile = False
-runtime.enable_torch_jit = False
-
-# Third Party
 import numpy as np
 import torch
-from torch.profiler import ProfilerActivity, profile
 
-# CuRobo
+import curobo.runtime as runtime
 from curobo._src.solver.solver_ik import IKSolver
 from curobo._src.solver.solver_ik_cfg import IKSolverCfg
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
-
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.logging import setup_curobo_logger
+from curobo._src.util_file import join_path, write_yaml
 
-# Enable CUDA event timing for accurate benchmark measurements
 runtime.enable_cuda_event_timer = True
-from curobo._src.util_file import (
-    join_path,
-    write_yaml,
-)
-from curobo.content import (
-    get_robot_configs_path,
-)
 
 # set seeds
 torch.manual_seed(2)
@@ -46,23 +32,17 @@ torch._dynamo.config.cache_size_limit = 64
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-from curobo._src.util.config_io import join_path, resolve_config
 
 
 def run_full_config_collision_free_ik(
-    robot_file,
-    world_file,
-    batch_size,
-    use_cuda_graph=False,
-    collision_free=True,
-    num_seeds=12,
-):
-    if not collision_free:
-        robot_file = resolve_config(join_path(get_robot_configs_path(), robot_file))
-        if "kinematics" not in robot_file:
-            robot_file = robot_file["robot_cfg"]
-        robot_file["kinematics"]["collision_link_names"] = None
-        robot_file["kinematics"]["lock_joints"] = None
+    robot_file: str,
+    world_file: Optional[str],
+    batch_size: int,
+    use_cuda_graph: bool = False,
+    collision_free: bool = True,
+    num_seeds: int = 12,
+) -> tuple[float, float, float, float]:
+    """Run five timed IK batches for one robot and optimizer pipeline."""
     device_cfg = DeviceCfg()
     position_threshold = 0.005
 
@@ -81,10 +61,16 @@ def run_full_config_collision_free_ik(
         optimizer_collision_activation_distance=0.0025,
         self_collision_check=collision_free,
         device_cfg=device_cfg,
-        override_iters_for_multi_link_ik=240 if robot_file in ["unitree_g1.yml"] else None,
-        seed_solver_num_seeds=128 if robot_file in ["unitree_g1.yml"] else max(32, num_seeds*2),
+        override_iters_for_multi_link_ik=(
+            160 if robot_file in ["unitree_g1_29dof_retarget.yml"] else None
+        ),
+        seed_solver_num_seeds=(
+            32 if robot_file in ["unitree_g1_29dof_retarget.yml"] else max(32, num_seeds * 2)
+        ),
         max_batch_size=batch_size,
+        load_collision_spheres=collision_free,
     )
+    config.use_lm_seed = True
 
     ik_solver = IKSolver(config)
 
@@ -124,15 +110,6 @@ def run_full_config_collision_free_ik(
         kin_state = ik_solver.compute_kinematics(JointState.from_position(q_sample))
         goal_tool_poses = kin_state.tool_poses.as_goal()
         seed_config = None
-        if False and i > 1:
-            print("profiling")
-            with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
-                result = ik_solver.solve_pose(
-                    goal_tool_poses=goal_tool_poses,
-                    seed_config=seed_config,
-                )
-            prof.export_chrome_trace(join_path("benchmark/log/trace", "ik_stream")[1:] + ".json")
-            exit()
         timer = CudaEventTimer().start()
 
         result = ik_solver.solve_pose(
@@ -164,7 +141,9 @@ def run_full_config_collision_free_ik(
     )
 
 
-def run_benchmark(world_file=None):
+
+def run_benchmark(world_file: Optional[str] = None) -> None:
+    """Run the standard LM-seeded L-BFGS IK benchmark."""
     setup_curobo_logger("error")
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -200,17 +179,17 @@ def run_benchmark(world_file=None):
         "Orientation-Error-C-Free-IK(deg)": [],
     }
 
-    robot_list = ["unitree_g1.yml", "dual_ur10e.yml", "franka.yml"]
+    robot_list = ["unitree_g1_29dof_retarget.yml", "dual_ur10e.yml", "franka.yml"]
+
     for robot_file in robot_list:
         print("running for robot: ", robot_file)
-        if robot_file == "unitree_g1.yml":
+        if robot_file == "unitree_g1_29dof_retarget.yml":
             world = "collision_table.yml"
         else:
             world = world_file
 
         for b_size in b_list:
             print(robot_file, b_size)
-
 
             torch.cuda.empty_cache()
             dt_cu_ik, succ, p_err, q_err = run_full_config_collision_free_ik(
@@ -224,7 +203,7 @@ def run_benchmark(world_file=None):
 
             torch.cuda.empty_cache()
             cfree_num_seeds = collision_free_num_seeds
-            if robot_file in ["unitree_g1.yml", "dual_ur10e.yml"]:
+            if robot_file in ["unitree_g1_29dof_retarget.yml", "dual_ur10e.yml"]:
                 cfree_num_seeds = max(16, collision_free_num_seeds)
 
             dt_cu_ik_cfree, success, p_err_c, q_err_c = run_full_config_collision_free_ik(

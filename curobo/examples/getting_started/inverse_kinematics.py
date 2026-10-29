@@ -173,8 +173,24 @@ import torch
 
 from curobo.inverse_kinematics import InverseKinematics, InverseKinematicsCfg
 from curobo.scene import Cuboid, Scene
-from curobo.types import ContentPath, GoalToolPose, Pose
+from curobo.servo import JointTargetServo
+from curobo.types import ContentPath, GoalToolPose, JointState, Pose
 from curobo.viewer import ViserVisualizer
+
+
+def _as_servo_joint_state(
+    joint_state: JointState,
+    require_velocity: bool = False,
+) -> JointState:
+    """Convert solver joint state output to the servo's ``(batch, dof)`` shape."""
+    servo_state = joint_state.clone()
+    if servo_state.position.ndim == 1:
+        servo_state = servo_state.unsqueeze(0)
+    if servo_state.position.ndim == 3:
+        servo_state = servo_state.squeeze(1)
+    if require_velocity and servo_state.velocity is None:
+        servo_state.velocity = torch.zeros_like(servo_state.position)
+    return servo_state
 
 
 def single_ik_example():
@@ -484,6 +500,10 @@ def differential_ik_example(robot_file="franka.yml", port=8080):
     }
 
     ik_solver = InverseKinematics(config)
+    servo = JointTargetServo(
+        joint_limits=ik_solver.kinematics.get_joint_limits(),
+        servo_dt_s=config.optimization_dt,
+    )
 
     goal_state = ik_solver.default_joint_state.clone()
     kin_state = ik_solver.compute_kinematics(goal_state).clone()
@@ -491,6 +511,12 @@ def differential_ik_example(robot_file="franka.yml", port=8080):
 
     current_state = ik_solver.default_joint_state.clone()
     current_state = current_state.unsqueeze(0)
+    servo.reset(
+        _as_servo_joint_state(
+            ik_solver.get_active_js(current_state),
+            require_velocity=True,
+        )
+    )
 
     ik_solver.solve_pose(
         goal_tool_poses=GoalToolPose.from_poses(
@@ -549,10 +575,17 @@ def differential_ik_example(robot_file="franka.yml", port=8080):
             return_seeds=1,
         )
         if result.success.any():
-            current_state = result.js_solution.clone()
-            viser_viz.set_joint_state(
-                result.js_solution.squeeze(0).squeeze(0)
+            servo.set_target(
+                _as_servo_joint_state(ik_solver.get_active_js(result.js_solution))
             )
+            command_state = servo.step(
+                _as_servo_joint_state(
+                    ik_solver.get_active_js(current_state),
+                    require_velocity=True,
+                )
+            )
+            current_state = ik_solver.get_full_js(command_state)
+            viser_viz.set_joint_state(current_state.squeeze(0).squeeze(0))
         time.sleep(0.001)
 
 

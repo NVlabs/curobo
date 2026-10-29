@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 from cuda.core import LaunchConfig
 
@@ -44,7 +44,7 @@ class KinematicsLaunchCfg:
     """Helper class for calculating launch configurations for kinematics kernels"""
 
     MAX_FW_BATCH_PER_BLOCK = 8
-    MAX_BW_BATCH_PER_BLOCK = 32  # From C++ code
+    MAX_JACOBIAN_VJP_BATCH_PER_BLOCK = 4
     DEFAULT_MAX_THREADS = 128
     DEFAULT_MAX_SHARED_MEM = 48 * 1024  # 48 KB
     MAX_FORWARD_LINKS = 500
@@ -53,11 +53,11 @@ class KinematicsLaunchCfg:
     def calculate_forward_config(
         batch_size: int,
         num_links: int,
-        threads_per_batch: int = 4,
         max_threads: int = None,
         max_shared_mem: int = None,
     ) -> LaunchConfig:
         """Calculate launch configuration for the forward kinematics kernels."""
+        threads_per_batch = 32
         max_threads = max_threads or KinematicsLaunchCfg.DEFAULT_MAX_THREADS
         max_shared_mem = max_shared_mem or KinematicsLaunchCfg.DEFAULT_MAX_SHARED_MEM
 
@@ -93,88 +93,29 @@ class KinematicsLaunchCfg:
         )
 
     @staticmethod
-    def calculate_backward_config(
+    def calculate_jacobian_vjp_config(
         batch_size: int,
         num_links: int,
-        num_spheres: int,
-        n_tool_frames: int,
-        n_joints: int,
         max_threads: int = None,
         max_shared_mem: int = None,
-    ) -> Tuple[LaunchConfig, int, bool, int]:
-        """Calculate launch configuration for kinematics backward kernel.
-
-        Ported from calculate_kinematics_backward_launch_config in
-        kinematics_backward_kernel_launch.cu (lines 20-74)
-
-        Args:
-            batch_size: Number of batches
-            num_links: Number of links
-            num_spheres: Number of spheres
-            n_tool_frames: Number of links to store
-            n_joints: Number of joints
-            max_threads: Maximum threads per block (default 128)
-            max_shared_mem: Maximum shared memory (default 48KB)
-
-        Returns:
-            Tuple of (LaunchConfig, threads_per_batch, use_warp_reduce, max_joints_template)
-        """
+    ) -> LaunchConfig:
+        """Calculate the launch configuration for the 32-lane Jacobian VJP."""
+        threads_per_batch = 32
         max_threads = max_threads or KinematicsLaunchCfg.DEFAULT_MAX_THREADS
         max_shared_mem = max_shared_mem or KinematicsLaunchCfg.DEFAULT_MAX_SHARED_MEM
+        shared_mem_per_batch = num_links * 12 * 4
+        if shared_mem_per_batch > max_shared_mem:
+            raise RuntimeError("Single batch shared memory requirement exceeds limit")
 
-        use_warp_reduce = num_spheres < 5000
-
-        # Select max_joints template parameter based on n_joints
-        if n_joints < 16:
-            max_joints_template = 16
-        elif n_joints < 64:
-            max_joints_template = 64
-        else:
-            max_joints_template = 128
-
-        if use_warp_reduce:
-            # Warp reduction configuration
-            max_batches_per_block = KinematicsLaunchCfg.MAX_BW_BATCH_PER_BLOCK
-            max_threads_per_batch = 32
-
-            # Check if even 1 batch per block would fit in shared memory
-            shared_mem_per_batch = num_links * 12 * 4  # sizeof(float) = 4
-            if shared_mem_per_batch > max_shared_mem:
-                raise RuntimeError("Single batch shared memory requirement exceeds limit")
-
-            # Limit batches per block based on shared memory constraints
-            max_batches_from_shared_mem = max_shared_mem // shared_mem_per_batch
-            max_batches_per_block = min(max_batches_per_block, max_batches_from_shared_mem)
-
-            # Limit threads per block based on input parameter for occupancy
-            if max_batches_per_block * max_threads_per_batch > max_threads:
-                max_batches_per_block = max_threads // max_threads_per_batch
-
-            # Ensure at least 1 batch per block
-            max_batches_per_block = max(1, max_batches_per_block)
-
-            # Actual batches per block (limited by batch_size)
-            batches_per_block = min(batch_size, max_batches_per_block)
-
-            threads_per_batch = max_threads_per_batch
-            threads_per_block = batches_per_block * max_threads_per_batch
-            blocks_per_grid = (
-                batch_size * max_threads_per_batch + threads_per_block - 1
-            ) // threads_per_block
-            shared_mem_size = batches_per_block * num_links * 12 * 4
-        else:
-            # Block reduction configuration
-            required_shared_mem = num_links * 12 * 4
-            if required_shared_mem > max_shared_mem:
-                raise RuntimeError("Single batch shared memory requirement exceeds limit")
-
-            threads_per_block = min(max_threads, max(32, max(num_spheres, n_tool_frames)))
-            blocks_per_grid = batch_size
-            shared_mem_size = required_shared_mem
-            threads_per_batch = threads_per_block
-
-        config = LaunchConfig(
-            grid=blocks_per_grid, block=threads_per_block, shmem_size=shared_mem_size
+        max_batches_per_block = min(
+            KinematicsLaunchCfg.MAX_JACOBIAN_VJP_BATCH_PER_BLOCK,
+            max_shared_mem // shared_mem_per_batch,
+            max_threads // threads_per_batch,
         )
-
-        return config, threads_per_batch, use_warp_reduce, max_joints_template
+        max_batches_per_block = max(1, max_batches_per_block)
+        batches_per_block = min(batch_size, max_batches_per_block)
+        return LaunchConfig(
+            grid=(batch_size + batches_per_block - 1) // batches_per_block,
+            block=batches_per_block * threads_per_batch,
+            shmem_size=batches_per_block * shared_mem_per_batch,
+        )

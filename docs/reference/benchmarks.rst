@@ -99,17 +99,6 @@ USD output (``--save_usd`` for ``motion_plan_benchmark.py``) additionally requir
     Isaac Sim provides its own USD runtime.
 
 
-Kinematics & Collision Checking
-********************************
-To measure compute time and peak memory for forward kinematics, pose-cost
-gradients, self-collision, and world-collision (with and without CUDA graphs)
-across all supported robots, run:
-
-``python benchmark/cost_gradient_benchmark.py``
-
-Results are written to ``benchmark/log/`` as four YAML files (one per stage),
-with times reported in milliseconds and memory in MiB.
-
 Inverse Kinematics
 ********************************
 
@@ -118,6 +107,16 @@ To measure success metrics and compute time for inverse kinematics and collision
 ``python benchmark/ik_benchmark.py --save_path=. --file_name=ik``
 
 This will save the results to ``ik.yml``.
+
+Inverse Dynamics
+********************************
+
+To profile inverse-dynamics forward and backward CUDA kernel execution across
+robots and batch sizes, run:
+
+``python benchmark/inverse_dynamics_kernel_benchmark.py``
+
+Use ``--robots`` and ``--batch-sizes`` to select the workloads.
 
 Motion Planning
 ***************************************

@@ -1,10 +1,19 @@
 
-Licenses for external assets are listed here:
+Licenses for assets are listed here:
+
+cuRobo-authored assets
+---------------------
+
+The following URDFs were authored for cuRobo by NVIDIA and are licensed under
+Apache 2.0, as specified in the top-level LICENSE file:
+
+  curobo/content/assets/robot/simple/simple_mimic_gripper.urdf
+  curobo/content/assets/robot/simple/simple_mimic_robot.urdf
 
 franka_ros 0.7.0
 ----------------
 
-The Franka urdf files in src/curobo/content/assets/robot/franka_description/ came from:
+The Franka urdf files in curobo/content/assets/robot/franka_description/ came from:
 
 Site:    https://github.com/frankaemika/franka_ros/
 License: https://github.com/frankaemika/franka_ros/blob/0.7.0/NOTICE
@@ -203,7 +212,7 @@ limitations under the License.
 
 ***********************
 
-The files in src/curobo/content/assets/robot/ur_description have been obtained from
+The files in curobo/content/assets/robot/ur_description have been obtained from
 https://github.com/UniversalRobots/Universal_Robots_ROS2_Description with BSD 3-Clause License
 
 Redistribution and use in source and binary forms, with or without

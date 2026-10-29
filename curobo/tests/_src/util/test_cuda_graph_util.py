@@ -152,6 +152,141 @@ class TestGraphExecutor:
         executor.reset()
         assert not executor.is_initialized
 
+    def test_static_inputs_and_replay_no_graph(self, device):
+        """Static inputs avoid the normal call-time input copy in eager mode too."""
+        executor = GraphExecutor(
+            capture_fn=simple_add_fn, device=device, use_cuda_graph=False, clone_outputs=False
+        )
+        a = torch.tensor([1.0, 2.0], device=device)
+        b = torch.tensor([3.0, 4.0], device=device)
+
+        with pytest.raises(ValueError, match="initialized"):
+            _ = executor.static_inputs
+        with pytest.raises(ValueError, match="initialized"):
+            executor.replay()
+
+        executor.warmup(a, b)
+        static_a, static_b = executor.static_inputs
+        static_a.copy_(torch.tensor([5.0, 6.0], device=device))
+        static_b.copy_(torch.tensor([7.0, 8.0], device=device))
+        result = executor.replay(clone_outputs=True)
+
+        assert torch.allclose(result, torch.tensor([12.0, 14.0], device=device))
+        executor.reset()
+        with pytest.raises(ValueError, match="initialized"):
+            _ = executor.static_inputs
+
+    def test_static_inputs_and_replay_with_graph(self, device):
+        """CUDA graph replay sees in-place static-input updates and can clone output."""
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
+
+        executor = GraphExecutor(
+            capture_fn=simple_add_fn, device=device, use_cuda_graph=True, clone_outputs=False
+        )
+        executor.warmup(
+            torch.tensor([1.0, 2.0], device=device),
+            torch.tensor([3.0, 4.0], device=device),
+        )
+        static_a, static_b = executor.static_inputs
+        first = executor.replay(clone_outputs=True)
+
+        static_a.copy_(torch.tensor([5.0, 6.0], device=device))
+        static_b.copy_(torch.tensor([7.0, 8.0], device=device))
+        second = executor.replay(clone_outputs=True)
+
+        assert torch.allclose(first, torch.tensor([4.0, 6.0], device=device))
+        assert torch.allclose(second, torch.tensor([12.0, 14.0], device=device))
+
+    def test_default_clones_fixed_inputs(self, device):
+        """Default initialization preserves private fixed-address input storage."""
+        a = torch.tensor([1.0, 2.0], device=device)
+        b = torch.tensor([3.0, 4.0], device=device)
+        executor = GraphExecutor(
+            capture_fn=simple_add_fn,
+            device=device,
+            use_cuda_graph=False,
+        )
+
+        executor.warmup(a, b)
+        static_a, static_b = executor.static_inputs
+
+        assert static_a is not a
+        assert static_b is not b
+        assert static_a.data_ptr() != a.data_ptr()
+        assert static_b.data_ptr() != b.data_ptr()
+
+    @pytest.mark.parametrize("use_cuda_graph", [False, True])
+    def test_borrowed_inputs_keep_pointers_and_receive_later_values(
+        self,
+        device,
+        use_cuda_graph,
+    ):
+        """Borrowed buffers remain fixed while later calls copy new values into them."""
+        if use_cuda_graph and not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
+        a = torch.tensor([1.0, 2.0], device=device)
+        b = torch.tensor([3.0, 4.0], device=device)
+        executor = GraphExecutor(
+            capture_fn=simple_add_fn,
+            device=device,
+            use_cuda_graph=use_cuda_graph,
+            clone_outputs=True,
+            clone_inputs=False,
+        )
+
+        executor.warmup(a, b)
+        static_a, static_b = executor.static_inputs
+        assert static_a is a
+        assert static_b is b
+        a_ptr = a.data_ptr()
+        b_ptr = b.data_ptr()
+
+        later_a = torch.tensor([5.0, 6.0], device=device)
+        later_b = torch.tensor([7.0, 8.0], device=device)
+        result = executor(later_a, later_b)
+
+        assert static_a.data_ptr() == a_ptr
+        assert static_b.data_ptr() == b_ptr
+        torch.testing.assert_close(a, later_a)
+        torch.testing.assert_close(b, later_b)
+        torch.testing.assert_close(result, torch.tensor([12.0, 14.0], device=device))
+
+    @pytest.mark.parametrize("use_cuda_graph", [False, True])
+    def test_zero_input_stateful_warmup_restore_once_then_replay(
+        self,
+        device,
+        use_cuda_graph,
+    ):
+        """A single post-warmup state restore makes stateful replays deterministic."""
+        if use_cuda_graph and not torch.cuda.is_available():
+            pytest.skip("CUDA not available")
+        state = torch.zeros(1, device=device)
+
+        def increment_state() -> torch.Tensor:
+            state.add_(1.0)
+            return state
+
+        executor = GraphExecutor(
+            capture_fn=increment_state,
+            device=device,
+            use_cuda_graph=use_cuda_graph,
+            clone_outputs=True,
+            clone_inputs=False,
+        )
+
+        executor.warmup()
+        expected_warmups = 3.0 if use_cuda_graph else 1.0
+        torch.testing.assert_close(state, torch.tensor([expected_warmups], device=device))
+        assert executor.static_inputs == ()
+
+        state.zero_()
+        first = executor.replay()
+        second = executor.replay()
+
+        torch.testing.assert_close(first, torch.tensor([1.0], device=device))
+        torch.testing.assert_close(second, torch.tensor([2.0], device=device))
+
     def test_multi_output_function(self, device):
         """Test function with multiple outputs."""
         executor = GraphExecutor(
@@ -225,6 +360,21 @@ class TestCreateGraphExecutor:
 
         assert torch.allclose(result, torch.tensor([3.0], device=device))
 
+    def test_factory_forwards_borrowed_input_mode(self):
+        """The factory exposes the same borrowed fixed-input behavior."""
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        value = torch.tensor([2.0], device=device)
+        executor = create_graph_executor(
+            capture_fn=lambda x: x + 1.0,
+            device=device,
+            use_cuda_graph=False,
+            clone_inputs=False,
+        )
+
+        executor.warmup(value)
+
+        assert executor.static_inputs[0] is value
+
 
 class TestGraphExecutorWithBackward:
     """Test CUDA graph with backward pass."""
@@ -255,7 +405,7 @@ class TestGraphExecutorWithBackward:
 
         def add_and_square(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
             result = a + b
-            return (result ** 2).sum()
+            return (result**2).sum()
 
         executor = GraphExecutor(
             capture_fn=add_and_square, device=device, use_cuda_graph=False, clone_outputs=True
@@ -304,7 +454,7 @@ class TestGraphExecutorEdgeCases:
     def test_cuda_graph_disabled_by_config(self, device):
         """Test CUDA graph disabled by runtime config."""
         # CuRobo
-        from curobo import runtime as curobo_runtime
+        import curobo._src.runtime as curobo_runtime
 
         original_value = curobo_runtime.cuda_graphs
 
@@ -324,6 +474,17 @@ class TestGraphExecutorEdgeCases:
             assert torch.allclose(result, torch.tensor([3.0], device=device))
         finally:
             curobo_runtime.cuda_graphs = original_value
+
+    @pytest.mark.parametrize("clone_inputs", [None, 0, "false"])
+    def test_clone_inputs_requires_boolean(self, device, clone_inputs):
+        """Reject ambiguous borrowed-input configuration values."""
+        with pytest.raises(ValueError, match="clone_inputs must be a boolean"):
+            GraphExecutor(
+                capture_fn=simple_add_fn,
+                device=device,
+                use_cuda_graph=False,
+                clone_inputs=clone_inputs,
+            )
 
     def test_cuda_graph_debug_mode(self, device):
         """Test CUDA graph with debug mode enabled."""
@@ -443,4 +604,3 @@ class TestGraphExecutorEdgeCases:
         assert isinstance(result, torch.Tensor)
         assert not isinstance(result, tuple)
         assert torch.allclose(result, torch.tensor([2.0, 4.0], device=device))
-

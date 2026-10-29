@@ -25,13 +25,20 @@ work well in practice for trajectory optimization and inverse kinematics problem
 where intermediate solutions to optimization should also be feasible, we recommend using the
 Strong Wolfe line search (e.g., model predictive control).
 
+When enabled, ``line_search_backtracking`` retries a failed probe fan at one tenth
+the step scale. Each problem owns one GPU ``beta`` value, reset to one after an
+accepted step. Retries preserve the search direction and optimizer history and
+consume the existing iteration budget. MPC profiles enable it; other solvers use
+the fallback policies listed below by default. Cost acceptance does not replace
+trajectory validation.
+
 Given the cost :math:`c(x)` evaluated at a point :math:`x`, gradient :math:`g(x)` and a step
 direction :math:`p`, the line search methods try different step sizes :math:`l` and check if the
 following conditions are satisfied:
 
-- Armijo condition: :math:`f(x + l * p) <= f(x) + c_1 * l * (g(x) * p^T)`
-- Weak Wolfe condition: :math:`g(x + l * p) * p^T >= c_2 * g(x) * p^T`
-- Strong Wolfe condition: :math:`|g(x + l * p) * p^T| <= c_2 * |g(x) * p^T|`
+- Armijo condition: :math:`f(x + l p) <= f(x) + c_1 l \nabla f(x)^T p`
+- Weak Wolfe condition: :math:`\nabla f(x + l p)^T p >= c_2 \nabla f(x)^T p`
+- Strong Wolfe condition: :math:`|\nabla f(x + l p)^T p| <= c_2 |\nabla f(x)^T p|`
 
 where :math:`c_1` and :math:`c_2` are parameters used to tune the line search,
 with :math:`c_1 = 1e-3` and :math:`c_2 = 0.9` being common choices. Some line search strategies use
@@ -62,15 +69,15 @@ fallback mechanisms to be robust to optimization difficulties.
      - None
 
    * - Approximate Wolfe
-     - Armijo condition & Strong Wolfe condition
+     - Armijo condition & Weak Wolfe condition
      - Armijo condition, :math:`l = l_1`
 
 """
 
 # Standard Library
 from abc import ABC, abstractmethod
-from enum import Enum
-from typing import Callable, List, Tuple
+from enum import Enum, IntEnum
+from typing import Callable, Tuple
 
 import torch
 import torch.autograd.profiler as profiler
@@ -95,6 +102,7 @@ __all__ = [
     "WolfeLineSearchStrategy",
     "StrongWolfeLineSearchStrategy",
     "ApproxWolfeLineSearchStrategy",
+    "LineSearchStatus",
     "LineSearchStrategyFactory",
 ]
 
@@ -106,6 +114,17 @@ class LineSearchType(Enum):
     STRONG_WOLFE = "strong_wolfe"
     APPROX_WOLFE = "approx_wolfe"
     APPROX_STRONG_WOLFE = "approx_strong_wolfe"
+
+
+class LineSearchStatus(IntEnum):
+    """Outcome used to advance the exploration state."""
+
+    BASELINE = 0
+    WOLFE = 1
+    ARMIJO = 2
+    GREEDY = 3
+    FALLBACK = 4
+    BACKTRACK = 5
 
 
 class LineSearchStrategy(ABC):
@@ -131,6 +150,11 @@ class LineSearchStrategy(ABC):
     def update_num_problems(self, num_problems: int, context: LineSearchContext):
         pass
 
+    @staticmethod
+    def _get_search_scales(context: LineSearchContext) -> torch.Tensor:
+        """Return fixed scales with shape ``(n_linesearch,)``."""
+        return context.get_line_search_scale()
+
     @profiler.record_function("LineSearchStrategy/prepare_search_points")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _prepare_search_points(
@@ -138,6 +162,7 @@ class LineSearchStrategy(ABC):
         x: torch.Tensor,
         step_direction: torch.Tensor,
         context: LineSearchContext,
+        line_search_scale: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Prepare points to evaluate during line search.
 
@@ -145,16 +170,19 @@ class LineSearchStrategy(ABC):
             x: The current point. Shape: (num_problems, action_horizon, action_dim)
             step_direction: The direction to search in.
                 Shape: (num_problems, action_horizon, action_dim)
-            context: The context containing parameters needed for line search
+            context: The context containing parameters needed for line search.
+            line_search_scale: Positive scales with shape ``(n_linesearch,)``.
 
         Returns:
             x_set: The set of points to evaluate.
-                   Shape: (num_problems, line_search_scale.shape[1], action_horizon * action_dim)
+                   Shape: (num_problems, n_linesearch, action_horizon * action_dim)
             step_direction: The direction to search in.
                    Shape: (num_problems, 1, action_horizon * action_dim)
         """
         if x.ndim != 3:
-            log_and_raise(f"x must have shape (num_problems, action_horizon, action_dim). Got {x.shape}")
+            log_and_raise(
+                f"x must have shape (num_problems, action_horizon, action_dim). Got {x.shape}"
+            )
         if step_direction.ndim != 3:
             log_and_raise(
                 "step_direction must have shape (num_problems, action_horizon, action_dim). "
@@ -163,7 +191,9 @@ class LineSearchStrategy(ABC):
 
         num_problems = x.shape[0]
         if x.shape != (num_problems, context.action_horizon, context.action_dim):
-            log_and_raise(f"x must have shape (num_problems, action_horizon, action_dim). Got {x.shape}")
+            log_and_raise(
+                f"x must have shape (num_problems, action_horizon, action_dim). Got {x.shape}"
+            )
         if step_direction.shape != (num_problems, context.action_horizon, context.action_dim):
             log_and_raise(
                 "step_direction must have shape (num_problems, action_horizon, action_dim). "
@@ -172,27 +202,15 @@ class LineSearchStrategy(ABC):
 
         step_direction = step_direction.detach()
 
-        if (context.step_scale != 0.0 and context.step_scale != 1.0) or (
-            context.fix_terminal_action and context.action_horizon > 1
-        ):
-            step_direction = self.scale_action(
-                step_direction,
-                context.action_horizon_step_max,
-                context.step_scale,
-                context.fix_terminal_action,
-                context.action_horizon,
-            )
-
         x = x.detach()
-        x_set = self.jit_get_x_set(
-            step_direction,
-            x,
-            context.line_search_scale,
-        )
+        probe_scales = line_search_scale.view(1, -1, 1, 1)
+        if context.line_search_backtracking:
+            probe_scales = context.beta.view(-1, 1, 1, 1) * probe_scales
+        x_set = self.jit_get_x_set(step_direction, x, probe_scales)
 
         x_set = x_set.view(
             x_set.shape[0],
-            context.line_search_scale.shape[1],
+            x_set.shape[1],
             context.action_horizon * context.action_dim,
         )
         step_direction = step_direction.view(
@@ -210,28 +228,34 @@ class LineSearchStrategy(ABC):
         iteration_state: OptimizationIterationState,
     ) -> OptimizationIterationState:
         """Post-search processing."""
+        if context.line_search_backtracking and not (
+            context.use_cuda_kernel_line_search and isinstance(self, BaseWolfeLineSearchStrategy)
+        ):
+            retry = ~line_search_result.curvature_update_valid
+            context.beta.copy_(torch.where(retry, context.beta * 0.1, 1.0))
+            line_search_result.line_search_status = torch.where(
+                retry, LineSearchStatus.BACKTRACK, line_search_result.line_search_status
+            )
         exploration_state = line_search_result.exploration_state
 
-        idxs_selected = exploration_state.idxs
-
         next_iteration_state = OptimizationIterationState(
-            action=line_search_result.selected_state.action.view(
+            action=line_search_result.selected_state.action.reshape(
                 line_search_result.selected_state.action.shape[0],
                 context.action_horizon,
                 context.action_dim,
-            ),
-            exploration_action=exploration_state.action.view(
+            ).contiguous(),
+            exploration_action=exploration_state.action.reshape(
                 exploration_state.action.shape[0], context.action_horizon, context.action_dim
-            ),
-            exploration_gradient=exploration_state.gradient.view(
+            ).contiguous(),
+            exploration_gradient=exploration_state.gradient.reshape(
                 exploration_state.gradient.shape[0], context.action_horizon, context.action_dim
-            ),
+            ).contiguous(),
             exploration_cost=exploration_state.cost,
-            gradient=line_search_result.selected_state.gradient.view(
+            gradient=line_search_result.selected_state.gradient.reshape(
                 line_search_result.selected_state.gradient.shape[0],
                 context.action_horizon,
                 context.action_dim,
-            ),
+            ).contiguous(),
             cost=line_search_result.selected_state.cost,
             step_direction=iteration_state.step_direction,
             best_action=iteration_state.best_action,
@@ -240,39 +264,95 @@ class LineSearchStrategy(ABC):
             best_iteration=iteration_state.best_iteration,
             state=iteration_state.state,
             converged=iteration_state.converged,
+            line_search_index=line_search_result.line_search_index,
+            line_search_status=line_search_result.line_search_status,
+            curvature_update_valid=line_search_result.curvature_update_valid,
         )
-
-        # update best action:
-        # next_iteration_state = self._update_best(next_iteration_state)
 
         return next_iteration_state
-        iteration_state.action = line_search_result.selected_state.action.view(
-            line_search_result.selected_state.action.shape[0],
-            context.action_horizon,
-            context.action_dim,
-        )
-        iteration_state.exploration_action = exploration_state.action.view(
-            exploration_state.action.shape[0], context.action_horizon, context.action_dim
-        )
-        iteration_state.exploration_gradient = exploration_state.gradient.view(
-            exploration_state.gradient.shape[0], context.action_horizon, context.action_dim
-        )
-        iteration_state.exploration_cost = exploration_state.cost
 
-        iteration_state.gradient = line_search_result.selected_state.gradient.view(
-            line_search_result.selected_state.gradient.shape[0],
-            context.action_horizon,
-            context.action_dim,
+    @staticmethod
+    def _baseline_state(
+        iteration_state: OptimizationIterationState,
+        context: LineSearchContext,
+    ) -> LineSearchState:
+        """Create a line-search state from the cached exploration baseline."""
+        batch_size = context.num_problems
+        indices = torch.full(
+            (batch_size, context.n_linesearch),
+            -1,
+            device=iteration_state.exploration_action.device,
+            dtype=torch.int32,
         )
-        iteration_state.cost = line_search_result.selected_state.cost
+        return LineSearchState(
+            action=iteration_state.exploration_action,
+            cost=iteration_state.exploration_cost,
+            gradient=iteration_state.exploration_gradient,
+            idxs=indices,
+        )
 
-        return iteration_state
+    @staticmethod
+    def _gather_trial_state(
+        x_set: torch.Tensor,
+        cost: torch.Tensor,
+        gradient: torch.Tensor,
+        local_index: torch.Tensor,
+        context: LineSearchContext,
+    ) -> LineSearchState:
+        """Gather one evaluated trial per problem."""
+        batch_size, n_linesearch, _ = x_set.shape
+        batch_index = torch.arange(batch_size, device=x_set.device)
+        action = x_set[batch_index, local_index]
+        selected_cost = cost.view(batch_size, n_linesearch)[batch_index, local_index]
+        selected_gradient = gradient[batch_index, local_index]
+        repeated_index = local_index.to(dtype=torch.int32).view(-1, 1).expand(-1, n_linesearch)
+        return LineSearchState(
+            action=action.view(batch_size, context.action_horizon, context.action_dim),
+            cost=selected_cost,
+            gradient=selected_gradient.view(
+                batch_size, context.action_horizon, context.action_dim
+            ),
+            idxs=repeated_index,
+        )
+
+    @staticmethod
+    def _choose_state(
+        baseline: LineSearchState,
+        trial: LineSearchState,
+        choose_trial: torch.Tensor,
+    ) -> LineSearchState:
+        """Choose complete action, cost, and gradient tuples without mixing sources."""
+        action_mask = choose_trial.view(-1, 1, 1)
+        index_mask = choose_trial.view(-1, 1)
+        return LineSearchState(
+            action=torch.where(action_mask, trial.action, baseline.action),
+            cost=torch.where(choose_trial, trial.cost, baseline.cost),
+            gradient=torch.where(action_mask, trial.gradient, baseline.gradient),
+            idxs=torch.where(index_mask, trial.idxs, baseline.idxs),
+        )
+
+    @staticmethod
+    def _make_result(
+        selected_state: LineSearchState,
+        exploration_state: LineSearchState,
+        exploration_index: torch.Tensor,
+        status: torch.Tensor,
+        curvature_update_valid: torch.Tensor,
+    ) -> LineSearchResult:
+        """Construct a complete line-search result."""
+        return LineSearchResult(
+            selected_state=selected_state,
+            exploration_state=exploration_state,
+            line_search_index=exploration_index.to(dtype=torch.int32),
+            line_search_status=status.to(dtype=torch.int32),
+            curvature_update_valid=curvature_update_valid,
+        )
 
     def _compute_costs_and_gradients(
         self,
         x_set: torch.Tensor,
         context: LineSearchContext,
-    ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute costs and gradients at all search points."""
         return context.compute_costs_and_gradients(x_set)
 
@@ -286,46 +366,18 @@ class LineSearchStrategy(ABC):
         Args:
             step_vec: The step vector to evaluate. Shape: (num_problems, action_horizon, action_dim)
             x: The current point. Shape: (num_problems, action_horizon, action_dim)
-            line_search_scales: The list of line search scales to evaluate.
-                Shape: (1, num_particles, 1, 1)
+            line_search_scales: Per-problem line search scales to evaluate.
+                Shape: (num_problems, num_particles, 1, 1)
 
         Returns:
             The set of points to evaluate. Shape: (B, H, N, D)
         """
         x = x.unsqueeze(1)  # batch, 1, action_horizon, action_dim
         step_vec = step_vec.unsqueeze(1)  # batch, 1, action_horizon, action_dim
-        x_set = x + line_search_scales * step_vec  # batch, num_particles, action_horizon, action_dim
+        x_set = (
+            x + line_search_scales * step_vec
+        )  # batch, num_particles, action_horizon, action_dim
         return x_set
-
-    @staticmethod
-    @get_torch_jit_decorator()
-    def scale_action(
-        dx: torch.Tensor,  # batch, horizon, action_dim
-        action_step_max: torch.Tensor,
-        step_scale: float,
-        fix_terminal_action: bool,
-        action_horizon: int,
-    ):
-        # dx: (num_problems, action_horizon, action_dim)
-        if step_scale != 0.0 and step_scale != 1.0:
-            # dx_flat = dx.view(dx.shape[0], -1)
-            action_step_max_flat = action_step_max.view(1, 1, -1)
-
-            diff = torch.abs(dx) / action_step_max_flat
-            scale_value = torch.max(diff.view(dx.shape[0], -1), dim=-1, keepdim=False)[0]
-
-            new_scale = torch.clamp(scale_value, min=1.0)
-
-            new_scale = new_scale.view(dx.shape[0], 1, 1)
-            # only perfom for dx that are greater than 1:
-            # new_scale = torch.nan_to_num(new_scale, 1.0)
-            dx_scaled = dx / new_scale
-        else:
-            dx_scaled = dx
-        if fix_terminal_action and action_horizon > 1:
-            dx_scaled[:, action_horizon - 1 :, :] = 0.0
-
-        return dx_scaled
 
     def _update_best_solution(
         self, iteration_state: OptimizationIterationState, context: LineSearchContext
@@ -344,8 +396,7 @@ class LineSearchStrategy(ABC):
 class GreedyLineSearchStrategy(LineSearchStrategy):
     """Greedy line search strategy.
 
-    The greedy line search strategy selects the step size that minimizes the cost by
-    evaluating the cost at all points in the line search scale and selecting the minimum.
+    Select the minimum-cost positive probe when it improves the cached baseline.
     """
 
     @profiler.record_function("GreedyLineSearchStrategy/search")
@@ -358,39 +409,39 @@ class GreedyLineSearchStrategy(LineSearchStrategy):
         x = iteration_state.exploration_action
 
         step_direction = iteration_state.step_direction
-
-        x_set, step_direction = self._prepare_search_points(x, step_direction, context)
+        line_search_scale = self._get_search_scales(context)
+        x_set, step_direction = self._prepare_search_points(
+            x, step_direction, context, line_search_scale
+        )
         b, n_line_search, _ = x_set.shape
 
         c, g_x = self._compute_costs_and_gradients(x_set, context)
 
         c = c.detach()
         g_x = g_x.detach()
-        best_c, m_idx = torch.min(c, dim=1)
-        best_c = best_c.view(context.num_problems)
-        m = m_idx.squeeze() + context.c_idx
-        g_x = g_x.view(b * n_line_search, context.opt_dim)
-        xs = x_set.view(b * n_line_search, context.opt_dim)
-        best_x = xs[m].clone()
-        best_grad = g_x[m].view(b, context.opt_dim).clone()
-
-        selected_state = LineSearchState(
-            action=best_x.detach().view(b, context.action_horizon, context.action_dim).clone(),
-            cost=best_c.detach().clone(),
-            gradient=best_grad.detach().view(b, context.action_horizon, context.action_dim).clone(),
-            idxs=m.clone(),
+        best_trial_cost, local_index = torch.min(c.squeeze(-1), dim=1)
+        trial_state = self._gather_trial_state(x_set, c, g_x, local_index, context)
+        baseline_state = self._baseline_state(iteration_state, context)
+        choose_trial = best_trial_cost < baseline_state.cost
+        if context.line_search_backtracking:
+            choose_trial = choose_trial & torch.isfinite(best_trial_cost)
+        exploration_state = self._choose_state(baseline_state, trial_state, choose_trial)
+        status = torch.where(
+            choose_trial,
+            torch.full_like(local_index, LineSearchStatus.GREEDY, dtype=torch.int32),
+            torch.full_like(local_index, LineSearchStatus.BASELINE, dtype=torch.int32),
         )
-
-        exploration_state = LineSearchState(
-            action=best_x.detach().view(b, context.action_horizon, context.action_dim).clone(),
-            cost=best_c.detach().clone(),
-            gradient=best_grad.detach().view(b, context.action_horizon, context.action_dim).clone(),
-            idxs=m.clone(),
+        exploration_index = torch.where(
+            choose_trial,
+            local_index.to(dtype=torch.int32),
+            torch.full_like(local_index, -1, dtype=torch.int32),
         )
-
-        result = LineSearchResult(
-            selected_state=selected_state,
+        result = self._make_result(
+            selected_state=exploration_state,
             exploration_state=exploration_state,
+            exploration_index=exploration_index,
+            status=status,
+            curvature_update_valid=choose_trial,
         )
 
         result = self._post_search_processing(result, context, iteration_state)
@@ -406,7 +457,7 @@ class ArmijoLineSearchStrategy(LineSearchStrategy):
     we want to find the largest step size :math:`l` such that:
 
     .. math::
-        c(x + l * p) <= c(x) + c_1 * l * (g(x) * p)
+        c(x + l p) <= c(x) + c_1 l g(x)^T p
     """
 
     @profiler.record_function("ArmijoLineSearchStrategy/search")
@@ -418,7 +469,10 @@ class ArmijoLineSearchStrategy(LineSearchStrategy):
         """Perform armijo line search to find optimal step size."""
         x = iteration_state.exploration_action
         step_direction = iteration_state.step_direction
-        x_set, step_direction = self._prepare_search_points(x, step_direction, context)
+        line_search_scale = self._get_search_scales(context)
+        x_set, step_direction = self._prepare_search_points(
+            x, step_direction, context, line_search_scale
+        )
         b, n_line_search, _ = x_set.shape
 
         c, g_x = self._compute_costs_and_gradients(x_set, context)
@@ -426,50 +480,45 @@ class ArmijoLineSearchStrategy(LineSearchStrategy):
         c = c.detach()
         g_x = g_x.detach()
 
-        c_0 = c[:, 0:1, :]
-        g_0 = g_x[:, 0:1, :]
-
         step_vec_T = step_direction.transpose(-1, -2)
-        g_step = g_0 @ step_vec_T
-        # g_step = g_step.squeeze(-1)
-        # condition 1:
-        delta_c = c - c_0
-        condition = context.line_search_c_1 * context.line_search_scale.squeeze(-1) * g_step
-        armijo_1 = delta_c <= condition
-
-        # get the last occurence of true (this will be the largest admissable alpha value):
-        # wolfe will have 1 for indices that satisfy.
-        # find the
-        step_success = armijo_1 * (context.line_search_scale.squeeze(-1) + 0.1)
-
-        _, m_idx = torch.max(step_success, dim=-2)
-
-        m = m_idx.squeeze() + context.c_idx
-        g_x = g_x.view(b * n_line_search, -1)
-        xs = x_set.view(b * n_line_search, -1)
-        cs = c.view(b * n_line_search)
-        best_c = cs[m]
-
-        best_x = xs[m]
-        best_grad = g_x[m].view(b, context.opt_dim)
-
-        selected_state = LineSearchState(
-            action=best_x.detach().view(b, context.action_horizon, context.action_dim),
-            cost=best_c.detach(),
-            gradient=best_grad.detach().view(b, context.action_horizon, context.action_dim),
-            idxs=m,
+        g_step = iteration_state.exploration_gradient.view(b, 1, -1) @ step_vec_T
+        armijo_scales = line_search_scale
+        if context.line_search_backtracking:
+            armijo_scales = context.beta.view(-1, 1) * armijo_scales
+        armijo = c.squeeze(-1) <= iteration_state.exploration_cost.view(-1, 1) + (
+            context.line_search_c_1 * armijo_scales * g_step.squeeze(-1)
         )
-
-        exploration_state = LineSearchState(
-            action=best_x.detach().view(b, context.action_horizon, context.action_dim),
-            cost=best_c.detach(),
-            gradient=best_grad.detach().view(b, context.action_horizon, context.action_dim),
-            idxs=m,
+        if context.line_search_backtracking:
+            armijo = (
+                armijo
+                & torch.isfinite(c.squeeze(-1))
+                & torch.isfinite(g_x).all(-1)
+                & torch.isfinite(g_step.squeeze(-1))
+                & (g_step.squeeze(-1) < 0.0)
+                & (c.squeeze(-1) < iteration_state.exploration_cost.view(-1, 1))
+            )
+        success_scale = torch.where(armijo, line_search_scale, torch.zeros_like(line_search_scale))
+        _, local_index = torch.max(success_scale, dim=1)
+        choose_trial = torch.any(armijo, dim=1)
+        trial_state = self._gather_trial_state(x_set, c, g_x, local_index, context)
+        baseline_state = self._baseline_state(iteration_state, context)
+        exploration_state = self._choose_state(baseline_state, trial_state, choose_trial)
+        status = torch.where(
+            choose_trial,
+            torch.full_like(local_index, LineSearchStatus.ARMIJO, dtype=torch.int32),
+            torch.full_like(local_index, LineSearchStatus.BASELINE, dtype=torch.int32),
         )
-
-        result = LineSearchResult(
-            selected_state=selected_state,
+        exploration_index = torch.where(
+            choose_trial,
+            local_index.to(dtype=torch.int32),
+            torch.full_like(local_index, -1, dtype=torch.int32),
+        )
+        result = self._make_result(
+            selected_state=exploration_state,
             exploration_state=exploration_state,
+            exploration_index=exploration_index,
+            status=status,
+            curvature_update_valid=choose_trial,
         )
         result = self._post_search_processing(result, context, iteration_state)
 
@@ -502,16 +551,25 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
             LineSearchResult containing the selected action, cost, and gradient
         """
         x = iteration_state.exploration_action
+        line_search_scale = self._get_search_scales(context)
         step_direction = iteration_state.step_direction
         # Prepare search points
-        x_set, step_vec = self._prepare_search_points(x, step_direction, context)
+        x_set, step_vec = self._prepare_search_points(
+            x, step_direction, context, line_search_scale
+        )
 
         # Compute costs and gradients
         c, g_x = self._compute_costs_and_gradients(x_set, context)
 
         if context.use_cuda_kernel_line_search:
             line_search_result = self._cuda_kernel_wolfe_search(
-                x_set, c, g_x, step_vec, iteration_state, context
+                x_set,
+                c,
+                g_x,
+                step_vec,
+                iteration_state,
+                context,
+                line_search_scale,
             )
 
             new_iteration_state = self._post_search_processing(
@@ -524,6 +582,8 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
                 step_vec,
                 c,
                 g_x,
+                iteration_state,
+                line_search_scale,
                 context,
                 self._compute_curvature_condition,
                 self._handle_no_valid_step,
@@ -540,6 +600,7 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
         if context.use_cuda_kernel_line_search:
             num_problems = context.num_problems
             n_linesearch = context.n_linesearch
+            curvature_update_default = isinstance(self, ApproxWolfeLineSearchStrategy)
             if self._output_buffers is None:
                 self._output_buffers = (
                     torch.zeros(
@@ -552,9 +613,32 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
                         dtype=torch.int32,
                         device=context.device_cfg.device,
                     ),
+                    torch.full(
+                        (num_problems,),
+                        -1,
+                        dtype=torch.int32,
+                        device=context.device_cfg.device,
+                    ),
+                    torch.zeros(
+                        (num_problems,),
+                        dtype=torch.int32,
+                        device=context.device_cfg.device,
+                    ),
+                    torch.full(
+                        (num_problems,),
+                        curvature_update_default,
+                        dtype=torch.bool,
+                        device=context.device_cfg.device,
+                    ),
                 )
 
-            exploration_idx, selected_idx = self._output_buffers
+            (
+                exploration_idx,
+                selected_idx,
+                line_search_index,
+                line_search_status,
+                curvature_update_valid,
+            ) = self._output_buffers
 
             if exploration_idx.shape != (num_problems, n_linesearch):
                 log_info(
@@ -575,9 +659,31 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
                     device=context.device_cfg.device,
                 )
 
+            if line_search_index.shape != (num_problems,):
+                line_search_index = torch.full(
+                    (num_problems,),
+                    -1,
+                    dtype=torch.int32,
+                    device=context.device_cfg.device,
+                )
+                line_search_status = torch.zeros(
+                    (num_problems,),
+                    dtype=torch.int32,
+                    device=context.device_cfg.device,
+                )
+                curvature_update_valid = torch.full(
+                    (num_problems,),
+                    curvature_update_default,
+                    dtype=torch.bool,
+                    device=context.device_cfg.device,
+                )
+
             self._output_buffers = (
                 exploration_idx,
                 selected_idx,
+                line_search_index,
+                line_search_status,
+                curvature_update_valid,
             )
 
         return super().update_num_problems(num_problems, context)
@@ -590,6 +696,8 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
         step_vec: torch.Tensor,
         c: torch.Tensor,
         g_x: torch.Tensor,
+        iteration_state: OptimizationIterationState,
+        line_search_scale: torch.Tensor,
         context: LineSearchContext,
         compute_curvature_condition: Callable,
         handle_no_valid_step: Callable,
@@ -598,76 +706,86 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
         # with torch.no_grad():
         if True:
             b, n_line_search, _ = x_set.shape
-            c_0 = c[:, 0:1]
             step_vec_T = step_vec.transpose(-1, -2)
             g_full_step = g_x @ step_vec_T
-            g_step = g_full_step[:, 0:1]
+            g_step = iteration_state.exploration_gradient.view(b, 1, context.opt_dim) @ step_vec_T
 
             # Wolfe condition 1 (sufficient decrease)
-            # armijo:
-            armijo_1 = (
-                c <= c_0 + context.line_search_c_1 * context.line_search_scale.squeeze(-1) * g_step
+            armijo_scales = line_search_scale
+            if context.line_search_backtracking:
+                armijo_scales = context.beta.view(-1, 1) * armijo_scales
+            armijo_1 = c.squeeze(-1) <= iteration_state.exploration_cost.view(-1, 1) + (
+                context.line_search_c_1 * armijo_scales * g_step.squeeze(-1)
             )
+            if context.line_search_backtracking:
+                armijo_1 = (
+                    armijo_1
+                    & torch.isfinite(c.squeeze(-1))
+                    & torch.isfinite(g_full_step.squeeze(-1))
+                    & torch.isfinite(g_step.squeeze(-1))
+                    & (g_step.squeeze(-1) < 0.0)
+                    & (c.squeeze(-1) < iteration_state.exploration_cost.view(-1, 1))
+                )
 
             # Wolfe condition 2 (curvature) - implemented by subclasses
-            wolfe_2 = compute_curvature_condition(g_full_step, g_step, context)
+            wolfe_2 = compute_curvature_condition(g_full_step, g_step, context).squeeze(-1)
 
             # Combined Wolfe conditions
             wolfe = torch.logical_and(armijo_1, wolfe_2)
 
             # Find largest step size that satisfies conditions
-            step_success = wolfe * (context.line_search_scale.squeeze(-1) + 0.1)
+            wolfe_scale = torch.where(
+                wolfe, line_search_scale, torch.zeros_like(line_search_scale)
+            )
+            _, wolfe_index = torch.max(wolfe_scale, dim=1)
+            has_wolfe = torch.any(wolfe, dim=1)
+            armijo_scale = torch.where(
+                armijo_1, line_search_scale, torch.zeros_like(line_search_scale)
+            )
+            _, armijo_index = torch.max(armijo_scale, dim=1)
+            has_armijo = torch.any(armijo_1, dim=1)
 
-            g_x_1 = g_x.view(b * n_line_search, -1)
-            xs_1 = x_set.view(b * n_line_search, -1)
-            cs_1 = c.view(b * n_line_search)
+            baseline_state = self._baseline_state(iteration_state, context)
+            wolfe_state = self._gather_trial_state(x_set, c, g_x, wolfe_index, context)
+            selected_state = self._choose_state(baseline_state, wolfe_state, has_wolfe)
 
-            _, m_idx = torch.max(step_success, dim=-2)
+            if isinstance(self, StrongWolfeLineSearchStrategy):
+                exploration_index = wolfe_index
+                choose_exploration = has_wolfe
+                status = torch.where(
+                    has_wolfe,
+                    torch.full_like(wolfe_index, LineSearchStatus.WOLFE, dtype=torch.int32),
+                    torch.full_like(wolfe_index, LineSearchStatus.BASELINE, dtype=torch.int32),
+                )
+            elif context.line_search_backtracking:
+                exploration_index = torch.where(has_wolfe, wolfe_index, armijo_index)
+                choose_exploration = has_wolfe | has_armijo
+                status = torch.where(
+                    has_wolfe,
+                    LineSearchStatus.WOLFE,
+                    torch.where(has_armijo, LineSearchStatus.ARMIJO, LineSearchStatus.BASELINE),
+                ).to(torch.int32)
+            else:
+                exploration_index, choose_exploration, status = handle_no_valid_step(
+                    wolfe_index, has_wolfe, armijo_index, has_armijo, context
+                )
 
-            selected_m = m_idx.squeeze() + context.c_idx
-
-            selected_x = xs_1[selected_m]
-            selected_c = cs_1[selected_m]
-            selected_grad = g_x_1[selected_m].view(b, context.opt_dim)
-
-            idxs_selected = (
-                selected_m.view(-1, 1)
-                .repeat(1, context.line_search_scale.shape[1])
-                .to(dtype=torch.int32)
+            trial_state = self._gather_trial_state(x_set, c, g_x, exploration_index, context)
+            exploration_state = self._choose_state(baseline_state, trial_state, choose_exploration)
+            if context.line_search_backtracking:
+                selected_state = exploration_state
+            local_index = torch.where(
+                choose_exploration,
+                exploration_index.to(dtype=torch.int32),
+                torch.full_like(exploration_index, -1, dtype=torch.int32),
             )
 
-            selected_state = LineSearchState(
-                action=selected_x.detach().view(b, context.action_horizon, context.action_dim),
-                cost=selected_c.detach(),
-                gradient=selected_grad.detach().view(b, context.action_horizon, context.action_dim),
-                idxs=idxs_selected,
-            )
-            # Handle case where no step satisfies conditions
-
-            fallback_m_idx = handle_no_valid_step(m_idx, armijo_1, context)
-
-            # Extract result
-            fallback_m = fallback_m_idx.squeeze() + context.c_idx
-
-            fallback_x = xs_1[fallback_m]
-            fallback_c = cs_1[fallback_m]
-            fallback_grad = g_x_1[fallback_m].view(b, context.opt_dim)
-            idxs_fallback = (
-                fallback_m.view(-1, 1)
-                .repeat(1, context.line_search_scale.shape[1])
-                .to(dtype=torch.int32)
-            )
-
-            exploration_state = LineSearchState(
-                action=fallback_x.detach().view(b, context.action_horizon, context.action_dim),
-                cost=fallback_c.detach(),
-                gradient=fallback_grad.detach().view(b, context.action_horizon, context.action_dim),
-                idxs=idxs_fallback,
-            )
-
-            return LineSearchResult(
+            return self._make_result(
                 selected_state=selected_state,
                 exploration_state=exploration_state,
+                exploration_index=local_index,
+                status=status,
+                curvature_update_valid=choose_exploration,
             )
 
     @profiler.record_function("BaseWolfeLineSearchStrategy/_cuda_kernel_wolfe_search")
@@ -679,16 +797,37 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
         step_direction: torch.Tensor,
         iteration_state: OptimizationIterationState,
         context: LineSearchContext,
+        line_search_scale: torch.Tensor,
     ) -> LineSearchResult:
         """Implement Wolfe search using CUDA kernels."""
-        exploration_idx, selected_idx = self._get_cuda_kernel_output_buffers(context)
-
+        (
+            exploration_idx,
+            selected_idx,
+            line_search_index,
+            line_search_status,
+            curvature_update_valid,
+        ) = self._get_cuda_kernel_output_buffers(context)
         # Call CUDA kernel
         is_strong_wolfe = isinstance(self, StrongWolfeLineSearchStrategy)
         is_approx_wolfe = isinstance(self, ApproxWolfeLineSearchStrategy)
         is_approx_strong_wolfe = isinstance(self, ApproxStrongWolfeLineSearchStrategy)
         if is_approx_strong_wolfe:
             log_and_raise("Approx strong Wolfe not implemented with cuda kernel")
+
+        for tensor_name in (
+            "best_action",
+            "exploration_action",
+            "exploration_gradient",
+            "action",
+            "gradient",
+        ):
+            tensor = getattr(iteration_state, tensor_name)
+            if not tensor.is_contiguous():
+                setattr(iteration_state, tensor_name, tensor.contiguous())
+        search_cost = search_cost.contiguous()
+        search_action = search_action.contiguous()
+        search_gradient = search_gradient.contiguous()
+        step_direction = step_direction.contiguous()
 
         (new_iteration_state, exploration_idx, selected_idx) = wolfe_line_search(
             iteration_state,
@@ -701,6 +840,10 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
             step_direction,
             is_strong_wolfe,
             is_approx_wolfe,
+            line_search_scale,
+            line_search_index,
+            line_search_status,
+            curvature_update_valid,
         )
         b, h, _ = search_action.shape
 
@@ -730,19 +873,20 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
         return LineSearchResult(
             selected_state=selected_state,
             exploration_state=exploration_state,
+            line_search_index=new_iteration_state.line_search_index,
+            line_search_status=new_iteration_state.line_search_status,
+            curvature_update_valid=new_iteration_state.curvature_update_valid,
         )
 
     @profiler.record_function("BaseWolfeLineSearchStrategy/_get_cuda_kernel_output_buffers")
     def _get_cuda_kernel_output_buffers(
         self, context: LineSearchContext
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Prepare output buffers for CUDA line search."""
         if self._output_buffers is None:
             log_and_raise("Output buffers are not initialized")
 
-        exploration_idx, selected_idx = self._output_buffers
-
-        return exploration_idx, selected_idx
+        return self._output_buffers
 
     @abstractmethod
     def _compute_curvature_condition(
@@ -753,8 +897,14 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
 
     @abstractmethod
     def _handle_no_valid_step(
-        self, m_idx: torch.Tensor, wolfe_1: torch.Tensor, context: LineSearchContext
-    ) -> torch.Tensor:
+        self,
+        wolfe_index: torch.Tensor,
+        has_wolfe: torch.Tensor,
+        armijo_index: torch.Tensor,
+        has_armijo: torch.Tensor,
+        valid: torch.Tensor,
+        context: LineSearchContext,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Handle the case where no step satisfies the Wolfe conditions."""
         pass
 
@@ -769,12 +919,12 @@ class WolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
     Wolfe condition 1:
 
     .. math::
-        c(x + l * p) <= c(x) + c_1 * l * (g(x) * p)
+        c(x + l * p) <= c(x) + c_1 * l * g(x)^T p
 
     Wolfe condition 2:
 
     .. math::
-        g(x + l * p) >= c_2 * g(x) * p
+        g(x + l * p)^T p >= c_2 * g(x)^T p
     """
 
     @staticmethod
@@ -786,13 +936,27 @@ class WolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
         return wolfe_condition
 
     def _handle_no_valid_step(
-        self, m_idx: torch.Tensor, armijo_1: torch.Tensor, context: LineSearchContext
-    ) -> torch.Tensor:
-        """Fall back to armijo condition"""
-        step_success = armijo_1 * (context.line_search_scale.squeeze(-1) + 0.1)
-        _, armijo_idx = torch.max(step_success, dim=-2)
-        m_idx = torch.where(m_idx == 0, armijo_idx, m_idx)
-        return m_idx
+        self,
+        wolfe_index: torch.Tensor,
+        has_wolfe: torch.Tensor,
+        armijo_index: torch.Tensor,
+        has_armijo: torch.Tensor,
+        context: LineSearchContext,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Fall back to the largest Armijo step, then the baseline."""
+        del context
+        index = torch.where(has_wolfe, wolfe_index, armijo_index)
+        choose = has_wolfe | has_armijo
+        status = torch.where(
+            has_wolfe,
+            torch.full_like(index, LineSearchStatus.WOLFE, dtype=torch.int32),
+            torch.where(
+                has_armijo,
+                torch.full_like(index, LineSearchStatus.ARMIJO, dtype=torch.int32),
+                torch.full_like(index, LineSearchStatus.BASELINE, dtype=torch.int32),
+            ),
+        )
+        return index, choose, status
 
 
 class StrongWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
@@ -805,12 +969,12 @@ class StrongWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
     Wolfe condition 1:
 
     .. math::
-        c(x + l * p) <= c(x) + c_1 * l * (g(x) * p)
+        c(x + l * p) <= c(x) + c_1 * l * g(x)^T p
 
     Strong Wolfe condition 2:
 
     .. math::
-        |g(x + l * p)| <= c_2 * |g(x) * p|
+        |g(x + l * p)^T p| <= c_2 * |g(x)^T p|
     """
 
     @staticmethod
@@ -825,10 +989,20 @@ class StrongWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
 
     @staticmethod
     def _handle_no_valid_step(
-        m_idx: torch.Tensor, armijo_1: torch.Tensor, context: LineSearchContext
-    ) -> torch.Tensor:
+        wolfe_index: torch.Tensor,
+        has_wolfe: torch.Tensor,
+        armijo_index: torch.Tensor,
+        has_armijo: torch.Tensor,
+        context: LineSearchContext,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Don't fall back to Armijo condition."""
-        return m_idx
+        del armijo_index, has_armijo, context
+        status = torch.where(
+            has_wolfe,
+            torch.full_like(wolfe_index, LineSearchStatus.WOLFE, dtype=torch.int32),
+            torch.full_like(wolfe_index, LineSearchStatus.BASELINE, dtype=torch.int32),
+        )
+        return wolfe_index, has_wolfe, status
 
 
 class ApproxWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
@@ -841,14 +1015,14 @@ class ApproxWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
     Wolfe condition 1:
 
     .. math::
-        c(x + l * p) <= c(x) + c_1 * l * (g(x) * p)
+        c(x + l * p) <= c(x) + c_1 * l * g(x)^T p
 
-    Strong Wolfe condition 2:
+    Weak Wolfe condition 2:
 
     .. math::
-        |g(x + l * p)| <= c_2 * |g(x) * p|
+        g(x + l * p)^T p >= c_2 * g(x)^T p
 
-    When strong wolfe condition fails, the line search falls back to condition 1. If
+    When the weak Wolfe condition fails, the line search falls back to condition 1. If
     condition 1 also fails, the line search returns step size line_search_scale[1] .
     """
 
@@ -863,17 +1037,30 @@ class ApproxWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
 
     @staticmethod
     def _handle_no_valid_step(
-        m_idx: torch.Tensor, armijo_1: torch.Tensor, context: LineSearchContext
-    ) -> torch.Tensor:
+        wolfe_index: torch.Tensor,
+        has_wolfe: torch.Tensor,
+        armijo_index: torch.Tensor,
+        has_armijo: torch.Tensor,
+        context: LineSearchContext,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """For approximate Wolfe, fallback to armijo condition, return step size at index 1."""
-        step_success = armijo_1 * (context.line_search_scale.squeeze(-1) + 0.1)
-        _, armijo_idx = torch.max(step_success, dim=-2)
-
-        m_idx = torch.where(m_idx == 0, armijo_idx, m_idx)
-
-        # Default to step size 1 if no conditions satisfied
-        m_idx = torch.where(m_idx == 0, 1, m_idx)
-        return m_idx
+        fallback_index = min(1, context.n_linesearch - 1)
+        fixed_fallback = torch.full_like(wolfe_index, fallback_index)
+        index = torch.where(
+            has_wolfe,
+            wolfe_index,
+            torch.where(has_armijo, armijo_index, fixed_fallback),
+        )
+        status = torch.where(
+            has_wolfe,
+            torch.full_like(index, LineSearchStatus.WOLFE, dtype=torch.int32),
+            torch.where(
+                has_armijo,
+                torch.full_like(index, LineSearchStatus.ARMIJO, dtype=torch.int32),
+                torch.full_like(index, LineSearchStatus.FALLBACK, dtype=torch.int32),
+            ),
+        )
+        return index, torch.ones_like(has_wolfe), status
 
 
 class ApproxStrongWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
@@ -886,12 +1073,12 @@ class ApproxStrongWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
     Wolfe condition 1:
 
     .. math::
-        c(x + l * p) <= c(x) + c_1 * l * (g(x) * p)
+        c(x + l * p) <= c(x) + c_1 * l * g(x)^T p
 
     Strong Wolfe condition 2:
 
     .. math::
-        |g(x + l * p)| <= c_2 * |g(x) * p|
+        |g(x + l * p)^T p| <= c_2 * |g(x)^T p|
 
     When strong wolfe condition fails, the line search falls back to condition 1. If
     condition 1 also fails, the line search returns step size line_search_scale[1] .
@@ -908,17 +1095,20 @@ class ApproxStrongWolfeLineSearchStrategy(BaseWolfeLineSearchStrategy):
 
     @staticmethod
     def _handle_no_valid_step(
-        m_idx: torch.Tensor, armijo_1: torch.Tensor, context: LineSearchContext
-    ) -> torch.Tensor:
+        wolfe_index: torch.Tensor,
+        has_wolfe: torch.Tensor,
+        armijo_index: torch.Tensor,
+        has_armijo: torch.Tensor,
+        context: LineSearchContext,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """For approximate Wolfe, fallback to armijo condition, return step size at index 1."""
-        step_success = armijo_1 * (context.line_search_scale.squeeze(-1) + 0.1)
-        _, armijo_idx = torch.max(step_success, dim=-2)
-
-        m_idx = torch.where(m_idx == 0, armijo_idx, m_idx)
-
-        # Default to step size 1 if no conditions satisfied
-        m_idx = torch.where(m_idx == 0, 1, m_idx)
-        return m_idx
+        return ApproxWolfeLineSearchStrategy._handle_no_valid_step(
+            wolfe_index,
+            has_wolfe,
+            armijo_index,
+            has_armijo,
+            context,
+        )
 
 
 class LineSearchStrategyFactory:

@@ -33,6 +33,7 @@ class TrajectoryKernelCfg(CudaCoreKernelCfg):
         """
         kernel_files = {
             "bspline_forward": ["bspline/bspline_kernel.cuh"],
+            "bspline_time_scaled_dt": ["bspline/bspline_kernel.cuh"],
             "bspline_backward": ["bspline/bspline_kernel.cuh"],
             "bspline_single_dt": ["bspline/bspline_kernel.cuh"],
             "differentiation_forward": ["legacy/differentiation_position_kernel.cuh"],
@@ -137,6 +138,14 @@ class BSplineLaunchCfg:
         threads_per_block = min(k_size, max_threads)
         blocks_per_grid = ceil_div(k_size, threads_per_block)
 
+        return LaunchConfig(grid=blocks_per_grid, block=threads_per_block, shmem_size=0)
+
+    @staticmethod
+    def calculate_time_scaled_dt_config(batch_size: int, horizon: int) -> LaunchConfig:
+        """Calculate a one-warp-per-timestep launch configuration."""
+        warps_per_block = 4
+        threads_per_block = warps_per_block * 32
+        blocks_per_grid = ceil_div(batch_size * horizon, warps_per_block)
         return LaunchConfig(grid=blocks_per_grid, block=threads_per_block, shmem_size=0)
 
     @staticmethod

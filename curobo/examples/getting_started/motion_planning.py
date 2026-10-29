@@ -44,6 +44,17 @@ To run only one mode:
    python -m curobo.examples.getting_started.motion_planning --mode pose
    python -m curobo.examples.getting_started.motion_planning --mode grasp
 
+The pose example uses RRT graph planning. Compare its fitted graph output
+against graph-seeded TrajOpt with:
+
+.. code-block:: bash
+
+   # RRT path fitted, retimed, and validated; TrajOpt is never invoked.
+   python -m curobo.examples.getting_started.motion_planning --mode pose --no-enable-trajopt
+
+   # RRT path followed by TrajOpt refinement (the default).
+   python -m curobo.examples.getting_started.motion_planning --mode pose
+
 Step 2: Check the output
 --------------------------
 
@@ -91,14 +102,16 @@ trajectory segments:
 
 1. **Approach**: Plan from the current configuration to a pre-grasp pose,
    offset along ``grasp_approach_axis`` by ``grasp_approach_offset`` (default
-   -15 cm along the tool Z axis). Finger-link collisions are disabled so the
-   gripper can reach into tight spaces.
+   -15 cm along the tool Z axis). Contact-link collisions remain enabled during
+   this phase.
 
 2. **Grasp**: Plan the final approach from the pre-grasp pose to the grasp
-   pose itself.
+   pose itself. Contact-link collisions are disabled and projected RRT is used
+   by default, with constrained TrajOpt as a failure fallback.
 
 3. **Lift**: Plan a retraction from the grasp pose, offset along
-   ``grasp_lift_axis`` by ``grasp_lift_offset``.
+   ``grasp_lift_axis`` by ``grasp_lift_offset``. This constrained phase also
+   uses projected RRT by default.
 
 The planner accepts a *goal set* of candidate grasp poses via ``ToolPose``,
 selects the most reachable one, and returns all three trajectory segments in
@@ -116,20 +129,26 @@ For an interactive version with a web-based 3D viewer, run:
 Open http://localhost:8080 in your browser. Drag the target frame to set
 the goal pose, move obstacles, and click "Move" to plan and execute.
 Click "Grasp" to plan and execute a three-phase grasp motion.
+The Planner panel has pose-planning RRT/TrajOpt controls and separate checkboxes
+for opting grasp selection and the constrained grasp/lift phases into TrajOpt.
 """
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
 import torch
 
 import curobo.runtime as runtime
+from curobo._src.state.state_joint_trajectory_ops import trim_joint_state_trajectory
 from curobo.motion_planner import MotionPlanner, MotionPlannerCfg
 from curobo.types import ContentPath, GoalToolPose, JointState, Pose
 from curobo.viewer import ViserVisualizer
-import time
+
+_DEFAULT_PLAYBACK_DT = 0.02
+
 
 def _get_output_dir() -> Path:
     """Return the example output directory, creating it if needed."""
@@ -138,31 +157,124 @@ def _get_output_dir() -> Path:
     return out
 
 
+def _prepare_interpolated_trajectory(
+    trajectory: JointState,
+    last_tstep: Optional[torch.Tensor] = None,
+) -> JointState:
+    """Return one valid trajectory with shape ``[1, horizon, dof]``."""
+    if trajectory.position.ndim == 4:
+        trajectory = trajectory[:, 0]
+    elif trajectory.position.ndim == 2:
+        trajectory = trajectory.unsqueeze(0)
+    elif trajectory.position.ndim != 3:
+        raise ValueError(
+            "interpolated trajectory must have shape [batch, seed, horizon, dof] "
+            "or [batch, horizon, dof]"
+        )
+
+    valid_horizon = trajectory.position.shape[-2]
+    if last_tstep is not None:
+        valid_horizon = int(last_tstep.reshape(-1)[0].item())
+        if valid_horizon <= 0:
+            valid_horizon = trajectory.position.shape[-2]
+    if valid_horizon > trajectory.position.shape[-2]:
+        raise ValueError("interpolated trajectory valid horizon exceeds its buffer")
+    return trim_joint_state_trajectory(trajectory, 0, valid_horizon)
+
+
+def _trajectory_dt(trajectory: JointState) -> float:
+    """Return the constant timestep stored on an interpolated trajectory."""
+    if trajectory.dt is None:
+        return _DEFAULT_PLAYBACK_DT
+    dt = float(trajectory.dt.reshape(-1)[0].item())
+    if dt <= 0.0:
+        raise ValueError("interpolated trajectory dt must be positive")
+    return dt
+
+
+def _combine_grasp_phases(
+    phases: List[tuple[str, JointState]],
+) -> tuple[torch.Tensor, torch.Tensor, List[int], List[str]]:
+    """Concatenate phases using phase-local timesteps and no duplicate endpoints."""
+    positions = []
+    timestamps = []
+    phase_boundaries = []
+    phase_labels = []
+    offset = 0
+    elapsed = 0.0
+
+    for phase_index, (label, trajectory) in enumerate(phases):
+        phase_position = trajectory.position[0]
+        first_index = 0 if phase_index == 0 else 1
+        if phase_position.shape[0] <= first_index:
+            continue
+        phase_position = phase_position[first_index:]
+        dt = _trajectory_dt(trajectory)
+        phase_time = (
+            elapsed
+            + torch.arange(
+                first_index,
+                first_index + phase_position.shape[0],
+                device=phase_position.device,
+                dtype=phase_position.dtype,
+            )
+            * dt
+        )
+
+        phase_boundaries.append(offset)
+        phase_labels.append(label)
+        positions.append(phase_position)
+        timestamps.append(phase_time)
+        offset += phase_position.shape[0]
+        elapsed = float(phase_time[-1].item())
+
+    if not positions:
+        raise ValueError("at least one non-empty grasp phase is required")
+    return (
+        torch.cat(positions, dim=0),
+        torch.cat(timestamps, dim=0),
+        phase_boundaries,
+        phase_labels,
+    )
+
+
 def _plot_trajectory(
     positions: torch.Tensor,
     joint_names: List[str],
-    dt: float,
+    dt: Optional[float],
     save_path: str,
     title: str = "Joint Trajectory",
     phase_boundaries: Optional[List[int]] = None,
     phase_labels: Optional[List[str]] = None,
-):
+    timestamps: Optional[torch.Tensor] = None,
+) -> None:
     """Plot joint positions over time and save to *save_path*.
 
     Args:
         positions: Joint positions tensor of shape ``(timesteps, n_joints)``.
         joint_names: Label for each joint.
-        dt: Time step between waypoints (seconds).
+        dt: Constant time between waypoints. Required when ``timestamps`` is None.
         save_path: Output file path (e.g. ``"trajectory.pdf"``).
         title: Plot title.
         phase_boundaries: Timestep indices where a new phase starts.
         phase_labels: Label for each phase (length must match *phase_boundaries*).
+        timestamps: Optional timestamp for every waypoint. Use this when phases
+            have different constant timesteps.
     """
     import matplotlib.pyplot as plt
 
+    if positions.ndim != 2:
+        raise ValueError("positions must have shape [horizon, dof]")
     pos_np = positions.cpu().numpy()
     n_steps = pos_np.shape[0]
-    t = [i * dt for i in range(n_steps)]
+    if timestamps is not None:
+        if timestamps.numel() != n_steps:
+            raise ValueError("timestamps must contain one value per waypoint")
+        t = timestamps.reshape(-1).cpu().numpy()
+    else:
+        if dt is None:
+            raise ValueError("dt is required when timestamps are not provided")
+        t = torch.arange(n_steps, dtype=torch.float32).numpy() * dt
 
     fig, ax = plt.subplots(figsize=(10, 5))
     for j, name in enumerate(joint_names):
@@ -170,9 +282,14 @@ def _plot_trajectory(
 
     if phase_boundaries and phase_labels:
         for idx, label in zip(phase_boundaries, phase_labels):
-            ax.axvline(x=idx * dt, color="grey", linestyle="--", linewidth=0.8)
+            boundary_time = t[idx]
+            ax.axvline(x=boundary_time, color="grey", linestyle="--", linewidth=0.8)
             ax.text(
-                idx * dt, ax.get_ylim()[1], f" {label}", fontsize=8, va="top",
+                boundary_time,
+                ax.get_ylim()[1],
+                f" {label}",
+                fontsize=8,
+                va="top",
             )
 
     ax.set_xlabel("Time (s)")
@@ -185,12 +302,25 @@ def _plot_trajectory(
     print(f"Trajectory plot saved to: {save_path}")
 
 
-def pose_planning_example(output_dir: Optional[Path] = None):
+def pose_planning_example(
+    output_dir: Optional[Path] = None,
+    robot_file: str = "franka.yml",
+    scene_file: str = "collision_test.yml",
+    enable_trajopt: bool = True,
+    always_run_trajopt: bool = True,
+    run_trajopt_on_graph_seed: bool = True,
+):
     """Plan a collision-free trajectory to a goal pose.
 
     Args:
         output_dir: Where to save output files. Defaults to
             ``<runtime.cache_dir>/examples/motion_planning/``.
+        robot_file: Robot configuration file.
+        scene_file: Collision-scene configuration file.
+        enable_trajopt: Disable to return the fitted RRT seed without TrajOpt.
+        always_run_trajopt: Always refine eligible fitted seeds with TrajOpt.
+        run_trajopt_on_graph_seed: Refine RRT seeds even when
+            ``always_run_trajopt`` is false.
 
     Returns:
         True if planning succeeded.
@@ -198,8 +328,12 @@ def pose_planning_example(output_dir: Optional[Path] = None):
     if output_dir is None:
         output_dir = _get_output_dir()
     config = MotionPlannerCfg.create(
-        robot="franka.yml",
-        scene_model="collision_test.yml",
+        robot=robot_file,
+        scene_model=scene_file,
+        graph_planner_algorithm="rrt",
+        enable_trajopt=enable_trajopt,
+        always_run_trajopt=always_run_trajopt,
+        run_trajopt_on_graph_seed=run_trajopt_on_graph_seed,
     )
     planner = MotionPlanner(config)
     planner.warmup(enable_graph=True, num_warmup_iterations=5)
@@ -209,41 +343,68 @@ def pose_planning_example(output_dir: Optional[Path] = None):
         joint_names=planner.joint_names,
     )
 
-    goal_pose = GoalToolPose(
-        tool_frames=planner.tool_frames,
-        position=torch.tensor([[[[[0.5, 0.0, 0.3]]]]], device="cuda", dtype=torch.float32),
-        quaternion=torch.tensor([[[[[1.0, 0.0, 0.0, 0.0]]]]], device="cuda", dtype=torch.float32),
-    )
+    q_goal = q_start.clone()
+    q_goal.position[:, 0] += 0.2
+    goal_pose = planner.compute_kinematics(q_goal).tool_poses.as_goal()
 
-    result = planner.plan_pose(goal_pose, q_start)
+    result = planner.plan_pose(goal_pose, q_start, max_attempts=1, enable_graph_attempt=0)
 
-    interp_dt = planner.trajopt_solver.config.interpolation_dt
-    if result is not None and result.success.any():
-        print("✓ Planning succeeded!")
-        interpolated = result.get_interpolated_plan()
+    if result is not None:
+        success = bool(result.success.any())
+        status = "✓ Planning succeeded!" if success else "✗ Dense validation failed"
+        print(status)
+        print(f"Trajectory source: {result.trajectory_source}")
+        print(f"RRT solve time: {planner.last_graph_time * 1000.0:.3f} ms")
+        print(f"TrajOpt invoked: {result.trajectory_source == 'trajopt'}")
+        print(f"Pipeline solver time: {result.solve_time * 1000.0:.3f} ms")
+        interpolated = _prepare_interpolated_trajectory(result.get_interpolated_plan())
+        interp_dt = _trajectory_dt(interpolated)
         n_waypoints = interpolated.position.shape[-2]
+        path_length = torch.linalg.vector_norm(
+            torch.diff(interpolated.position, dim=-2),
+            dim=-1,
+        ).sum()
         print(f"Trajectory has {n_waypoints} waypoints")
-        print(f"Duration: {n_waypoints * interp_dt:.2f}s")
+        print(f"Duration: {(n_waypoints - 1) * interp_dt:.2f}s")
+        print(f"Joint-space path length: {path_length.item():.3f} rad")
 
         _plot_trajectory(
-            interpolated.position.squeeze(0),
+            interpolated.position[0],
             planner.joint_names,
             dt=interp_dt,
             save_path=str(output_dir / "motion_plan.pdf"),
             title="Pose-to-Pose Trajectory",
         )
-        return True
+        return success
     else:
         print("✗ Planning failed - try adjusting the goal or obstacles")
         return False
 
 
-def grasp_planning_example(output_dir: Optional[Path] = None):
+def grasp_planning_example(
+    output_dir: Optional[Path] = None,
+    robot_file: str = "franka.yml",
+    scene_file: str = "collision_test.yml",
+    enable_trajopt: bool = True,
+    always_run_trajopt: bool = True,
+    run_trajopt_on_graph_seed: bool = True,
+    use_rrt_for_constrained_phases: bool = False,
+    use_double_pass_trajopt_for_constrained_phases: bool = False,
+) -> bool:
     """Plan a three-phase grasp motion (approach, grasp, lift).
 
     Args:
         output_dir: Where to save output files. Defaults to
             ``<runtime.cache_dir>/examples/motion_planning/``.
+        robot_file: Robot configuration file.
+        scene_file: Collision-scene configuration file.
+        enable_trajopt: Disable to return fitted graph seeds without TrajOpt.
+        always_run_trajopt: Always refine eligible graph seeds with TrajOpt.
+        run_trajopt_on_graph_seed: Refine graph seeds when the general fast path
+            is enabled.
+        use_rrt_for_constrained_phases: Use projected RRT for grasp and lift.
+        use_double_pass_trajopt_for_constrained_phases: Add a second TrajOpt pass
+            to grasp and lift. Cannot be combined with the RRT option.
 
     Returns:
         True if grasp planning succeeded.
@@ -251,9 +412,13 @@ def grasp_planning_example(output_dir: Optional[Path] = None):
     if output_dir is None:
         output_dir = _get_output_dir()
     config = MotionPlannerCfg.create(
-        robot="franka.yml",
-        scene_model="collision_test.yml",
+        robot=robot_file,
+        scene_model=scene_file,
         max_goalset=10,
+        graph_planner_algorithm="rrt",
+        enable_trajopt=enable_trajopt,
+        always_run_trajopt=always_run_trajopt,
+        run_trajopt_on_graph_seed=run_trajopt_on_graph_seed,
     )
     planner = MotionPlanner(config)
     planner.warmup(enable_graph=True, num_warmup_iterations=5)
@@ -286,49 +451,57 @@ def grasp_planning_example(output_dir: Optional[Path] = None):
         plan_approach_to_grasp=True,
         plan_grasp_to_lift=True,
         grasp_lift_in_tool_frame=True,
+        use_rrt_for_constrained_phases=use_rrt_for_constrained_phases,
+        use_double_pass_trajopt_for_constrained_phases=(
+            use_double_pass_trajopt_for_constrained_phases
+        ),
     )
 
     if result.success is not None and result.success.any():
         print("✓ Grasp planning succeeded!")
 
-        approach = result.approach_interpolated_trajectory
-        grasp = result.grasp_interpolated_trajectory
-        lift = result.lift_interpolated_trajectory
+        prepared_phases: List[tuple[str, JointState]] = []
+        for label, trajectory, last_tstep in (
+            (
+                "Approach",
+                result.approach_interpolated_trajectory,
+                result.approach_interpolated_last_tstep,
+            ),
+            (
+                "Grasp",
+                result.grasp_interpolated_trajectory,
+                result.grasp_interpolated_last_tstep,
+            ),
+            (
+                "Lift",
+                result.lift_interpolated_trajectory,
+                result.lift_interpolated_last_tstep,
+            ),
+        ):
+            if trajectory is not None:
+                valid_trajectory = _prepare_interpolated_trajectory(
+                    trajectory,
+                    last_tstep,
+                )
+                prepared_phases.append((label, valid_trajectory))
+                print(
+                    f"  {label + ':':<9} {valid_trajectory.position.shape[-2]} waypoints "
+                    f"at {_trajectory_dt(valid_trajectory):.4f}s"
+                )
 
-        if approach is not None:
-            print(f"  Approach: {approach.position.shape[-2]} waypoints")
-        if grasp is not None:
-            print(f"  Grasp:    {grasp.position.shape[-2]} waypoints")
-        if lift is not None:
-            print(f"  Lift:     {lift.position.shape[-2]} waypoints")
-
-        all_positions = []
-        phase_boundaries = []
-        phase_labels = []
-        offset = 0
-        n_joints = approach.position.shape[-1] if approach is not None else None
-        for traj, label in [
-            (approach, "Approach"),
-            (grasp, "Grasp"),
-            (lift, "Lift"),
-        ]:
-            if traj is not None:
-                phase_boundaries.append(offset)
-                phase_labels.append(label)
-                pos = traj.position.reshape(-1, traj.position.shape[-1])
-                all_positions.append(pos)
-                offset += pos.shape[0]
-
-        if all_positions:
-            combined = torch.cat(all_positions, dim=0)
+        if prepared_phases:
+            combined, timestamps, phase_boundaries, phase_labels = _combine_grasp_phases(
+                prepared_phases
+            )
             _plot_trajectory(
                 combined,
                 planner.joint_names,
-                dt=0.02,
+                dt=None,
                 save_path=str(output_dir / "grasp_plan.pdf"),
                 title="Grasp Trajectory (Approach → Grasp → Lift)",
                 phase_boundaries=phase_boundaries,
                 phase_labels=phase_labels,
+                timestamps=timestamps,
             )
         return True
     else:
@@ -337,7 +510,16 @@ def grasp_planning_example(output_dir: Optional[Path] = None):
         return False
 
 
-def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_test.yml", port=8080):
+def interactive_motion_planning(
+    robot_file: str = "franka.yml",
+    scene_file: str = "collision_test.yml",
+    port: int = 8080,
+    enable_trajopt: bool = True,
+    always_run_trajopt: bool = True,
+    run_trajopt_on_graph_seed: bool = True,
+    use_rrt_for_constrained_phases: bool = False,
+    use_double_pass_trajopt_for_constrained_phases: bool = False,
+) -> None:
     """Launch an interactive Viser viewer for motion planning.
 
     Provides a web-based 3D viewer where you can:
@@ -356,7 +538,14 @@ def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_t
         visualize_robot_spheres=False,
     )
 
-    config = MotionPlannerCfg.create(robot=robot_file, scene_model=scene_file)
+    config = MotionPlannerCfg.create(
+        robot=robot_file,
+        scene_model=scene_file,
+        graph_planner_algorithm="rrt",
+        enable_trajopt=enable_trajopt,
+        always_run_trajopt=always_run_trajopt,
+        run_trajopt_on_graph_seed=run_trajopt_on_graph_seed,
+    )
     planner = MotionPlanner(config)
 
     scene_cfg = config.scene_collision_cfg.scene_model
@@ -378,17 +567,22 @@ def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_t
         import io
 
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import numpy as np
 
-        traj = trajectory.squeeze(0)
-        pos = np.atleast_2d(traj.position[0].cpu().numpy())  # (horizon, dof)
-        dt_val = traj.dt.item() if traj.dt is not None else 0.02
+        traj = _prepare_interpolated_trajectory(trajectory)
+        pos = np.atleast_2d(traj.position[0].cpu().numpy())
+        dt_val = _trajectory_dt(traj)
         t = np.arange(pos.shape[0]) * dt_val
 
         vel = np.atleast_2d(traj.velocity[0].cpu().numpy()) if traj.velocity is not None else None
-        acc = np.atleast_2d(traj.acceleration[0].cpu().numpy()) if traj.acceleration is not None else None
+        acc = (
+            np.atleast_2d(traj.acceleration[0].cpu().numpy())
+            if traj.acceleration is not None
+            else None
+        )
         jrk = np.atleast_2d(traj.jerk[0].cpu().numpy()) if traj.jerk is not None else None
 
         n_plots = 1 + (vel is not None) + (acc is not None) + (jrk is not None)
@@ -424,12 +618,113 @@ def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_t
         fig.savefig(buf, format="png")
         buf.seek(0)
         from PIL import Image
+
         img_array = np.array(Image.open(buf))
         plt.close(fig)
         buf.close()
         return img_array
 
     server = viser_viz._server
+    with server.gui.add_folder("Planner"):
+        rrt_only_btn = server.gui.add_button("Pose: RRT only")
+        rrt_trajopt_btn = server.gui.add_button("Pose: RRT + TrajOpt")
+        enable_trajopt_cb = server.gui.add_checkbox(
+            "Enable TrajOpt",
+            initial_value=enable_trajopt,
+        )
+        always_run_trajopt_cb = server.gui.add_checkbox(
+            "Always run TrajOpt",
+            initial_value=always_run_trajopt,
+        )
+        run_trajopt_on_graph_seed_cb = server.gui.add_checkbox(
+            "TrajOpt on RRT seed",
+            initial_value=run_trajopt_on_graph_seed,
+        )
+        trajopt_grasp_selection_cb = server.gui.add_checkbox(
+            "TrajOpt grasp selection",
+            initial_value=False,
+        )
+        rrt_constrained_phases_cb = server.gui.add_checkbox(
+            "RRT grasp/lift phases",
+            initial_value=use_rrt_for_constrained_phases,
+        )
+        double_pass_constrained_phases_cb = server.gui.add_checkbox(
+            "Double-pass TrajOpt grasp/lift",
+            initial_value=use_double_pass_trajopt_for_constrained_phases,
+        )
+        planner_mode_text = server.gui.add_text(
+            "Active mode",
+            initial_value="",
+            disabled=True,
+        )
+
+    def _sync_planner_policy():
+        planner.config.enable_trajopt = bool(enable_trajopt_cb.value)
+        planner.config.always_run_trajopt = bool(always_run_trajopt_cb.value)
+        planner.config.run_trajopt_on_graph_seed = bool(run_trajopt_on_graph_seed_cb.value)
+        if not planner.config.enable_trajopt:
+            mode = "RRT only"
+        elif planner.config.always_run_trajopt:
+            mode = "RRT + TrajOpt"
+        elif planner.config.run_trajopt_on_graph_seed:
+            mode = "RRT + TrajOpt; linear fast path"
+        else:
+            mode = "Validated seed; TrajOpt fallback"
+        grasp_selection = (
+            "TrajOpt selection" if trajopt_grasp_selection_cb.value else "IK selection"
+        )
+        if rrt_constrained_phases_cb.value:
+            constrained_phases = "projected RRT phases"
+        elif double_pass_constrained_phases_cb.value:
+            constrained_phases = "double-pass TrajOpt phases"
+        else:
+            constrained_phases = "single-pass TrajOpt phases"
+        planner_mode_text.value = f"Pose: {mode} | Grasp: {grasp_selection} + {constrained_phases}"
+
+    @rrt_only_btn.on_click
+    def _use_rrt_only(_):
+        enable_trajopt_cb.value = False
+        always_run_trajopt_cb.value = False
+        run_trajopt_on_graph_seed_cb.value = False
+        _sync_planner_policy()
+
+    @rrt_trajopt_btn.on_click
+    def _use_rrt_with_trajopt(_):
+        enable_trajopt_cb.value = True
+        always_run_trajopt_cb.value = True
+        run_trajopt_on_graph_seed_cb.value = True
+        _sync_planner_policy()
+
+    @enable_trajopt_cb.on_update
+    def _update_enable_trajopt(_):
+        _sync_planner_policy()
+
+    @always_run_trajopt_cb.on_update
+    def _update_always_run_trajopt(_):
+        _sync_planner_policy()
+
+    @run_trajopt_on_graph_seed_cb.on_update
+    def _update_run_trajopt_on_graph_seed(_):
+        _sync_planner_policy()
+
+    @trajopt_grasp_selection_cb.on_update
+    def _update_trajopt_grasp_selection(_):
+        _sync_planner_policy()
+
+    @rrt_constrained_phases_cb.on_update
+    def _update_rrt_constrained_phases(_):
+        if rrt_constrained_phases_cb.value:
+            double_pass_constrained_phases_cb.value = False
+        _sync_planner_policy()
+
+    @double_pass_constrained_phases_cb.on_update
+    def _update_double_pass_constrained_phases(_):
+        if double_pass_constrained_phases_cb.value:
+            rrt_constrained_phases_cb.value = False
+        _sync_planner_policy()
+
+    _sync_planner_policy()
+
     traj_plot = server.gui.add_image(
         _create_trajectory_image(
             JointState.from_position(
@@ -452,7 +747,8 @@ def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_t
 
     def execute_trajectory(trajectory):
         nonlocal current_state, is_moving
-        traj = trajectory.squeeze(0)
+        traj = _prepare_interpolated_trajectory(trajectory)
+        playback_dt = _trajectory_dt(traj)
         for i in range(traj.position.shape[-2]):
             if not is_moving:
                 return
@@ -461,7 +757,7 @@ def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_t
                 joint_names=traj.joint_names,
             )
             viser_viz.set_joint_state(waypoint.squeeze(0))
-            time.sleep(0.02)
+            time.sleep(playback_dt)
         current_state = JointState.from_position(
             traj.position[0, -1, :].unsqueeze(0),
             joint_names=traj.joint_names,
@@ -483,12 +779,14 @@ def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_t
                 active_js,
                 use_implicit_goal=True,
                 max_attempts=3,
+                enable_graph_attempt=0,
             )
             if result is not None and result.success.any():
                 interp = result.get_interpolated_plan()
                 traj_plot.image = _create_trajectory_image(
-                    interp, planner.joint_names,
-                    title=f"Pose Plan  |  {result.total_time:.3f}s",
+                    interp,
+                    planner.joint_names,
+                    title=(f"Pose Plan ({result.trajectory_source})  |  {result.total_time:.3f}s"),
                 )
                 execute_trajectory(interp)
             else:
@@ -515,23 +813,42 @@ def interactive_motion_planning(robot_file="franka.yml", scene_file="collision_t
                 plan_approach_to_grasp=True,
                 plan_grasp_to_lift=True,
                 grasp_lift_in_tool_frame=True,
+                use_trajopt_for_goalset_selection=bool(trajopt_grasp_selection_cb.value),
+                use_rrt_for_constrained_phases=bool(rrt_constrained_phases_cb.value),
+                use_double_pass_trajopt_for_constrained_phases=bool(
+                    double_pass_constrained_phases_cb.value
+                ),
             )
             if result is not None and result.success is not None and result.success.any():
-                traj_plot.image = _create_trajectory_image(
-                    result.approach_interpolated_trajectory, planner.joint_names,
-                    title="Approach",
-                )
-                execute_trajectory(result.approach_interpolated_trajectory)
-                traj_plot.image = _create_trajectory_image(
-                    result.grasp_interpolated_trajectory, planner.joint_names,
-                    title="Grasp",
-                )
-                execute_trajectory(result.grasp_interpolated_trajectory)
-                traj_plot.image = _create_trajectory_image(
-                    result.lift_interpolated_trajectory, planner.joint_names,
-                    title="Lift",
-                )
-                execute_trajectory(result.lift_interpolated_trajectory)
+                for label, trajectory, last_tstep in (
+                    (
+                        "Approach",
+                        result.approach_interpolated_trajectory,
+                        result.approach_interpolated_last_tstep,
+                    ),
+                    (
+                        "Grasp",
+                        result.grasp_interpolated_trajectory,
+                        result.grasp_interpolated_last_tstep,
+                    ),
+                    (
+                        "Lift",
+                        result.lift_interpolated_trajectory,
+                        result.lift_interpolated_last_tstep,
+                    ),
+                ):
+                    if trajectory is None:
+                        continue
+                    valid_trajectory = _prepare_interpolated_trajectory(
+                        trajectory,
+                        last_tstep,
+                    )
+                    traj_plot.image = _create_trajectory_image(
+                        valid_trajectory,
+                        planner.joint_names,
+                        title=label,
+                    )
+                    execute_trajectory(valid_trajectory)
             else:
                 print("Grasp planning failed")
             is_moving = False
@@ -611,6 +928,38 @@ def main():
         default=None,
         help="Directory for output files (default: ~/.cache/curobo/examples/motion_planning/)",
     )
+    parser.add_argument(
+        "--enable-trajopt",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Enable TrajOpt (default). Use --no-enable-trajopt to return the fitted, "
+            "retimed RRT path without optimization or fallback."
+        ),
+    )
+    parser.add_argument(
+        "--always-run-trajopt",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Always refine eligible seeds with TrajOpt (default: enabled).",
+    )
+    parser.add_argument(
+        "--run-trajopt-on-graph-seed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=("Refine RRT seeds when --no-always-run-trajopt is used (default: enabled)."),
+    )
+    grasp_phase_group = parser.add_mutually_exclusive_group()
+    grasp_phase_group.add_argument(
+        "--grasp-rrt-constrained-phases",
+        action="store_true",
+        help="Use projected RRT for grasp and lift instead of single-pass TrajOpt.",
+    )
+    grasp_phase_group.add_argument(
+        "--grasp-double-pass-trajopt",
+        action="store_true",
+        help="Add one TrajOpt refinement pass to grasp and lift.",
+    )
     args = parser.parse_args()
 
     if args.test:
@@ -619,7 +968,14 @@ def main():
 
     if args.visualize:
         interactive_motion_planning(
-            robot_file=args.robot, scene_file=args.scene, port=args.port,
+            robot_file=args.robot,
+            scene_file=args.scene,
+            port=args.port,
+            enable_trajopt=args.enable_trajopt,
+            always_run_trajopt=args.always_run_trajopt,
+            run_trajopt_on_graph_seed=args.run_trajopt_on_graph_seed,
+            use_rrt_for_constrained_phases=args.grasp_rrt_constrained_phases,
+            use_double_pass_trajopt_for_constrained_phases=(args.grasp_double_pass_trajopt),
         )
         return
 
@@ -629,12 +985,28 @@ def main():
 
     if args.mode in ("pose", "all"):
         print("=== Pose-to-Pose Motion Planning ===")
-        pose_planning_example(output_dir=output_dir)
+        pose_planning_example(
+            output_dir=output_dir,
+            robot_file=args.robot,
+            scene_file=args.scene,
+            enable_trajopt=args.enable_trajopt,
+            always_run_trajopt=args.always_run_trajopt,
+            run_trajopt_on_graph_seed=args.run_trajopt_on_graph_seed,
+        )
         print()
 
     if args.mode in ("grasp", "all"):
         print("=== Grasp Planning ===")
-        grasp_planning_example(output_dir=output_dir)
+        grasp_planning_example(
+            output_dir=output_dir,
+            robot_file=args.robot,
+            scene_file=args.scene,
+            enable_trajopt=args.enable_trajopt,
+            always_run_trajopt=args.always_run_trajopt,
+            run_trajopt_on_graph_seed=args.run_trajopt_on_graph_seed,
+            use_rrt_for_constrained_phases=args.grasp_rrt_constrained_phases,
+            use_double_pass_trajopt_for_constrained_phases=(args.grasp_double_pass_trajopt),
+        )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 # Standard Library
+import math
 from typing import TYPE_CHECKING, Optional, Union
 
 # Third Party
@@ -11,7 +12,12 @@ import torch
 import torch.autograd.profiler as profiler
 
 # CuRobo
+from curobo._src.curobolib.cuda_ops.tensor_checks import (
+    check_float16_tensors,
+    check_float32_tensors,
+)
 from curobo._src.robot.kinematics.kinematics import Kinematics
+from curobo._src.robot.types.joint_limits import JointLimits
 from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_joint_ops import augment_joint_state, stack_joint_states
 from curobo._src.state.state_robot import RobotState
@@ -27,7 +33,6 @@ from curobo._src.util.cuda_stream_util import (
     cuda_stream_context,
     synchronize_cuda_streams,
 )
-from curobo._src.curobolib.cuda_ops.tensor_checks import check_float16_tensors, check_float32_tensors
 from curobo._src.util.logging import log_and_raise, log_info
 from curobo._src.util.state_filter import JointStateFilter
 
@@ -47,13 +52,16 @@ class RobotStateTransition:
         self.batch_size = self.config.batch_size
         self.interpolation_steps = self.config.interpolation_steps
         self.dt = self.config.dt_traj_params.base_dt
-        self.robot_model = Kinematics(self.config.robot_config.kinematics, compute_jacobian=False)
+        self.robot_model = Kinematics(
+            self.config.robot_config.kinematics,
+            compute_jacobian=self.config.compute_jacobian,
+        )
         # update cspace to store joint names in the order given by robot model:
         self.num_dof = self.robot_model.get_dof()
         self.robot_dynamics = None
         self._transition_streams = {}
         self._transition_events = {}
-        if self.config.robot_config.dynamics is not None:
+        if self.config.compute_inverse_dynamics and self.config.robot_config.dynamics is not None:
             self.robot_dynamics = self._create_dynamics()
             self._transition_streams["robot_dynamics"], self._transition_events["robot_dynamics"] = create_cuda_stream_pair(self.device_cfg.device)
             self._transition_streams["kinematics"], self._transition_events["kinematics"] = create_cuda_stream_pair(self.device_cfg.device)
@@ -330,9 +338,7 @@ class RobotStateTransition:
         use_implicit_goal_state: Optional[torch.Tensor] = None,
         idxs_env: Optional[torch.Tensor] = None,
     ) -> RobotState:
-        # filter state if needed:
         start_state_shaped = start_state  # .unsqueeze(1)
-        # batch_size, horizon, d_act = act_seq.shape
         batch_size = act_seq.shape[0]
 
         self.update_batch_size(batch_size, force_update=act_seq.requires_grad)
@@ -362,8 +368,64 @@ class RobotStateTransition:
                 goal_state_idx=goal_state_idx,
                 use_implicit_goal_state=use_implicit_goal_state,
             )
-        state = self.compute_augmented_state(state_seq, idxs_env=idxs_env)
-        return state
+        return self.compute_augmented_state(state_seq, idxs_env=idxs_env)
+
+    @torch.no_grad()
+    @profiler.record_function("RobotStateTransition/compute_time_scaled_dt_from_action")
+    def compute_time_scaled_dt_from_action(
+        self,
+        start_state: JointState,
+        act_seq: torch.Tensor,
+        joint_limits: JointLimits,
+        epsilon: float = 1e-3,
+        minimum_dt: float = -1.0,
+        maximum_dt: float = -1.0,
+        start_state_idx: Optional[torch.Tensor] = None,
+        goal_state: Optional[JointState] = None,
+        goal_state_idx: Optional[torch.Tensor] = None,
+        use_implicit_goal_state: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Compute a feasible trajectory dt directly from an action sequence.
+
+        Args:
+            start_state: Starting joint state with shape ``(batch, dof)``.
+            act_seq: Actions with shape ``(batch, action_horizon, action_dim)``.
+            joint_limits: Velocity, acceleration, and jerk limits used for time scaling.
+            epsilon: Multiplicative margin applied to the required dt.
+            minimum_dt: Lower dt bound, or a negative value to disable it.
+            maximum_dt: Upper dt bound, or a negative value to disable it.
+            start_state_idx: Per-action indices into ``start_state``.
+            goal_state: Optional goal joint state used for boundary conditions.
+            goal_state_idx: Per-action indices into ``goal_state``.
+            use_implicit_goal_state: Per-goal flags for implicit boundary conditions.
+
+        Returns:
+            Preallocated tensor containing one time-scaled dt per action sequence.
+        """
+        if (
+            minimum_dt >= 0.0
+            and maximum_dt >= 0.0
+            and minimum_dt > maximum_dt
+        ):
+            log_and_raise(
+                f"minimum_dt must not exceed maximum_dt: {minimum_dt} > {maximum_dt}"
+            )
+        self.update_batch_size(act_seq.shape[0], force_update=act_seq.requires_grad)
+        return self._rollout_step_fn.compute_time_scaled_dt_from_action(
+            start_state,
+            act_seq,
+            self.state_seq,
+            joint_limits.velocity[1, :],
+            joint_limits.acceleration[1, :],
+            joint_limits.jerk[1, :],
+            epsilon=epsilon,
+            minimum_dt=minimum_dt,
+            maximum_dt=maximum_dt,
+            start_state_idx=start_state_idx,
+            goal_state=goal_state,
+            goal_state_idx=goal_state_idx,
+            use_implicit_goal_state=use_implicit_goal_state,
+        )
 
     def compute_augmented_state(
         self, state_seq: JointState, idxs_env: Optional[torch.Tensor] = None,
@@ -581,6 +643,23 @@ class RobotStateTransition:
     def control_space(self):
         return self.config.control_space
 
+    def get_hessian_block_half_bandwidth(
+        self, dense_temporal_support_span: int
+    ) -> Optional[int]:
+        """Map dense-time cost support to action-knot Hessian bandwidth.
+
+        Returns ``None`` when a conservative block-banded pattern is not
+        available for the configured control space.
+        """
+        if dense_temporal_support_span < 0:
+            log_and_raise("dense_temporal_support_span must be non-negative")
+        if self.control_space not in ControlSpace.bspline_types():
+            return None
+        dense_span_knots = math.ceil(
+            dense_temporal_support_span / self.interpolation_steps
+        )
+        return ControlSpace.spline_degree(self.control_space) + dense_span_knots
+
     @property
     def device_cfg(self):
         return self.config.device_cfg
@@ -711,20 +790,98 @@ class RobotStateTransition:
                 "Cannot update link inertial properties without inverse dynamics (robot_config.dynamics is None)"
             )
 
-    @profiler.record_function("RobotStateTransition/get_full_dof_from_solution")
-    def get_full_dof_from_solution(self, q_js: JointState) -> JointState:
-        """This function will all the dof that are locked during optimization.
+    def get_full_dof_from_position(self, position: torch.Tensor) -> JointState:
+        """Create a full-DOF joint state from active joint positions.
+
+        Locked joints are appended before zero-valued derivatives are created,
+        avoiding separate concatenations for velocity, acceleration, and jerk.
 
         Args:
-            q_sol: _description_
+            position: Active joint positions with shape ``[..., active_dof]``.
 
         Returns:
-            _description_
+            Full joint state in robot-model joint order.
         """
-        if self.robot_model.lock_jointstate is None:
-            return q_js
-        all_joint_names = self.robot_model.all_articulated_joint_names
         lock_joint_state = self.robot_model.lock_jointstate
+        if lock_joint_state is None:
+            return JointState.from_position(position, joint_names=self.joint_names)
 
-        new_js = augment_joint_state(q_js, all_joint_names, lock_joint_state)
-        return new_js
+        full_joint_names = self.robot_model.all_articulated_joint_names
+        source_joint_names = self.joint_names + lock_joint_state.joint_names
+        if source_joint_names != full_joint_names:
+            active_state = JointState(position=position, joint_names=self.joint_names)
+            full_position_state = augment_joint_state(
+                active_state,
+                full_joint_names,
+                lock_joint_state,
+            )
+            return JointState.from_position(
+                full_position_state.position,
+                joint_names=full_position_state.joint_names,
+            )
+
+        full_position = self._append_locked_dof(position, lock_joint_state.position)
+        return JointState.from_position(full_position, joint_names=list(full_joint_names))
+
+    @profiler.record_function("RobotStateTransition/get_full_dof_from_solution")
+    def get_full_dof_from_solution(self, q_js: JointState) -> JointState:
+        """Add degrees of freedom that are locked during optimization.
+
+        Args:
+            q_js: Active joint state with degrees of freedom in :attr:`joint_names` order.
+
+        Returns:
+            Joint state containing active and locked degrees of freedom in robot-model order.
+        """
+        lock_joint_state = self.robot_model.lock_jointstate
+        if lock_joint_state is None:
+            return q_js
+        full_joint_names = self.robot_model.all_articulated_joint_names
+        source_joint_names = q_js.joint_names + lock_joint_state.joint_names
+        if q_js.joint_names != self.joint_names or source_joint_names != full_joint_names:
+            return augment_joint_state(
+                q_js,
+                full_joint_names,
+                lock_joint_state,
+            )
+
+        position = self._append_locked_dof(q_js.position, lock_joint_state.position)
+        velocity = self._append_locked_dof(q_js.velocity, lock_joint_state.velocity)
+        acceleration = self._append_locked_dof(
+            q_js.acceleration,
+            lock_joint_state.acceleration,
+        )
+        jerk = self._append_locked_dof(q_js.jerk, lock_joint_state.jerk)
+
+        return JointState(
+            position=position,
+            velocity=velocity,
+            acceleration=acceleration,
+            jerk=jerk,
+            joint_names=list(full_joint_names),
+            dt=q_js.dt.clone() if q_js.dt is not None else None,
+            device_cfg=q_js.device_cfg,
+            control_space=q_js.control_space,
+        )
+
+    def _append_locked_dof(
+        self,
+        active_values: Optional[torch.Tensor],
+        locked_values: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        """Append locked values to an active-DOF tensor."""
+        if active_values is None:
+            return None
+        if locked_values is None:
+            locked_values = torch.zeros_like(self.robot_model.lock_jointstate.position)
+        locked_values = self._expand_locked_dof(locked_values, active_values)
+        return torch.cat((active_values, locked_values), dim=-1)
+
+    @staticmethod
+    def _expand_locked_dof(
+        locked_values: torch.Tensor,
+        active_values: torch.Tensor,
+    ) -> torch.Tensor:
+        """Broadcast a locked-joint vector across active state batch dimensions."""
+        view_shape = [1] * (active_values.ndim - 1) + [locked_values.shape[-1]]
+        return locked_values.view(view_shape).expand(*active_values.shape[:-1], -1)

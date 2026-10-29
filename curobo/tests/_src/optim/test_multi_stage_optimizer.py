@@ -332,7 +332,6 @@ class TestMultiStageOptimizer:
             num_iters=10,
             history=10,
             solver_type="lbfgs",
-            use_cuda_kernel_step_direction=False,
             device_cfg=DeviceCfg(
                 device=optimizer_setup["device"], dtype=optimizer_setup["dtype"]
             ),
@@ -394,6 +393,42 @@ class TestMultiStageOptimizer:
         # Reinitialize should not raise errors
         multi_opt.reinitialize(initial_action)
         multi_opt.reinitialize(initial_action, clear_optimizer_state=False)
+
+    def test_reinitialize_hands_first_stage_result_to_second(self, optimizer_setup):
+        """Initialize stage two from stage one's result instead of the original seed."""
+        rollout_fn = optimizer_setup["rollout_fn"]
+        configs = [
+            GradientDescentOptCfg(
+                num_problems=optimizer_setup["batch_size"],
+                num_iters=2,
+                solver_type="gradient_descent",
+                solver_name=f"gradient_descent_{index}",
+                store_debug=True,
+                device_cfg=DeviceCfg(
+                    device=optimizer_setup["device"], dtype=optimizer_setup["dtype"]
+                ),
+            )
+            for index in range(2)
+        ]
+        optimizers = [GradientDescentOpt(config, [rollout_fn]) for config in configs]
+        for optimizer in optimizers:
+            optimizer.update_num_problems(optimizer_setup["batch_size"])
+        multi_opt = MultiStageOptimizer(optimizers)
+        initial_action = torch.zeros(
+            optimizer_setup["batch_size"],
+            optimizer_setup["action_horizon"],
+            optimizer_setup["num_dof"],
+            device=optimizer_setup["device"],
+            dtype=optimizer_setup["dtype"],
+        )
+
+        multi_opt.reinitialize(initial_action)
+        multi_opt.optimize(initial_action)
+
+        first_trace = optimizers[0].get_recorded_trace()["debug"]
+        second_trace = optimizers[1].get_recorded_trace()["debug"]
+        assert not torch.equal(first_trace[-1], initial_action)
+        torch.testing.assert_close(second_trace[0], first_trace[-1])
 
     def test_update_num_problems(self, optimizer_setup):
         """Test updating the number of problems."""
@@ -664,4 +699,3 @@ class TestMultiStageOptimizer:
         # Both should improve, and two stages should be at least as good as one
         assert cost1 < initial_cost
         assert cost2 <= cost1 * 1.1  # Allow small tolerance
-

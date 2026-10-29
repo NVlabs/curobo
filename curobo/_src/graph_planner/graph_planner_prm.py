@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 # Standard Library
-import math
 import random
 from typing import List, Optional
 
@@ -30,10 +29,11 @@ from curobo._src.graph_planner.search.path_pruner import PathPruner
 from curobo._src.robot.kinematics.kinematics import Kinematics, KinematicsState
 from curobo._src.rollout.rollout_robot import RobotRollout
 from curobo._src.state.state_joint import JointState
+from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType, linear_smooth
 from curobo._src.transition.robot_state_transition import RobotStateTransition
 from curobo._src.util.cuda_event_timer import CudaEventTimer
+from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise, log_warn
-from curobo._src.util.trajectory import TrajInterpolationType, linear_smooth
 
 
 class PRMGraphPlanner:
@@ -62,7 +62,10 @@ class PRMGraphPlanner:
         self.feasibility_rollout = RobotRollout(
             self.config.rollout_config,
             self.scene_collision_checker,
-            use_cuda_graph=self.config.use_cuda_graph_for_rollout,
+            # The planner-level executor below captures the final Boolean
+            # feasibility result as well as the rollout. Keeping this rollout
+            # eager avoids nested CUDA graphs.
+            use_cuda_graph=False,
         )
         self.auxiliary_rollout = RobotRollout(
             self.config.rollout_config, self.scene_collision_checker
@@ -74,6 +77,18 @@ class PRMGraphPlanner:
             device=self.device_cfg.device,
             dtype=self.device_cfg.dtype,
         )
+        self._max_env_query_buffer = torch.zeros(
+            (self.config.feasibility_buffer_size,),
+            device=self.device_cfg.device,
+            dtype=torch.int32,
+        )
+        self._sample_feasibility_executor: GraphExecutor = create_graph_executor(
+            capture_fn=self._compute_sample_feasibility,
+            device=self.device_cfg.device,
+            use_cuda_graph=self.config.use_cuda_graph_for_rollout,
+            clone_outputs=False,
+        )
+        self._sample_feasibility_env_executor: Optional[GraphExecutor] = None
 
         self.graph_path_finder = NetworkXPathFinder(seed=self.config.graph_path_finder_seed)
 
@@ -83,8 +98,9 @@ class PRMGraphPlanner:
         # Initialize the linear connector
         self.linear_connector = LinearConnector(self.config, self.device_cfg)
 
-        self._cspace_distance_weight = torch.ones(self.action_dim, device=self.device_cfg.device,
-        dtype=self.device_cfg.dtype)
+        self._cspace_distance_weight = torch.ones(
+            self.action_dim, device=self.device_cfg.device, dtype=self.device_cfg.dtype
+        )
 
         # Initialize the distance neighbor calculator
         self.distance_calculator = DistanceNeighborCalculator(
@@ -142,49 +158,115 @@ class PRMGraphPlanner:
         self.linear_connector.set_dependencies(
             action_dim=self.action_dim,
             cspace_distance_weight=self.cspace_distance_weight,
-            check_feasibility_fn=self.check_samples_feasibility,
+            check_feasibility_fn=self._check_samples_feasibility_ephemeral,
             preallocated_idx_buffer=self.node_manager._preallocated_idx_buffer,
         )
 
-    def check_samples_feasibility(self, action_samples):  # call feasibility here:
-        # call mask samples here with a for loop:
+    def _compute_sample_feasibility(self, action_samples: torch.Tensor) -> torch.Tensor:
+        """Compute the planner's exact Boolean feasibility predicate."""
+        metrics_result = self.feasibility_rollout.compute_metrics_from_action(action_samples)
+        return metrics_result.costs_and_constraints.get_feasible(
+            include_all_hybrid=False, sum_horizon=True
+        )
+
+    def _compute_sample_feasibility_with_env(
+        self,
+        action_samples: torch.Tensor,
+        env_query_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute feasibility with an explicit environment per sample."""
+        metrics_result = self.feasibility_rollout.compute_metrics_from_action(
+            action_samples,
+            idxs_env_query=env_query_idx,
+        )
+        return metrics_result.costs_and_constraints.get_feasible(
+            include_all_hybrid=False,
+            sum_horizon=True,
+        )
+
+    def _check_samples_feasibility_ephemeral(
+        self,
+        action_samples: torch.Tensor,
+        env_query_idx: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Borrow graph output for immediate same-stream connector reduction."""
+        return self.check_samples_feasibility(
+            action_samples,
+            clone_output=False,
+            env_query_idx=env_query_idx,
+        )
+
+    def check_samples_feasibility(
+        self,
+        action_samples: torch.Tensor,
+        clone_output: bool = True,
+        env_query_idx: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Return feasibility, optionally borrowing the CUDA-graph output buffer.
+
+        ``clone_output=False`` is for same-stream internal consumers that finish
+        reading the mask before the next feasibility replay. Public callers keep
+        the historical independently-owned result by default.
+        """
         if len(action_samples.shape) != 2:
             log_and_raise("action_samples must be a 2D tensor (batch_size, action_dim)")
 
-        feasible_mask = []
-        action_samples = action_samples.unsqueeze(1)
-        if self.config.feasibility_buffer_size < action_samples.shape[0]:
-            for i in range(
-                math.ceil(action_samples.shape[0] / self.config.feasibility_buffer_size)
-            ):
-                start = i * self.config.feasibility_buffer_size
-                end = (i + 1) * self.config.feasibility_buffer_size
-                if end > action_samples.shape[0]:
-                    end = action_samples.shape[0]
-                current_action_samples = action_samples[start:end, :]
+        if env_query_idx is not None:
+            if env_query_idx.shape != (action_samples.shape[0],):
+                log_and_raise("env_query_idx must have shape (batch_size,)")
+            if env_query_idx.dtype != torch.int32:
+                log_and_raise("env_query_idx must use torch.int32")
+            if env_query_idx.device != action_samples.device:
+                log_and_raise("env_query_idx must share action_samples.device")
 
-                end_idx = current_action_samples.shape[0]
-                self._max_act_buffer[:end_idx, :, :] = current_action_samples
-                metrics_result = self.feasibility_rollout.compute_metrics_from_action(
-                    self._max_act_buffer,
-                )
-                feasible = metrics_result.costs_and_constraints.get_feasible(
-                    include_all_hybrid=False, sum_horizon=True
-                )[:end_idx]
-                feasible_mask.append(feasible)
+        action_samples = action_samples.unsqueeze(1)
+        buffer_size = self.config.feasibility_buffer_size
+        if action_samples.shape[0] == 0:
+            return torch.empty(0, dtype=torch.bool, device=action_samples.device)
+
+        if env_query_idx is None:
+            executor = self._sample_feasibility_executor
+            if not executor.is_initialized:
+                executor.warmup(self._max_act_buffer)
+            graph_input = executor.static_inputs[0]
+            env_graph_input = None
         else:
-            start = 0
-            end = action_samples.shape[0]
-            self._max_act_buffer[:end, :, :] = action_samples
-            metrics_result = self.feasibility_rollout.compute_metrics_from_action(
-                self._max_act_buffer,
-            )
-            feasible = metrics_result.costs_and_constraints.get_feasible(
-                include_all_hybrid=False, sum_horizon=True
-            )[:end]
-            feasible_mask.append(feasible)
-        feasible_mask = torch.cat(feasible_mask).squeeze()
-        return feasible_mask
+            if self._sample_feasibility_env_executor is None:
+                self._sample_feasibility_env_executor = create_graph_executor(
+                    capture_fn=self._compute_sample_feasibility_with_env,
+                    device=self.device_cfg.device,
+                    use_cuda_graph=self.config.use_cuda_graph_for_rollout,
+                    clone_outputs=False,
+                )
+            executor = self._sample_feasibility_env_executor
+            if not executor.is_initialized:
+                executor.warmup(self._max_act_buffer, self._max_env_query_buffer)
+            graph_input = executor.static_inputs[0]
+            env_graph_input = executor.static_inputs[1]
+
+        if action_samples.shape[0] <= buffer_size:
+            graph_input[: action_samples.shape[0]].copy_(action_samples)
+            if env_graph_input is not None:
+                env_graph_input[: action_samples.shape[0]].copy_(env_query_idx)
+            feasible = executor.replay()[: action_samples.shape[0]]
+            if clone_output:
+                feasible = feasible.clone()
+            return feasible.squeeze()
+
+        feasible_chunks = []
+        for start in range(0, action_samples.shape[0], buffer_size):
+            end = min(start + buffer_size, action_samples.shape[0])
+            chunk_size = end - start
+            graph_input[:chunk_size].copy_(action_samples[start:end])
+            if env_graph_input is not None:
+                env_graph_input[:chunk_size].copy_(env_query_idx[start:end])
+
+            # CUDA graph outputs use fixed storage. Clone each active slice so
+            # a later chunk replay cannot overwrite an earlier result.
+            feasible = executor.replay()[:chunk_size]
+            feasible_chunks.append(feasible.clone())
+
+        return torch.cat(feasible_chunks).squeeze()
 
     @profiler.record_function("base_graph_planner/extend_roadmap_with_random_samples")
     def extend_roadmap_with_random_samples(
@@ -343,7 +425,9 @@ class PRMGraphPlanner:
             return result
 
         # if start and goal are same, return True:
-        linear_path_distance = self.distance_calculator.calculate_weighted_distance(x_start, x_goal)
+        linear_path_distance = self.distance_calculator.calculate_weighted_distance(
+            x_start, x_goal
+        )
         if torch.all(linear_path_distance < self.config.cspace_similarity_threshold):
             result.success[:] = True
             result.plan_waypoints = [
@@ -361,10 +445,14 @@ class PRMGraphPlanner:
         )
 
         batch_start_idx = (
-            start_nodes_in_roadmap[..., self.action_dim].to(dtype=torch.int64, device="cpu").tolist()
+            start_nodes_in_roadmap[..., self.action_dim]
+            .to(dtype=torch.int64, device="cpu")
+            .tolist()
         )
         batch_goal_idx = (
-            goal_nodes_in_roadmap[..., self.action_dim].to(dtype=torch.int64, device="cpu").tolist()
+            goal_nodes_in_roadmap[..., self.action_dim]
+            .to(dtype=torch.int64, device="cpu")
+            .tolist()
         )
         path_exists, exist_label = self._check_paths_exist(
             batch_start_idx, batch_goal_idx, require_all_paths=True
@@ -449,7 +537,9 @@ class PRMGraphPlanner:
             else:
                 if path_finding_iter == 1:
                     n_nodes = self.config.new_nodes_per_iteration
-                c_max_tensor[idx] = c_max_tensor[idx] * self.config.exploration_radius_growth_factor
+                c_max_tensor[idx] = (
+                    c_max_tensor[idx] * self.config.exploration_radius_growth_factor
+                )
 
             k_nn = int(self.config.neighbors_per_node_growth_factor * k_nn)
             n_nodes = int(self.config.new_nodes_per_iteration_growth_factor * n_nodes)
@@ -562,6 +652,7 @@ class PRMGraphPlanner:
         return interpolated_trajectory_gpu
 
     def reset_buffer(self):
+        """Clear roadmap nodes and edges without invalidating CUDA graphs."""
         self.node_manager.reset_buffer()
         self.graph_constructor.reset()
 
@@ -571,6 +662,10 @@ class PRMGraphPlanner:
         self.graph_path_finder.reset_seed()
 
     def reset_cuda_graph(self):
+        self._sample_feasibility_executor.reset()
+        if self._sample_feasibility_env_executor is not None:
+            self._sample_feasibility_env_executor.reset()
+            self._sample_feasibility_env_executor = None
         if hasattr(self.auxiliary_rollout, "reset_cuda_graph"):
             self.auxiliary_rollout.reset_cuda_graph()
 

@@ -10,6 +10,9 @@ import pytest
 import torch
 
 # CuRobo
+from curobo._src.robot.dynamics.dynamics import Dynamics
+from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+from curobo._src.solver.processor_trajopt_result import TorchTrajOptResultProcessor
 from curobo._src.solver.solver_trajopt import TrajOptSolver
 from curobo._src.solver.solver_trajopt_cfg import TrajOptSolverCfg
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
@@ -17,6 +20,7 @@ from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
 from curobo._src.types.tool_pose import GoalToolPose
+from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
 
 
 @pytest.fixture(scope="module")
@@ -92,6 +96,64 @@ def sample_start_state_goalset(trajopt_solver_goalset):
     )
 
 
+@pytest.mark.parametrize("batched", [False, True])
+def test_payload_updates_refresh_metrics_dynamics(
+    cuda_device_cfg: DeviceCfg, batched: bool
+) -> None:
+    """Keep every rollout's torques consistent after loading and unloading a payload."""
+    robot = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
+    robot["load_dynamics"] = True
+    solver = TrajOptSolver(
+        TrajOptSolverCfg.create(
+            robot=robot, device_cfg=cuda_device_cfg, num_seeds=1, use_cuda_graph=False
+        )
+    )
+    rollouts = solver.core.get_all_rollout_instances() + list(
+        solver.core.additional_metrics_rollouts.values()
+    )
+    assert "interpolated_rollout" in solver.core.additional_metrics_rollouts
+    models = [
+        model
+        for rollout in rollouts
+        for model in (rollout.transition_model, rollout.metrics_transition_model)
+    ]
+    position = solver.default_joint_state.position.reshape(1, 1, -1).clone()
+    state = JointState(
+        position=position,
+        velocity=torch.full_like(position, 0.1),
+        acceleration=torch.full_like(position, 0.2),
+    )
+    for model in models:
+        assert model.compute_inverse_dynamics
+        model.robot_dynamics.setup_batch_size(1, 1)
+    previous_torque = models[0].robot_dynamics.compute_inverse_dynamics(state).clone()
+    com = torch.tensor([0.01, 0.02, 0.1], **cuda_device_cfg.as_torch_dict())
+    for mass in (1.0, 0.1):
+        inertia = torch.tensor(
+            [0.001, 0.002, 0.003, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict()
+        ) * mass
+        if batched:
+            solver.update_links_inertial(
+                {"attached_object": {"mass": mass, "com": com, "inertia": inertia}}
+            )
+        else:
+            solver.update_link_inertial("attached_object", mass, com, inertia)
+        reference = Dynamics(
+            DynamicsCfg(
+                kinematics_config=solver.kinematics.config.kinematics_config,
+                device_cfg=cuda_device_cfg,
+            )
+        )
+        reference.setup_batch_size(1, 1)
+        expected_torque = reference.compute_inverse_dynamics(state).clone()
+        assert not torch.allclose(expected_torque, previous_torque)
+        for model in models:
+            torch.testing.assert_close(
+                model.robot_dynamics.compute_inverse_dynamics(state), expected_torque
+            )
+        previous_torque = expected_torque
+
+
 class TestTrajOptSolverCfgCreation:
     """Test TrajOptSolverCfg creation."""
 
@@ -137,6 +199,7 @@ class TestTrajOptSolverInitialization:
         assert hasattr(solver, 'seed_manager')
         assert hasattr(solver, 'goal_registry_manager')
         assert hasattr(solver, '_trajectory_seed_generator')
+        assert isinstance(solver.result_processor, TorchTrajOptResultProcessor)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_init_creates_interpolated_rollout(self, franka_trajopt_config):
@@ -252,6 +315,64 @@ class TestTrajOptSolverSolvePose:
         if result.solution is not None:
             assert result.solution.ndim == 4
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_trajectory_dt_update_is_visible_to_all_rollouts(
+        self, trajopt_solver, sample_start_state, sample_goal_pose
+    ):
+        """A central dt write is visible through every rollout's cached goal aliases."""
+        tool_frames = trajopt_solver.kinematics.tool_frames
+        goal_tool_poses = GoalToolPose.from_poses(
+            {tool_frames[0]: sample_goal_pose.unsqueeze(1)},
+            ordered_tool_frames=tool_frames,
+        )
+        trajopt_solver.solve_pose(
+            current_state=sample_start_state,
+            goal_tool_poses=goal_tool_poses,
+        )
+        goal_buffer = trajopt_solver.core._goal_buffer
+        central_dt = goal_buffer.seed_goal_js.dt
+        updated_dt = torch.full_like(central_dt, 0.04)
+
+        trajopt_solver._update_trajectory_dt(updated_dt)
+
+        for rollout in trajopt_solver.get_all_rollout_instances(
+            include_optimizer_rollouts=True, include_auxiliary_rollout=False
+        ):
+            assert rollout._metrics_goal.seed_goal_js.dt is central_dt
+            assert rollout._num_particles_goal.seed_goal_js.dt is central_dt
+            torch.testing.assert_close(rollout._num_particles_goal.seed_goal_js.dt, updated_dt)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_seed_config_reuses_initial_goal_buffer(
+        self, trajopt_solver, sample_start_state, sample_goal_pose, monkeypatch
+    ):
+        """Initial retiming and optimization share one full goal-buffer preparation."""
+        tool_frames = trajopt_solver.kinematics.tool_frames
+        goal_tool_poses = GoalToolPose.from_poses(
+            {tool_frames[0]: sample_goal_pose.unsqueeze(1)},
+            ordered_tool_frames=tool_frames,
+        )
+        seed_config = sample_start_state.position.view(1, 1, -1).repeat(
+            1, trajopt_solver.config.num_seeds, 1
+        )
+        prepare_calls = 0
+        original_prepare = trajopt_solver._prepare_goal_buffer
+
+        def count_prepare(*args, **kwargs):
+            nonlocal prepare_calls
+            prepare_calls += 1
+            return original_prepare(*args, **kwargs)
+
+        monkeypatch.setattr(trajopt_solver, "_prepare_goal_buffer", count_prepare)
+
+        trajopt_solver.solve_pose(
+            current_state=sample_start_state,
+            goal_tool_poses=goal_tool_poses,
+            seed_config=seed_config,
+        )
+
+        assert prepare_calls == 1
+
 
 class TestTrajOptSolverProperties2:
     """Test additional TrajOptSolver properties."""
@@ -326,6 +447,9 @@ class TestTrajOptSolverResultFromSolve:
         )
 
         assert hasattr(result, 'interpolated_trajectory')
+        full_joint_names = trajopt_solver.kinematics.all_articulated_joint_names
+        assert result.interpolated_trajectory.joint_names == full_joint_names
+        assert result.interpolated_trajectory.shape[-1] == len(full_joint_names)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_result_has_js_solution(
@@ -415,6 +539,80 @@ class TestTrajOptSolverPrepareTrajectorySeeds:
         """Test prepare_trajectory_seeds method exists."""
         assert hasattr(trajopt_solver, 'prepare_trajectory_seeds')
         assert callable(trajopt_solver.prepare_trajectory_seeds)
+
+
+class TestTrajOptSolverEvaluateSeed:
+    """Test retiming and dense validation without optimization."""
+
+    @staticmethod
+    def _make_cspace_seed(trajopt_solver, sample_start_state):
+        goal_state = sample_start_state.clone()
+        goal_state.position[..., 0] += 0.1
+        num_seeds = trajopt_solver.config.num_seeds
+        seed_config = goal_state.position.view(1, 1, -1).repeat(1, num_seeds, 1)
+        seed_traj = trajopt_solver.prepare_trajectory_seeds(
+            1,
+            num_seeds,
+            sample_start_state,
+            seed_config=seed_config,
+        ).view(1, num_seeds, trajopt_solver.action_horizon, trajopt_solver.action_dim)
+        return goal_state, seed_traj
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_seed_valid_mask_rejects_non_graph_lanes(
+        self,
+        trajopt_solver,
+        sample_start_state,
+    ):
+        """Do not count straight-line fallbacks as graph-planner successes."""
+        goal_state, seed_traj = self._make_cspace_seed(trajopt_solver, sample_start_state)
+        seed_valid_mask = torch.zeros(
+            (1, trajopt_solver.config.num_seeds),
+            dtype=torch.bool,
+            device=seed_traj.device,
+        )
+
+        result = trajopt_solver.evaluate_cspace_seed(
+            goal_state,
+            sample_start_state,
+            seed_traj,
+            seed_valid_mask=seed_valid_mask,
+        )
+
+        assert not result.success.any()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_required_dt_above_maximum_rejects_seed(
+        self,
+        trajopt_solver,
+        sample_start_state,
+        monkeypatch,
+    ):
+        """Reject seeds whose unclamped retiming exceeds the solver limit."""
+        goal_state, seed_traj = self._make_cspace_seed(trajopt_solver, sample_start_state)
+
+        def above_maximum_dt(trajectory, epsilon=1e-3, scale_dt=True):
+            del epsilon, scale_dt
+            return torch.full(
+                (trajectory.shape[0],),
+                trajopt_solver.config.maximum_trajectory_dt + 0.1,
+                device=trajectory.position.device,
+                dtype=trajectory.position.dtype,
+            )
+
+        monkeypatch.setattr(
+            trajopt_solver,
+            "_compute_unclamped_trajectory_dt",
+            above_maximum_dt,
+        )
+
+        result = trajopt_solver.evaluate_cspace_seed(
+            goal_state,
+            sample_start_state,
+            seed_traj,
+        )
+
+        assert not result.success.any()
 
 
 class TestTrajOptSolverResetMethods:

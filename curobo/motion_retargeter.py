@@ -16,13 +16,13 @@ Example:
     cfg = MotionRetargeterCfg.create(
         robot="unitree_g1_29dof_retarget.yml",
         tool_pose_criteria={
-            "pelvis": ToolPoseCriteria.track_position_and_orientation(
+            "pelvis": ToolPoseCriteria.track_pose(
                 xyz=[1.0, 1.0, 1.0], rpy=[0.5, 0.5, 0.5],
             ),
-            "left_hand": ToolPoseCriteria.track_position_and_orientation(
+            "left_hand": ToolPoseCriteria.track_pose(
                 xyz=[1.0, 1.0, 1.0], rpy=[0.3, 0.3, 0.3],
             ),
-            "right_hand": ToolPoseCriteria.track_position_and_orientation(
+            "right_hand": ToolPoseCriteria.track_pose(
                 xyz=[1.0, 1.0, 1.0], rpy=[0.3, 0.3, 0.3],
             ),
         },

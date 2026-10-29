@@ -101,23 +101,7 @@ body:
         - Source — CUDA 13 + PyTorch (`uv pip install .[cu13-torch]`)
         - Source — CUDA 12, PyTorch pre-installed (`uv pip install .[cu12]`)
         - Source — CUDA 13, PyTorch pre-installed (`uv pip install .[cu13]`)
-        - Source — with `pybind` extra (`uv pip install .[<cuda>,pybind]`)
         - Other (please describe in "Additional context")
-    validations:
-      required: true
-
-  - type: dropdown
-    id: kernel_backend
-    attributes:
-      label: Kernel backend
-      description: |
-        Which curobolib backend is in use? Check by running
-        `python -c "from curobo._src.curobolib.backends import get_backend_name; print(get_backend_name())"`,
-        or by inspecting the `CUROBO_KERNEL_BACKEND` environment variable.
-      options:
-        - cuda_core (default, runtime compilation)
-        - pybind (pre-compiled extension)
-        - Not sure
     validations:
       required: true
 

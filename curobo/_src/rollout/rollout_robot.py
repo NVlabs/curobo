@@ -17,10 +17,11 @@ from typing import Dict, List, Optional
 import torch
 import torch.autograd.profiler as profiler
 
-from curobo._src.cost.cost_base import BaseCost
-
 # CuRobo
+import curobo._src.runtime as curobo_runtime
+from curobo._src.cost.cost_base import BaseCost
 from curobo._src.geom.collision.collision_scene import SceneCollision, create_scene_collision
+from curobo._src.robot.types.joint_limits import JointLimits
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.metrics import (
     CostCollection,
@@ -31,7 +32,8 @@ from curobo._src.rollout.metrics import (
 from curobo._src.rollout.rollout_robot_cfg import RobotRolloutCfg
 from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_robot import RobotState
-from curobo._src.util.cuda_graph_util import create_graph_executor, GraphExecutor
+from curobo._src.types.tool_pose import GoalToolPose
+from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.sampling.sample_buffer import SampleBuffer
 
@@ -42,7 +44,8 @@ class RobotRollout:
     Combines a state-transition model, cost manager, and collision checker to
     score candidate trajectories.  CUDA-graph wrapping for
     ``compute_metrics_from_state`` and ``compute_metrics_from_action`` is
-    controlled by the ``use_cuda_graph`` constructor parameter.
+    controlled by the ``use_cuda_graph`` constructor parameter. Direct time
+    scaling uses a graph executor when runtime checks are skipped.
     """
 
     @profiler.record_function("robot_rollout/init")
@@ -63,8 +66,10 @@ class RobotRollout:
         self._use_cuda_graph = use_cuda_graph
         self._compute_metrics_from_state_executor: Optional[GraphExecutor] = None
         self._compute_metrics_from_action_executor: Optional[GraphExecutor] = None
+        self._compute_time_scaled_dt_from_action_executor: Optional[GraphExecutor] = None
 
         if config is not None:
+            config.resolve_requirements()
             self.scene_collision_checker = scene_collision_checker
             self.device_cfg = config.device_cfg
             self.sum_horizon = config.sum_horizon
@@ -114,7 +119,9 @@ class RobotRollout:
 
         if self.config.constraint_cfg is not None:
             self.constraint_manager = self.config.constraint_cfg.class_type(self.device_cfg)
-            self.metrics_constraint_manager = self.config.constraint_cfg.class_type(self.device_cfg)
+            self.metrics_constraint_manager = self.config.constraint_cfg.class_type(
+                self.device_cfg
+            )
             self._cost_manager_list.append(self.constraint_manager)
             self._cost_manager_list.append(self.metrics_constraint_manager)
 
@@ -192,6 +199,22 @@ class RobotRollout:
     @property
     def horizon(self) -> int:
         return self.transition_model.horizon
+
+    def get_hessian_block_half_bandwidth(self) -> Optional[int]:
+        """Derive conservative action-knot Hessian bandwidth from all costs."""
+        dense_temporal_support_span = max(
+            (
+                manager.dense_temporal_support_span
+                for manager in (
+                    self.cost_manager,
+                    self.constraint_manager,
+                    self.hybrid_cost_constraint_manager,
+                )
+                if manager is not None
+            ),
+            default=0,
+        )
+        return self.transition_model.get_hessian_block_half_bandwidth(dense_temporal_support_span)
 
     @property
     def action_bound_lows(self) -> torch.Tensor:
@@ -283,7 +306,7 @@ class RobotRollout:
             :class:`RolloutMetrics` containing per-problem feasibility,
             cost/constraint values, and convergence tolerances.
         """
-        if self._use_cuda_graph:
+        if self._use_cuda_graph and not kwargs:
             if self._compute_metrics_from_state_executor is None:
                 self._compute_metrics_from_state_executor = create_graph_executor(
                     capture_fn=self._compute_metrics_from_state_impl,
@@ -310,7 +333,7 @@ class RobotRollout:
         """
         batch_size = act_seq.shape[0]
         self.update_batch_size(batch_size)
-        if self._use_cuda_graph:
+        if self._use_cuda_graph and not kwargs:
             if self._compute_metrics_from_action_executor is None:
                 self._compute_metrics_from_action_executor = create_graph_executor(
                     capture_fn=self._compute_metrics_from_action_impl,
@@ -323,12 +346,84 @@ class RobotRollout:
     #  State computation (public, used by solvers)                         #
     # ------------------------------------------------------------------ #
 
+    @profiler.record_function("robot_rollout/compute_time_scaled_dt_from_action")
+    def compute_time_scaled_dt_from_action(
+        self,
+        act_seq: torch.Tensor,
+        joint_limits: JointLimits,
+        epsilon: float = 1e-3,
+        minimum_dt: float = -1.0,
+        maximum_dt: float = -1.0,
+    ) -> torch.Tensor:
+        """Compute one feasible absolute dt per action sequence.
+
+        When runtime checks are skipped, repeated calls replay through a graph executor. Negative
+        minimum or maximum bounds disable the corresponding clamp.
+        """
+        if curobo_runtime.skip_checks:
+            if self._compute_time_scaled_dt_from_action_executor is None:
+                self._compute_time_scaled_dt_from_action_executor = create_graph_executor(
+                    capture_fn=self._compute_time_scaled_dt_from_action_impl,
+                    device=self.device_cfg.device,
+                    clone_outputs=False,
+                    joint_limits=joint_limits,
+                    epsilon=epsilon,
+                    minimum_dt=minimum_dt,
+                    maximum_dt=maximum_dt,
+                )
+            return self._compute_time_scaled_dt_from_action_executor(act_seq)
+        return self._compute_time_scaled_dt_from_action_impl(
+            act_seq,
+            joint_limits,
+            epsilon=epsilon,
+            minimum_dt=minimum_dt,
+            maximum_dt=maximum_dt,
+        )
+
+    def _compute_time_scaled_dt_from_action_impl(
+        self,
+        act_seq: torch.Tensor,
+        joint_limits: JointLimits,
+        epsilon: float = 1e-3,
+        minimum_dt: float = -1.0,
+        maximum_dt: float = -1.0,
+    ) -> torch.Tensor:
+        """Compute time scaling eagerly for direct execution or graph capture."""
+        return self.transition_model.compute_time_scaled_dt_from_action(
+            self.start_state,
+            act_seq,
+            joint_limits,
+            epsilon=epsilon,
+            minimum_dt=minimum_dt,
+            maximum_dt=maximum_dt,
+            start_state_idx=(
+                self._num_particles_goal.idxs_current_js
+                if self._num_particles_goal is not None
+                else None
+            ),
+            goal_state=(
+                self._num_particles_goal.seed_goal_js
+                if self._num_particles_goal is not None
+                else None
+            ),
+            goal_state_idx=(
+                self._num_particles_goal.idxs_seed_goal_js
+                if self._num_particles_goal is not None
+                else None
+            ),
+            use_implicit_goal_state=(
+                self._num_particles_goal.seed_enable_implicit_goal_js
+                if self._num_particles_goal is not None
+                else None
+            ),
+        )
+
     @profiler.record_function("robot_rollout/compute_state_from_action")
-    def compute_state_from_action(self, act_seq: torch.Tensor, **kwargs) -> JointState:
+    def compute_state_from_action(self, act_seq: torch.Tensor, **kwargs) -> RobotState:
         return self._compute_state_from_action_impl(act_seq)
 
-    def compute_state_from_action_metrics(self, act_seq: torch.Tensor, **kwargs) -> JointState:
-        return self._compute_state_from_action_metrics_impl(act_seq)
+    def compute_state_from_action_metrics(self, act_seq: torch.Tensor, **kwargs) -> RobotState:
+        return self._compute_state_from_action_metrics_impl(act_seq, **kwargs)
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -376,21 +471,78 @@ class RobotRollout:
         else:
             self._metrics_goal.copy_(goal, update_idx_buffers=True, allow_clone=False)
 
+        if goal.seed_goal_js is not None and goal.seed_goal_js.dt is not None:
+            self._alias_seed_goal_dt(goal.seed_goal_js.dt)
+
         if num_particles is not None:
             batch_size = self._num_particles_goal.num_seeds * self._num_particles_goal.batch_size
             self.update_batch_size(batch_size)
         return True
 
+    def _alias_seed_goal_dt(self, goal_dt: torch.Tensor) -> None:
+        """Point both cached goal registries at the central per-seed dt tensor."""
+        for cached_goal in (self._metrics_goal, self._num_particles_goal):
+            if cached_goal is None:
+                log_and_raise("Rollout not initialized. Call update_params first.")
+            if cached_goal.seed_goal_js is None:
+                log_and_raise("seed_goal_js is None")
+            cached_dt = cached_goal.seed_goal_js.dt
+            if cached_dt is not None and cached_dt.shape != goal_dt.shape:
+                log_and_raise("dt shape mismatch")
+            cached_goal.seed_goal_js.dt = goal_dt
+
+    def alias_goal_tool_poses(self, goal_tool_poses: GoalToolPose) -> None:
+        """Point cached goal registries at one fixed-address tool-pose target."""
+        for cached_goal in (self._metrics_goal, self._num_particles_goal):
+            if cached_goal is None or cached_goal.link_goal_poses is None:
+                log_and_raise("Tool-pose rollout goal has not been initialized")
+            if cached_goal.link_goal_poses.shape != goal_tool_poses.shape:
+                log_and_raise(
+                    "Tool-pose goal shape mismatch: "
+                    f"{cached_goal.link_goal_poses.shape} != {goal_tool_poses.shape}"
+                )
+            if cached_goal.link_goal_poses.tool_frames != goal_tool_poses.tool_frames:
+                log_and_raise("Tool-pose goal frames cannot change after initialization")
+            cached_goal.link_goal_poses = goal_tool_poses
+
+    @property
+    def has_goal_pose_routes(self) -> bool:
+        """Return whether fixed tool-pose route buffers have been installed."""
+        cached_goals = (self._metrics_goal, self._num_particles_goal)
+        return all(goal is not None and goal.idxs_link_pose is not None for goal in cached_goals)
+
+    def route_goal_poses(self, goal_query_idx: torch.Tensor) -> None:
+        """Copy per-state tool-pose goal routes into fixed rollout buffers.
+
+        This operation is allocation-free and safe to capture inside RRT CUDA
+        graphs after :attr:`has_goal_pose_routes` becomes true.
+
+        Args:
+            goal_query_idx: Goal row for every rollout state with shape
+                ``(batch, 1)`` and dtype ``torch.int32``.
+        """
+        for cached_goal in (self._metrics_goal, self._num_particles_goal):
+            if cached_goal is None or cached_goal.idxs_link_pose is None:
+                log_and_raise("Tool-pose rollout goal routes have not been initialized")
+            if (
+                cached_goal.idxs_link_pose.shape != goal_query_idx.shape
+                or cached_goal.idxs_link_pose.dtype != goal_query_idx.dtype
+                or cached_goal.idxs_link_pose.device != goal_query_idx.device
+            ):
+                log_and_raise(
+                    "Tool-pose goal route shape, dtype, and device must match rollout buffers"
+                )
+            cached_goal.idxs_link_pose.copy_(goal_query_idx)
+
     def update_goal_dt(self, goal: GoalRegistry) -> bool:
         """Hot-patch the per-seed trajectory dt without a full goal update.
 
-        Copies ``goal.seed_goal_js.dt`` into both the particle-expanded and
-        metrics goal registries.  Six guard clauses verify that both
-        registries exist, their ``seed_goal_js`` fields are populated, and
-        the dt tensor shapes match the incoming goal.
+        Makes both the particle-expanded and metrics goal registries reference
+        ``goal.seed_goal_js.dt``. Shape checks protect existing captured tensor
+        contracts.
 
         Args:
-            goal: Goal registry whose ``seed_goal_js.dt`` will be copied.
+            goal: Goal registry whose ``seed_goal_js.dt`` will be referenced.
                 Must not be ``None`` and must have matching dt shape.
 
         Returns:
@@ -402,20 +554,9 @@ class RobotRollout:
         """
         if goal.seed_goal_js is None:
             log_and_raise("seed_goal_js is None")
-        if self._num_particles_goal is None:
-            log_and_raise("Rollout not initialized. Call update_params first.")
-        if self._metrics_goal is None:
-            log_and_raise("Rollout not initialized. Call update_params first.")
-        if self._metrics_goal.seed_goal_js is None:
-            log_and_raise("seed_goal_js is None")
-        if self._metrics_goal.seed_goal_js.dt.shape != goal.seed_goal_js.dt.shape:
-            log_and_raise("dt shape mismatch")
-        if self._num_particles_goal.seed_goal_js is None:
-            log_and_raise("seed_goal_js is None")
-        if self._num_particles_goal.seed_goal_js.dt.shape != goal.seed_goal_js.dt.shape:
-            log_and_raise("dt shape mismatch")
-        self._metrics_goal.seed_goal_js.dt.copy_(goal.seed_goal_js.dt)
-        self._num_particles_goal.seed_goal_js.dt.copy_(goal.seed_goal_js.dt)
+        if goal.seed_goal_js.dt is None:
+            log_and_raise("dt is None in seed_goal_js")
+        self._alias_seed_goal_dt(goal.seed_goal_js.dt)
         return True
 
     def update_batch_size(self, batch_size: int) -> None:
@@ -449,6 +590,9 @@ class RobotRollout:
             self._compute_metrics_from_state_executor.reset()
         if self._compute_metrics_from_action_executor is not None:
             self._compute_metrics_from_action_executor.reset()
+        if self._compute_time_scaled_dt_from_action_executor is not None:
+            self._compute_time_scaled_dt_from_action_executor.reset()
+            self._compute_time_scaled_dt_from_action_executor = None
         return self.reset_shape()
 
     def reset_seed(self) -> None:
@@ -535,7 +679,7 @@ class RobotRollout:
     # ------------------------------------------------------------------ #
 
     def _compute_state_from_action_impl(self, act_seq: torch.Tensor) -> RobotState:
-        state = self.transition_model.forward(
+        return self.transition_model.forward(
             self.start_state,
             act_seq,
             (
@@ -559,12 +703,9 @@ class RobotRollout:
                 else None
             ),
             idxs_env=(
-                self._num_particles_goal.idxs_env
-                if self._num_particles_goal is not None
-                else None
+                self._num_particles_goal.idxs_env if self._num_particles_goal is not None else None
             ),
         )
-        return state
 
     def _compute_costs_and_constraints_impl(
         self, state: RobotState, **kwargs
@@ -593,6 +734,11 @@ class RobotRollout:
     def _compute_state_from_action_metrics_impl(
         self, act_seq: torch.Tensor, **kwargs
     ) -> RobotState:
+        idxs_env = kwargs.get("idxs_env_query")
+        if idxs_env is None:
+            idxs_env = kwargs.get("env_query_idx")
+        if idxs_env is None and self._metrics_goal is not None:
+            idxs_env = self._metrics_goal.idxs_env
         state = self.metrics_transition_model.forward(
             self.start_state,
             act_seq,
@@ -604,9 +750,7 @@ class RobotRollout:
                 if self._metrics_goal is not None
                 else None
             ),
-            idxs_env=(
-                self._metrics_goal.idxs_env if self._metrics_goal is not None else None
-            ),
+            idxs_env=idxs_env,
         )
         return state
 
@@ -624,10 +768,8 @@ class RobotRollout:
             )
             costs_and_constraints.constraints.merge(constraint_collection)
         if self.config.hybrid_cost_constraint_cfg is not None:
-            hybrid_cost_collection = (
-                self.metrics_hybrid_cost_constraint_manager.compute_costs(
-                    state, goal=goal, **kwargs
-                )
+            hybrid_cost_collection = self.metrics_hybrid_cost_constraint_manager.compute_costs(
+                state, goal=goal, **kwargs
             )
             costs_and_constraints.hybrid_costs_constraints.merge(hybrid_cost_collection)
         return costs_and_constraints
@@ -642,8 +784,8 @@ class RobotRollout:
         return convergence_collection
 
     def _compute_metrics_from_state_impl(self, state: JointState, **kwargs) -> RolloutMetrics:
-        costs_and_constraints = self._compute_costs_and_constraints_metrics_impl(state)
-        convergence = self._compute_convergence_metrics_impl(state)
+        costs_and_constraints = self._compute_costs_and_constraints_metrics_impl(state, **kwargs)
+        convergence = self._compute_convergence_metrics_impl(state, **kwargs)
         return RolloutMetrics(
             costs_and_constraints=costs_and_constraints,
             feasible=costs_and_constraints.get_feasible(),
@@ -651,10 +793,8 @@ class RobotRollout:
             convergence=convergence,
         )
 
-    def _compute_metrics_from_action_impl(
-        self, act_seq: torch.Tensor, **kwargs
-    ) -> RolloutMetrics:
-        state = self._compute_state_from_action_metrics_impl(act_seq)
+    def _compute_metrics_from_action_impl(self, act_seq: torch.Tensor, **kwargs) -> RolloutMetrics:
+        state = self._compute_state_from_action_metrics_impl(act_seq, **kwargs)
         metrics = self._compute_metrics_from_state_impl(state, **kwargs)
         metrics.actions = act_seq
         return metrics
