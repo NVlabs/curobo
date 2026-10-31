@@ -149,6 +149,54 @@ class TestUrdfRobotParserJointLimits:
         assert link_params.joint_limits[0] == pytest.approx(-6.28, abs=0.01)
         assert link_params.joint_limits[1] == pytest.approx(6.28, abs=0.01)
 
+    def test_continuous_joint_without_limit_element(self, tmp_path):
+        """Test continuous joint without a <limit> element uses default limits."""
+        urdf_content = """<?xml version="1.0"?>
+<robot name="test_robot">
+  <link name="base_link"/>
+  <link name="joint_link"/>
+
+  <joint name="continuous_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="joint_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+</robot>"""
+
+        urdf_path = tmp_path / "continuous_joint_no_limit.urdf"
+        urdf_path.write_text(urdf_content)
+
+        parser = UrdfRobotParser(urdf_path=str(urdf_path))
+        link_params = parser.get_link_parameters("joint_link", base=False)
+
+        assert link_params.joint_limits is not None
+        assert link_params.joint_limits == pytest.approx([-6.28, 6.28], abs=0.01)
+        assert link_params.joint_effort_limit == pytest.approx([100.0])
+        assert link_params.joint_velocity_limits == pytest.approx([-100.0, 100.0])
+
+    def test_revolute_joint_without_limit_element_raises(self, tmp_path):
+        """Test revolute joint without a <limit> element raises a clear error."""
+        urdf_content = """<?xml version="1.0"?>
+<robot name="test_robot">
+  <link name="base_link"/>
+  <link name="joint_link"/>
+
+  <joint name="revolute_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="joint_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+</robot>"""
+
+        urdf_path = tmp_path / "revolute_joint_no_limit.urdf"
+        urdf_path.write_text(urdf_content)
+
+        parser = UrdfRobotParser(urdf_path=str(urdf_path))
+        with pytest.raises(ValueError, match="has no <limit> element"):
+            parser.get_link_parameters("joint_link", base=False)
+
     def test_get_joint_name_method(self, franka_parser):
         """Test _get_joint_name method (lines 92-93)."""
         # Get the name of the first joint

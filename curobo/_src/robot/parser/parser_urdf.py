@@ -101,6 +101,13 @@ class UrdfRobotParser(RobotParser):
         """
         joint_type = joint.type
         if joint_type != "continuous":
+            if joint.limit is None:
+                # yourdfpy does not validate this, so give a clear diagnostic
+                # instead of dereferencing None below.
+                log_and_raise(
+                    f"Joint {joint.name} of type {joint_type} has no <limit> element, "
+                    "which is required for revolute and prismatic joints."
+                )
             joint_limits = {
                 "effort": joint.limit.effort,
                 "lower": joint.limit.lower,
@@ -114,11 +121,15 @@ class UrdfRobotParser(RobotParser):
                 + " to revolute with limits [-6.28,6.28]"
             )
             joint_type = "revolute"
+            # Continuous joints may omit the optional <limit> element entirely;
+            # urdfdom only requires it for revolute/prismatic joints. Keep the
+            # existing None fallbacks (effort/velocity -> 100.0) working.
+            limit = joint.limit
             joint_limits = {
-                "effort": joint.limit.effort,
+                "effort": None if limit is None else limit.effort,
                 "lower": -3.14 * 2,
                 "upper": 3.14 * 2,
-                "velocity": joint.limit.velocity,
+                "velocity": None if limit is None else limit.velocity,
             }
 
         if joint_type != "fixed":
