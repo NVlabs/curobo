@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
     config.num_seeds = 4;
     config.max_iterations = 50;
     config.finetune_attempts = 0;
+    config.enable_timeopt = false;
     config.check_effort_limits = true;
     curobo::robot::TrajectoryOptimizer optimizer(argv[1], config);
     const auto info = optimizer.info();

@@ -322,7 +322,8 @@ void TrajectorySeedFitterRuntime::fit_impl(
         reinterpret_cast<const float*>(basis_velocity_.ptr()),
         reinterpret_cast<const float*>(basis_acceleration_.ptr()),
         reinterpret_cast<const float*>(basis_jerk_.ptr()), seeds, steps, dof,
-        knots, manifest_.path_normal_trace, manifest_.timing_regularization,
+        knots, manifest_.interpolation_steps, manifest_.path_normal_trace,
+        manifest_.timing_regularization,
         manifest_.irls_epsilon,
         reinterpret_cast<float*>(velocity_trace_workspace_.ptr()),
         reinterpret_cast<float*>(acceleration_trace_workspace_.ptr()),
@@ -347,7 +348,7 @@ void TrajectorySeedFitterRuntime::fit_impl(
         reinterpret_cast<const float*>(basis_jerk_.ptr()),
         reinterpret_cast<const float*>(path_normal_.ptr()),
         reinterpret_cast<const float*>(derivative_scale_.ptr()), seeds, steps,
-        dof, knots, manifest_.regularization,
+        dof, knots, manifest_.interpolation_steps, manifest_.regularization,
         manifest_.trust_region_regularization, manifest_.path_diagonal_scale,
         manifest_.irls_epsilon,
         reinterpret_cast<float*>(candidate_knots_.ptr()), request.stream));

@@ -44,6 +44,9 @@ struct MotionPlanningInfo {
   int num_knots{0};
   int trajectory_steps{0};
   int max_rrt_path_nodes{0};
+  SplineLayout spline_layout{};
+  /** Native state count shared with trajectory optimization. */
+  int native_horizon() const { return spline_layout.native_horizon; }
 };
 
 /**
@@ -95,6 +98,13 @@ struct MotionPlanningRequest {
   float path_orientation_tolerance{-1.0F};
   const float* start_velocity{nullptr};
   const float* start_acceleration{nullptr};
+  /** Aligned temporal tool reference instead of a static line goal. */
+  bool track_waypoints{false};
+  bool track_orientation{true};
+  float final_position_tolerance{-1.0F};
+  float final_orientation_tolerance{-1.0F};
+  /** Maximum initial solve/check passes per TrajOpt solve (50 iterations per pass by default). */
+  int outer_iterations{1};
 };
 
 /**
@@ -102,7 +112,8 @@ struct MotionPlanningRequest {
  *
  * Goal positions and wxyz quaternions have shapes `[num_tool_frames, 3]` and
  * `[num_tool_frames, 4]`. Current position has shape `[num_dof]`. Optional IK
- * seeds have shape `[inverse_kinematics.num_seeds, num_dof]`. Trajectory
+ * seeds have shape `[inverse_kinematics.lm_num_seeds, num_dof]`, using
+ * `inverse_kinematics.num_seeds` when lm_num_seeds is zero. Trajectory
  * outputs match `MotionPlanningRequest`. Optional selected goal position,
  * pose errors, selected seed, and planning-attempt count are scalar or
  * `[num_dof]` outputs as appropriate. Optional current velocity and
@@ -142,6 +153,32 @@ struct PoseMotionPlanningRequest {
   float path_orientation_tolerance{-1.0F};
   const float* current_velocity{nullptr};
   const float* current_acceleration{nullptr};
+  /** Maximum initial solve/check passes per TrajOpt solve (50 iterations per pass by default).
+   * Refinement has its own iteration budget. */
+  int outer_iterations{1};
+};
+
+/** Rest-to-rest Cartesian planning with 1..256 targets excluding the current FK pose.
+ * The count must fit spline_layout.reference_intervals (72 with default 16 controls).
+ * Configure 64 controls to retain all 256 targets.
+ * Positions/quaternions are CUDA float32 [num_waypoints,num_tool_frames,3/4],
+ * with wxyz quaternions. Positions interpolate linearly; rotations use SLERP.
+ * The motion request supplies current state, output buffers, and attempt policy.
+ * outer_iterations supplies the initial solve/check budget instead of motion.outer_iterations.
+ * The geometric spline keeps its configured control count and native horizon.
+ */
+struct WaypointMotionPlanningRequest {
+  PoseMotionPlanningRequest motion{};
+  const float *positions{nullptr};
+  const float *quaternions{nullptr};
+  int num_waypoints{0};
+  float path_position_tolerance{0.05F};
+  float path_orientation_tolerance{0.261799388F};
+  float final_position_tolerance{0.005F};
+  float final_orientation_tolerance{0.05F};
+  bool track_orientation{true};
+  /** Maximum initial solve/check passes; four passes allow up to 200 iterations by default. */
+  int outer_iterations{4};
 };
 
 /** Cartesian axis used to offset and constrain grasp phases. */
@@ -223,6 +260,7 @@ struct GraspPlanningRequest {
   uint8_t* success{nullptr};
   uint8_t* goalset_success{nullptr};
   int32_t* goalset_index{nullptr};
+  /** Goalset-selection IK output; insertion may use another configuration for the same pose. */
   float* selected_grasp_configuration{nullptr};
   float* goalset_position_error{nullptr};
   float* goalset_orientation_error{nullptr};
@@ -252,6 +290,14 @@ struct GraspPlanningRequest {
   /** Optional actual execution speeds for approach, insertion, and lift.
    * Zero preserves the optimizer's configured speed for that phase. */
   std::array<float, 3> phase_execution_speed_scales{};
+  /** Maximum insertion reference-tracking error in meters and radians.
+   * Tracks linear Cartesian interpolation from the reached start to the grasp pose. */
+  float grasp_path_position_tolerance{0.02F};
+  float grasp_path_orientation_tolerance{0.174532925F};
+  /** Maximum lift reference-tracking error in meters and radians.
+   * Tracks linear Cartesian interpolation from the reached grasp to the lift pose. */
+  float lift_path_position_tolerance{0.02F};
+  float lift_path_orientation_tolerance{0.174532925F};
 };
 
 /**
@@ -279,6 +325,8 @@ class MotionPlanner final {
 
   CuroboRobotInfo robot_info() const;
   MotionPlanningInfo info() const;
+  /** Query the fixed native state count from the exported spline layout. */
+  int native_horizon() const;
   const MotionPlanningConfig& config() const;
   /** Synchronized wall time spent in RRT by the last planning request. */
   double last_rrt_time() const;
@@ -312,6 +360,8 @@ class MotionPlanner final {
 
   /** Run single-pose IK followed by fitted TrajOpt and optional RRT fallback. */
   void plan_pose(const PoseMotionPlanningRequest& request) const;
+  /** Follow Cartesian waypoints using terminal IK and the fixed spline optimizer. */
+  void plan_pose_waypoints(const WaypointMotionPlanningRequest &request) const;
 
   /** Borrow all retained TrajOpt seeds from the last successful plan. */
   TrajectoryOptimizationCandidates candidates() const;

@@ -10,12 +10,15 @@ import pytest
 import torch
 
 # CuRobo
+from curobo._src.cost.cost_tool_pose import ToolPoseCost
+from curobo._src.cost.cost_tool_pose_cfg import ToolPoseCostCfg
 from curobo._src.cost.tool_pose_criteria import (
     PoseErrorFrame,
     StackedToolPoseCriteria,
     ToolPoseCriteria,
 )
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.types.tool_pose import ToolPose
 
 
 @pytest.fixture
@@ -246,6 +249,46 @@ def test_clone_copy_and_path_constraint_preserve_canonical_fields(device_cfg: De
     torch.testing.assert_close(path.terminal_position_axis_scale, source.path_position_axis_scale)
     torch.testing.assert_close(path.terminal_rotation_axis_scale, source.path_rotation_axis_scale)
     torch.testing.assert_close(path.terminal_tolerance, source.path_tolerance)
+
+
+@pytest.mark.parametrize("in_place", [False, True])
+@pytest.mark.parametrize("enforce_path", [False, True])
+def test_path_constraint_conversion_enforces_horizon_one_tolerance(
+    device_cfg: DeviceCfg, in_place: bool, enforce_path: bool
+) -> None:
+    """Horizon-one acceptance must use the source path gate rather than its terminal gate."""
+    source = ToolPoseCriteria.track_pose(non_terminal_scale=1.0, device_cfg=device_cfg)
+    source.path_tolerance.copy_(device_cfg.to_device([0.01, 0.1]))
+    source.enforce_path_tolerance.fill_(enforce_path)
+    source.enforce_terminal_tolerance.fill_(not enforce_path)
+    if in_place:
+        converted = ToolPoseCriteria(device_cfg=device_cfg)
+        pointers = {
+            name: getattr(converted, name).data_ptr() for name in converted.tensor_field_names()
+        }
+        assert converted.copy_path_constraint_(source) is converted
+        for name, pointer in pointers.items():
+            assert getattr(converted, name).data_ptr() == pointer
+    else:
+        converted = source.as_path_constraint()
+    cost = ToolPoseCost(
+        ToolPoseCostCfg(
+            tool_frames=["tool"],
+            tool_pose_criteria={"tool": converted},
+            weight=[1.0, 1.0],
+            device_cfg=device_cfg,
+        )
+    )
+    cost.setup_batch_tensors(2, 1)
+    position = device_cfg.to_device([[0.005, 0.0, 0.0], [0.03, 0.0, 0.0]]).view(2, 1, 1, 3)
+    quaternion = device_cfg.to_device([1.0, 0.0, 0.0, 0.0]).view(1, 1, 1, 4).repeat(2, 1, 1, 1)
+    poses = ToolPose(["tool"], position, quaternion)
+    valid = cost.get_path_feasibility(
+        position.norm(dim=-1), torch.zeros((2, 1, 1), **device_cfg.as_torch_dict()), poses
+    )
+    assert valid[:, 0].tolist() == [True, not enforce_path]
+    assert source.enforce_path_tolerance.item() == enforce_path
+    assert source.enforce_terminal_tolerance.item() == (not enforce_path)
 
 
 def test_stacked_criteria_shapes_clone_and_in_place_update(device_cfg: DeviceCfg):

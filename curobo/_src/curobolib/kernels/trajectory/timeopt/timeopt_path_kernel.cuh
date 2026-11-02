@@ -43,11 +43,12 @@ __device__ __forceinline__ void timing_state(const float *polynomial, const floa
   x[2] = 6.0f * a[0] * local + 2.0f * a[1];
 }
 
-__global__ void sample_kernel(const float *controls, const float *start, const float *goal,
+__global__ void sample_with_progress_kernel(const float *controls, const float *start, const float *goal,
                               const float *output_timing, const float *polynomial,
                               const float *nodes, const float *time_weights,
                               const float *output_time, const float *sample_times,
                               const bool *success, const bool *stationary, float *sample_joints,
+                              float *sample_progress,
                               int batch, int samples, int dof, int knots, int intervals,
                               int start_offset) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -87,6 +88,8 @@ __global__ void sample_kernel(const float *controls, const float *start, const f
   const float speed = sqrtf(fmaxf(0.0f, x[0]));
   const int spans = knots + 3 - start_offset;
   const float coordinate = s * spans;
+  sample_progress[idx] = fminf(1.0f, fmaxf(0.0f,
+      (coordinate + start_offset - 1.0f) / (knots + 2)));
   const int segment = min(static_cast<int>(coordinate), spans - 1);
   const bool tail = requested < 0.0f || requested > duration || stationary[b];
   for (int j = 0; j < dof; ++j) {

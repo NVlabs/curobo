@@ -388,6 +388,10 @@ class ConjugateGradientOpt:
         """Run the full optimization loop and return the best action sequence."""
         return self._core.optimize(seed_action)
 
+    def continue_optimization(self) -> torch.Tensor:
+        """Continue the last solve with its current iterate and conjugate direction."""
+        return self._core.continue_optimization()
+
     def reinitialize(self, action, mask=None, clear_optimizer_state=True, reset_num_iters=False):
         """Reset optimizer state and seed with new actions before a fresh solve."""
         return self._core.reinitialize(action, mask, clear_optimizer_state, reset_num_iters)

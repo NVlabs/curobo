@@ -24,6 +24,7 @@ def create_lbfgs_runtime_kernels(
 
     fixed_dimension = wp.constant(optimization_dimension)
     fixed_lines = wp.constant(num_line_search)
+    tile_threads = wp.constant(32)
 
     def _prepare_initial_state_template(
         seed_action: wp.array2d(dtype=wp.float32),
@@ -51,15 +52,15 @@ def create_lbfgs_runtime_kernels(
         clear_optimizer_state: wp.uint8,
         beta: wp.array(dtype=wp.float32),
     ):
-        problem_idx = wp.tid()
-        beta[problem_idx] = 1.0
+        problem_idx, lane = wp.tid()
         direction_scale = wp.float32(1.0)
-        for variable_idx in range(fixed_dimension):
+        for variable_idx in range(lane, fixed_dimension, tile_threads):
             raw_direction = -initial_step_scale * seed_gradient[problem_idx, variable_idx]
             step_max = optimization_step_max[variable_idx]
             if step_max > 0.0:
                 direction_scale = wp.max(direction_scale, wp.abs(raw_direction) / step_max)
-        for variable_idx in range(fixed_dimension):
+        direction_scale = wp.tile_max(wp.tile(direction_scale))[0]
+        for variable_idx in range(lane, fixed_dimension, tile_threads):
             value = seed_action[problem_idx, variable_idx]
             grad = seed_gradient[problem_idx, variable_idx]
             action[problem_idx, variable_idx] = value
@@ -72,17 +73,19 @@ def create_lbfgs_runtime_kernels(
             step_direction[problem_idx, variable_idx] = (
                 -initial_step_scale * grad / direction_scale
             )
-        value_cost = seed_cost[problem_idx]
-        cost[problem_idx] = value_cost
-        exploration_cost[problem_idx] = value_cost
-        best_cost[problem_idx] = value_cost
-        best_iteration[problem_idx] = 1
-        current_iteration[problem_idx] = 1
-        converged[problem_idx] = wp.uint8(0)
-        if clear_optimizer_state == wp.uint8(1):
-            history_head[problem_idx] = 0
-            history_count[problem_idx] = 0
-        curvature_update_valid[problem_idx] = False
+        if lane == 0:
+            beta[problem_idx] = 1.0
+            value_cost = seed_cost[problem_idx]
+            cost[problem_idx] = value_cost
+            exploration_cost[problem_idx] = value_cost
+            best_cost[problem_idx] = value_cost
+            best_iteration[problem_idx] = 1
+            current_iteration[problem_idx] = 1
+            converged[problem_idx] = wp.uint8(0)
+            if clear_optimizer_state == wp.uint8(1):
+                history_head[problem_idx] = 0
+                history_count[problem_idx] = 0
+            curvature_update_valid[problem_idx] = False
 
     prepare_initial_state = warp_kernel(
         f"{name_prefix}_lbfgs_prepare_initial_{optimization_dimension}_{num_line_search}",

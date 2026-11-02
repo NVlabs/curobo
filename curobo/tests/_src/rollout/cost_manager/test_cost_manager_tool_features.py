@@ -10,22 +10,26 @@ import pytest
 import torch
 import warp as wp
 
+from curobo._src.cost.cost_tool_pose_cfg import ToolPoseCostCfg
+
 # CuRobo
 from curobo._src.cost.cost_tool_relative_transform_cfg import ToolRelativeTransformCostCfg
 from curobo._src.cost.cost_tool_velocity_limit_cfg import ToolVelocityLimitCostCfg
 from curobo._src.cost.criteria_tool_relative_transform import ToolRelativeTransformCriteria
 from curobo._src.cost.criteria_tool_velocity_limit import ToolVelocityLimitCriteria
+from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.robot.kinematics.kinematics_state import KinematicsState
 from curobo._src.rollout.cost_manager.cost_manager_robot import RobotCostManager
 from curobo._src.rollout.cost_manager.cost_manager_robot_cfg import RobotCostManagerCfg
 from curobo._src.rollout.goal_registry import GoalRegistry
+from curobo._src.rollout.metrics import CostsAndConstraints
 from curobo._src.rollout.rollout_robot import RobotRollout
 from curobo._src.rollout.rollout_robot_cfg import RobotRolloutCfg
 from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_robot import RobotState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
-from curobo._src.types.tool_pose import ToolPose
+from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
 
 
@@ -44,6 +48,65 @@ def _device_cfg() -> DeviceCfg:
         pytest.skip("RobotCostManager uses CUDA streams")
     wp.init()
     return DeviceCfg(device=torch.device("cuda:0"), dtype=torch.float32)
+
+
+@pytest.mark.parametrize("horizon", [81, 129])
+def test_checked_line_path_contributes_to_native_and_dense_feasibility(horizon: int) -> None:
+    """A bowed middle fails metrics despite an exact endpoint, at either resolution."""
+    device_cfg = _device_cfg()
+    criteria = ToolPoseCriteria.linear_motion(direction=[0.0, 0.0, 1.0], device_cfg=device_cfg)
+    criteria.path_tolerance.copy_(device_cfg.to_device([0.02, 0.1]))
+    criteria.enforce_path_tolerance.fill_(1.0)
+    manager = RobotCostManager(device_cfg)
+    manager.initialize_from_config(
+        RobotCostManagerCfg(
+            tool_pose_cfg=ToolPoseCostCfg(
+                weight=[1.0, 1.0],
+                tool_pose_criteria={"tool": criteria},
+                device_cfg=device_cfg,
+            )
+        ),
+        _transition(["tool"]),
+    )
+    position = torch.zeros((2, horizon, 1, 3), **device_cfg.as_torch_dict())
+    position[0, horizon // 2, 0, 0] = 0.021
+    quaternion = torch.zeros((2, horizon, 1, 4), **device_cfg.as_torch_dict())
+    quaternion[..., 0] = 1.0
+    state = RobotState(
+        joint_state=JointState.from_position(
+            torch.zeros((2, horizon, 1), **device_cfg.as_torch_dict())
+        ),
+        cuda_robot_model_state=KinematicsState(
+            tool_poses=ToolPose(
+                tool_frames=["tool"],
+                position=position,
+                quaternion=quaternion,
+            )
+        ),
+    )
+    goal = GoalRegistry(
+        batch_size=2,
+        link_goal_poses=GoalToolPose(
+            tool_frames=["tool"],
+            position=torch.zeros((1, 1, 1, 1, 3), **device_cfg.as_torch_dict()),
+            quaternion=device_cfg.to_device([1.0, 0.0, 0.0, 0.0]).view(1, 1, 1, 1, 4),
+        ),
+        idxs_link_pose=torch.zeros((2, 1), device=device_cfg.device, dtype=torch.int32),
+    )
+    # Exercise the real pose convergence and rollout feasibility merge without a robot model.
+    rollout = object.__new__(RobotRollout)
+    rollout._compute_costs_and_constraints_metrics_impl = lambda *_args, **_kw: (
+        CostsAndConstraints()
+    )
+    rollout._compute_convergence_metrics_impl = lambda *_args, **_kw: manager.compute_convergence(
+        state, goal=goal
+    )
+    metrics = rollout._compute_metrics_from_state_impl(state)
+    assert metrics.feasible.all(dim=-1).tolist() == [False, True]
+
+    criteria.enforce_path_tolerance.zero_()
+    manager.update_params(tool_pose_criteria={"tool": criteria})
+    assert rollout._compute_metrics_from_state_impl(state).feasible.all()
 
 
 def test_relative_transform_dispatch_and_convergence() -> None:

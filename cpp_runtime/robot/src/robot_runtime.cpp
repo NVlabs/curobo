@@ -520,7 +520,7 @@ IkManifest load_ik_manifest(const std::string& artifact_dir) {
   manifest.collision_voxel = extract_ik_kernel(kernels, "collision_voxel");
   manifest.self_collision = extract_ik_kernel(kernels, "self_collision");
 
-  if (manifest.schema_version != 13) {
+  if (manifest.schema_version != 18) {
     throw std::runtime_error("unsupported robot IK artifact schema version: " +
                              std::to_string(manifest.schema_version));
   }
@@ -657,6 +657,10 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
 
   TrajectoryOptimizationManifest manifest;
   manifest.schema_version = extract_int(json, "schema_version");
+  if (manifest.schema_version != 23) {
+    throw std::runtime_error("unsupported TrajOpt artifact schema; re-export the robot artifact");
+  }
+
   manifest.arch = extract_string(json, "arch");
   manifest.num_dof = extract_int(json, "num_dof");
   manifest.num_links = extract_int(json, "num_links");
@@ -668,6 +672,8 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
   manifest.trajectory_steps = extract_int(json, "trajectory_steps");
   manifest.interpolation_buffer_size =
       extract_int(json, "interpolation_buffer_size");
+  manifest.minimum_interpolation_buffer_size =
+      extract_int(json, "minimum_interpolation_buffer_size");
   manifest.spline_degree = extract_int(json, "spline_degree");
   manifest.max_seeds = extract_int(json, "max_seeds");
   manifest.history = extract_int(json, "history");
@@ -739,6 +745,9 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
   manifest.bspline_single_dt =
       extract_ik_kernel(kernels, "bspline_single_dt");
   manifest.bspline_backward = extract_ik_kernel(kernels, "bspline_backward");
+  manifest.bspline_backward_effort =
+      extract_ik_kernel(kernels, "bspline_backward_effort");
+  manifest.reduce_rollout_cost = extract_ik_kernel(kernels, "reduce_rollout_cost");
   manifest.time_scaled_dt = extract_ik_kernel(kernels, "time_scaled_dt");
   manifest.cspace = extract_ik_kernel(kernels, "cspace");
   manifest.pose = extract_ik_kernel(kernels, "pose");
@@ -785,29 +794,39 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
       extract_ik_kernel(kernels, "prepare_search_actions");
   manifest.prepare_search_actions_backtracking =
       extract_ik_kernel(kernels, "prepare_search_actions_backtracking");
-  manifest.combine_rollout = extract_ik_kernel(kernels, "combine_rollout");
   manifest.accumulate = extract_ik_kernel(kernels, "accumulate");
   manifest.finalize = extract_ik_kernel(kernels, "finalize");
   manifest.line_search = extract_ik_kernel(kernels, "line_search");
   manifest.line_search_backtracking = extract_ik_kernel(kernels, "line_search_backtracking");
   manifest.lbfgs = extract_ik_kernel(kernels, "lbfgs");
 
-  if (manifest.schema_version != 18) {
-    throw std::runtime_error("unsupported TrajOpt artifact schema; re-export the robot artifact");
+  const auto layout = extract_object(json, "spline_layout");
+  manifest.spline_layout = {extract_int(layout, "num_knots"),
+                            extract_int(layout, "degree"),
+                            extract_int(layout, "interpolation_steps"),
+                            extract_int(layout, "native_horizon"),
+                            extract_int(layout, "padding"),
+                            extract_int(layout, "reference_intervals")};
+  const auto &spline = manifest.spline_layout;
+  if (spline.num_knots != manifest.num_knots || spline.degree != manifest.spline_degree ||
+      spline.native_horizon != manifest.trajectory_steps || spline.interpolation_steps < 1 ||
+      spline.interpolation_steps > 32 || spline.padding != spline.interpolation_steps ||
+      spline.reference_intervals <= 0 ||
+      spline.reference_intervals + 2 * spline.padding + 1 != spline.native_horizon ||
+      (spline.num_knots + spline.degree + 1) * spline.interpolation_steps + 1 !=
+          spline.native_horizon) {
+    throw std::runtime_error("robot TrajOpt spline layout metadata is inconsistent");
   }
-  if (manifest.num_dof <= 0 ||
-      manifest.num_links <= 0 || manifest.num_tool_frames <= 0 ||
+  if (manifest.num_dof <= 0 || manifest.num_links <= 0 || manifest.num_tool_frames <= 0 ||
       manifest.num_spheres <= 0 || manifest.num_self_collision_pairs < 0 ||
-      manifest.num_knots <= 5 || manifest.trajectory_steps <= 16 ||
+      manifest.num_knots < 12 || manifest.num_knots > 1024 || manifest.trajectory_steps <= 16 ||
       manifest.interpolation_buffer_size < manifest.trajectory_steps ||
-      manifest.spline_degree != 3 || manifest.max_seeds <= 0 ||
-      manifest.history <= 0 || manifest.num_line_search <= 0 ||
-      manifest.num_line_search > 32 || manifest.base_dt <= 0.0F ||
-      manifest.minimum_dt <= 0.0F ||
-      manifest.maximum_dt < manifest.minimum_dt ||
+      manifest.minimum_interpolation_buffer_size < manifest.trajectory_steps ||
+      manifest.spline_degree != 3 || manifest.max_seeds <= 0 || manifest.history <= 0 ||
+      manifest.num_line_search <= 0 || manifest.num_line_search > 32 || manifest.base_dt <= 0.0F ||
+      manifest.minimum_dt <= 0.0F || manifest.maximum_dt < manifest.minimum_dt ||
       manifest.interpolation_dt <= 0.0F || manifest.epsilon <= 0.0F ||
-      manifest.initial_step_scale <= 0.0F ||
-      manifest.convergence_iteration <= 0) {
+      manifest.initial_step_scale <= 0.0F || manifest.convergence_iteration <= 0) {
     throw std::runtime_error("robot TrajOpt artifact metadata is invalid");
   }
   const auto dof = static_cast<size_t>(manifest.num_dof);
@@ -877,6 +896,7 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
            &manifest.bspline_forward,
            &manifest.bspline_single_dt,
            &manifest.bspline_backward,
+           &manifest.bspline_backward_effort,
            &manifest.time_scaled_dt,
            &manifest.cspace,
            &manifest.pose,
@@ -889,7 +909,7 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
            &manifest.prepare_initial_state,
            &manifest.prepare_search_actions,
            &manifest.prepare_search_actions_backtracking,
-           &manifest.combine_rollout,
+           &manifest.reduce_rollout_cost,
            &manifest.accumulate,
            &manifest.finalize,
            &manifest.line_search,
@@ -931,6 +951,35 @@ RolloutManifest load_rollout_manifest(const std::string& artifact_dir) {
   manifest.num_original_links = extract_int(json, "num_original_links");
   manifest.num_levels = extract_int(json, "num_levels");
   manifest.level_link_indices = extract_int(json, "level_link_indices");
+  if (has_key(json, "forward_profiles")) {
+    const auto forward_profiles = extract_object(json, "forward_profiles");
+    const int count = extract_int(forward_profiles, "count");
+    if (count < 1 || count > 16) {
+      throw std::runtime_error("invalid RNEA forward profile count");
+    }
+    int previous_max = 0;
+    for (int i = 0; i < count; ++i) {
+      const auto entry = extract_object(forward_profiles, "profile_" + std::to_string(i));
+      RolloutForwardProfile profile;
+      profile.max_states = extract_int(entry, "max_states");
+      profile.threads_per_batch = extract_int(entry, "threads_per_batch");
+      profile.kernel = extract_ik_kernel(entry, "kernel");
+      const int width = profile.threads_per_batch;
+      if (profile.max_states <= previous_max ||
+          (width != 1 && width != 2 && width != 4 && width != 16 && width != 32) ||
+          profile.kernel.cubin.empty() || profile.kernel.symbol.empty() ||
+          profile.kernel.source != "curobo_rnea_kernel" ||
+          profile.kernel.block_dim <= 0 || profile.kernel.block_dim % width != 0 ||
+          profile.kernel.shared_memory < 0) {
+        throw std::runtime_error("invalid RNEA forward profile metadata");
+      }
+      previous_max = profile.max_states;
+      manifest.forward_profiles.push_back(std::move(profile));
+    }
+    if (previous_max != INT_MAX) {
+      throw std::runtime_error("RNEA forward profiles must cover all state counts");
+    }
+  }
   manifest.fixed_transforms = extract_tensor(tensors, "fixed_transforms");
   manifest.link_masses_com = extract_tensor(tensors, "link_masses_com");
   manifest.link_inertias = extract_tensor(tensors, "link_inertias");

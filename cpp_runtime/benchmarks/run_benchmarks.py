@@ -19,7 +19,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-ROBOTS = ("unitree_g1_29dof_retarget", "dual_ur10e", "franka")
+ROBOTS = ("unitree_g1_29dof", "dual_ur10e", "franka")
 
 
 def run(command: list[str], log: Path | None = None) -> str:
@@ -40,6 +40,27 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def run_native(command: list[str], log: Path, profile: str | None) -> None:
+    """Optionally trace the public-API calls after sustained warmup with Nsight Systems."""
+    if profile is not None:
+        command = [
+            "nsys",
+            "profile",
+            "--trace=cuda,nvtx",
+            "--sample=none",
+            "--cpuctxsw=none",
+            f"--cuda-graph-trace={profile}",
+            "--capture-range=cudaProfilerApi",
+            "--capture-range-end=stop",
+            "--export=sqlite",
+            "--force-overwrite=true",
+            f"--output={log.with_suffix('')}_profile",
+            *command,
+            "--profile",
+        ]
+    run(command, log)
+
+
 def save_json(path: Path, value: Any) -> None:
     """Write strict, human-readable JSON."""
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
@@ -47,7 +68,18 @@ def save_json(path: Path, value: Any) -> None:
 
 def source_provenance() -> dict[str, Any]:
     """Record the revision and actual runtime/exporter source content, including edits."""
-    paths = run(["git", "ls-files", "curobo", "cpp_runtime/robot"]).splitlines()
+    paths = run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "curobo",
+            "cpp_runtime/robot",
+        ]
+    ).splitlines()
     hashes = {name: sha256(ROOT / name) for name in paths if (ROOT / name).is_file()}
     return {
         "commit": run(["git", "rev-parse", "HEAD"]).strip(),
@@ -84,19 +116,35 @@ def scene_boxes(obstacles: dict[str, Any]) -> list[dict[str, Any]]:
     return boxes
 
 
+def motion_interpolation_buffer_size(num_knots: int) -> int:
+    """Retain the 1,000-sample benchmark floor and fit the default native timestep range."""
+    from curobo._src.types.spline_layout import SplineLayout
+
+    return max(1000, SplineLayout(num_knots).dense_horizon(0.2, 0.025))
+
+
 def export_artifact(
     config: Path,
     artifact: Path,
     source_hash: str,
     expansion: float = 0.0,
     motion_max_cuboids: int | None = None,
+    num_knots: int = 16,
+    max_ik_seeds: int = 32,
+    target_device: Path | None = None,
 ) -> None:
     """Export fresh kernels or reuse an artifact with matching source and configuration hashes."""
     signature = {
         "source": source_hash,
         "config": sha256(config),
         "joint_limit_expansion": expansion,
+        "num_knots": num_knots,
+        "max_ik_seeds": max_ik_seeds,
     }
+    if target_device is not None:
+        from cpp_runtime.robot.tools.export_device import ExportDevice
+
+        signature["target_device"] = ExportDevice.from_file(target_device).to_dict()
     export_options = {}
     if motion_max_cuboids is not None:
         export_options = {
@@ -105,7 +153,7 @@ def export_artifact(
             "max-cylinders": 0,
             "max-meshes": 0,
             "max-voxel-grids": 0,
-            "interpolation-buffer-size": 1000,
+            "interpolation-buffer-size": motion_interpolation_buffer_size(num_knots),
         }
         signature["export_options"] = export_options
     stamp = artifact / "benchmark_export.json"
@@ -122,11 +170,14 @@ def export_artifact(
             "--out",
             str(artifact),
             "--max-ik-seeds",
-            "32",
+            str(max_ik_seeds),
             "--max-trajopt-seeds",
             "4",
             "--joint-limit-expansion",
             str(expansion),
+            "--num-knots",
+            str(num_knots),
+            *(["--target-device", str(target_device.resolve())] if target_device else []),
             *[
                 part
                 for name, value in export_options.items()
@@ -138,7 +189,10 @@ def export_artifact(
     save_json(stamp, signature)
 
 
-def prepare_motion(output: Path, limit: int, source_hash: str) -> dict[str, Any]:
+def prepare_motion(
+    output: Path, limit: int, source_hash: str, num_knots: int = 16,
+    target_device: Path | None = None,
+) -> dict[str, Any]:
     """Freeze the complete corpus, exclusions, OBB inputs, and dataset-specific robot models."""
     from robometrics.file_structure import get_dataset_path
 
@@ -196,6 +250,8 @@ def prepare_motion(output: Path, limit: int, source_hash: str) -> dict[str, Any]
             "excluded": len(excluded),
             "dataset_sha256": sha256(path),
             "input_sha256": sha256(input_path),
+            "num_knots": num_knots,
+            "interpolation_buffer_size": motion_interpolation_buffer_size(num_knots),
         }
     for dataset in datasets.values():
         dataset["max_cuboids"] = max_cuboids
@@ -205,6 +261,8 @@ def prepare_motion(output: Path, limit: int, source_hash: str) -> dict[str, Any]
             source_hash,
             expansion=0.2,
             motion_max_cuboids=max_cuboids,
+            num_knots=num_knots,
+            target_device=target_device,
         )
     return datasets
 
@@ -224,12 +282,15 @@ def align_joint_samples(
     return result
 
 
-def prepare_ik(output: Path, source_hash: str) -> list[dict[str, Any]]:
+def prepare_ik(
+    output: Path, source_hash: str, input_dir: Path | None = None,
+    target_device: Path | None = None,
+) -> list[dict[str, Any]]:
     """Generate five reachable 100-query batches per robot/mode with rejection sampling."""
     import torch
 
+    from benchmark.ik_benchmark import create_ik_config, sample_ik_configs
     from curobo._src.solver.solver_ik import IKSolver
-    from curobo._src.solver.solver_ik_cfg import IKSolverCfg
 
     torch.manual_seed(2)
     np.random.seed(2)
@@ -241,41 +302,58 @@ def prepare_ik(output: Path, source_hash: str) -> list[dict[str, Any]]:
     for robot in ROBOTS:
         config_path = ROOT / f"curobo/content/configs/robot/{robot}.yml"
         artifact = output / "artifacts" / robot
-        export_artifact(config_path, artifact, source_hash)
-        manifest = json.loads((artifact / "robot_kinematics_manifest.json").read_text())
-        native_names = manifest["joint_names"]
-        default_position = np.fromfile(artifact / "default_joint_position.f32", dtype=np.float32)
         for collision_free in (False, True):
             name = f"{robot}_{'collision_free' if collision_free else 'pose_only'}"
             print(f"Preparing {name}", flush=True)
             input_path = output / f"{name}.txt"
-            config = IKSolverCfg.create(
-                robot=str(config_path),
-                scene_model="collision_table.yml" if collision_free else None,
-                num_seeds=2,
-                max_batch_size=100,
-                use_cuda_graph=True,
-                self_collision_check=collision_free,
-                load_collision_spheres=collision_free,
-            )
+            config = create_ik_config(config_path.name, collision_free=collision_free)
             sampler = IKSolver(config)
-            with input_path.open("w") as stream:
-                write_scene(stream, boxes)
-                stream.write("100 5\n")
-                for _ in range(5):
-                    for ratio in range(10, 101, 10):
-                        samples = sampler.sample_configs(100, rejection_ratio=ratio)
-                        if samples.shape[0] >= 100:
-                            break
-                    else:
-                        raise RuntimeError(f"could not sample 100 valid configurations for {name}")
-                    aligned = align_joint_samples(
-                        samples[:100].cpu().numpy(),
-                        sampler.joint_names,
-                        native_names,
-                        default_position,
-                    )
-                    write_values(stream, aligned)
+            lm = sampler.seed_ik_solver.config
+            settings = {
+                "lm_num_seeds": lm.num_seeds,
+                "lm_iterations": lm.max_iterations,
+                "num_seeds": config.num_seeds,
+                "lbfgs_iterations": config.optimizer_configs[0].num_iters,
+                "position_tolerance": config.position_tolerance,
+                "orientation_tolerance": config.orientation_tolerance,
+                "optimizer_collision_activation_distance": (
+                    config.optimizer_collision_activation_distance
+                ),
+            }
+            profile_path = output / f"{name}_config.txt"
+            with profile_path.open("w") as stream:
+                write_values(stream, list(settings.values()))
+            if not collision_free:
+                export_artifact(
+                    config_path, artifact, source_hash, max_ik_seeds=lm.num_seeds,
+                    target_device=target_device,
+                )
+            manifest = json.loads((artifact / "robot_kinematics_manifest.json").read_text())
+            native_names = manifest["joint_names"]
+            default_position = np.fromfile(
+                artifact / "default_joint_position.f32", dtype=np.float32
+            )
+            if input_dir is not None:
+                saved_manifest = json.loads(
+                    (
+                        input_dir / "artifacts" / robot / "robot_kinematics_manifest.json"
+                    ).read_text()
+                )
+                if saved_manifest["joint_names"] != native_names:
+                    raise ValueError("Saved IK joint order differs from the exported robot")
+                input_path.write_bytes((input_dir / f"{name}.txt").read_bytes())
+            else:
+                with input_path.open("w") as stream:
+                    write_scene(stream, boxes)
+                    stream.write("100 5\n")
+                    for _ in range(5):
+                        aligned = align_joint_samples(
+                            sample_ik_configs(sampler, 100).cpu().numpy(),
+                            sampler.joint_names,
+                            native_names,
+                            default_position,
+                        )
+                        write_values(stream, aligned)
             del sampler
             torch.cuda.empty_cache()
             cases.append(
@@ -288,6 +366,8 @@ def prepare_ik(output: Path, source_hash: str) -> list[dict[str, Any]]:
                     "num_dof": len(native_names),
                     "num_tool_frames": manifest["num_tool_frames"],
                     "input_sha256": sha256(input_path),
+                    "config": str(profile_path),
+                    "solver_settings": settings,
                 }
             )
     return cases
@@ -358,7 +438,7 @@ def trajectory_metrics(states: np.ndarray, dt: float, model: Any, data: Any) -> 
     }
 
 
-def aggregate_motion(output: Path, datasets: dict[str, Any], dynamics: bool) -> dict[str, Any]:
+def aggregate_motion(output: Path, datasets: dict[str, Any], has_payload: bool) -> dict[str, Any]:
     """Score all native attempts using the matching robot inertia."""
     import pinocchio as pin
 
@@ -366,15 +446,15 @@ def aggregate_motion(output: Path, datasets: dict[str, Any], dynamics: bool) -> 
 
     rows = []
     for name, dataset in datasets.items():
-        path = output / f"{name}_{'3kg' if dynamics else '0kg'}.jsonl"
+        path = output / f"{name}_{'3kg' if has_payload else '0kg'}.jsonl"
         records = read_records(path, dataset["count"])
         identities = json.loads((output / f"{name}_problems.json").read_text())
         config = yaml.safe_load(Path(dataset["config"]).read_text())["robot_cfg"]
         kin = RobotCfg.create(config).kinematics.kinematics_config
         kin.link_masses_com[kin.link_name_to_idx_map["attached_object"], 3] = (
-            3.0 if dynamics else 0.0
+            3.0 if has_payload else 0.0
         )
-        urdf = output / f"dynamics_{name}_{int(dynamics)}.urdf"
+        urdf = output / f"dynamics_{name}_{int(has_payload)}.urdf"
         kin.export_to_urdf(robot_name="benchmark", output_path=str(urdf), include_spheres=False)
         model = pin.buildModelFromUrdf(str(urdf))
         data = model.createData()
@@ -395,7 +475,7 @@ def aggregate_motion(output: Path, datasets: dict[str, Any], dynamics: bool) -> 
                 row.update(trajectory_metrics(trajectory, row["dt"], model, data))
                 row["position_error_mm"] = row["position_error_m"] * 1000
             rows.append(row)
-    save_json(output / f"motion_{'3kg' if dynamics else '0kg'}_metrics.json", rows)
+    save_json(output / f"motion_{'3kg' if has_payload else '0kg'}_metrics.json", rows)
     success = [row for row in rows if row["success"]]
     metrics = (
         "plan_time_s",
@@ -510,6 +590,8 @@ def render_tables(summary: dict[str, Any]) -> str:
 
 def main() -> None:
     """Build, prepare, run and summarize the selected native benchmark suite."""
+    from curobo._src.types.spline_layout import MAX_SPLINE_KNOTS, MIN_TRAJOPT_KNOTS
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--suite", choices=("all", "motion", "ik"), default="all")
@@ -517,19 +599,60 @@ def main() -> None:
         "--max-problems", type=int, default=0, help="Per-corpus motion limit; zero runs all"
     )
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument(
+        "--disable-inverse-dynamics",
+        action="store_true",
+        help="disable motion IK/RRT/TrajOpt effort checks; retiming still uses inverse dynamics",
+    )
+    parser.add_argument(
+        "--target-device", type=Path,
+        help="prepare artifacts for a device JSON; requires --prepare-only and skips host build",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("node", "graph"),
+        help="Trace the first 50 warmed calls per case; profiled times are diagnostic only",
+    )
+    parser.add_argument(
+        "--ik-input-dir", type=Path, help="Reuse a previous native run's IK targets"
+    )
+    parser.add_argument(
+        "--num-knots",
+        type=int,
+        default=16,
+        choices=range(MIN_TRAJOPT_KNOTS, MAX_SPLINE_KNOTS + 1),
+        metavar="N",
+        help=f"Fixed spatial control count for motion ({MIN_TRAJOPT_KNOTS}..{MAX_SPLINE_KNOTS})",
+    )
     args = parser.parse_args()
+    if args.target_device is not None and not args.prepare_only:
+        parser.error(
+            "--target-device requires --prepare-only; run the C++ executable on the target"
+        )
+    if args.target_device is not None:
+        from cpp_runtime.robot.tools.export_device import ExportDevice
+
+        target = ExportDevice.from_file(args.target_device)
     if args.max_problems < 0:
         parser.error("--max-problems must be nonnegative")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     provenance = source_provenance()
+    if args.target_device is not None:
+        provenance["target_device"] = target.to_dict()
+        save_json(output / "target_device.json", target.to_dict())
     provenance.update(
         {
             "started_utc": datetime.now(timezone.utc).isoformat(),
             "suite": args.suite,
             "max_problems": args.max_problems,
+            "motion_num_knots": args.num_knots if args.suite != "ik" else None,
+            "motion_inverse_dynamics": (
+                not args.disable_inverse_dynamics if args.suite != "ik" else None
+            ),
             "gpu": run(["nvidia-smi"]),
             "command": sys.argv,
+            "python_ik_benchmark_sha256": sha256(ROOT / "benchmark/ik_benchmark.py"),
             "benchmark_sources": {
                 p.name: sha256(p) for p in Path(__file__).parent.iterdir() if p.is_file()
             },
@@ -539,26 +662,49 @@ def main() -> None:
     build = output / "build"
     import torch
 
-    capability = torch.cuda.get_device_capability()
-    run(
-        [
-            "cmake",
-            "-S",
-            "cpp_runtime/benchmarks",
-            "-B",
-            str(build),
-            "-DCMAKE_BUILD_TYPE=Release",
-            f"-DCMAKE_CUDA_ARCHITECTURES={capability[0]}{capability[1]}",
-            "-DBUILD_TESTING=OFF",
-        ],
-        output / "configure.log",
-    )
-    run(["cmake", "--build", str(build), "-j", "4"], output / "build.log")
+    if args.target_device is None:
+        capability = torch.cuda.get_device_capability()
+        run(
+            [
+                "cmake",
+                "-S",
+                "cpp_runtime/benchmarks",
+                "-B",
+                str(build),
+                "-DCMAKE_BUILD_TYPE=Release",
+                f"-DCMAKE_CUDA_ARCHITECTURES={capability[0]}{capability[1]}",
+                "-DBUILD_TESTING=OFF",
+            ],
+            output / "configure.log",
+        )
+        run(["cmake", "--build", str(build), "-j", "4"], output / "build.log")
     executable = build / "curobo_benchmark"
     source_hash = provenance["runtime_source_sha256"]
-    datasets = prepare_motion(output, args.max_problems, source_hash) if args.suite != "ik" else {}
-    cases = prepare_ik(output, source_hash) if args.suite != "motion" else []
-    save_json(output / "inputs.json", {"motion": datasets, "ik": cases})
+    datasets = (
+        prepare_motion(
+            output, args.max_problems, source_hash, num_knots=args.num_knots,
+            **({"target_device": args.target_device} if args.target_device is not None else {}),
+        )
+        if args.suite != "ik"
+        else {}
+    )
+    cases = (
+        prepare_ik(
+            output, source_hash, args.ik_input_dir,
+            **({"target_device": args.target_device} if args.target_device is not None else {}),
+        )
+        if args.suite != "motion" else []
+    )
+    save_json(
+        output / "inputs.json",
+        {
+            "motion": datasets,
+            "ik": cases,
+            "motion_inverse_dynamics": (
+                not args.disable_inverse_dynamics if datasets else None
+            ),
+        },
+    )
     artifact_paths = {Path(case["artifact"]) for case in cases}
     artifact_paths.update(Path(dataset["artifact"]) for dataset in datasets.values())
     save_json(
@@ -574,6 +720,7 @@ def main() -> None:
         return
     summary: dict[str, Any] = {
         "backend": "C++ runtime",
+        "profile": args.profile,
         "cuda_graph": True,
         "timeopt": True,
         "partial": args.max_problems > 0,
@@ -581,6 +728,8 @@ def main() -> None:
         "ik": {},
     }
     if datasets:
+        summary["motion_num_knots"] = args.num_knots
+        summary["motion_inverse_dynamics"] = not args.disable_inverse_dynamics
         summary["motion_scene_capacities"] = {
             "cuboid": next(iter(datasets.values()))["max_cuboids"],
             "capsule": 0,
@@ -588,34 +737,39 @@ def main() -> None:
             "mesh": 0,
             "voxel": 0,
         }
-        summary["motion_interpolation_buffer_size"] = 1000
-    for dynamics in (False, True):
+        summary["motion_interpolation_buffer_size"] = next(iter(datasets.values()))[
+            "interpolation_buffer_size"
+        ]
+    for has_payload in (False, True):
         if not datasets:
             break
         for name, dataset in datasets.items():
-            stem = f"{name}_{'3kg' if dynamics else '0kg'}"
+            stem = f"{name}_{'3kg' if has_payload else '0kg'}"
             print(f"Running {stem}: {dataset['count']} problems", flush=True)
-            run(
+            run_native(
                 [
                     str(executable),
                     "motion",
                     dataset["artifact"],
                     dataset["input"],
                     str(output / f"{stem}.jsonl"),
-                    str(int(dynamics)),
+                    str(int(has_payload)),
                     "0",
                     str(dataset["max_cuboids"]),
+                    str(dataset["num_knots"]),
+                    *(["--disable-inverse-dynamics"] if args.disable_inverse_dynamics else []),
                 ],
                 output / f"{stem}.log",
+                args.profile,
             )
-        summary["motion"]["3kg" if dynamics else "0kg"] = aggregate_motion(
-            output, datasets, dynamics
+        summary["motion"]["3kg" if has_payload else "0kg"] = aggregate_motion(
+            output, datasets, has_payload
         )
         save_json(output / "summary.json", summary)
     for case in cases:
         print(f"Running {case['name']}: 500 IK queries", flush=True)
         path = output / f"{case['name']}.jsonl"
-        run(
+        run_native(
             [
                 str(executable),
                 "ik",
@@ -623,9 +777,10 @@ def main() -> None:
                 case["input"],
                 str(path),
                 str(int(case["collision_free"])),
-                str(int(case["robot"] == "unitree_g1_29dof_retarget")),
+                case["config"],
             ],
             output / f"{case['name']}.log",
+            args.profile,
         )
         summary["ik"][case["name"]] = aggregate_ik(read_records(path, 500))
         save_json(output / "summary.json", summary)

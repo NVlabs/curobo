@@ -27,7 +27,10 @@ struct InverseKinematicsConfig {
   int device_ordinal{0};
   int max_batch_size{1};
   int max_goalset{64};
+  /** Candidates retained for collision validation and L-BFGS refinement. */
   int num_seeds{32};
+  /** LM candidates before selecting num_seeds for L-BFGS; zero uses num_seeds. */
+  int lm_num_seeds{0};
   /** Zero uses the iteration count exported from Python's L-BFGS IK profile. */
   int lbfgs_iterations{0};
   float position_tolerance{0.005F};
@@ -65,7 +68,8 @@ struct InverseKinematicsConfig {
  * Inputs and outputs are contiguous CUDA storage. Goal shapes are
  * `[batch_size, num_tool_frames, num_goalset, 3]` and
  * `[batch_size, num_tool_frames, num_goalset, 4]`; quaternions use wxyz order.
- * Optional seed positions have shape `[batch_size, num_seeds, num_dof]`. When
+ * Optional seed positions have shape `[batch_size, lm_num_seeds, num_dof]`
+ * (or num_seeds when lm_num_seeds is zero). When
  * seeds are null, deterministic artifact seeds are used. Optional current
  * positions have shape `[batch_size, num_dof]`; they become the first LM seed
  * and participate in result ranking. Output shapes are
@@ -91,6 +95,8 @@ struct IkSolveRequest {
   cudaStream_t stream{nullptr};
   /** Rotate deterministic artifact seeds without recapturing the CUDA graph. */
   int seed_offset{0};
+  /** Ignore rotational residuals and orientation acceptance when false. */
+  bool track_orientation{true};
 };
 
 /**

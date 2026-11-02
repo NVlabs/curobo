@@ -35,8 +35,9 @@ class TrajectoryTimeOptRuntime {
   TrajectoryTimeOptRuntime(const std::string &directory, const TrajectoryTimeOptConfig &config,
                           RolloutRuntime* shared_rollout = nullptr)
       : config_(config) {
+    // Spatial controls are independent of the 32 timing variables and uniform grid.
     if (config.num_seeds < 1 || config.num_seeds > 128 || config.num_knots < 2 ||
-        config.num_knots > 512 || config.num_intervals < 1 ||
+        config.num_knots > 1024 || config.num_intervals < 1 ||
         config.max_iterations < 1 ||
         config.sample_count < 1 || config.sample_count > 1000000 ||
         !std::isfinite(config.limit_scale) || config.limit_scale <= 0 || config.limit_scale > 1 ||
@@ -188,6 +189,8 @@ class TrajectoryTimeOptRuntime {
             w_.sample_joints + 3 * plane};
   }
 
+  const float *sample_progress() const { return w_.sample_progress; }
+
   void update_links_inertial(const LinkInertialUpdates &updates) {
     CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
     rollout_->update_links_inertial(updates);
@@ -267,6 +270,7 @@ class TrajectoryTimeOptRuntime {
     w_.status = allocate<int>(b);
     w_.sample_times = allocate(b * w_.samples);
     w_.sample_joints = allocate(4 * boundary * w_.samples);
+    w_.sample_progress = allocate(static_cast<size_t>(w_.batch) * w_.samples);
     dynamics_cache_ =
         allocate(3 * b * w_.points * rollout_->num_links() * rollout_->cache_floats_per_link());
   }
@@ -281,7 +285,7 @@ class TrajectoryTimeOptRuntime {
         reinterpret_cast<CUdeviceptr>(w_.q), reinterpret_cast<CUdeviceptr>(w_.qd),
         reinterpret_cast<CUdeviceptr>(w_.qdd), reinterpret_cast<CUdeviceptr>(w_.tau),
         reinterpret_cast<CUdeviceptr>(dynamics_cache_), w_.batch * 3 * w_.points,
-        reinterpret_cast<CUstream>(stream));
+        reinterpret_cast<CUstream>(stream), false);
     CRR_CUDA_CHECK(launch_timeopt_solve(w_, stream));
     CRR_CUDA_CHECK(cudaMemcpy2DAsync(w_.duration, sizeof(float), w_.output_time + w_.intervals,
                                      (w_.intervals + 1) * sizeof(float), sizeof(float), w_.batch,
@@ -348,6 +352,7 @@ TrajectoryTimeOptResult TrajectoryTimeOpt::timeopt(const TrajectoryTimeOptReques
 TrajectoryTimeOptSamples TrajectoryTimeOpt::sample(const float *times, cudaStream_t stream) const {
   return runtime_->sample(times, stream);
 }
+const float *TrajectoryTimeOpt::sample_progress() const { return runtime_->sample_progress(); }
 void TrajectoryTimeOpt::update_links_inertial(const LinkInertialUpdates &updates) {
   runtime_->update_links_inertial(updates);
 }

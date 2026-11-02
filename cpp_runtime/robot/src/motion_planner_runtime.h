@@ -42,7 +42,9 @@ class MotionPlannerRuntime final {
   void update_link_inertial(const LinkInertialUpdate& update);
   void update_links_inertial(const LinkInertialUpdates& updates) const;
   void plan(const MotionPlanningRequest& request) const;
-  void plan_pose(const PoseMotionPlanningRequest& request) const;
+  void plan_pose(const PoseMotionPlanningRequest &request,
+                 const WaypointMotionPlanningRequest *waypoints = nullptr) const;
+  void plan_pose_waypoints(const WaypointMotionPlanningRequest &request) const;
   TrajectoryOptimizationCandidates candidates() const;
   TimeOptTrajectory timeopt_trajectory() const;
   void set_execution_speed_scale(float scale);
@@ -53,22 +55,10 @@ class MotionPlannerRuntime final {
 
  private:
   friend class MpcRuntime;
-  struct CudaGraphStage final {
+  struct TrajoptGraph final {
     cudaGraph_t graph{nullptr};
     cudaGraphExec_t executable{nullptr};
-  };
-
-  struct TrajoptGraph final {
-    CudaGraphStage setup{};
-    CudaGraphStage pass{};
-    CudaGraphStage refinement_pass{};
-    CudaGraphStage base_accumulate{};
-    CudaGraphStage finetune_prepare{};
-    CudaGraphStage finetune_accumulate{};
-    CudaGraphStage finalize{};
     TrajectoryOptimizationRequest request{};
-    bool has_finetune_stages{false};
-    bool initialized{false};
   };
 
   struct TrajoptGraphCache final {
@@ -86,9 +76,8 @@ class MotionPlannerRuntime final {
   bool plan_impl(const MotionPlanningRequest& request,
                  bool activate_repaired_seeds,
                  TrajoptGraphCache* graph_cache) const;
-  void plan_pose_impl(const PoseMotionPlanningRequest& request,
-                      TrajoptGraphCache* graph_cache,
-                      const float* known_goal_configuration = nullptr) const;
+  void plan_pose_impl(const PoseMotionPlanningRequest &request, TrajoptGraphCache *graph_cache,
+                      const WaypointMotionPlanningRequest *waypoints = nullptr) const;
   void set_rrt_outputs(const MotionPlanningRequest& request, bool used_rrt,
                        CUstream stream) const;
   void finish_rrt_failure(const MotionPlanningRequest& request,
@@ -101,18 +90,14 @@ class MotionPlannerRuntime final {
                            bool enabled) const;
   bool run_goalset_selection(const GraspPlanningRequest& request,
                              cudaStream_t stream) const;
-  bool plan_linear_phase(const float* goal_positions,
-                         const float* goal_quaternions,
-                         const float* start_position,
-                         const float* start_velocity,
-                         const float* start_acceleration,
-                         const std::array<float, 3>& direction,
-                         bool direction_in_goal_frame,
-                         int finetune_attempts,
-                         const GraspPhaseOutput& output,
-                         cudaStream_t stream,
-                         TrajoptGraphCache* graph_cache,
-                         const float* known_goal_configuration) const;
+  bool plan_linear_phase(const float *goal_positions, const float *goal_quaternions,
+                         const float *start_position, const float *start_velocity,
+                         const float *start_acceleration, int finetune_attempts,
+                         float position_tolerance, float orientation_tolerance,
+                         const GraspPhaseOutput &output, cudaStream_t stream,
+                         TrajoptGraphCache *graph_cache) const;
+  PoseMotionPlanningRequest prepare_pose_waypoints(
+      const WaypointMotionPlanningRequest &request) const;
   GraspPhaseOutput grasp_phase_workspace() const;
   void copy_grasp_phase_output(const GraspPhaseOutput& output,
                                cudaStream_t stream) const;
@@ -156,6 +141,8 @@ class MotionPlannerRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer ik_goalset_index_;
   mutable curobo_robot_runtime::DeviceBuffer pose_selected_seed_;
   mutable curobo_robot_runtime::DeviceBuffer staged_start_position_;
+  mutable curobo_robot_runtime::DeviceBuffer waypoint_reference_positions_;
+  mutable curobo_robot_runtime::DeviceBuffer waypoint_reference_quaternions_;
   mutable curobo_robot_runtime::DeviceBuffer staged_start_velocity_;
   mutable curobo_robot_runtime::DeviceBuffer staged_start_acceleration_;
   mutable curobo_robot_runtime::DeviceBuffer staged_goal_position_;

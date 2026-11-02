@@ -30,6 +30,8 @@ TrajectorySeedFitterInfo TrajectorySeedFitter::info() const {
   return runtime_->info();
 }
 
+int TrajectorySeedFitter::native_horizon() const { return info().native_horizon(); }
+
 const TrajectorySeedFitterConfig& TrajectorySeedFitter::config() const {
   return runtime_->config();
 }

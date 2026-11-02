@@ -31,7 +31,17 @@ from curobo._src.rollout.metrics import (
     RolloutResult,
 )
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.util.cuda_graph_util import GraphExecutor
 from curobo._src.util.sampling.sample_buffer import SampleBuffer
+
+
+def _candidate_arguments(direction: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """Allocate mandatory trial outputs for direct kernel tests."""
+    batch, dimension = direction.shape
+    scales = torch.tensor([0.1, 0.5, 1.0], device=direction.device, dtype=direction.dtype)
+    candidates = torch.empty((batch, 3, dimension), device=direction.device, dtype=direction.dtype)
+    beta = torch.ones(batch, device=direction.device, dtype=direction.dtype)
+    return candidates, scales, beta
 
 
 @pytest.mark.parametrize("compact", [False, True])
@@ -54,19 +64,54 @@ def test_backtracking_preserves_direction_and_history_in_graph(compact: bool) ->
     allowed = torch.tensor([False, True], device="cuda")
     step_max = torch.ones(dimension, device="cuda")
 
+    candidates, scales, beta = _candidate_arguments(step)
+    beta[0] = 0.1
+
     def solve() -> None:
         if compact:
             LBFGSCompactCu.apply(
-                step, buffers.rho, buffers.y, buffers.s, buffers.compact_inverse_r,
-                buffers.compact_matrix_workspace, q, gradient, buffers.x_0,
-                buffers.grad_0, buffers.history_head, buffers.history_count,
-                step_max, 0.01, shared_matrices, True, allowed, True, status,
+                step,
+                candidates, scales, beta,
+                buffers.rho,
+                buffers.y,
+                buffers.s,
+                buffers.compact_inverse_r,
+                buffers.compact_matrix_workspace,
+                q,
+                gradient,
+                buffers.x_0,
+                buffers.grad_0,
+                buffers.history_head,
+                buffers.history_count,
+                step_max,
+                0.01,
+                shared_matrices,
+                True,
+                allowed,
+                True,
+                status,
             )
         else:
             LBFGScu.apply(
-                step, buffers.rho, buffers.y, buffers.s, q, gradient, buffers.x_0,
-                buffers.grad_0, buffers.history_head, buffers.history_count,
-                0.01, True, True, True, step_max, True, allowed, status,
+                step,
+                candidates, scales, beta,
+                buffers.rho,
+                buffers.y,
+                buffers.s,
+                q,
+                gradient,
+                buffers.x_0,
+                buffers.grad_0,
+                buffers.history_head,
+                buffers.history_count,
+                0.01,
+                True,
+                True,
+                True,
+                step_max,
+                True,
+                allowed,
+                status,
             )
 
     solve()  # Compile before capture.
@@ -74,9 +119,10 @@ def test_backtracking_preserves_direction_and_history_in_graph(compact: bool) ->
     buffers.x_0.zero_()
     buffers.grad_0.zero_()
     step.fill_(123.0)
-    preserved = {name: getattr(buffers, name).clone() for name in (
-        "rho", "s", "y", "x_0", "grad_0", "history_head", "history_count"
-    )}
+    preserved = {
+        name: getattr(buffers, name).clone()
+        for name in ("rho", "s", "y", "x_0", "grad_0", "history_head", "history_count")
+    }
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
         solve()
@@ -90,8 +136,15 @@ def test_backtracking_preserves_direction_and_history_in_graph(compact: bool) ->
             torch.testing.assert_close(actual[:, 0], original[:, 0], rtol=0, atol=0)
         else:
             torch.testing.assert_close(actual[0], original[0], rtol=0, atol=0)
+    expected = q[:, None, :] + (beta[:, None, None] * scales[None, :, None]) * step[:, None, :]
+    torch.testing.assert_close(candidates, expected, rtol=1e-6, atol=1e-6)
+    beta[0] = 0.01
+    graph.replay()
+    torch.cuda.synchronize()
+    expected = q[:, None, :] + (beta[:, None, None] * scales[None, :, None]) * step[:, None, :]
+    torch.testing.assert_close(candidates, expected, rtol=1e-6, atol=1e-6)
     assert buffers.history_count[1].item() == 1
-    torch.testing.assert_close(step[1], -q[1], rtol=2.e-3, atol=1.e-5)
+    torch.testing.assert_close(step[1], -q[1], rtol=2.0e-3, atol=1.0e-5)
     if compact:
         torch.testing.assert_close(buffers.compact_inverse_r[0], torch.eye(history, device="cuda"))
 
@@ -386,6 +439,65 @@ def optimizer_setup():
     }
 
 
+@pytest.mark.parametrize("use_cuda_graph", [False, True])
+def test_continuation_matches_uninterrupted_optimization(
+    use_cuda_graph: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Four blocks preserve the iterate, counters, and L-BFGS history of one long solve."""
+    device_cfg = DeviceCfg()
+    rollout = MockRollout(num_dof=2, action_horizon=4, batch_size=2)
+    config = LBFGSOptCfg(
+        num_problems=2,
+        num_iters=200,
+        inner_iters=25,
+        history=7,
+        device_cfg=device_cfg,
+        use_compact_operator=False,
+    )
+    optimizer = LBFGSOpt(config, [rollout, rollout], use_cuda_graph=use_cuda_graph)
+    seed = torch.linspace(-0.5, 0.5, 16, **device_cfg.as_torch_dict()).reshape(2, 4, 2)
+    optimizer.reinitialize(seed)
+    optimizer.optimize(seed)  # Compare both schedules after graph capture warmup.
+    optimizer.reinitialize(seed)
+    uninterrupted = optimizer.optimize(seed).clone()
+    state = optimizer._core._continuation_state.clone()
+    history = {
+        name: getattr(optimizer._qn, name).clone()
+        for name in (
+            "s",
+            "y",
+            "rho",
+            "x_0",
+            "grad_0",
+            "history_head",
+            "history_count",
+        )
+    }
+
+    optimizer.update_niters(50)
+    optimizer.reinitialize(seed)
+    optimizer.optimize(seed)
+
+    def unexpected_capture(executor: GraphExecutor, inputs: tuple) -> None:
+        pytest.fail("Continuation captured a new CUDA graph")
+
+    if use_cuda_graph:
+        monkeypatch.setattr(GraphExecutor, "_initialize_cuda_graph", unexpected_capture)
+    for _ in range(3):
+        continued = optimizer.continue_optimization()
+    torch.testing.assert_close(continued, uninterrupted, atol=1e-6, rtol=1e-6)
+    resumed = optimizer._core._continuation_state
+    for name in ("action", "gradient", "step_direction", "cost", "current_iteration"):
+        torch.testing.assert_close(getattr(resumed, name), getattr(state, name))
+    for name, expected in history.items():
+        torch.testing.assert_close(getattr(optimizer._qn, name), expected)
+
+    optimizer.reinitialize(seed)
+    with pytest.raises(ValueError, match="Run optimize"):
+        optimizer.continue_optimization()
+
+
 def create_optimizer(
     rollout_fn,
     batch_size,
@@ -422,6 +534,40 @@ def create_optimizer(
     optimizer = LBFGSOpt(config, [rollout_fn, rollout_fn])
     optimizer.update_num_problems(batch_size)
     return optimizer
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_optimizer_consumes_emitted_candidates(
+    compact: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use limited-direction candidates without regenerating them in line search."""
+    rollout = MockRollout(num_dof=7, action_horizon=8, batch_size=2)
+    config = LBFGSOptCfg(
+        num_problems=2,
+        history=16,
+        step_scale=0.01,
+        line_search_scale=[0.1, 0.5, 1.5],
+        line_search_backtracking=True,
+        use_compact_operator=compact,
+    )
+    optimizer = LBFGSOpt(config, [rollout, rollout])
+    seed = torch.linspace(-2.0, 2.0, 112, device="cuda").reshape(2, 8, 7)
+    state = optimizer._core._prepare_initial_iteration_state(seed)
+    context = optimizer._core._line_search_context
+
+    def unexpected_preparation(*args: Any, **kwargs: Any) -> torch.Tensor:
+        pytest.fail("L-BFGS line search regenerated candidates")
+
+    monkeypatch.setattr(
+        optimizer._core._line_search_strategy, "jit_get_x_set", unexpected_preparation
+    )
+    for _ in range(4):
+        state = optimizer._core._opt_step(state)
+        direction = state.step_direction.reshape(2, 1, 56)
+        origin = state.exploration_action.reshape(2, 1, 56)
+        scales = context.beta[:, None, None] * context.get_line_search_scale()[None, :, None]
+        torch.testing.assert_close(state.search_actions, origin + scales * direction)
+        assert torch.all(direction.abs() <= optimizer._core.action_horizon_step_max + 1e-6)
 
 
 def test_optimize_without_timing_matches_timed_solve(optimizer_setup):
@@ -466,8 +612,12 @@ def test_optimize_without_timing_matches_timed_solve(optimizer_setup):
 def test_50_then_25_iterations_reuse_cuda_graph(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replay one 25-step graph twice initially and once while retaining finetune history."""
     config = LBFGSOptCfg(
-        num_problems=2, num_iters=50, inner_iters=25, history=7,
-        fixed_iters=True, step_scale=0.05,
+        num_problems=2,
+        num_iters=50,
+        inner_iters=25,
+        history=7,
+        fixed_iters=True,
+        step_scale=0.05,
     )
     graph_rollout = MockRollout(num_dof=7, action_horizon=4, batch_size=2)
     eager_rollout = MockRollout(num_dof=7, action_horizon=4, batch_size=2)
@@ -490,7 +640,9 @@ def test_50_then_25_iterations_reuse_cuda_graph(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(executor, "replay", count_replay)
     graph_seed, eager_seed = seed.clone(), seed.clone()
     for iterations, retain_history, expected_replays in (
-        (50, False, 2), (25, True, 1), (50, False, 2)
+        (50, False, 2),
+        (25, True, 1),
+        (50, False, 2),
     ):
         if not retain_history:
             graph_seed, eager_seed = seed.clone(), seed.clone()
@@ -570,9 +722,19 @@ def test_lbfgs_optimization_cuda_kernel(
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize(
     ("opt_dim", "batch_size"),
-    [(7, 17), (31, 2), (1024, 2), (1025, 2), (1568, 2), (4097, 2), (8193, 2)],
+    [
+        (7, 17),
+        (31, 2),
+        (1024, 2),
+        (1025, 2),
+        (1568, 2),
+        (4097, 2),
+        (7168, 2),
+        (8193, 2),
+        (65536, 2),
+    ],
 )
-def test_lbfgs_step_matches_tensor_reference(opt_dim: int, batch_size: int):
+def test_lbfgs_step_matches_tensor_reference(opt_dim: int, batch_size: int) -> None:
     """Match the tensor recursion across warp, block, register, and workspace paths."""
     torch.manual_seed(1000 + opt_dim)
     history = 7
@@ -600,6 +762,7 @@ def test_lbfgs_step_matches_tensor_reference(opt_dim: int, batch_size: int):
         gradient = weights * q.unsqueeze(1)
         cuda_step = LBFGScu.apply(
             step,
+            *_candidate_arguments(step),
             rho,
             y,
             s,
@@ -653,6 +816,7 @@ def test_curvature_mask_advances_reference_without_inserting_pair() -> None:
 
     LBFGScu.apply(
         torch.zeros_like(position),
+        *_candidate_arguments(torch.zeros_like(position)),
         torch.zeros((history, batch_size, 1, 1), device=device),
         torch.zeros((history, batch_size, opt_dim, 1), device=device),
         torch.zeros((history, batch_size, opt_dim, 1), device=device),
@@ -722,6 +886,7 @@ def test_lbfgs_ignores_inactive_per_problem_history(use_shared_buffers: bool) ->
     ) -> torch.Tensor:
         return LBFGScu.apply(
             torch.zeros_like(position),
+            *_candidate_arguments(torch.zeros_like(position)),
             rho,
             y,
             s,
@@ -797,6 +962,7 @@ def test_compact_pair_eligibility_and_fallback_scale_guard() -> None:
 
     step = LBFGSCompactCu.apply(
         torch.zeros_like(position),
+        *_candidate_arguments(torch.zeros_like(position)),
         rho_buffer,
         y_buffer,
         s_buffer,
@@ -911,6 +1077,7 @@ def test_compact_step_matches_two_loop_during_history_startup(
         line_search_status.fill_(4 if iteration == history else 0)
         expected = LBFGScu.apply(
             two_loop_step,
+            *_candidate_arguments(two_loop_step),
             two_loop_rho,
             two_loop_y,
             two_loop_s,
@@ -930,6 +1097,7 @@ def test_compact_step_matches_two_loop_during_history_startup(
         ).clone()
         actual = LBFGSCompactCu.apply(
             compact_step,
+            *_candidate_arguments(compact_step),
             compact_rho,
             compact_y,
             compact_s,
@@ -1122,6 +1290,7 @@ def test_two_loop_history_128_launch_paths(opt_dim: int, use_shared_buffers: boo
     gradient = weights * q.unsqueeze(1)
     step = LBFGScu.apply(
         torch.zeros_like(q),
+        *_candidate_arguments(torch.zeros_like(q)),
         torch.zeros((history, batch_size, 1, 1), device=device),
         torch.zeros((history, batch_size, opt_dim, 1), device=device),
         torch.zeros((history, batch_size, opt_dim, 1), device=device),
@@ -1181,6 +1350,7 @@ def test_fused_step_scaling_matches_amax_reference():
     gradient = weights * q.unsqueeze(1)
     raw_step = LBFGScu.apply(
         torch.zeros((batch_size, opt_dim), device=device),
+        *_candidate_arguments(torch.zeros((batch_size, opt_dim), device=device)),
         rho,
         y,
         s,
@@ -1197,6 +1367,7 @@ def test_fused_step_scaling_matches_amax_reference():
     ).clone()
     fused_step = LBFGScu.apply(
         torch.zeros((batch_size, opt_dim), device=device),
+        *_candidate_arguments(torch.zeros((batch_size, opt_dim), device=device)),
         scaled_rho,
         scaled_y,
         scaled_s,
@@ -1280,6 +1451,7 @@ def test_scaling_specializations_match_tensor_reference():
 
         cuda_step = LBFGScu.apply(
             step,
+            *_candidate_arguments(step),
             rho,
             y,
             s,
@@ -1336,6 +1508,7 @@ def test_invalid_pair_does_not_modify_full_ring():
 
     invalid_step = LBFGScu.apply(
         step,
+        *_candidate_arguments(step),
         rho,
         y,
         s,
@@ -1361,6 +1534,7 @@ def test_invalid_pair_does_not_modify_full_ring():
     for position, gradient_value in ((2.0, 0.0), (3.0, 1.0)):
         LBFGScu.apply(
             step,
+            *_candidate_arguments(step),
             rho,
             y,
             s,
@@ -1384,6 +1558,7 @@ def test_invalid_pair_does_not_modify_full_ring():
 
     LBFGScu.apply(
         step,
+        *_candidate_arguments(step),
         rho,
         y,
         s,
@@ -1408,6 +1583,7 @@ def test_invalid_pair_does_not_modify_full_ring():
 
     LBFGScu.apply(
         step,
+        *_candidate_arguments(step),
         rho,
         y,
         s,

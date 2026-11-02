@@ -28,6 +28,8 @@ struct TrajectorySeedFitterInfo {
   int num_knots{0};
   int trajectory_steps{0};
   int irls_iterations{0};
+  /** Number of native samples in the exported spline layout. */
+  int native_horizon() const { return trajectory_steps; }
 };
 
 /**
@@ -75,6 +77,8 @@ class TrajectorySeedFitter final {
 
   CuroboRobotInfo robot_info() const;
   TrajectorySeedFitterInfo info() const;
+  /** Query native state count consistently with the planner and optimizer. */
+  int native_horizon() const;
   const TrajectorySeedFitterConfig& config() const;
 
   /** Enqueue fixed-shape arc-length fitting and IRLS refinement. */

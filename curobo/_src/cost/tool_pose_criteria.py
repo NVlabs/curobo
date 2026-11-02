@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 # Standard Library
-from dataclasses import InitVar, dataclass
+from dataclasses import InitVar, dataclass, field
 from enum import IntEnum
 from math import isfinite
 from typing import ClassVar, Dict, List, Optional, Sequence, Tuple, Union
@@ -202,6 +202,10 @@ class ToolPoseCriteria:
 
     terminal_tolerance: Optional[TensorLike] = None
     path_tolerance: Optional[TensorLike] = None
+    #: Require every intermediate sample to satisfy the path tolerance when enabled.
+    enforce_path_tolerance: Union[bool, torch.Tensor] = field(default=False, kw_only=True)
+    #: Require the terminal pose to meet its own deadband, independently of solver defaults.
+    enforce_terminal_tolerance: Union[bool, torch.Tensor] = field(default=False, kw_only=True)
     error_frame: Optional[ErrorFrameLike] = None
 
     device_cfg: DeviceCfg = DeviceCfg()
@@ -223,6 +227,8 @@ class ToolPoseCriteria:
         "path_rotation_axis_scale",
         "terminal_tolerance",
         "path_tolerance",
+        "enforce_path_tolerance",
+        "enforce_terminal_tolerance",
         "error_frame",
     )
 
@@ -369,6 +375,11 @@ class ToolPoseCriteria:
             "path_tolerance",
             self.device_cfg,
         )
+        for name in ("enforce_path_tolerance", "enforce_terminal_tolerance"):
+            value = _as_float_tensor(getattr(self, name), (), name, self.device_cfg)
+            if not bool((value == 0) | (value == 1)):
+                log_and_raise(f"{name} must be a boolean or a zero/one scalar")
+            setattr(self, name, value)
         self.error_frame = _as_error_frame(
             PoseErrorFrame.WORLD if self.error_frame is None else self.error_frame,
             self.device_cfg,
@@ -392,6 +403,8 @@ class ToolPoseCriteria:
             path_rotation_axis_scale=self.path_rotation_axis_scale.clone(),
             terminal_tolerance=self.terminal_tolerance.clone(),
             path_tolerance=self.path_tolerance.clone(),
+            enforce_path_tolerance=self.enforce_path_tolerance.clone(),
+            enforce_terminal_tolerance=self.enforce_terminal_tolerance.clone(),
             error_frame=self.error_frame.clone(),
             device_cfg=self.device_cfg,
         )
@@ -424,6 +437,7 @@ class ToolPoseCriteria:
             ("terminal_position_axis_scale", "path_position_axis_scale"),
             ("terminal_rotation_axis_scale", "path_rotation_axis_scale"),
             ("terminal_tolerance", "path_tolerance"),
+            ("enforce_terminal_tolerance", "enforce_path_tolerance"),
         ):
             source = getattr(other, path_name)
             getattr(self, terminal_name).copy_(source)
@@ -444,6 +458,8 @@ class ToolPoseCriteria:
             path_rotation_axis_scale=self.path_rotation_axis_scale.clone(),
             terminal_tolerance=self.path_tolerance.clone(),
             path_tolerance=self.path_tolerance.clone(),
+            enforce_path_tolerance=self.enforce_path_tolerance.clone(),
+            enforce_terminal_tolerance=self.enforce_path_tolerance.clone(),
             error_frame=self.error_frame.clone(),
             device_cfg=self.device_cfg,
         )
@@ -671,6 +687,10 @@ class StackedToolPoseCriteria:
     path_rotation_axis_scale: torch.Tensor
     terminal_tolerance: torch.Tensor
     path_tolerance: torch.Tensor
+    #: Per-link device flags enabling intermediate tolerance checks.
+    enforce_path_tolerance: torch.Tensor
+    #: Per-link device flags enabling terminal deadband checks.
+    enforce_terminal_tolerance: torch.Tensor
     error_frame: torch.Tensor
     device_cfg: DeviceCfg = DeviceCfg()
 
@@ -720,6 +740,8 @@ class StackedToolPoseCriteria:
             "path_rotation_axis_scale": (num_links, 3),
             "terminal_tolerance": (num_links, 2),
             "path_tolerance": (num_links, 2),
+            "enforce_path_tolerance": (num_links,),
+            "enforce_terminal_tolerance": (num_links,),
             "error_frame": (num_links,),
         }
         for name, expected_shape in expected_shapes.items():
@@ -765,6 +787,11 @@ class StackedToolPoseCriteria:
             tolerance = getattr(self, name)
             if not bool(torch.isfinite(tolerance).all()) or not bool(torch.all(tolerance >= 0.0)):
                 log_and_raise(f"{name} must contain finite, nonnegative values")
+
+        for name in ("enforce_path_tolerance", "enforce_terminal_tolerance"):
+            value = getattr(self, name)
+            if not bool(((value == 0) | (value == 1)).all()):
+                log_and_raise(f"{name} must contain only zero/one flags")
 
         if self.error_frame.dtype != torch.int32:
             log_and_raise(f"error_frame must use torch.int32, got {self.error_frame.dtype}")

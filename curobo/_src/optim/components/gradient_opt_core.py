@@ -122,6 +122,7 @@ class GradientOptCore:
         self.use_cuda_graph = use_cuda_graph
         self._enabled = True
         self._iteration_state: Optional[OptimizationIterationState] = None
+        self._continuation_state: Optional[OptimizationIterationState] = None
         self._og_num_iters = config.num_iters
 
         # Callbacks
@@ -317,6 +318,13 @@ class GradientOptCore:
         """
         return self._optimize_impl(seed_action)
 
+    def continue_optimization(self) -> torch.Tensor:
+        """Run another iteration block with the last iterate and optimizer history intact."""
+        if self._continuation_state is None:
+            log_and_raise("Run optimize before continuing optimization")
+        self._iteration_state = self._continuation_state
+        return self.optimize(self._continuation_state.action)
+
     def _optimize_impl(self, seed_action: torch.Tensor) -> torch.Tensor:
         """Execute the outer optimization loop over line-search iterations.
 
@@ -354,6 +362,7 @@ class GradientOptCore:
                 ):
                     break
 
+        self._continuation_state = iteration_state
         q = iteration_state.action.view(
             self.config.num_problems, self.action_horizon * self.action_dim
         )
@@ -601,6 +610,7 @@ class GradientOptCore:
                 original configured value.
         """
         action = action.view(self.config.num_problems, self.action_horizon, self.action_dim)
+        self._continuation_state = None
 
         if mask is None and self._debug:
             self._debug.clear()
@@ -644,6 +654,8 @@ class GradientOptCore:
         return True
 
     def update_num_problems(self, num_problems: int):
+        self._continuation_state = None
+        self._iteration_state = None
         assert num_problems > 0
         self.config.num_problems = num_problems
 
@@ -709,6 +721,8 @@ class GradientOptCore:
         return self.rollout_fn.compute_metrics_from_action(action)
 
     def reset_shape(self):
+        self._continuation_state = None
+        self._iteration_state = None
         for rollout in self._rollout_list:
             rollout.reset_shape()
 
@@ -716,6 +730,8 @@ class GradientOptCore:
         return True
 
     def reset_cuda_graph(self):
+        self._continuation_state = None
+        self._iteration_state = None
         for executor in self._executors.values():
             if executor is not None:
                 executor.reset()

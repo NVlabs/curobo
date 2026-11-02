@@ -11,7 +11,6 @@ collision checking.
 from __future__ import annotations
 
 # Standard Library
-from dataclasses import dataclass
 from typing import Dict, Optional
 
 # Third Party
@@ -49,16 +48,6 @@ from curobo._src.util.logging import log_and_raise, log_warn
 from curobo._src.util.tensor_util import stable_topk
 
 
-@dataclass(frozen=True)
-class _IKConvergenceLayout:
-    """Indices into a stable IK convergence metric collection."""
-
-    position_indices: tuple[int, ...]
-    orientation_indices: tuple[int, ...]
-    goalset_indices: tuple[int, ...]
-    cspace_indices: tuple[int, ...]
-
-
 def _pad_batch_inputs(
     goal_tool_poses: GoalToolPose,
     current_state: Optional[JointState],
@@ -86,16 +75,10 @@ def _pad_batch_inputs(
             [current_state.position, current_state.position[:1].expand(pad, -1)],
             dim=0,
         )
-        if current_state.velocity is not None:
-            current_state.velocity = torch.cat(
-                [current_state.velocity, current_state.velocity[:1].expand(pad, -1)],
-                dim=0,
-            )
-        if current_state.acceleration is not None:
-            current_state.acceleration = torch.cat(
-                [current_state.acceleration, current_state.acceleration[:1].expand(pad, -1)],
-                dim=0,
-            )
+        for name in ("velocity", "acceleration", "jerk"):
+            value = getattr(current_state, name)
+            if value is not None:
+                setattr(current_state, name, torch.cat([value, value[:1].expand(pad, -1)], dim=0))
     if seed_config is not None:
         seed_config = torch.cat(
             [seed_config, seed_config[:1].expand(pad, *[-1] * (seed_config.ndim - 1))],
@@ -152,6 +135,11 @@ def _slice_batch_result(result, batch_size: int):
         "total_cost_reshaped",
         "seed_rank",
         "seed_cost",
+        "path_position_error",
+        "path_rotation_error",
+        "interpolated_trajectory",
+        "interpolated_last_tstep",
+        "timeopt_duration",
     ):
         val = getattr(result, attr, None)
         if val is not None:
@@ -160,6 +148,9 @@ def _slice_batch_result(result, batch_size: int):
         result.js_solution = result.js_solution[:batch_size]
     if result.solution_state is not None:
         result.solution_state = result.solution_state[:batch_size]
+    if isinstance(result.debug_info, dict):
+        for name, value in result.debug_info.get("validation", {}).items():
+            result.debug_info["validation"][name] = value[:batch_size]
     return result
 
 
@@ -174,8 +165,6 @@ class IKSolver:
         self.core = SolverCore(config.core_cfg, scene_collision_checker)
 
         self.seed_ik_solver = None
-        self._result_convergence_names: tuple[str, ...] = ()
-        self._result_convergence_layout: Optional[_IKConvergenceLayout] = None
         self._result_batch_offsets: Optional[torch.Tensor] = None
         self._result_batch_offset_shape = (-1, -1)
 
@@ -771,49 +760,6 @@ class IKSolver:
         )
 
         return ik_result
-
-    def _get_result_convergence_layout(
-        self,
-        metrics_result: RolloutMetrics,
-    ) -> _IKConvergenceLayout:
-        """Return cached field indices for a stable convergence collection."""
-        names = tuple(metrics_result.convergence.names)
-        if names != self._result_convergence_names:
-            self._result_convergence_names = names
-            self._result_convergence_layout = _IKConvergenceLayout(
-                position_indices=tuple(
-                    index for index, name in enumerate(names) if "position_tolerance" in name
-                ),
-                orientation_indices=tuple(
-                    index for index, name in enumerate(names) if "orientation_tolerance" in name
-                ),
-                goalset_indices=tuple(
-                    index for index, name in enumerate(names) if "goalset_index" in name
-                ),
-                cspace_indices=tuple(
-                    index
-                    for index, name in enumerate(names)
-                    if "start_cspace_dist_tolerance" in name
-                ),
-            )
-        layout = self._result_convergence_layout
-        if layout is None or not layout.position_indices or not layout.orientation_indices:
-            log_and_raise("IK metrics require position and orientation convergence values")
-        return layout
-
-    @staticmethod
-    def _get_result_convergence_values(
-        metrics_result: RolloutMetrics,
-        indices: tuple[int, ...],
-        problem_count: int,
-    ) -> torch.Tensor:
-        """Return selected convergence fields flattened after the problem dimension."""
-        values = metrics_result.convergence.values
-        if len(indices) == 1:
-            selected = values[indices[0]]
-        else:
-            selected = torch.cat([values[index] for index in indices], dim=-1)
-        return selected.view(problem_count, -1)
 
     def _get_result_feasibility(
         self,

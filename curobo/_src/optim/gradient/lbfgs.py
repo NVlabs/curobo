@@ -216,6 +216,7 @@ class LBFGSOpt:
     def _get_step_direction_impl(
         self, iteration_state: OptimizationIterationState
     ) -> torch.Tensor:
+        """Write the next trial points and return the limited L-BFGS direction."""
         q = iteration_state.exploration_action.reshape(-1, self._core.opt_dim).contiguous()
         grad_q = iteration_state.exploration_gradient.reshape(
             -1, 1, self._core.opt_dim
@@ -228,6 +229,9 @@ class LBFGSOpt:
             with profiler.record_function("lbfgs/compact"):
                 dq = LBFGSCompactCu.apply(
                     step_direction,
+                    iteration_state.search_actions,
+                    self._core._line_search_context.get_line_search_scale(),
+                    self._core._line_search_context.beta,
                     self._qn.rho,
                     self._qn.y,
                     self._qn.s,
@@ -251,6 +255,9 @@ class LBFGSOpt:
             with profiler.record_function("lbfgs/two_loop"):
                 dq = LBFGScu.apply(
                     step_direction,
+                    iteration_state.search_actions,
+                    self._core._line_search_context.get_line_search_scale(),
+                    self._core._line_search_context.beta,
                     self._qn.rho,
                     self._qn.y,
                     self._qn.s,
@@ -277,7 +284,15 @@ class LBFGSOpt:
     def _on_reinitialize(self, mask):
         self._qn.clear(mask)
 
-    def _on_initial_state(self, iteration_state, mask):
+    def _on_initial_state(
+        self, iteration_state: OptimizationIterationState, mask: torch.Tensor | None
+    ) -> None:
+        """Prepare the first candidates and reset the quasi-Newton reference point."""
+        context = self._core._line_search_context
+        scales = context.beta.view(-1, 1, 1, 1) * context.get_line_search_scale().view(1, -1, 1, 1)
+        iteration_state.search_actions = self._core._line_search_strategy.jit_get_x_set(
+            iteration_state.step_direction, iteration_state.exploration_action, scales
+        ).reshape(context.num_problems, context.n_linesearch, context.opt_dim).detach()
         self._qn.set_reference(
             iteration_state.exploration_action.view(-1, self._core.opt_dim, 1),
             iteration_state.exploration_gradient.view(-1, self._core.opt_dim, 1),
@@ -448,6 +463,10 @@ class LBFGSOpt:
     def optimize_without_timing(self, seed_action):
         """Run a solve without the outer synchronizing CUDA event timer."""
         return self._core.optimize_without_timing(seed_action)
+
+    def continue_optimization(self) -> torch.Tensor:
+        """Continue the last solve without resetting its iterate or L-BFGS history."""
+        return self._core.continue_optimization()
 
     def reinitialize(self, action, mask=None, clear_optimizer_state=True, reset_num_iters=False):
         """Reset optimizer state and seed with new actions before a fresh solve."""

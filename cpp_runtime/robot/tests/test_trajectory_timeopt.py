@@ -22,7 +22,16 @@ from curobo._src.state.state_joint import JointState
 
 @pytest.mark.parametrize(
     "knots,reference,intervals",
-    [(16, True, 511), (16, True, 512), (32, False, 511), (64, False, 511)],
+    [
+        (16, True, 511),
+        (16, True, 512),
+        (32, False, 511),
+        (64, False, 511),
+        (512, True, 511),
+        (513, True, 511),
+        (1024, True, 511),
+        (1024, False, 511),
+    ],
 )
 @pytest.mark.parametrize("allow_tf32", [False, True])
 def test_native_timeopt_parity(
@@ -48,7 +57,7 @@ def test_native_timeopt_parity(
     trajopt = json.loads((directory / "robot_trajopt_manifest.json").read_text())
     rollout = json.loads((directory / "robot_rollout_manifest.json").read_text())
     dof = manifest["num_dof"]
-    if intervals != 511:
+    if intervals != 511 or not (directory / f"timeopt_{knots}_{int(reference)}.json").exists():
         source_directory = directory
         directory = tmp_path / "artifact"
         directory.mkdir()
@@ -140,8 +149,15 @@ def test_native_timeopt_parity(
     assert expected["success"][:3].all()
     assert expected["status"][3] == 3
     subprocess.run(
-        [executable, str(directory), str(tmp_path), str(knots), str(int(reference)),
-         "1000", str(intervals)],
+        [
+            executable,
+            str(directory),
+            str(tmp_path),
+            str(knots),
+            str(int(reference)),
+            "1000",
+            str(intervals),
+        ],
         check=True,
     )
     for mode in ("eager", "graph"):

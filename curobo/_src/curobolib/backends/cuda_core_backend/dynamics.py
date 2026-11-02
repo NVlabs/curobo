@@ -234,7 +234,8 @@ def launch_rnea_forward(
     num_original_links: Optional[int] = None,
     project_external_forces: bool = False,
     f_ext: Optional[torch.Tensor] = None,
-):
+    save_for_backward: bool = True,
+) -> None:
     """Launch RNEA forward kernel using cuda.core runtime compilation.
 
     Computes inverse dynamics: τ = RNEA(q, q̇, q̈, f_ext) and saves forward
@@ -273,6 +274,7 @@ def launch_rnea_forward(
         f_ext: [batch_size, num_original_links, 6] External spatial wrenches (optional).
                When provided, forces are subtracted: f[k] = I·a + v×*(I·v) - f_ext[k].
                Each f_ext[b,k] is a 6D wrench [torque(3), force(3)] in link k's frame.
+        save_for_backward: Whether to populate the cache consumed by RNEA backward.
     """
     runtime = get_runtime()
     cache = runtime.get_cuda_core_cache()
@@ -295,10 +297,12 @@ def launch_rnea_forward(
     all_movable_str = "true" if all_movable else "false"
     direct_joints_str = "true" if direct_joints else "false"
     project_external_forces_str = "true" if project_external_forces and has_f_ext else "false"
+    save_for_backward_str = "true" if save_for_backward else "false"
     kernel_name = (
         f"curobo::dynamics::rnea_forward_kernel"
         f"<{num_links}, {num_dof}, {threads_per_batch}, {has_f_ext_str}, "
-        f"{all_movable_str}, {direct_joints_str}, {project_external_forces_str}>"
+        f"{all_movable_str}, {direct_joints_str}, {project_external_forces_str}, "
+        f"{save_for_backward_str}>"
     )
 
     kernel_files = [

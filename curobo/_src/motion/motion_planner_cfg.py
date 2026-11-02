@@ -16,7 +16,6 @@ from curobo._src.graph_planner.graph_planner_prm_cfg import PRMGraphPlannerCfg
 from curobo._src.graph_planner.rrt import (
     BiRRTConfig,
     RRTGraphPlannerCfg,
-    RRTSampleProjectionConfig,
 )
 from curobo._src.rollout.cost_manager.cost_manager_robot_cfg import RobotCostManagerCfg
 from curobo._src.solver.solver_ik_cfg import IKSolverCfg
@@ -26,34 +25,13 @@ from curobo._src.transition.robot_state_transition_cfg import (
 )
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
+from curobo._src.types.spline_layout import SplineLayout
 from curobo._src.util.config_io import join_path, resolve_config
 from curobo._src.util.logging import log_and_raise
 from curobo.content import get_robot_configs_path, get_scene_configs_path
 
 RRT_GRAPH_PLANNER_ALGORITHMS = ("rrt",)
 GRAPH_PLANNER_ALGORITHMS = ("prm", *RRT_GRAPH_PLANNER_ALGORITHMS)
-
-
-def _default_constrained_rrt_config(use_cuda_graph: bool) -> BiRRTConfig:
-    """Create the tuned single-lane projected-RRT configuration for grasp phases."""
-    return BiRRTConfig(
-        samples_per_iteration=24,
-        max_iterations=60,
-        failure_extension_iterations=60,
-        max_nodes_per_tree=4096,
-        cspace_resolution=0.025,
-        fixed_steer_steps=64,
-        shortcut_path=True,
-        sample_projection=RRTSampleProjectionConfig(
-            iterations=25,
-            projection_slots=24,
-            history=7,
-            line_search_scales=(0.0, 0.1, 0.5, 1.0),
-            step_scale=1.0,
-            initial_step_scale=0.001,
-            use_cuda_graph=use_cuda_graph,
-        ),
-    )
 
 
 def is_rrt_graph_planner_algorithm(graph_planner_algorithm: str) -> bool:
@@ -85,7 +63,21 @@ class MotionPlannerCfg:
     always_run_trajopt: bool = True
     run_trajopt_on_graph_seed: bool = True
     enable_trajopt: bool = True
-    constrained_rrt_planner_config: Optional[RRTGraphPlannerCfg] = None
+
+    @property
+    def spline_layout(self) -> SplineLayout:
+        """Spline layout shared by planning, optimization, and reference construction."""
+        return self.trajopt_solver_config.spline_layout
+
+    @property
+    def num_knots(self) -> int:
+        """Fixed number of trajectory optimization controls."""
+        return self.spline_layout.num_knots
+
+    @property
+    def native_horizon(self) -> int:
+        """Number of native rollout states before dense interpolation."""
+        return self.trajopt_solver_config.native_horizon
 
     def __post_init__(self) -> None:
         """Normalize planner selection for direct dataclass construction too."""
@@ -95,11 +87,6 @@ class MotionPlannerCfg:
             log_and_raise("run_trajopt_on_graph_seed must be a boolean")
         if not isinstance(self.enable_trajopt, bool):
             log_and_raise("enable_trajopt must be a boolean")
-        if self.constrained_rrt_planner_config is not None and not isinstance(
-            self.constrained_rrt_planner_config,
-            RRTGraphPlannerCfg,
-        ):
-            log_and_raise("constrained_rrt_planner_config must be an RRTGraphPlannerCfg or None")
         self.graph_planner_algorithm = _resolve_graph_planner_selection(
             self.graph_planner_algorithm
         )
@@ -161,7 +148,7 @@ class MotionPlannerCfg:
         multi_env: bool = False,
         max_goalset: int = 1,
         interpolation_dt: float = 0.025,
-        interpolation_buffer_size: int = 1000,
+        interpolation_buffer_size: Optional[int] = None,
         ik_position_rank_weight: Optional[float] = None,
         ik_orientation_rank_weight: Optional[float] = None,
         ik_cspace_rank_weight: float = 5.0,
@@ -173,9 +160,8 @@ class MotionPlannerCfg:
         enable_trajopt: bool = True,
         ik_metrics_rollout: Optional[Union[str, Dict[str, Any]]] = None,
         trajopt_metrics_rollout: Optional[Union[str, Dict[str, Any]]] = None,
-        create_constrained_rrt: bool = True,
-        constrained_rrt_planner_config: Optional[Union[BiRRTConfig, Dict[str, Any]]] = None,
         enable_timeopt: bool = True,
+        num_knots: Optional[int] = None,
     ) -> MotionPlannerCfg:
         """Create a MotionPlannerCfg from robot, task, and scene configs.
 
@@ -202,6 +188,11 @@ class MotionPlannerCfg:
             metrics_rollout: Metrics rollout task config shared by IK,
                 and TrajOpt unless a solver-specific override is supplied.
             trajopt_optimizer_configs: Trajectory optimization task configs.
+            num_knots: Fixed B-spline control count in [12, 1024]. None preserves
+                the transition configuration (16 by default). More knots generally
+                increase motion duration and may increase planning time, but can
+                reduce waypoint tracking error. Choose the count based on the
+                required waypoint tracking tolerance and obstacle density.
             trajopt_transition_model: Trajectory optimization transition model
                 config.
             graph_planner_config: PRM graph planner config. The default
@@ -244,12 +235,6 @@ class MotionPlannerCfg:
             trajopt_metrics_rollout: Optional TrajOpt-only metrics rollout
                 override, including dense validation constraints such as tool
                 velocity limits.
-            create_constrained_rrt: Create a separate projected-RRT instance for
-                constrained grasp and lift phases. This does not replace or alter
-                the general graph planner.
-            constrained_rrt_planner_config: Optional projected-RRT algorithm
-                tuning. The default is the configuration measured by the grasp
-                benchmark. Custom configurations must enable sample projection.
             scene_model: Optional scene config. String paths are resolved
                 relative to cuRobo scene configs. When None, no world
                 obstacles are loaded initially.
@@ -306,8 +291,9 @@ class MotionPlannerCfg:
                 Smaller goalsets are padded internally.
             interpolation_dt: Time step in seconds for the dense trajectory
                 returned by TrajOpt. Larger values produce fewer waypoints.
-            interpolation_buffer_size: Maximum number of dense trajectory
-                waypoints preallocated by TrajOpt. Increase this when using a
+            interpolation_buffer_size: None sizes dense buffers from the configured
+                spline and timestep bounds. An integer sets an explicit maximum number
+                of dense trajectory waypoints preallocated by TrajOpt. Increase this when using a
                 smaller ``interpolation_dt`` or longer trajectories. Larger
                 buffers can significantly increase GPU memory usage because
                 state buffers are allocated for every batched seed trajectory.
@@ -327,8 +313,6 @@ class MotionPlannerCfg:
             num_ik_seeds = 16 if max_batch_size > 1 else 32
         if num_trajopt_seeds is None:
             num_trajopt_seeds = 2 if max_batch_size > 1 else 4
-        if not isinstance(create_constrained_rrt, bool):
-            log_and_raise("create_constrained_rrt must be a boolean")
 
         graph_planner_algorithm = _resolve_graph_planner_selection(graph_planner_algorithm)
         num_envs = max_batch_size if multi_env else 1
@@ -416,6 +400,7 @@ class MotionPlannerCfg:
 
         trajopt_solver_config = TrajOptSolverCfg.create(
             robot=robot_config,
+            num_knots=num_knots,
             optimizer_configs=trajopt_optimizer_configs,
             transition_model=trajopt_transition_model,
             metrics_rollout=resolved_trajopt_metrics_rollout,
@@ -461,23 +446,6 @@ class MotionPlannerCfg:
                 device_cfg=device_cfg,
                 use_cuda_graph_for_rollout=use_cuda_graph,
             )
-        resolved_constrained_rrt_planner_config = None
-        if create_constrained_rrt:
-            resolved_constrained_rrt_planner_config = RRTGraphPlannerCfg.create(
-                robot=robot_config,
-                planner=(
-                    _default_constrained_rrt_config(use_cuda_graph)
-                    if constrained_rrt_planner_config is None
-                    else constrained_rrt_planner_config
-                ),
-                resources_config=graph_planner_resources_config,
-                rollout=graph_planner_rollout,
-                transition_model=graph_planner_transition_model,
-                device_cfg=device_cfg,
-                use_cuda_graph_for_rollout=use_cuda_graph,
-            )
-            if resolved_constrained_rrt_planner_config.planner_config.sample_projection is None:
-                log_and_raise("constrained RRT requires sample_projection")
         return MotionPlannerCfg(
             ik_solver_config=ik_solver_config,
             trajopt_solver_config=trajopt_solver_config,
@@ -488,7 +456,6 @@ class MotionPlannerCfg:
             always_run_trajopt=always_run_trajopt,
             run_trajopt_on_graph_seed=run_trajopt_on_graph_seed,
             enable_trajopt=enable_trajopt,
-            constrained_rrt_planner_config=resolved_constrained_rrt_planner_config,
             scene_collision_cfg=scene_collision_cfg,
             device_cfg=device_cfg,
         )

@@ -14,12 +14,15 @@ import torch
 
 from curobo._src.trajectory.timeopt.timeopt_basis import CubicTimingBasis, TimeOptProblem
 from curobo._src.trajectory.timeopt.timeopt_solver import CudaTimeOptSolver
+from curobo._src.types.spline_layout import MAX_SPLINE_KNOTS
 
 
 def export_timeopt_tables(
     directory: Path, dof: int, knots: int, reference: bool, intervals: int = 511
 ) -> Path:
     """Export static float32/int32 tensors; no GPU or runtime model is required."""
+    if type(knots) is not int or not 2 <= knots <= MAX_SPLINE_KNOTS:
+        raise ValueError(f"knots must be an integer in [2, {MAX_SPLINE_KNOTS}]")
     basis = CubicTimingBasis(32, torch.device("cpu"))
     spans = knots + 2 + reference
     internal = np.arange(1, spans) / spans
@@ -91,7 +94,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--dof", type=int, required=True)
-    parser.add_argument("--knots", type=int, nargs="+", default=[12, 16, 32, 64])
+    parser.add_argument(
+        "--knots",
+        type=int,
+        nargs="+",
+        choices=range(2, MAX_SPLINE_KNOTS + 1),
+        metavar="N",
+        default=[12, 16, 32, 64],
+    )
     args = parser.parse_args()
     for knots in args.knots:
         for reference in (False, True):

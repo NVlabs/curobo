@@ -35,7 +35,7 @@ cudaError_t launch_seed_fitter_derivative_scale(
     const float* max_velocity, const float* max_acceleration,
     const float* max_jerk, const float* basis_velocity,
     const float* basis_acceleration, const float* basis_jerk, int seeds,
-    int steps, int dof, int knots, float path_normal_trace,
+    int steps, int dof, int knots, int interpolation_steps, float path_normal_trace,
     float timing_regularization, float irls_epsilon,
     float* velocity_trace_workspace, float* acceleration_trace_workspace,
     float* jerk_trace_workspace, float* derivative_scale,
@@ -51,6 +51,7 @@ cudaError_t launch_seed_fitter_solve_irls(
     const float* basis_velocity, const float* basis_acceleration,
     const float* basis_jerk, const float* path_normal,
     const float* derivative_scale, int seeds, int steps, int dof, int knots,
+    int interpolation_steps,
     float regularization, float trust_region_regularization,
     float path_diagonal_scale, float irls_epsilon, float* candidate_knots,
     cudaStream_t stream);

@@ -35,6 +35,7 @@ def test_search_preparation_specialization(backtracking: bool) -> None:
     """Fixed-fan preparation ignores beta; MPC applies it per problem."""
     import warp as wp
 
+    wp.init()
     from cpp_runtime.robot.kernels.lbfgs import create_lbfgs_runtime_kernels
 
     kernels = create_lbfgs_runtime_kernels(7, 3, "test_backtracking")
@@ -124,7 +125,9 @@ def test_runtime_reuses_curobo_kernel_sources() -> None:
         Path("src/mpc_cuda.cu"),
         Path("src/trajectory_seed_fitter_cuda.cu"),
         Path("src/trajectory_timeopt_cuda.cu"),
+        Path("src/trajectory_waypoints_cuda.cu"),
         Path("tests/mpc_continuation_test.cu"),
+        Path("kernels/trajectory_gradient.cuh"),
     }
     shared_seed_fitter = (
         ROBOT_ROOT.parents[1]
@@ -142,6 +145,9 @@ def test_runtime_reuses_curobo_kernel_sources() -> None:
     assert "kernel_lbfgs_step_circular" in exporter
     assert "kinematics_link_wrench_backward_kernel" in exporter
     runtime_kernel_dir = ROBOT_ROOT / "kernels"
+    gradient_wrapper = (runtime_kernel_dir / "trajectory_gradient.cuh").read_text()
+    assert "bspline/bspline_kernel.cuh" in gradient_wrapper
+    assert "bspline_backward_impl" in gradient_wrapper
     shared_rrt_kernels = (
         ROBOT_ROOT.parents[1] / "curobo/_src/graph_planner/rrt/kernel_rrt_runtime.py"
     )
@@ -810,6 +816,33 @@ def test_exported_trajectory_optimization_runtime() -> None:
     )
 
 
+@pytest.mark.parametrize("component", ["WAYPOINTS", "MPC"])
+def test_exported_cartesian_runtime(component: str) -> None:
+    """Check temporal references, adaptive replay, fallback, and shared MPC acceptance."""
+    artifact = os.environ.get("CUROBO_ROBOT_TEST_ARTIFACT_DIR")
+    if artifact is None:
+        pytest.skip("set CUROBO_ROBOT_TEST_ARTIFACT_DIR to an exported robot artifact")
+    executable = Path(
+        os.environ.get(
+            f"CUROBO_ROBOT_{component}_TEST_EXECUTABLE",
+            ROBOT_ROOT.parent / "build" / "robot" / f"curobo_robot_{component.lower()}_test",
+        )
+    ).resolve()
+    if not executable.exists():
+        pytest.skip(f"build the native Cartesian test first: {executable}")
+    if component == "MPC":
+        manifest = json.loads((Path(artifact) / "robot_ik_manifest.json").read_text())
+        if manifest["kernels"]["collision_voxel"]["max_obstacles"] < 1:
+            pytest.skip("MPC test requires export with --max-voxel-grids 1")
+    arguments = [str(executable), str(Path(artifact).resolve())]
+    if component == "WAYPOINTS":
+        metadata = json.loads((Path(artifact) / "robot_trajopt_manifest.json").read_text())
+        arguments.append(str(metadata["spline_layout"]["num_knots"]))
+    if component == "MPC":
+        arguments.append("--cartesian-only")
+    subprocess.run(arguments, check=True)
+
+
 @pytest.mark.parametrize("solver", ["IK", "TRAJOPT"])
 def test_exported_solver_parallelism(solver: str) -> None:
     """Compare parallel selection across eager execution and graph replay."""
@@ -1039,3 +1072,22 @@ def test_exported_collision_layers() -> None:
     if artifact is None or executable is None:
         pytest.skip("set robot artifact and native collision-layer test executable")
     subprocess.run([executable, artifact], check=True)
+
+
+def test_exported_spline_layout_matches_python() -> None:
+    """Native buffers and reference indices use the Python configuration's exported layout."""
+    artifact = os.environ.get("CUROBO_ROBOT_TEST_ARTIFACT_DIR")
+    if artifact is None:
+        pytest.skip("set CUROBO_ROBOT_TEST_ARTIFACT_DIR to an exported robot artifact")
+    from curobo.types import SplineLayout
+
+    metadata = json.loads((Path(artifact) / "robot_trajopt_manifest.json").read_text())
+    native = metadata["spline_layout"]
+    layout = SplineLayout(native["num_knots"], interpolation_steps=native["interpolation_steps"])
+    assert native["native_horizon"] == metadata["trajectory_steps"] == layout.native_horizon
+    assert native["padding"] == layout.padding
+    assert native["reference_intervals"] == layout.reference_intervals
+    assert metadata["minimum_interpolation_buffer_size"] == layout.dense_horizon(
+        metadata["maximum_dt"], metadata["interpolation_dt"]
+    )
+    assert metadata["interpolation_buffer_size"] >= metadata["minimum_interpolation_buffer_size"]

@@ -173,6 +173,7 @@ def launch_derivative_scale_kernel(
     basis_velocity: torch.Tensor,
     basis_acceleration: torch.Tensor,
     basis_jerk: torch.Tensor,
+    interpolation_steps: int,
     path_normal_trace: float,
     timing_regularization: float,
     irls_epsilon: float,
@@ -200,6 +201,7 @@ def launch_derivative_scale_kernel(
         steps,
         dof,
         free_knots,
+        interpolation_steps,
         np.float32(path_normal_trace),
         np.float32(timing_regularization),
         np.float32(irls_epsilon),
@@ -228,6 +230,7 @@ def launch_solve_irls_kernel(
     basis_jerk: torch.Tensor,
     path_normal: torch.Tensor,
     derivative_scale: torch.Tensor,
+    interpolation_steps: int,
     regularization: float,
     trust_region_regularization: float,
     path_diagonal_scale: float,
@@ -238,7 +241,8 @@ def launch_solve_irls_kernel(
     seeds, steps, dof = current_velocity.shape
     knot_count = current_knots.shape[1]
     free_knots = knot_count - 1
-    shared_values = 2 * steps + free_knots * free_knots + free_knots
+    # Six lower-band entries (degrees 3..5) and one RHS value per free control.
+    shared_values = 7 * free_knots
     _launch(
         "solve_irls_kernel",
         candidate_knots,
@@ -263,6 +267,7 @@ def launch_solve_irls_kernel(
         steps,
         dof,
         knot_count,
+        interpolation_steps,
         np.float32(regularization),
         np.float32(trust_region_regularization),
         np.float32(path_diagonal_scale),

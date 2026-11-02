@@ -104,6 +104,13 @@ def test_invalid_duration_intervals_rejected(robot: KinematicsCfg, intervals: in
         )
 
 
+@pytest.mark.parametrize("knots", [1, 1025])
+def test_invalid_spatial_control_count_rejected(robot: KinematicsCfg, knots: int) -> None:
+    """Reject shapes outside the qualified spatial-control range before allocation."""
+    with pytest.raises(ValueError, match="n_knots"):
+        TrajectoryTimeOpt(TrajectoryTimeOptCfg(robot, n_knots=knots))
+
+
 @pytest.fixture
 def robot(tmp_path: Path) -> KinematicsCfg:
     """One rigid pendulum, including gravity and an explicit effort limit."""
@@ -427,6 +434,56 @@ def test_reference_path_matches_trajopt(robot: KinematicsCfg) -> None:
             interior = torch.arange(153, device="cuda") % 8 != 0
             actual, expected = actual[:, interior], expected[:, interior]
         torch.testing.assert_close(actual, expected, rtol=2e-4, atol=5e-5)
+
+
+@pytest.mark.parametrize("reference", [False, True])
+def test_sample_progress_matches_native_static_spline(
+    robot: KinematicsCfg, reference: bool
+) -> None:
+    """Reported progress reproduces joint geometry through either sampler start convention."""
+    timeopt = make_timeopt(robot, 2, True)
+    controls, start, goal = inputs(2)
+    if reference:
+        result = timeopt.timeopt(
+            controls,
+            JointState.from_position(start),
+            goal,
+            knot_dt=torch.full((2,), 0.15, device="cuda"),
+        )
+    else:
+        result = timeopt.timeopt(controls, start, goal)
+    assert result.success.all()
+    times = (result.duration[:, None] * torch.linspace(0, 1.2, 257, device="cuda")).contiguous()
+    sampled = timeopt.sample(times)
+    progress = timeopt._sample_progress
+    assert progress.shape == times.shape
+    coordinate = 1 + 18 * progress
+    interval = coordinate.floor().to(torch.long)
+    local = coordinate - interval
+    weights = (
+        torch.stack(
+            (
+                (1 - local).pow(3),
+                3 * local.pow(3) - 6 * local.square() + 4,
+                -3 * local.pow(3) + 3 * local.square() + 3 * local + 1,
+                local.pow(3),
+            ),
+            dim=-1,
+        )
+        / 6
+    )
+    extended = torch.cat(
+        (
+            start[:, None].repeat(1, 4, 1),
+            controls[:, :-1],
+            goal[:, None].repeat(1, 4, 1),
+        ),
+        dim=1,
+    )
+    indices = interval[..., None] + torch.arange(4, device="cuda")
+    support = extended[torch.arange(2, device="cuda")[:, None, None], indices]
+    expected = (support * weights[..., None]).sum(dim=-2)
+    torch.testing.assert_close(sampled.position, expected, atol=2e-6, rtol=2e-5)
 
 
 def test_reference_input_failures(robot: KinematicsCfg) -> None:

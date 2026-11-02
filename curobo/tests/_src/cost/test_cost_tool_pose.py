@@ -4,6 +4,9 @@
 
 """Unit tests for ToolPoseCost and ToolPoseCostCfg."""
 
+# Standard Library
+import math
+
 # Third Party
 import pytest
 import torch
@@ -12,9 +15,208 @@ import torch
 from curobo._src.cost.cost_tool_pose import ToolPoseCost
 from curobo._src.cost.cost_tool_pose_cfg import ToolPoseCostCfg
 from curobo._src.cost.tool_pose_criteria import PoseErrorFrame, ToolPoseCriteria
+from curobo._src.trajectory.trajectory_pose_reference import (
+    interpolate_pose_waypoints,
+)
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 from curobo._src.util.warp import init_warp
+
+
+def test_temporal_goal_indexing_and_dense_reference(device_cfg: DeviceCfg) -> None:
+    """Native and dense costs use the requested geometric target, including seed routes."""
+    identity = device_cfg.to_device([1.0, 0.0, 0.0, 0.0])
+    start = ToolPose(
+        ["a"],
+        torch.zeros((2, 1, 1, 3), **device_cfg.as_torch_dict()),
+        identity.view(1, 1, 1, 4).repeat(2, 1, 1, 1),
+    )
+    target = GoalToolPose(
+        ["a"],
+        device_cfg.to_device([[0.1, 0.0, 0.0], [0.0, 0.2, 0.0]]).view(2, 1, 1, 1, 3),
+        identity.view(1, 1, 1, 1, 4).repeat(2, 1, 1, 1, 1),
+    )
+    reference = interpolate_pose_waypoints(target, start, horizon=81, padding=4)
+    criteria = ToolPoseCriteria.track_pose(non_terminal_scale=1.0, device_cfg=device_cfg)
+    criteria.path_tolerance.fill_(1e-5)
+    criteria.enforce_path_tolerance.fill_(1.0)
+    cost = ToolPoseCost(
+        ToolPoseCostCfg(
+            weight=[1.0, 1.0],
+            tool_frames=["a"],
+            tool_pose_criteria={"a": criteria},
+            device_cfg=device_cfg,
+        )
+    )
+    routes = torch.tensor([[1], [0]], device=device_cfg.device, dtype=torch.int32)
+    current = ToolPose(
+        ["a"],
+        reference.position.flip(0).squeeze(3).contiguous(),
+        reference.quaternion.flip(0).squeeze(3).contiguous(),
+    )
+    cost.setup_batch_tensors(2, 81)
+    native = cost.forward(current, reference, routes)
+    assert native[0].abs().max() < 1e-8
+    current.position = current.position.detach().clone().requires_grad_(True)
+    with torch.no_grad():
+        current.position[..., 2] += 0.03
+    reference.position.requires_grad_(True)
+    cost.forward(current, reference, routes)[0].sum().backward()
+    expected_gradient = torch.zeros_like(current.position)
+    expected_gradient[..., 2] = 0.03
+    torch.testing.assert_close(current.position.grad, expected_gradient, atol=1e-6, rtol=1e-5)
+    assert reference.position.grad is None
+
+    progress = torch.linspace(0, 1, 37, **device_cfg.as_torch_dict())[None].repeat(2, 1)
+    counts = torch.full((2,), 37, device=device_cfg.device, dtype=torch.int32)
+    cost.setup_batch_tensors(2, 37)
+    cost.set_reference_samples(progress, counts, 4)
+    factor = progress.view(2, 37, 1, 1)
+    current = ToolPose(
+        ["a"],
+        factor * target.position.flip(0).squeeze(3),
+        identity.view(1, 1, 1, 4).repeat(2, 37, 1, 1),
+    )
+    dense = cost.forward(current, reference, routes)
+    assert cost.get_path_feasibility(dense[1], dense[2], current).all()
+    current.position[0, 10, 0, 2] += 0.03
+    dense = cost.forward(current, reference, routes)
+    assert not cost.get_path_feasibility(dense[1], dense[2], current)[0, 10]
+
+
+def test_waypoint_cost_and_gradient_remain_active_inside_tolerance(device_cfg: DeviceCfg) -> None:
+    """Changing acceptance tolerances must not alter a waypoint objective or gradient."""
+    from curobo._src.util.cuda_graph_util import GraphExecutor
+
+    criteria = ToolPoseCriteria.track_pose(non_terminal_scale=1.0, device_cfg=device_cfg)
+    criteria.path_tolerance.copy_(device_cfg.to_device([0.02, 0.2]))
+    criteria.terminal_tolerance.copy_(criteria.path_tolerance)
+    criteria.enforce_path_tolerance.fill_(1)
+    criteria.enforce_terminal_tolerance.fill_(1)
+    cost = ToolPoseCost(
+        ToolPoseCostCfg(
+            weight=[1.0, 1.0],
+            tool_frames=["a"],
+            tool_pose_criteria={"a": criteria},
+            device_cfg=device_cfg,
+        )
+    )
+    cost._apply_tolerance_to_cost.zero_()
+    cost._refresh_pose_metric_buffers()
+    cost.setup_batch_tensors(1, 5)
+    position = torch.full((1, 5, 1, 3), 0.005, **device_cfg.as_torch_dict())
+    quaternion = device_cfg.to_device([math.cos(0.01), 0.0, math.sin(0.01), 0.0])
+    quaternion = quaternion.view(1, 1, 1, 4).repeat(1, 5, 1, 1)
+    goal = GoalToolPose(
+        ["a"],
+        torch.zeros((1, 1, 1, 1, 3), **device_cfg.as_torch_dict()),
+        device_cfg.to_device([1.0, 0.0, 0.0, 0.0]).view(1, 1, 1, 1, 4),
+    )
+    routes = torch.zeros((1, 1), device=device_cfg.device, dtype=torch.int32)
+
+    def evaluate() -> tuple[torch.Tensor, ...]:
+        current = ToolPose(["a"], position, quaternion)
+        objective, linear, angular, _ = cost.forward(current, goal, routes)
+        valid = cost.get_path_feasibility(linear, angular, current)
+        position_convergence, rotation_convergence = cost.get_convergence_errors(linear, angular)
+        return (
+            objective,
+            cost._out_position_gradient,
+            cost._out_rotation_gradient,
+            valid,
+            position_convergence,
+            rotation_convergence,
+        )
+
+    execute = GraphExecutor(evaluate, device=device_cfg.device, use_cuda_graph=True)
+    first = tuple(value.clone() for value in execute())
+    assert first[0].min() > 0
+    assert first[1].abs().sum() > 0 and first[2].abs().sum() > 0
+    assert first[3].all() and first[4].count_nonzero() == first[5].count_nonzero() == 0
+    stacked = cost._stacked_tool_pose_criteria
+    stacked.path_tolerance.fill_(0.001)
+    stacked.terminal_tolerance.fill_(0.001)
+    cost._refresh_pose_metric_buffers()
+    second = execute()
+    for index in (0, 1, 2):
+        torch.testing.assert_close(second[index], first[index])
+    assert not second[3].any()
+    assert second[4].min() > 0 and second[5].min() > 0
+    execute.reset()
+
+
+@pytest.mark.parametrize("horizon", [5, 37])
+def test_projected_path_tolerances_and_graph_replay(device_cfg: DeviceCfg, horizon: int) -> None:
+    """Check all links/samples with physical angle bounds and a replay-safe gate."""
+    criteria = ToolPoseCriteria.linear_motion(direction=[0.0, 0.0, 1.0], device_cfg=device_cfg)
+    criteria.path_tolerance.copy_(
+        device_cfg.to_device([0.02, 2.0 * math.sin(math.radians(10.0) / 2)])
+    )
+    criteria.enforce_path_tolerance.fill_(1.0)
+    cost = ToolPoseCost(
+        ToolPoseCostCfg(
+            weight=[1.0, 1.0],
+            tool_frames=["a", "b"],
+            tool_pose_criteria={"a": criteria, "b": criteria},
+            device_cfg=device_cfg,
+        )
+    )
+    cost.setup_batch_tensors(7, horizon)
+    position = torch.zeros((7, horizon, 2, 3), **device_cfg.as_torch_dict())
+    quaternion = torch.zeros((7, horizon, 2, 4), **device_cfg.as_torch_dict())
+    quaternion[..., 0] = 1.0
+    position[0, 2, 1, 0] = 0.021
+    quaternion[1, 2, 1, 0] = math.cos(math.radians(10.1) / 2)
+    quaternion[1, 2, 1, 1] = math.sin(math.radians(10.1) / 2)
+    position[2, :, :, 2] = 10.0  # Axial travel is unconstrained.
+    position[3, 2, 1, 0] = 0.019
+    quaternion[3, 2, 1, 0] = math.cos(math.radians(9.9) / 2)
+    quaternion[3, 2, 1, 1] = math.sin(math.radians(9.9) / 2)
+    position[4, 2, 1, 0] = torch.nan
+    position[5, -1, 1, 0] = 1.0  # Terminal convergence has its own check.
+    position[6, 2, 1, 0] = 0.02
+    quaternion[6, 2, 1, 0] = math.cos(math.radians(10.0) / 2)
+    quaternion[6, 2, 1, 1] = math.sin(math.radians(10.0) / 2)
+    current = ToolPose(["a", "b"], position, quaternion)
+    goal = GoalToolPose(
+        tool_frames=["a", "b"],
+        position=torch.zeros((1, 1, 2, 1, 3), **device_cfg.as_torch_dict()),
+        quaternion=device_cfg.to_device([1.0, 0.0, 0.0, 0.0])
+        .view(1, 1, 1, 1, 4)
+        .repeat(1, 1, 2, 1, 1),
+    )
+    route = torch.zeros((7, 1), device=device_cfg.device, dtype=torch.int32)
+
+    def evaluate() -> torch.Tensor:
+        _, position_error, rotation_error, _ = cost.forward(current, goal, route)
+        return cost.get_path_feasibility(position_error, rotation_error, current)
+
+    expected = [False, False, True, True, False, True, True]
+    assert evaluate().all(dim=-1).tolist() == expected
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        valid = evaluate()
+    graph.replay()
+    assert valid.all(dim=-1).tolist() == expected
+
+    criteria.enforce_path_tolerance.zero_()
+    cost.update_tool_pose_criteria({"a": criteria, "b": criteria})
+    graph.replay()
+    assert valid.all()
+    criteria.enforce_path_tolerance.fill_(1.0)
+    cost.update_tool_pose_criteria({"a": criteria, "b": criteria})
+    graph.replay()
+    assert valid.all(dim=-1).tolist() == expected
+
+    tolerance_ptr = cost._pose_tolerance.data_ptr()
+    criteria.path_tolerance.copy_(
+        device_cfg.to_device([0.03, 2.0 * math.sin(math.radians(12.0) / 2)])
+    )
+    cost.update_tool_pose_criteria({"a": criteria, "b": criteria})
+    graph.replay()
+    assert valid.all(dim=-1).tolist() == [True, True, True, True, False, True, True]
+    assert cost._pose_tolerance.data_ptr() == tolerance_ptr
 
 
 @pytest.fixture(scope="module", autouse=True)

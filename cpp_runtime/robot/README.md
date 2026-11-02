@@ -21,6 +21,11 @@ uses cuRobo CUDA kernels and exported Warp kernels.
 
 ## Export a Robot
 
+To export for a different GPU or an ARM64 Jetson without installing Python dependencies on
+the deployment machine, follow
+[Export the C++ runtime for another GPU](../../docs/guides/export_cpp_runtime.md).
+Use `--target-device` with a device description from `tools/export_device.py`.
+
 Generate a robot-specific artifact from a cuRobo YAML configuration. Repeat
 `--tool-frame` to request more than one output link:
 
@@ -29,6 +34,39 @@ python cpp_runtime/robot/tools/export_robot.py \
   --robot-config curobo/content/configs/robot/franka.yml \
   --tool-frame panda_hand \
   --out cpp_runtime/robot/artifacts/franka
+```
+
+Use `--num-knots N` to select any integer control count from 12 through 1,024
+(default 16). Set `TrajectoryOptimizationConfig::num_knots` to the same value;
+for the composed planner use `config.trajectory_optimization.num_knots`.
+Each instance keeps that count for its lifetime and uses an artifact exported
+for that count. More knots generally increase motion duration and may increase
+planning time, but can reduce waypoint tracking error. Choose the count based on
+the required waypoint tracking tolerance and obstacle density.
+
+Native horizon, padding, and active reference intervals come
+from the exported `SplineLayout`; the runtime validates the config/artifact match.
+`native_horizon()` is available on both `TrajectoryOptimizer` and `MotionPlanner`.
+The default remains 16 controls. With four samples per span, 1,024 controls produce
+4,113 native states; automatic dense buffers grow to cover the maximum configured timestep.
+The retimer keeps 32 timing controls and 512 uniform constraint/duration nodes by default.
+Those are independent of spatial controls: both sides of every spatial knot are added
+to the constraint grid. The former C++ 512-spatial-control validation cap is now 1,024.
+The same count is available through `info().native_horizon()` and
+`info().spline_layout.native_horizon`. Use this query when allocating native
+state and waypoint-reference buffers. Default dense capacity grows with the
+layout and timestep bounds; an explicit `--interpolation-buffer-size` is checked
+against the exported minimum.
+
+Python uses the same layout:
+
+```python
+from curobo.motion_planner import MotionPlannerCfg
+from curobo.trajectory_optimizer import TrajectoryOptimizerCfg
+
+planner_cfg = MotionPlannerCfg.create(robot="franka.yml", num_knots=32)
+trajopt_cfg = TrajectoryOptimizerCfg.create(robot="franka.yml", num_knots=32)
+assert planner_cfg.native_horizon == trajopt_cfg.native_horizon == 145
 ```
 
 Reserve fixed collision storage for a runtime-held payload without editing the
@@ -122,7 +160,7 @@ Each MPC problem owns one GPU beta value: failed probe fans multiply it by `0.1`
 reset it to `1`. Retries leave the search direction and L-BFGS history unchanged
 and consume the fixed CUDA-graph iteration budget. Set the solver configuration
 flag to `false` to disable this policy. Re-export existing artifacts after this
-kernel ABI update (IK schema 13, TrajOpt schema 18). The artifacts contain separate
+kernel ABI update (IK schema 18, TrajOpt schema 23). The artifacts contain separate
 fixed-fan and backtracking kernels, selected before graph capture. The fixed-fan
 candidate and line-search kernels do not read or update the backtracking scale.
 
@@ -188,7 +226,10 @@ Inputs and outputs are caller-owned contiguous CUDA buffers. Goals have shapes
 `[batch, num_tool_frames, num_goalset, 3]` and
 `[batch, num_tool_frames, num_goalset, 4]`; quaternions use `wxyz` order. Set
 `num_goalset = 1` for a single pose. Optional seeds have shape
-`[batch, num_seeds, num_dof]`. Optional current positions have shape
+`[batch, lm_num_seeds, num_dof]`; `lm_num_seeds=0` uses `num_seeds`.
+Set `lm_num_seeds` greater than `num_seeds` to refine a larger pose-only LM pool
+and retain its best `num_seeds` candidates for collision validation and L-BFGS.
+The artifact seed capacity must accommodate the LM pool. Optional current positions have shape
 `[batch, num_dof]` and bias ranking toward nearby configurations. Set
 `num_solutions` to return multiple distinct ranked candidates. Solutions have
 shape `[batch, num_solutions, num_dof]`, metrics have shape
@@ -207,7 +248,11 @@ Goalset scoring uses one CUDA block per seed, with goal poses distributed across
 threads and a stable reduction to the lowest-cost goal. Final validation computes
 each seed's feasibility and ranking score once, then ranks seeds in parallel.
 Both stages remain inside the solver's CUDA Graphs; equal scores retain the
-lower goal/seed index. These kernels use IK artifact schema 13.
+lower goal/seed index. These kernels use IK artifact schema 18.
+
+LM retains the Jacobian and gradient with each accepted seed; rejected steps keep the
+previous derivatives. Native L-BFGS initialization distributes each seed across one warp;
+its launch ABI requires IK schema 18 and TrajOpt schema 23 artifacts.
 
 IK first runs pose-only Levenberg-Marquardt seed refinement, with no world- or
 self-collision cost in the refinement loop. It then evaluates pose convergence,
@@ -238,7 +283,7 @@ previous solver calls before changing policy; these synchronous setters run outs
 
 `MotionPlanner` shares link-local spheres, masks, and attachment state between ordinary IK,
 grasp IK, RRT, and TrajOpt, while keeping solver workspaces separate. Native scenes remain
-single-environment. Re-export artifacts for IK schema 13, TrajOpt schema 18, and RRT schema 8
+single-environment. Re-export artifacts for IK schema 18, TrajOpt schema 23, and RRT schema 8
 before loading them into the updated runtime.
 
 `GraspPlanningRequest::collision_policy` enables the two-field grasp path. The caller owns
@@ -257,7 +302,7 @@ Recorded-scene and Ada qualification are still required before physical executio
 `curobo::robot::TrajectoryOptimizer` optimizes one joint-space request with
 multiple parallel seeds. It accepts common fallback endpoints and optional
 paired start/goal configurations per seed. It returns 16 optimized cubic
-B-spline knots plus the current default 81-state trajectory. Query `info()`
+B-spline knots plus native states for the configured spline. Query `native_horizon()` or `info()`
 instead of hard-coding those artifact dimensions.
 
 ```cpp
@@ -330,8 +375,17 @@ time-scaling kernel to compute the uniform timestep required by velocity,
 acceleration, and jerk limits. Each refinement starts from the best retained
 knots at `required_dt * finetune_dt_scale`; a faster result replaces the prior
 one only when it remains feasible. `trajectory_dt` reports the selected result.
-The fixed number of passes remains allocation-free, asynchronous, and CUDA
-Graph capturable.
+Initial optimization defaults to a maximum of 50 iterations.
+`max_iterations` sets the cap; `initial_check_interval` sets the checkpoint spacing
+(also 50 by default). A larger cap enables continuation of the same iterate and
+L-BFGS history when a native and dense feasibility check fails.
+For a per-call budget, set `TrajectoryOptimizationRequest::outer_iterations` to the maximum
+number of solve/check passes; a positive value overrides the configured iteration cap.
+Refinement keeps its separate 25-iteration budget. Failed refinement or final
+retiming falls back to the saved initial solution and validates it again.
+Calls remain allocation-free and CUDA Graph capturable. Uncaptured standalone
+calls synchronize at success checkpoints; captured replay uses device conditionals
+and stays asynchronous. The runtime requires CUDA Toolkit 12.3 or newer.
 
 This component is joint-space TrajOpt, not the complete motion planner: pose
 goals must first be converted with IK. It reuses cuRobo's current cubic B-spline,
@@ -607,6 +661,7 @@ pose_request.used_rrt = used_rrt;
 pose_request.rrt_iterations = rrt_iterations;
 pose_request.selected_seed = selected_seed;           // Optional scalar
 pose_request.planning_attempts = planning_attempts;   // Optional scalar
+pose_request.outer_iterations = 1;                   // Default: one solve/check pass
 planner.plan_pose(pose_request);
 ```
 
@@ -615,12 +670,61 @@ direct seeds, and retries up to `max_attempts`. Starting at
 `enable_graph_attempt`, it runs paired RRT over the valid IK solutions, fits
 the successful paths, and sends them through TrajOpt. Defaults match the
 single-goal Python policy: up to 20 attempts, graph planning from attempt one,
-50 initial iterations, one 25-iteration time-optimal refinement, and
+one initial solve/check pass of 50 optimizer iterations,
+one 25-iteration time-optimal refinement, and
 `finetune_dt_scale = 0.6`. It supports one pose
 per tool frame; goalsets are intentionally not part of this deployment API.
+`outer_iterations` sets the maximum initial solve/check passes per optimization, including
+RRT-seeded attempts. Additional passes preserve the iterate and optimizer history and stop
+early on success. The pass size is `initial_check_interval` (50 by default); refinement
+keeps its separate budget. Changing the pass count recaptures the C++ optimization graph.
+
+For Cartesian paths, reuse the output buffers and current state above:
+
+```cpp
+curobo::robot::WaypointMotionPlanningRequest waypoints;
+waypoints.motion = pose_request;
+waypoints.positions = waypoint_positions;      // CUDA float32 [N, tools, 3]
+waypoints.quaternions = waypoint_quaternions;  // CUDA float32 [N, tools, 4], wxyz
+waypoints.num_waypoints = N;                   // 1..256, excluding the current FK pose
+waypoints.track_orientation = true;            // false tracks only position, including the endpoint
+waypoints.outer_iterations = 4;                // Default: allow up to four solve/check passes
+planner.plan_pose_waypoints(waypoints);
+```
+
+Waypoint planning defaults to four initial solve/check passes (up to 200 optimizer iterations),
+independent of `waypoints.motion.outer_iterations`. This budget applies only to the current
+call; later ordinary pose calls retain their one-pass default.
+The current state must be stationary. The planner prepends its FK pose,
+linearly interpolates position and SLERPs orientation onto the native reference grid, and
+holds the boundary spans. The cubic spline retains its initialization-time control count
+(default 16), and all reference buffers use the exported native horizon.
+Every target is retained, so the count must also fit `spline_layout.reference_intervals`.
+The default 16 controls support up to 72 targets; configure/export 64 controls for 256 targets.
+Terminal IK uses the current configuration and Halton seeds, then TrajOpt starts
+from joint-space linear interpolation. Waypoint costs remain active inside the
+acceptance tolerances. Defaults are 5 cm / 15 degrees along the path and
+5 mm / 0.05 radians at the endpoint; each request can override them. Angular
+API values use radians. Dense checks use the actual spline progress after
+retiming and ignore unused output capacity. RRT fallback is disabled for these
+requests. Normal pose planning and either waypoint orientation mode reuse the
+same TrajOpt graph stages; ordinary initialization suffices before replay.
+Re-export artifacts for IK schema 18 and TrajOpt schema 23.
+
+These schemas require L-BFGS to emit the next line-search candidates along with its limited
+direction. The runtime prepares the first candidates before each optimization pass, then consumes
+the candidates produced by L-BFGS on subsequent iterations. Backtracking regenerates candidates
+using the reduced step multiplier while retaining the direction and history. Earlier artifacts
+must be re-exported because the L-BFGS kernel arguments changed.
 
 For the Python-compatible grasp pipeline, pass a goalset directly to
-`plan_grasp()`:
+`plan_grasp()`. Insertion and lift each expose separate path position and
+orientation tolerances, defaulting to 2 cm and 10 degrees. Each phase tracks
+an ordered Cartesian reference interpolated from its start pose to its endpoint.
+Success checks position and angular error against that reference at corresponding
+path progress on both native and dense samples, including the final retimed output.
+The tolerance permits small deviations in progress; strict monotonic motion is
+not guaranteed. Endpoint acceptance remains separate from the running path tolerance:
 
 ```cpp
 curobo::robot::GraspPlanningRequest grasp_request;
@@ -644,12 +748,15 @@ the grasp, restores them for the approach, and disables them again for the
 linear insertion and lift. Every exit path restores collision geometry. The
 default goalset stage uses the IK solver's current-state ranking; set
 `use_trajopt_for_goalset_selection` to select through the full motion pipeline.
-Insertion reuses the selected grasp joint configuration without solving IK again.
-Trajectory optimization, Cartesian-path validation, and collision checks still run.
-Lift solves IK for its new endpoint. Both use single-pass constrained TrajOpt by default; set
+Insertion and lift solve endpoint IK from the reached start of each phase. The
+configuration found during goalset selection is not imposed on insertion: the
+approach may have reached another IK branch for the selected Cartesian grasp.
+Both Python and C++ use the waypoint planner
+with one endpoint per phase and one 50-step initial solve pass; set
 `use_double_pass_trajopt_for_constrained_phases` for one timestep-refinement
-pass. The C++ runtime does not expose Python's projected-RRT option; ordinary
-pose planning still uses RRT as its unconstrained fallback.
+pass. These phases require trajectory optimization to be enabled. Insertion and
+lift do not use line costs or RRT fallback. Ordinary pose
+planning still uses RRT as its unconstrained fallback.
 
 Grasp planning stages dynamic inputs and outputs through fixed internal CUDA
 addresses. Goal selection, approach, insertion, and lift therefore keep their
@@ -664,7 +771,7 @@ Selected, approach, and lift poses are prepared on the GPU. Contact-link toggles
 update device sphere radii without uploading the full sphere array. Host success
 reads remain at phase boundaries. TrajOpt validates and retains state/joint values
 in parallel, then reduces the per-seed ranks and copies the winner in parallel
-(TrajOpt artifact schema 18).
+(TrajOpt artifact schema 23).
 
 ## Joint-space and Cartesian MPC
 
@@ -964,3 +1071,7 @@ refinement, exact goal knot, required timestep, and CUDA Graph replay:
 cpp_runtime/build/robot/curobo_robot_seed_fitter_test \
   cpp_runtime/robot/artifacts/franka
 ```
+
+TrajOpt schema 23 uses gradient assembly inside B-spline backward exclusively. The Warp
+cost reducer accepts only cost buffers and can overlap the backward passes. Re-export
+older artifacts to update the cost-reduction kernel ABI.

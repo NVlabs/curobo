@@ -20,6 +20,7 @@
 #include "motion_planner_cuda.h"
 #include "rrt_runtime.h"
 #include "trajectory_optimizer_runtime.h"
+#include "trajectory_waypoints_cuda.h"
 #include "warp_abi.h"
 
 namespace curobo::robot::detail {
@@ -206,6 +207,7 @@ MotionPlanningInfo MotionPlannerRuntime::info() const {
       manifest_.num_knots,
       manifest_.trajectory_steps,
       manifest_.max_rrt_path_nodes,
+      trajectory_optimizer_->info().spline_layout,
   };
 }
 
@@ -519,14 +521,10 @@ void MotionPlannerRuntime::copy_grasp_phase_output(
 }
 
 bool MotionPlannerRuntime::plan_linear_phase(
-    const float* goal_positions, const float* goal_quaternions,
-    const float* start_position, const float* start_velocity,
-    const float* start_acceleration,
-    const std::array<float, 3>& direction, bool direction_in_goal_frame,
-    int finetune_attempts,
-    const GraspPhaseOutput& output, cudaStream_t stream,
-    TrajoptGraphCache* graph_cache,
-    const float* known_goal_configuration) const {
+    const float *goal_positions, const float *goal_quaternions, const float *start_position,
+    const float *start_velocity, const float *start_acceleration, int finetune_attempts,
+    float position_tolerance, float orientation_tolerance, const GraspPhaseOutput &output,
+    cudaStream_t stream, TrajoptGraphCache *graph_cache) const {
   CRR_CUDA_CHECK(cudaMemcpyAsync(
       reinterpret_cast<void*>(grasp_phase_goal_position_.ptr()), goal_positions,
       grasp_phase_goal_position_.bytes(), cudaMemcpyDeviceToDevice, stream));
@@ -561,16 +559,20 @@ bool MotionPlannerRuntime::plan_linear_phase(
       reinterpret_cast<const float*>(grasp_phase_start_velocity_.ptr()),
       reinterpret_cast<const float*>(grasp_phase_start_acceleration_.ptr()),
       workspace, stream);
-  pose_request.constrain_tool_path = true;
-  pose_request.free_position_direction = direction;
-  pose_request.direction_in_goal_frame = direction_in_goal_frame;
-  pose_request.path_position_tolerance =
-      config_.inverse_kinematics.position_tolerance;
-  pose_request.path_orientation_tolerance =
-      config_.inverse_kinematics.orientation_tolerance;
   pose_request.finetune_attempts = finetune_attempts;
   pose_request.finetune_dt_scale = config_.trajectory_optimization.finetune_dt_scale;
-  plan_pose_impl(pose_request, graph_cache, known_goal_configuration);
+  WaypointMotionPlanningRequest waypoints;
+  waypoints.motion = pose_request;
+  waypoints.positions = pose_request.goal_positions;
+  waypoints.quaternions = pose_request.goal_quaternions;
+  waypoints.num_waypoints = 1;
+  waypoints.outer_iterations = pose_request.outer_iterations;
+  waypoints.path_position_tolerance = position_tolerance;
+  waypoints.path_orientation_tolerance = orientation_tolerance;
+  waypoints.final_position_tolerance = config_.trajectory_optimization.position_tolerance;
+  waypoints.final_orientation_tolerance = config_.trajectory_optimization.orientation_tolerance;
+  pose_request = prepare_pose_waypoints(waypoints);
+  plan_pose_impl(pose_request, graph_cache, &waypoints);
   copy_grasp_phase_output(output, stream);
   uint8_t success = 0U;
   CRR_CUDA_CHECK(cudaMemcpyAsync(
@@ -654,6 +656,11 @@ void MotionPlannerRuntime::load_fit_artifact() {
 }
 
 void MotionPlannerRuntime::allocate_workspace() {
+  const int waypoint_values = trajectory_optimizer_->info().native_horizon() *
+                              trajectory_optimizer_->info().num_tool_frames;
+  waypoint_reference_positions_.allocate(waypoint_values * 3 * sizeof(float));
+  waypoint_reference_quaternions_.allocate(waypoint_values * 4 * sizeof(float));
+
   const auto dof = static_cast<size_t>(manifest_.num_dof);
   const auto knots = static_cast<size_t>(manifest_.num_knots);
   const auto steps = static_cast<size_t>(manifest_.trajectory_steps);
@@ -702,7 +709,7 @@ void MotionPlannerRuntime::allocate_workspace() {
   staged_tool_goal_positions_.allocate(tool_frames * 3 * sizeof(float));
   staged_tool_goal_quaternions_.allocate(tool_frames * 4 * sizeof(float));
   staged_ik_seed_positions_.allocate(
-      static_cast<size_t>(config_.inverse_kinematics.num_seeds) * dof *
+      static_cast<size_t>(inverse_kinematics_->config().lm_num_seeds) * dof *
       sizeof(float));
   staged_selected_goal_position_.allocate(dof * sizeof(float));
   staged_position_error_.allocate(sizeof(float));
@@ -971,20 +978,18 @@ bool MotionPlannerRuntime::same_graph_request(
   return left.start_position == right.start_position &&
          left.start_velocity == right.start_velocity &&
          left.start_acceleration == right.start_acceleration &&
-         left.goal_position == right.goal_position &&
-         left.seed_knots == right.seed_knots &&
+         left.goal_position == right.goal_position && left.seed_knots == right.seed_knots &&
          left.seed_goal_positions == right.seed_goal_positions &&
          left.seed_start_positions == right.seed_start_positions &&
-         left.seed_valid == right.seed_valid &&
-         left.optimized_knots == right.optimized_knots &&
+         left.seed_valid == right.seed_valid && left.optimized_knots == right.optimized_knots &&
          left.trajectory_position == right.trajectory_position &&
          left.trajectory_velocity == right.trajectory_velocity &&
          left.trajectory_acceleration == right.trajectory_acceleration &&
-         left.trajectory_jerk == right.trajectory_jerk &&
-         left.success == right.success && left.cost == right.cost &&
-         left.collision_cost == right.collision_cost &&
-         left.trajectory_dt == right.trajectory_dt &&
-         left.selected_seed == right.selected_seed &&
+         left.trajectory_jerk == right.trajectory_jerk && left.success == right.success &&
+         left.cost == right.cost && left.collision_cost == right.collision_cost &&
+         left.trajectory_dt == right.trajectory_dt && left.selected_seed == right.selected_seed &&
+         left.stream == right.stream && left.finetune_attempts == right.finetune_attempts &&
+         left.outer_iterations == right.outer_iterations &&
          left.finetune_dt_scale == right.finetune_dt_scale &&
          left.goal_tool_positions == right.goal_tool_positions &&
          left.goal_tool_quaternions == right.goal_tool_quaternions &&
@@ -992,26 +997,16 @@ bool MotionPlannerRuntime::same_graph_request(
          left.free_position_direction == right.free_position_direction &&
          left.direction_in_goal_frame == right.direction_in_goal_frame &&
          left.path_position_tolerance == right.path_position_tolerance &&
-         left.path_orientation_tolerance == right.path_orientation_tolerance;
+         left.path_orientation_tolerance == right.path_orientation_tolerance &&
+         left.track_waypoints == right.track_waypoints &&
+         left.track_orientation == right.track_orientation &&
+         left.final_position_tolerance == right.final_position_tolerance &&
+         left.final_orientation_tolerance == right.final_orientation_tolerance;
 }
 
 void MotionPlannerRuntime::destroy_graph(TrajoptGraph* graph) noexcept {
-  for (auto* stage : {
-           &graph->setup,
-           &graph->pass,
-           &graph->refinement_pass,
-           &graph->base_accumulate,
-           &graph->finetune_prepare,
-           &graph->finetune_accumulate,
-           &graph->finalize,
-       }) {
-    if (stage->executable != nullptr) {
-      cudaGraphExecDestroy(stage->executable);
-    }
-    if (stage->graph != nullptr) {
-      cudaGraphDestroy(stage->graph);
-    }
-  }
+  if (graph->executable != nullptr) cudaGraphExecDestroy(graph->executable);
+  if (graph->graph != nullptr) cudaGraphDestroy(graph->graph);
   *graph = {};
 }
 
@@ -1023,108 +1018,43 @@ void MotionPlannerRuntime::destroy_graph_cache(
 
 void MotionPlannerRuntime::optimize_trajectory(
     const TrajectoryOptimizationRequest& request, TrajoptGraph* graph) const {
-  trajectory_optimizer_->validate_request(request);
-  const int finetune_attempts =
-      trajectory_optimizer_->resolved_finetune_attempts(request);
-  const auto run_stages = [&](const auto& launch) {
-    launch(graph->setup);
-    launch(graph->pass);
-    launch(graph->base_accumulate);
-    if (finetune_attempts > 0 &&
-        trajectory_optimizer_->base_pass_succeeded(request.stream)) {
-      for (int attempt = 0; attempt < finetune_attempts; ++attempt) {
-        launch(graph->finetune_prepare);
-        launch(graph->refinement_pass);
-        launch(graph->finetune_accumulate);
-      }
-    }
-    launch(graph->finalize);
-  };
   if (!config_.use_cuda_graph) {
-    trajectory_optimizer_->begin_optimization(request);
-    trajectory_optimizer_->run_optimization_pass(request);
-    trajectory_optimizer_->accumulate_optimization_pass(true, request);
-    if (finetune_attempts > 0 &&
-        trajectory_optimizer_->base_pass_succeeded(request.stream)) {
-      for (int attempt = 0; attempt < finetune_attempts; ++attempt) {
-        trajectory_optimizer_->prepare_finetune_pass(request);
-        trajectory_optimizer_->run_optimization_pass(request, true);
-        trajectory_optimizer_->accumulate_optimization_pass(false, request);
-      }
-    }
-    trajectory_optimizer_->finish_optimization(request);
+    trajectory_optimizer_->optimize(request);
     return;
   }
-  if (graph->initialized &&
-      graph->has_finetune_stages == (finetune_attempts > 0) &&
-      same_graph_request(graph->request, request)) {
-    run_stages([&](const CudaGraphStage& stage) {
-      CRR_CUDA_CHECK(cudaGraphLaunch(stage.executable, request.stream));
-    });
+  if (graph->executable != nullptr && same_graph_request(graph->request, request)) {
+    CRR_CUDA_CHECK(cudaGraphLaunch(graph->executable, request.stream));
     return;
   }
 
   destroy_graph(graph);
   CRR_CUDA_CHECK(cudaStreamSynchronize(request.stream));
+  CRR_CUDA_CHECK(cudaStreamBeginCapture(request.stream, cudaStreamCaptureModeThreadLocal));
+  bool capture_active = true;
   try {
-    const auto capture_stage = [&](CudaGraphStage* stage,
-                                   const auto& enqueue) {
-      CRR_CUDA_CHECK(cudaStreamBeginCapture(
-          request.stream, cudaStreamCaptureModeThreadLocal));
-      bool capture_active = true;
-      try {
-        enqueue();
-        CRR_CUDA_CHECK(cudaStreamEndCapture(request.stream, &stage->graph));
-        capture_active = false;
-        CRR_CUDA_CHECK(
-            cudaGraphInstantiate(&stage->executable, stage->graph, 0));
-      } catch (...) {
-        if (capture_active) {
-          cudaGraph_t abandoned_graph = nullptr;
-          cudaStreamEndCapture(request.stream, &abandoned_graph);
-          if (abandoned_graph != nullptr) {
-            cudaGraphDestroy(abandoned_graph);
-          }
-        }
-        throw;
-      }
-    };
-    capture_stage(&graph->setup, [&]() {
-      trajectory_optimizer_->begin_optimization(request);
-    });
-    capture_stage(&graph->pass, [&]() {
-      trajectory_optimizer_->run_optimization_pass(request);
-    });
-    capture_stage(&graph->base_accumulate, [&]() {
-      trajectory_optimizer_->accumulate_optimization_pass(true, request);
-    });
-    if (finetune_attempts > 0) {
-      capture_stage(&graph->refinement_pass, [&]() {
-        trajectory_optimizer_->run_optimization_pass(request, true);
-      });
-      capture_stage(&graph->finetune_prepare, [&]() {
-        trajectory_optimizer_->prepare_finetune_pass(request);
-      });
-      capture_stage(&graph->finetune_accumulate, [&]() {
-        trajectory_optimizer_->accumulate_optimization_pass(false, request);
-      });
-    }
-    capture_stage(&graph->finalize, [&]() {
-      trajectory_optimizer_->finish_optimization(request);
-    });
+    // Capture the same entry point as standalone TrajectoryOptimizer::optimize.
+    // Its conditional nodes own continuation, refinement, and fallback policy.
+    trajectory_optimizer_->optimize(request);
+    CRR_CUDA_CHECK(cudaStreamEndCapture(request.stream, &graph->graph));
+    capture_active = false;
+    CRR_CUDA_CHECK(cudaGraphInstantiate(&graph->executable, graph->graph, 0));
   } catch (...) {
+    if (capture_active) {
+      cudaGraph_t abandoned_graph = nullptr;
+      cudaStreamEndCapture(request.stream, &abandoned_graph);
+      if (abandoned_graph != nullptr) cudaGraphDestroy(abandoned_graph);
+    }
     destroy_graph(graph);
     throw;
   }
   graph->request = request;
-  graph->has_finetune_stages = finetune_attempts > 0;
-  graph->initialized = true;
-  run_stages([&](const CudaGraphStage& stage) {
-    CRR_CUDA_CHECK(cudaGraphLaunch(stage.executable, request.stream));
-  });
+  CRR_CUDA_CHECK(cudaGraphLaunch(graph->executable, request.stream));
 }
 
 void MotionPlannerRuntime::plan(const MotionPlanningRequest& request) const {
+  if (request.outer_iterations <= 0) {
+    throw std::invalid_argument("outer_iterations must be positive");
+  }
   last_ik_time_seconds_ = 0.0;
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
@@ -1328,9 +1258,14 @@ bool MotionPlannerRuntime::plan_impl(
     trajopt_request.seed_valid =
         activate_repaired_seeds ? nullptr : active_request.seed_valid;
     trajopt_request.finetune_attempts = active_request.finetune_attempts;
+    trajopt_request.outer_iterations = active_request.outer_iterations;
     trajopt_request.finetune_dt_scale = active_request.finetune_dt_scale;
     trajopt_request.constrain_tool_path = active_request.constrain_tool_path;
-    if (active_request.constrain_tool_path) {
+    trajopt_request.track_waypoints = active_request.track_waypoints;
+    trajopt_request.track_orientation = active_request.track_orientation;
+    trajopt_request.final_position_tolerance = active_request.final_position_tolerance;
+    trajopt_request.final_orientation_tolerance = active_request.final_orientation_tolerance;
+    if (active_request.constrain_tool_path || active_request.track_waypoints) {
       trajopt_request.goal_tool_positions = active_request.goal_tool_positions;
       trajopt_request.goal_tool_quaternions =
           active_request.goal_tool_quaternions;
@@ -1407,8 +1342,100 @@ bool MotionPlannerRuntime::plan_impl(
   return success != 0U;
 }
 
-void MotionPlannerRuntime::plan_pose(
-    const PoseMotionPlanningRequest& request) const {
+void MotionPlannerRuntime::plan_pose_waypoints(const WaypointMotionPlanningRequest &request) const {
+  const auto pose = prepare_pose_waypoints(request);
+  plan_pose(pose, &request);
+}
+
+PoseMotionPlanningRequest MotionPlannerRuntime::prepare_pose_waypoints(
+    const WaypointMotionPlanningRequest &request) const {
+  if (request.num_waypoints < 1 || request.num_waypoints > 256 || request.positions == nullptr ||
+      request.quaternions == nullptr || request.motion.current_position == nullptr) {
+    throw std::invalid_argument("waypoints require 1..256 Cartesian targets and a current state");
+  }
+  if (!config_.attempt_direct_trajectory_optimization) {
+    throw std::invalid_argument("waypoint planning requires direct trajectory optimization");
+  }
+  const auto info = trajectory_optimizer_->info();
+  if (request.num_waypoints > info.spline_layout.reference_intervals) {
+    throw std::invalid_argument(
+        "native reference grid supports at most " +
+        std::to_string(info.spline_layout.reference_intervals) + " targets; got " +
+        std::to_string(request.num_waypoints));
+  }
+  for (const float value :
+       {request.path_position_tolerance, request.path_orientation_tolerance,
+        request.final_position_tolerance, request.final_orientation_tolerance}) {
+    if (!std::isfinite(value) || value <= 0.0F) {
+      throw std::invalid_argument("waypoint tolerances must be finite and positive");
+    }
+  }
+  if (request.path_orientation_tolerance > 3.141592654F ||
+      request.final_orientation_tolerance > 3.141592654F) {
+    throw std::invalid_argument("waypoint orientation tolerance must not exceed pi radians");
+  }
+  CRR_CUDA_CHECK(cudaSetDevice(config_.trajectory_optimization.device_ordinal));
+  auto stream = request.motion.stream;
+  if (stream == nullptr && config_.use_cuda_graph) stream = internal_stream_;
+  std::vector<float> values(static_cast<size_t>(request.num_waypoints) * info.num_tool_frames * 7);
+  const size_t positions = static_cast<size_t>(request.num_waypoints) * info.num_tool_frames * 3;
+  CRR_CUDA_CHECK(cudaMemcpyAsync(values.data(), request.positions, positions * sizeof(float),
+                                 cudaMemcpyDeviceToHost, stream));
+  CRR_CUDA_CHECK(cudaMemcpyAsync(values.data() + positions, request.quaternions,
+                                 (values.size() - positions) * sizeof(float),
+                                 cudaMemcpyDeviceToHost, stream));
+  std::vector<float> state(info.num_dof * 3, 0.0F);
+  CRR_CUDA_CHECK(cudaMemcpyAsync(state.data(), request.motion.current_position,
+                                 info.num_dof * sizeof(float), cudaMemcpyDeviceToHost, stream));
+  if (request.motion.current_velocity != nullptr)
+    CRR_CUDA_CHECK(cudaMemcpyAsync(state.data() + info.num_dof, request.motion.current_velocity,
+                                   info.num_dof * sizeof(float), cudaMemcpyDeviceToHost, stream));
+  if (request.motion.current_acceleration != nullptr)
+    CRR_CUDA_CHECK(cudaMemcpyAsync(state.data() + 2 * info.num_dof,
+                                   request.motion.current_acceleration,
+                                   info.num_dof * sizeof(float), cudaMemcpyDeviceToHost, stream));
+  CRR_CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (size_t i = 0; i < state.size(); ++i) {
+    if (!std::isfinite(state[i]) || (i >= static_cast<size_t>(info.num_dof) && state[i] != 0.0F))
+      throw std::invalid_argument("waypoint planning requires a finite stationary current state");
+  }
+  for (const float value : values) {
+    if (!std::isfinite(value)) throw std::invalid_argument("waypoint poses must be finite");
+  }
+  for (size_t i = positions; i < values.size(); i += 4) {
+    float norm = 0.0F;
+    for (int j = 0; j < 4; ++j) norm += values[i + j] * values[i + j];
+    if (!(norm > 0.0F) || !std::isfinite(norm))
+      throw std::invalid_argument("waypoint quaternions must have a finite nonzero norm");
+  }
+  trajectory_optimizer_->launch_kinematics_to(
+      1, 1, reinterpret_cast<CUdeviceptr>(request.motion.current_position),
+      trajectory_optimizer_->link_position_.ptr(), trajectory_optimizer_->link_quaternion_.ptr(),
+      trajectory_optimizer_->robot_spheres_.ptr(), trajectory_optimizer_->global_cumulative_.ptr(),
+      reinterpret_cast<CUstream>(stream));
+  CRR_CUDA_CHECK(launch_pose_waypoints(
+      request.positions, request.quaternions, request.num_waypoints,
+      reinterpret_cast<const float *>(trajectory_optimizer_->link_position_.ptr()),
+      reinterpret_cast<const float *>(trajectory_optimizer_->link_quaternion_.ptr()),
+      info.num_tool_frames, info.spline_layout,
+      reinterpret_cast<float *>(waypoint_reference_positions_.ptr()),
+      reinterpret_cast<float *>(waypoint_reference_quaternions_.ptr()), stream));
+  auto pose = request.motion;
+  pose.outer_iterations = request.outer_iterations;
+  pose.stream = stream;
+  pose.goal_positions = reinterpret_cast<const float *>(waypoint_reference_positions_.ptr()) +
+                        (info.trajectory_steps - 1) * info.num_tool_frames * 3;
+  pose.goal_quaternions = reinterpret_cast<const float *>(waypoint_reference_quaternions_.ptr()) +
+                          (info.trajectory_steps - 1) * info.num_tool_frames * 4;
+  pose.enable_graph_attempt = pose.max_attempts;
+  return pose;
+}
+
+void MotionPlannerRuntime::plan_pose(const PoseMotionPlanningRequest &request,
+                                     const WaypointMotionPlanningRequest *waypoints) const {
+  if (request.outer_iterations <= 0) {
+    throw std::invalid_argument("outer_iterations must be positive");
+  }
   last_ik_time_seconds_ = 0.0;
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
@@ -1473,7 +1500,7 @@ void MotionPlannerRuntime::plan_pose(
       reinterpret_cast<const float*>(staged_start_acceleration_.ptr());
   if (request.ik_seed_positions != nullptr) {
     const auto ik_seed_values =
-        static_cast<size_t>(config_.inverse_kinematics.num_seeds) * dof;
+        static_cast<size_t>(inverse_kinematics_->config().lm_num_seeds) * dof;
     copy_to_staging(&staged_ik_seed_positions_, request.ik_seed_positions,
                     ik_seed_values * sizeof(float));
     stable_request.ik_seed_positions =
@@ -1509,7 +1536,7 @@ void MotionPlannerRuntime::plan_pose(
   stable_request.planning_attempts =
       reinterpret_cast<int32_t*>(selection_planning_attempts_.ptr());
   stable_request.stream = stream;
-  plan_pose_impl(stable_request, &default_trajopt_graphs_);
+  plan_pose_impl(stable_request, &default_trajopt_graphs_, waypoints);
 
   const auto trajectory_values =
       static_cast<size_t>(manifest_.trajectory_steps) * dof;
@@ -1562,10 +1589,9 @@ void MotionPlannerRuntime::plan_pose(
   CRR_CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
-void MotionPlannerRuntime::plan_pose_impl(
-    const PoseMotionPlanningRequest& request,
-    TrajoptGraphCache* graph_cache,
-    const float* known_goal_configuration) const {
+void MotionPlannerRuntime::plan_pose_impl(const PoseMotionPlanningRequest &request,
+                                          TrajoptGraphCache *graph_cache,
+                                          const WaypointMotionPlanningRequest *waypoints) const {
   if (request.goal_positions == nullptr ||
       request.goal_quaternions == nullptr ||
       request.current_position == nullptr || request.optimized_knots == nullptr ||
@@ -1606,7 +1632,7 @@ void MotionPlannerRuntime::plan_pose_impl(
     const bool reuse_ik_solution =
         attempt == request.enable_graph_attempt && has_reusable_ik_solution;
     has_reusable_ik_solution = false;
-    if (known_goal_configuration == nullptr && !reuse_ik_solution) {
+    if (!reuse_ik_solution) {
       IkSolveRequest ik_request;
       ik_request.goal_positions = request.goal_positions;
       ik_request.goal_quaternions = request.goal_quaternions;
@@ -1624,11 +1650,12 @@ void MotionPlannerRuntime::plan_pose_impl(
       ik_request.num_goalset = 1;
       ik_request.num_solutions = seeds;
       ik_request.stream = active_stream;
+      ik_request.track_orientation = waypoints == nullptr || waypoints->track_orientation;
       // Match Python's SeedIK progression by advancing the Halton window only
       // when IK actually runs, not when its result is reused for RRT.
       ik_request.seed_offset =
           request.ik_seed_positions == nullptr
-              ? ik_solve_index * (config_.inverse_kinematics.num_seeds - 1)
+              ? ik_solve_index * (inverse_kinematics_->config().lm_num_seeds - 1)
               : 0;
       const auto ik_begin = std::chrono::steady_clock::now();
       const bool ik_success_is_ready =
@@ -1641,6 +1668,26 @@ void MotionPlannerRuntime::plan_pose_impl(
             ik_success.data(), reinterpret_cast<const void*>(ik_success_.ptr()),
             ik_success.size(), cudaMemcpyDeviceToHost, active_stream));
         CRR_CUDA_CHECK(cudaStreamSynchronize(active_stream));
+      }
+      if (waypoints != nullptr) {
+        std::vector<float> errors(static_cast<size_t>(2 * seeds));
+        CRR_CUDA_CHECK(
+            cudaMemcpyAsync(errors.data(), reinterpret_cast<const void *>(ik_position_error_.ptr()),
+                            seeds * sizeof(float), cudaMemcpyDeviceToHost, active_stream));
+        CRR_CUDA_CHECK(cudaMemcpyAsync(
+            errors.data() + seeds, reinterpret_cast<const void *>(ik_orientation_error_.ptr()),
+            seeds * sizeof(float), cudaMemcpyDeviceToHost, active_stream));
+        CRR_CUDA_CHECK(cudaStreamSynchronize(active_stream));
+        const float rotation_limit = 2.0F * std::sin(waypoints->final_orientation_tolerance / 2.0F);
+        for (int seed = 0; seed < seeds; ++seed) {
+          if (!std::isfinite(errors[seed]) || errors[seed] > waypoints->final_position_tolerance ||
+              (waypoints->track_orientation &&
+               (!std::isfinite(errors[seeds + seed]) || errors[seeds + seed] > rotation_limit)))
+            ik_success[seed] = 0;
+        }
+        CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(ik_success_.ptr()),
+                                       ik_success.data(), ik_success.size(), cudaMemcpyHostToDevice,
+                                       active_stream));
       }
       last_ik_time_seconds_ +=
           std::chrono::duration<double>(std::chrono::steady_clock::now() - ik_begin).count();
@@ -1673,25 +1720,18 @@ void MotionPlannerRuntime::plan_pose_impl(
       has_reusable_ik_solution =
           attempt + 1 == request.enable_graph_attempt;
     }
-    if (known_goal_configuration == nullptr) {
-      CRR_CUDA_CHECK(cudaMemcpyAsync(
-          reinterpret_cast<void*>(pose_joint_goal_.ptr()),
-          reinterpret_cast<const void*>(ik_solutions_.ptr() +
-                                        first_valid_index * dof_bytes),
-          dof_bytes, cudaMemcpyDeviceToDevice, active_stream));
-    }
-    const auto first_goal = known_goal_configuration != nullptr
-        ? known_goal_configuration
-        : reinterpret_cast<const float*>(pose_joint_goal_.ptr());
+    CRR_CUDA_CHECK(cudaMemcpyAsync(
+        reinterpret_cast<void*>(pose_joint_goal_.ptr()),
+        reinterpret_cast<const void*>(ik_solutions_.ptr() + first_valid_index * dof_bytes),
+        dof_bytes, cudaMemcpyDeviceToDevice, active_stream));
 
     MotionPlanningRequest motion_request;
     motion_request.start_position = request.current_position;
     motion_request.start_velocity = request.current_velocity;
     motion_request.start_acceleration = request.current_acceleration;
-    motion_request.goal_position = first_goal;
+    motion_request.goal_position = reinterpret_cast<const float*>(pose_joint_goal_.ptr());
     motion_request.seed_goal_positions =
-        known_goal_configuration == nullptr
-            ? reinterpret_cast<const float*>(ik_solutions_.ptr()) : nullptr;
+        reinterpret_cast<const float*>(ik_solutions_.ptr());
     motion_request.optimized_knots = request.optimized_knots;
     motion_request.trajectory_position = request.trajectory_position;
     motion_request.trajectory_velocity = request.trajectory_velocity;
@@ -1704,25 +1744,38 @@ void MotionPlannerRuntime::plan_pose_impl(
     motion_request.used_rrt = request.used_rrt;
     motion_request.rrt_iterations = request.rrt_iterations;
     motion_request.stream = active_stream;
-    motion_request.seed_valid =
-        known_goal_configuration == nullptr
-            ? reinterpret_cast<const uint8_t*>(ik_success_.ptr()) : nullptr;
+    motion_request.seed_valid = reinterpret_cast<const uint8_t*>(ik_success_.ptr());
     motion_request.selected_seed =
         reinterpret_cast<int32_t*>(pose_selected_seed_.ptr());
     motion_request.attempt_direct_trajectory_optimization =
         attempt < request.enable_graph_attempt;
     motion_request.allow_rrt = attempt >= request.enable_graph_attempt;
     motion_request.finetune_attempts = request.finetune_attempts;
+    motion_request.outer_iterations = request.outer_iterations;
     motion_request.finetune_dt_scale = request.finetune_dt_scale;
     motion_request.goal_tool_positions = request.goal_positions;
     motion_request.goal_tool_quaternions = request.goal_quaternions;
     motion_request.constrain_tool_path = request.constrain_tool_path;
+
     motion_request.free_position_direction = request.free_position_direction;
     motion_request.direction_in_goal_frame = request.direction_in_goal_frame;
     motion_request.path_position_tolerance =
         request.path_position_tolerance;
     motion_request.path_orientation_tolerance =
         request.path_orientation_tolerance;
+    if (waypoints != nullptr) {
+      motion_request.track_waypoints = true;
+      motion_request.track_orientation = waypoints->track_orientation;
+      motion_request.goal_tool_positions =
+          reinterpret_cast<const float *>(waypoint_reference_positions_.ptr());
+      motion_request.goal_tool_quaternions =
+          reinterpret_cast<const float *>(waypoint_reference_quaternions_.ptr());
+      motion_request.path_position_tolerance = waypoints->path_position_tolerance;
+      motion_request.path_orientation_tolerance = waypoints->path_orientation_tolerance;
+      motion_request.final_position_tolerance = waypoints->final_position_tolerance;
+      motion_request.final_orientation_tolerance = waypoints->final_orientation_tolerance;
+      motion_request.allow_rrt = false;
+    }
     if (plan_impl(motion_request, true, graph_cache)) {
       copy_pose_outputs(request, completed_attempts, active_stream);
       return;
@@ -1733,6 +1786,9 @@ void MotionPlannerRuntime::plan_pose_impl(
 
 GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
     const GraspPlanningRequest& request) const {
+  if (request.plan_approach_to_grasp && !config_.attempt_direct_trajectory_optimization) {
+    throw std::invalid_argument("grasp insertion and lift require direct trajectory optimization");
+  }
   last_ik_time_seconds_ = 0.0;
   last_rrt_time_seconds_ = 0.0;
   last_rrt_calls_ = 0;
@@ -1751,6 +1807,17 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
       !std::isfinite(request.grasp_lift_offset)) {
     throw std::invalid_argument(
         "grasp goal count or Cartesian offset is invalid");
+  }
+  for (const float value :
+       {request.grasp_path_position_tolerance, request.grasp_path_orientation_tolerance,
+        request.lift_path_position_tolerance, request.lift_path_orientation_tolerance}) {
+    if (!std::isfinite(value) || value <= 0.0F) {
+      throw std::invalid_argument("insertion/lift tolerances must be finite and positive");
+    }
+  }
+  if (request.grasp_path_orientation_tolerance > 3.141592654F ||
+      request.lift_path_orientation_tolerance > 3.141592654F) {
+    throw std::invalid_argument("insertion/lift angular tolerances cannot exceed pi radians");
   }
   validate_phase_output(request.approach, "approach");
   if (request.plan_approach_to_grasp) {
@@ -1950,13 +2017,11 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
               : config_.trajectory_optimization.execution_speed_scale);
     }
     const bool grasp_success = plan_linear_phase(
-        reinterpret_cast<const float*>(selected_grasp_position_.ptr()),
-        reinterpret_cast<const float*>(selected_grasp_quaternion_.ptr()),
-        approach_end, approach_end_velocity, approach_end_acceleration,
-        approach_axis, request.grasp_approach_in_tool_frame,
-        constrained_finetune_attempts, request.grasp, stream,
-        &grasp_insert_trajopt_graphs_,
-        reinterpret_cast<const float*>(selected_grasp_configuration_.ptr()));
+        reinterpret_cast<const float *>(selected_grasp_position_.ptr()),
+        reinterpret_cast<const float *>(selected_grasp_quaternion_.ptr()), approach_end,
+        approach_end_velocity, approach_end_acceleration, constrained_finetune_attempts,
+        request.grasp_path_position_tolerance, request.grasp_path_orientation_tolerance,
+        request.grasp, stream, &grasp_insert_trajopt_graphs_);
     if (!grasp_success) {
       set_collision_links(unique_links, true);
       return finish(GraspPlanningStatus::GRASP_FAILED);
@@ -1989,12 +2054,11 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
               : config_.trajectory_optimization.execution_speed_scale);
     }
     const bool lift_success = plan_linear_phase(
-        reinterpret_cast<const float*>(lift_goal_position_.ptr()),
-        reinterpret_cast<const float*>(lift_goal_quaternion_.ptr()), grasp_end,
-        grasp_end_velocity, grasp_end_acceleration, lift_axis,
-        request.grasp_lift_in_tool_frame,
-        constrained_finetune_attempts, request.lift, stream,
-        &grasp_lift_trajopt_graphs_, nullptr);
+        reinterpret_cast<const float *>(lift_goal_position_.ptr()),
+        reinterpret_cast<const float *>(lift_goal_quaternion_.ptr()), grasp_end, grasp_end_velocity,
+        grasp_end_acceleration,
+        constrained_finetune_attempts, request.lift_path_position_tolerance,
+        request.lift_path_orientation_tolerance, request.lift, stream, &grasp_lift_trajopt_graphs_);
     set_collision_links(unique_links, true);
     if (!lift_success) {
       return finish(GraspPlanningStatus::LIFT_FAILED);

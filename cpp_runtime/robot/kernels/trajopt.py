@@ -52,12 +52,7 @@ def create_trajopt_runtime_kernels(
         rotation_metric: wp.array(dtype=wp.mat33),
         pose_tolerance: wp.array(dtype=wp.vec2),
         error_frame: wp.array(dtype=wp.int32),
-        direction_x: wp.float32,
-        direction_y: wp.float32,
-        direction_z: wp.float32,
-        path_position_tolerance: wp.float32,
-        path_orientation_tolerance: wp.float32,
-        direction_in_goal_frame: wp.uint8,
+        settings: wp.array(dtype=wp.float32),
         num_tool_frames: wp.int32,
     ):
         criteria_idx = wp.tid()
@@ -75,16 +70,20 @@ def create_trajopt_runtime_kernels(
             1.0,
         )
         position_projector = identity
+        rotation_projector = identity * settings[1]
         tolerance = wp.vec2(0.0, 0.0)
-        if not terminal:
-            direction = wp.normalize(wp.vec3(direction_x, direction_y, direction_z))
+        if not terminal and settings[0] == 1.0:
+            direction = wp.normalize(wp.vec3(settings[6], settings[7], settings[8]))
             position_projector = identity - wp.outer(direction, direction)
-            tolerance = wp.vec2(path_position_tolerance, path_orientation_tolerance)
+            tolerance = wp.vec2(settings[2], 2.0 * wp.sin(settings[3] / 2.0))
+        if settings[0] == 0.0:
+            position_projector = identity * 0.0
+            rotation_projector = identity * 0.0
         position_metric[criteria_idx] = position_projector
-        rotation_metric[criteria_idx] = identity
+        rotation_metric[criteria_idx] = rotation_projector
         pose_tolerance[criteria_idx] = tolerance
         if terminal:
-            error_frame[tool_idx] = wp.int32(direction_in_goal_frame)
+            error_frame[tool_idx] = wp.int32(settings[9]) if settings[0] == 1.0 else 0
 
     prepare_pose_criteria = warp_kernel(
         f"trajopt_prepare_pose_criteria_{num_seeds}",
@@ -263,26 +262,13 @@ def create_trajopt_runtime_kernels(
         "trajopt",
     )
 
-    def _combine_rollout_template(
+    def _reduce_rollout_cost_template(
         cspace_cost: wp.array(dtype=wp.float32),
-        cspace_gradient_position: wp.array(dtype=wp.float32),
-        cspace_gradient_velocity: wp.array(dtype=wp.float32),
-        cspace_gradient_acceleration: wp.array(dtype=wp.float32),
-        cspace_gradient_jerk: wp.array(dtype=wp.float32),
-        effort_gradient_position: wp.array(dtype=wp.float32),
-        effort_gradient_velocity: wp.array(dtype=wp.float32),
-        effort_gradient_acceleration: wp.array(dtype=wp.float32),
-        collision_joint_gradient: wp.array(dtype=wp.float32),
         world_collision_cost: wp.array(dtype=wp.float32),
         self_collision_cost: wp.array(dtype=wp.float32),
         pose_cost: wp.array(dtype=wp.float32),
         num_tool_frames: wp.int32,
         pose_constraint_active: wp.uint8,
-        effort_active: wp.uint8,
-        dense_gradient_position: wp.array(dtype=wp.float32),
-        dense_gradient_velocity: wp.array(dtype=wp.float32),
-        dense_gradient_acceleration: wp.array(dtype=wp.float32),
-        dense_gradient_jerk: wp.array(dtype=wp.float32),
         trajectory_cost: wp.array(dtype=wp.float32),
     ):
         trajectory_idx, lane = wp.tid()
@@ -306,24 +292,15 @@ def create_trajopt_runtime_kernels(
                         for pose_idx in range(2 * num_tool_frames):
                             value_cost += pose_cost[pose_offset + pose_idx]
                 local_cost += value_cost
-                dense_gradient_position[index] = (
-                    cspace_gradient_position[index] + collision_joint_gradient[index]
-                )
-                dense_gradient_velocity[index] = cspace_gradient_velocity[index]
-                dense_gradient_acceleration[index] = cspace_gradient_acceleration[index]
-                dense_gradient_jerk[index] = cspace_gradient_jerk[index]
-                if effort_active == wp.uint8(1):
-                    dense_gradient_position[index] += effort_gradient_position[index]
-                    dense_gradient_velocity[index] += effort_gradient_velocity[index]
-                    dense_gradient_acceleration[index] += effort_gradient_acceleration[index]
 
         block_cost = wp.tile_sum(wp.tile(local_cost))
         if lane == 0:
             trajectory_cost[trajectory_idx] = block_cost[0]
 
-    combine_rollout = warp_kernel(
-        f"trajopt_combine_rollout_{dof}_{horizon}", enable_backward=False
-    )(_combine_rollout_template)
+    reduce_rollout_cost = warp_kernel(
+        f"trajopt_reduce_rollout_cost_{dof}_{horizon}",
+        enable_backward=False,
+    )(_reduce_rollout_cost_template)
 
     def _accumulate_template(
         candidate_knots: wp.array2d(dtype=wp.float32),
@@ -371,6 +348,7 @@ def create_trajopt_runtime_kernels(
         num_tool_frames: wp.int32,
         pose_constraint_active: wp.uint8,
         effort_active: wp.uint8,
+        settings: wp.array(dtype=wp.float32),
     ):
         seed_idx, lane = wp.tid()
         feasible = active_seed_valid[seed_idx] == wp.uint8(1) and interpolated_violation[
@@ -423,12 +401,19 @@ def create_trajopt_runtime_kernels(
             if state_idx >= 8 and state_idx < fixed_horizon - 8:
                 acceleration_total += wp.abs(a)
                 jerk_total += wp.abs(j)
-            if joint_idx == 0 and pose_constraint_active == wp.uint8(1):
+            if joint_idx == 0 and (settings[0] != 0.0 or pose_constraint_active == wp.uint8(1)):
+                # MPC supplies its own pose criteria and acceptance residuals.
                 position_limit = path_position_tolerance
                 orientation_limit = path_orientation_tolerance
                 if state_idx == fixed_horizon - 1:
                     position_limit = pose_position_tolerance
                     orientation_limit = pose_orientation_tolerance
+                if settings[0] != 0.0:
+                    position_limit = settings[2]
+                    orientation_limit = 2.0 * wp.sin(settings[3] / 2.0)
+                    if state_idx == fixed_horizon - 1:
+                        position_limit = settings[4]
+                        orientation_limit = 2.0 * wp.sin(settings[5] / 2.0)
                 pose_offset = collision_idx * num_tool_frames
                 for tool_idx in range(num_tool_frames):
                     pose_idx = pose_offset + tool_idx
@@ -450,14 +435,18 @@ def create_trajopt_runtime_kernels(
             feasible = False
 
         should_update = first_pass == wp.uint8(1)
-        if lane == 0 and first_pass == wp.uint8(1) and feasible:
+        if lane == 0 and feasible:
             wp.atomic_max(finetune_enabled, 0, wp.int32(1))
         if first_pass == wp.uint8(0):
-            should_update = (
-                finetune_enabled[0] == wp.int32(1)
-                and feasible
-                and trajectory_dt[seed_idx] <= retained_dt[seed_idx]
+            should_update = feasible and (
+                retained_success[seed_idx] == wp.uint8(0)
+                or trajectory_dt[seed_idx] <= retained_dt[seed_idx]
             )
+            if retained_success[seed_idx] == wp.uint8(0) and not feasible:
+                should_update = pose_valid and (
+                    retained_pose_valid[seed_idx] == wp.uint8(0)
+                    or candidate_cost[seed_idx] <= retained_cost[seed_idx]
+                )
         if should_update:
             for variable_idx in range(lane, opt_dim, combine_block):
                 retained_knots[seed_idx, variable_idx] = candidate_knots[seed_idx, variable_idx]
@@ -564,7 +553,7 @@ def create_trajopt_runtime_kernels(
         "calculate_interpolation_horizon": calculate_interpolation_horizon,
         "validate_interpolated": validate_interpolated,
         **lbfgs_kernels,
-        "combine_rollout": combine_rollout,
+        "reduce_rollout_cost": reduce_rollout_cost,
         "accumulate": accumulate,
         "finalize": finalize,
     }

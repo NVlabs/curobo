@@ -12,7 +12,8 @@ from __future__ import annotations
 
 # Standard Library
 import math
-from typing import Optional, Tuple
+from contextlib import contextmanager
+from typing import Iterator, Optional, Tuple
 
 # Third Party
 import torch
@@ -28,11 +29,12 @@ from curobo._src.solver.processor_trajopt_result import (
     TrajOptResultCandidate,
     TrajOptResultProcessor,
     TrajOptResultProcessorConfig,
+    TrajOptResultUpdate,
 )
 from curobo._src.solver.solve_mode import SolveMode
 from curobo._src.solver.solve_state import SolveState
 from curobo._src.solver.solver_core import SolverCore
-from curobo._src.solver.solver_timeopt import TimeOptSolver
+from curobo._src.solver.solver_timeopt import TimeOptSolver, trajectory_validation_masks
 from curobo._src.solver.solver_trajopt_cfg import TrajOptSolverCfg
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
@@ -40,8 +42,13 @@ from curobo._src.trajectory.trajectory_interpolation import (
     calculate_dt_no_clamp,
     get_batch_interpolated_trajectory,
 )
+from curobo._src.trajectory.trajectory_pose_reference import (
+    pose_errors,
+    validate_pose_tolerance,
+)
 from curobo._src.trajectory.trajectory_seed_generator import TrajectorySeedGenerator
 from curobo._src.types.control_space import ControlSpace
+from curobo._src.types.spline_layout import SplineLayout, validate_trajopt_knots
 from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose
 from curobo._src.util.cuda_event_timer import CudaEventTimer
@@ -78,6 +85,8 @@ class TrajOptSolver:
         self._interpolation_dt_buffer = None
         self._interpolation_buffer_is_validated = False
         self._seed_dt_buffer = None
+        self._dense_reference_progress: Optional[torch.Tensor] = None
+        self._dense_reference_counts: Optional[torch.Tensor] = None
         result_processor_config = TrajOptResultProcessorConfig(
             device_cfg=self.device_cfg,
             action_horizon=self.action_horizon,
@@ -141,6 +150,16 @@ class TrajOptSolver:
     @property
     def horizon(self) -> int:
         return self.auxiliary_rollout.horizon
+
+    @property
+    def spline_layout(self) -> SplineLayout:
+        """Fixed spline layout used by costs, references, and validation."""
+        return self.config.spline_layout
+
+    @property
+    def native_horizon(self) -> int:
+        """Number of native rollout states, including both boundaries."""
+        return self.config.native_horizon
 
     @property
     def opt_dim(self) -> int:
@@ -259,6 +278,13 @@ class TrajOptSolver:
             self._timeopt = None
             self._result_processor.reset_cuda_graph()
 
+    def _ensure_timeopt(self, lanes: int) -> TimeOptSolver:
+        """Initialize graph-unsafe retiming resources before using their buffers."""
+        if self._timeopt is None or self._timeopt.lanes != lanes:
+            self._reset_timeopt()
+            self._timeopt = TimeOptSolver(self, lanes)
+        return self._timeopt
+
     def reset_shape(self):
         self._reset_timeopt()
         self.core.reset_shape()
@@ -294,6 +320,25 @@ class TrajOptSolver:
     ) -> Tuple[GoalRegistry, bool]:
         if current_state is None:
             log_and_raise("current_state is required for TrajOpt")
+        # Keep derivative storage present from the first solve. Adding optional
+        # fields later would replace pointers already captured by rollout updates.
+        current_state = current_state.clone()
+        for name in ("velocity", "acceleration", "jerk"):
+            if getattr(current_state, name) is None:
+                setattr(current_state, name, torch.zeros_like(current_state.position))
+        static_reference = goal_tool_poses.horizon == 1
+        if goal_tool_poses.horizon not in (1, self.horizon):
+            log_and_raise("TrajOpt goal horizon must be one or match the native rollout horizon")
+        if static_reference:
+            goal_tool_poses = GoalToolPose(
+                tool_frames=goal_tool_poses.tool_frames,
+                position=goal_tool_poses.position.expand(
+                    -1, self.horizon, -1, -1, -1
+                ).contiguous(),
+                quaternion=goal_tool_poses.quaternion.expand(
+                    -1, self.horizon, -1, -1, -1
+                ).contiguous(),
+            )
         goal_buffer, update_reference = self.core.prepare_goal_buffer(
             solve_state=solve_state,
             goal_tool_poses=goal_tool_poses,
@@ -304,6 +349,135 @@ class TrajOptSolver:
             tool_relative_transform_target=tool_relative_transform_target,
         )
         return goal_buffer, update_reference
+
+    def _set_dense_reference_samples(
+        self, progress: torch.Tensor, valid_steps: torch.Tensor
+    ) -> None:
+        """Copy sampler progress into fixed storage used by dense pose validation graphs."""
+        counts = valid_steps.reshape(-1).to(dtype=torch.int32)
+        if (
+            self._dense_reference_progress is None
+            or self._dense_reference_progress.shape != progress.shape
+        ):
+            self._dense_reference_progress = torch.empty_like(progress)
+            self._dense_reference_counts = torch.empty_like(counts)
+        self._dense_reference_progress.copy_(progress)
+        self._dense_reference_counts.copy_(counts)
+        rollout = self.additional_metrics_rollouts["interpolated_rollout"]
+        for cost in rollout.get_cost_component_by_name("tool_pose"):
+            if cost is not None:
+                cost.set_reference_samples(
+                    self._dense_reference_progress,
+                    self._dense_reference_counts,
+                    self.spline_layout.padding,
+                )
+
+    def _validate_waypoint_layout(self) -> None:
+        """Require a configured cubic spline and its unmodified native sample grid."""
+        validate_trajopt_knots(self.action_horizon)
+        if (
+            self.horizon != self.native_horizon
+            or self.transition_model.control_space != ControlSpace.BSPLINE_3
+        ):
+            log_and_raise("waypoint tracking requires a configured cubic spline at native horizon")
+
+    @contextmanager
+    def _waypoint_tracking(
+        self,
+        enabled: bool,
+        path_tolerance: Optional[Tuple[float, float]],
+        final_tolerance: Optional[Tuple[float, float]],
+        track_orientation: bool,
+    ) -> Iterator[None]:
+        """Update existing device criteria for one call and restore them without recapture."""
+        if not enabled:
+            yield
+            return
+        if path_tolerance is None or final_tolerance is None:
+            log_and_raise("waypoint tracking requires path_tolerance and final_tolerance")
+        validate_pose_tolerance(path_tolerance)
+        validate_pose_tolerance(final_tolerance)
+        metrics_rollouts = (
+            self.metrics_rollout,
+            self.additional_metrics_rollouts["interpolated_rollout"],
+        )
+        for rollout in metrics_rollouts:
+            cost = rollout.metrics_convergence_manager.get_cost("tool_pose")
+            if cost is None or not cost.enabled:
+                log_and_raise(
+                    "waypoint tracking requires enabled native and dense pose convergence"
+                )
+        identity = torch.eye(3, **self.device_cfg.as_torch_dict())
+        path_deadband = self.device_cfg.to_device(
+            [
+                path_tolerance[0],
+                2 * math.sin(path_tolerance[1] / 2),
+            ]
+        )
+        final_deadband = self.device_cfg.to_device(
+            [
+                final_tolerance[0],
+                2 * math.sin(final_tolerance[1] / 2),
+            ]
+        )
+        saved = []
+        rollouts = self.get_all_rollout_instances() + list(
+            self.additional_metrics_rollouts.values()
+        )
+        try:
+            for rollout in rollouts:
+                for cost in rollout.get_cost_component_by_name("tool_pose"):
+                    if cost is None:
+                        continue
+                    criteria = cost._stacked_tool_pose_criteria
+                    saved.append(
+                        (
+                            cost,
+                            {
+                                name: getattr(criteria, name).clone()
+                                for name in criteria.tensor_field_names()
+                            },
+                            cost._apply_tolerance_to_cost.clone(),
+                        )
+                    )
+                    for prefix in ("path", "terminal"):
+                        for kind in ("position", "rotation"):
+                            getattr(criteria, f"{prefix}_{kind}_projector").copy_(identity)
+                            getattr(criteria, f"{prefix}_{kind}_axis_scale").fill_(1.0)
+                        if not track_orientation:
+                            getattr(criteria, f"{prefix}_rotation_axis_scale").zero_()
+                    criteria.path_tolerance.copy_(path_deadband)
+                    criteria.terminal_tolerance.copy_(final_deadband)
+                    criteria.enforce_path_tolerance.fill_(1.0)
+                    criteria.enforce_terminal_tolerance.fill_(1.0)
+                    cost._apply_tolerance_to_cost.zero_()
+                    cost._refresh_pose_metric_buffers()
+            yield
+        finally:
+            for cost, original, cost_deadband in saved:
+                for name, value in original.items():
+                    getattr(cost._stacked_tool_pose_criteria, name).copy_(value)
+                cost._apply_tolerance_to_cost.copy_(cost_deadband)
+                cost._refresh_pose_metric_buffers()
+
+    def _attach_path_errors(self, result: TrajOptSolverResult, reference: GoalToolPose) -> None:
+        """Attach selected native-grid errors in physical units without changing selection."""
+        state = result.js_solution
+        batch, seeds, horizon, dof = state.position.shape
+        flat = self.get_active_js(
+            JointState.from_position(
+                state.position.reshape(-1, dof),
+                joint_names=state.joint_names,
+            )
+        )
+        poses = self.compute_kinematics(flat).tool_poses
+        links = reference.num_links
+        result.path_position_error, result.path_rotation_error = pose_errors(
+            poses.position.reshape(batch, seeds, horizon, links, 3),
+            poses.quaternion.reshape(batch, seeds, horizon, links, 4),
+            reference.position.squeeze(3).unsqueeze(1),
+            reference.quaternion.squeeze(3).unsqueeze(1),
+        )
 
     def _update_rollout_params(self, goal_buffer, include_auxiliary_rollout=True):
         self.core.update_rollout_params(goal_buffer, include_auxiliary_rollout)
@@ -340,9 +514,27 @@ class TrajOptSolver:
         finetune_dt_scale: float = 0.6,
         initial_dt_scale: Optional[float] = 1.25,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
+        actual_batch_size: Optional[int] = None,
     ) -> TrajOptSolverResult:
         opt_time = 0.0
         total_timer = CudaEventTimer().start()
+        initial_budget = (
+            initial_iters if initial_iters is not None else self.config.initial_max_iters
+        )
+        inner_iters = self.optimizer.optimizers[-1].config.inner_iters
+        for name, value in (
+            ("initial_iters", initial_budget),
+            ("initial_check_interval", self.config.initial_check_interval),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value <= 0
+                or value % inner_iters != 0
+            ):
+                log_and_raise(f"{name} must be a positive multiple of inner_iters ({inner_iters})")
+        if finetune_attempts < 0:
+            log_and_raise("finetune_attempts must be nonnegative")
         # enable all optimizers
         for optimizer in self.optimizer.optimizers:
             optimizer.enable()
@@ -408,6 +600,10 @@ class TrajOptSolver:
         )
         self._result_processor.reset(seed_goal_state.dt)
         next_seed = None
+        initial_iterations = 0
+        active_batch_size = actual_batch_size or solve_state.batch_size
+        initial_candidate = None
+        refined = False
 
         for i in range(finetune_attempts + 1):
             current_dt_for_buffer = self._result_processor.best_dt
@@ -427,7 +623,8 @@ class TrajOptSolver:
             else:
                 if current_dt_for_buffer.shape != seed_goal_state.dt.shape:
                     log_and_raise(
-                        f"current_dt_for_buffer.shape: {current_dt_for_buffer.shape} != seed_goal_state.dt.shape: {seed_goal_state.dt.shape}"
+                        f"current_dt_for_buffer.shape: {current_dt_for_buffer.shape} != "
+                        f"seed_goal_state.dt.shape: {seed_goal_state.dt.shape}"
                     )
                 seed_goal_state.dt.copy_(current_dt_for_buffer)
                 goal_buffer, _ = self._prepare_goal_buffer(
@@ -446,8 +643,9 @@ class TrajOptSolver:
             if hasattr(self.optimizer.optimizers[-1].config, "num_iters"):
                 num_iters_backup = self.optimizer.optimizers[-1].config.num_iters
                 if i == 0:
-                    if initial_iters is not None:
-                        self.optimizer.optimizers[-1].update_niters(initial_iters)
+                    self.optimizer.optimizers[-1].update_niters(
+                        min(initial_budget, self.config.initial_check_interval)
+                    )
                 if i == 1:
                     if time_optimal_iters is not None:
                         self.optimizer.optimizers[-1].update_niters(time_optimal_iters)
@@ -456,6 +654,7 @@ class TrajOptSolver:
                         self.optimizer.optimizers[-1].update_niters(finetune_iters)
 
             if i >= 1:
+                refined = True
                 if len(self.optimizer.optimizers) > 1:
                     self.optimizer.optimizers[0].disable()
 
@@ -471,46 +670,44 @@ class TrajOptSolver:
             else:
                 self.optimizer.reinitialize(current_seed, clear_optimizer_state=False)
 
-            opt_result = self.optimizer.optimize(current_seed)
-            opt_time += opt_timer.stop()
-
-            if num_iters_backup is not None:
-                self.optimizer.optimizers[-1].update_niters(num_iters_backup)
-
-            with profiler.record_function("trajopt_solver/post_optimization"):
-                new_dt = self.metrics_rollout.compute_time_scaled_dt_from_action(
-                    opt_result.detach(),
-                    self.transition_model.get_state_bounds(),
-                    epsilon=1e-3,
-                    minimum_dt=self.config.minimum_trajectory_dt,
-                    maximum_dt=self.config.maximum_trajectory_dt,
-                )
-                new_dt = new_dt.view(solve_state.batch_size, num_seeds)
-
-                if new_dt.shape != seed_goal_state.dt.shape:
-                    log_and_raise(
-                        f"new_dt.shape: {new_dt.shape} != seed_goal_state.dt.shape: {seed_goal_state.dt.shape}"
+            try:
+                opt_result = self.optimizer.optimize(current_seed)
+                opt_time += opt_timer.stop()
+                while True:
+                    if i == 0:
+                        final_optimizer = self.optimizer.optimizers[-1]
+                        initial_iterations += (
+                            final_optimizer.outer_iters * final_optimizer.config.inner_iters
+                        )
+                    result_update = self._process_optimization_result(
+                        opt_result,
+                        solve_state.batch_size,
+                        num_seeds,
                     )
-                self._update_trajectory_dt(new_dt)
-                metrics_result = self.metrics_rollout.compute_metrics_from_action(opt_result)
-
-            js_optimized = metrics_result.state.joint_state
-            js_optimized.joint_names = self.joint_names
-            js_optimized.knot = metrics_result.actions
-            js_optimized.knot_dt = (
-                metrics_result.state.joint_state.dt
-                * self.auxiliary_rollout.transition_model.interpolation_steps
-            )
-            interpolated_metrics = self._interpolate_and_compute_metrics(js_optimized)
-
-            result_update = self._result_processor.update(
-                TrajOptResultCandidate(
-                    metrics=metrics_result,
-                    interpolated_metrics=interpolated_metrics,
-                    debug_info={"solver": self.optimizer.get_recorded_trace()},
-                )
-            )
+                    if (
+                        i > 0
+                        or initial_iterations >= initial_budget
+                        or bool(result_update.success[:active_batch_size].any(dim=-1).all())
+                    ):
+                        break
+                    # Validation changes dt. Restore the unchanged objective before resuming
+                    # the cached iterate, gradient, search direction, and optimizer history.
+                    self._update_trajectory_dt(current_dt_for_buffer)
+                    final_optimizer.update_niters(
+                        min(
+                            self.config.initial_check_interval,
+                            initial_budget - initial_iterations,
+                        )
+                    )
+                    opt_timer = CudaEventTimer().start()
+                    opt_result = self.optimizer.continue_optimization(opt_result)
+                    opt_time += opt_timer.stop()
+            finally:
+                if num_iters_backup is not None:
+                    self.optimizer.optimizers[-1].update_niters(num_iters_backup)
             next_seed = result_update.next_seed
+            if i == 0 and finetune_attempts > 0 and result_update.any_success:
+                initial_candidate = (next_seed.clone(), result_update.best_dt.clone())
 
             if i > 0 and not result_update.improved:
                 break
@@ -518,9 +715,100 @@ class TrajOptSolver:
                 break
 
         best_trajopt_result = self._finalize_result(current_state, num_seeds, return_seeds)
+        failed = ~best_trajopt_result.success.any(dim=-1)
+        failed[active_batch_size:] = False
+        if refined and initial_candidate is not None and bool(failed.any()):
+            # Final timing/validation can reject a refinement that passed native checks.
+            # Preserve successful refined rows while retrying the owned initial geometry.
+            best_trajopt_result = best_trajopt_result.clone()
+            actions, initial_dt = initial_candidate
+            self._result_processor.reset(initial_dt)
+            self._process_optimization_result(
+                actions,
+                solve_state.batch_size,
+                num_seeds,
+                dt=initial_dt,
+            )
+            fallback = self._finalize_result(current_state, num_seeds, return_seeds)
+            recovered = failed & fallback.success.any(dim=-1)
+            best_trajopt_result.copy_at_batch_indices(fallback, recovered)
+            best_trajopt_result.timeopt_time += fallback.timeopt_time
         best_trajopt_result.solve_time = opt_time
         best_trajopt_result.total_time = total_timer.stop()
+        best_trajopt_result.debug_info["initial_iterations"] = initial_iterations
         return best_trajopt_result
+
+    def _process_optimization_result(
+        self,
+        actions: torch.Tensor,
+        batch_size: int,
+        num_seeds: int,
+        *,
+        dt: Optional[torch.Tensor] = None,
+    ) -> TrajOptResultUpdate:
+        """Validate native and dense trajectories and retain the best feasible seeds."""
+        with profiler.record_function("trajopt_solver/post_optimization"):
+            new_dt = dt
+            if new_dt is None:
+                new_dt = self.metrics_rollout.compute_time_scaled_dt_from_action(
+                    actions.detach(),
+                    self.transition_model.get_state_bounds(),
+                    epsilon=1e-3,
+                    minimum_dt=self.config.minimum_trajectory_dt,
+                    maximum_dt=self.config.maximum_trajectory_dt,
+                ).view(batch_size, num_seeds)
+            if dt is None and self.config.enable_timeopt:
+                goal = self.core._goal_buffer
+                current = goal.current_js
+                moving = torch.zeros(
+                    current.position.shape[0], device=current.position.device, dtype=torch.bool
+                )
+                for name in ("velocity", "acceleration", "jerk"):
+                    value = getattr(current, name)
+                    if value is not None:
+                        moving |= (value != 0).reshape(value.shape[0], -1).any(dim=-1)
+                moving = moving[goal.idxs_current_js.reshape(-1).long()].view(
+                    batch_size, num_seeds
+                )
+                if bool(moving.any()):
+                    timing = self._ensure_timeopt(batch_size * num_seeds).optimizer.config
+                    margin = max(
+                        1.0 / timing.limit_scale, (1.0 / timing.jerk_limit_scale) ** (1.0 / 3.0)
+                    )
+                    new_dt = torch.where(
+                        moving,
+                        (new_dt * margin).clamp(max=self.config.maximum_trajectory_dt),
+                        new_dt,
+                    )
+                    self._update_trajectory_dt(new_dt)
+                    # Moving boundary controls change with dt; correct the timing
+                    # again at the updated boundary before freezing the retimer path.
+                    corrected_dt = self.metrics_rollout.compute_time_scaled_dt_from_action(
+                        actions.detach(),
+                        self.transition_model.get_state_bounds(),
+                        epsilon=1e-3,
+                        minimum_dt=self.config.minimum_trajectory_dt,
+                        maximum_dt=self.config.maximum_trajectory_dt,
+                    ).view(batch_size, num_seeds)
+                    new_dt = torch.where(
+                        moving,
+                        (corrected_dt * margin).clamp(max=self.config.maximum_trajectory_dt),
+                        new_dt,
+                    )
+            self._update_trajectory_dt(new_dt)
+            metrics = self.metrics_rollout.compute_metrics_from_action(actions)
+        trajectory = metrics.state.joint_state
+        trajectory.joint_names = self.joint_names
+        trajectory.knot = metrics.actions
+        trajectory.knot_dt = trajectory.dt * self.interpolation_steps
+        dense_metrics = self._interpolate_and_compute_metrics(trajectory)
+        return self._result_processor.update(
+            TrajOptResultCandidate(
+                metrics=metrics,
+                interpolated_metrics=dense_metrics,
+                debug_info={"solver": self.optimizer.get_recorded_trace()},
+            )
+        )
 
     def _finalize_result(
         self,
@@ -537,10 +825,8 @@ class TrajOptSolver:
         if self.config.enable_timeopt:
             timer = CudaEventTimer().start()
             lanes = native.position.shape[0]
-            if self._timeopt is None or self._timeopt.lanes != lanes:
-                self._reset_timeopt()
-                self._timeopt = TimeOptSolver(self, lanes)
-            interpolated, counts, success, duration = self._timeopt.timeopt(
+            timeopt = self._ensure_timeopt(lanes)
+            interpolated, counts, success, duration = timeopt.timeopt(
                 native, current_state, num_seeds
             )
             timeopt_success = success.view(batch_size, num_seeds)
@@ -552,6 +838,9 @@ class TrajOptSolver:
             timeopt_time = timer.stop()
         else:
             interpolated, counts, _ = self.get_interpolated_trajectory(native)
+            rollout = self.additional_metrics_rollouts["interpolated_rollout"]
+            state = rollout.transition_model.compute_augmented_state(interpolated)
+            final_metrics = rollout.compute_metrics_from_state(state)
         result = self._result_processor.finalize(
             return_seeds,
             interpolated.view(batch_size, num_seeds, interpolated.shape[-2], self.action_dim),
@@ -560,6 +849,20 @@ class TrajOptSolver:
             timeopt_duration,
         )
         result.timeopt_time = timeopt_time
+        masks = (
+            self._timeopt.validation_masks
+            if self.config.enable_timeopt
+            else trajectory_validation_masks(final_metrics)
+        )
+        result.debug_info["validation"] = {}
+        for name, values in masks.items():
+            values = values.reshape(batch_size, num_seeds)
+            selected = (
+                values
+                if return_seeds == num_seeds
+                else values.gather(1, result.seed_rank[:, :return_seeds])
+            )
+            result.debug_info["validation"][name] = selected.clone()
         return result
 
     @profiler.record_function("trajopt_solver/_interpolate_and_compute_metrics")
@@ -635,18 +938,18 @@ class TrajOptSolver:
 
         if state.shape != self._interpolated_traj_buffer.shape:
             self._raise_interpolation_buffer_size_error(state.shape[1])
+        if js_optimized.control_space in ControlSpace.bspline_types():
+            layout = self.spline_layout
+            index = torch.arange(state.shape[1], **self.device_cfg.as_torch_dict())[None, :]
+            intervals = (last_tstep.reshape(-1) - 1).clamp(min=1)
+            native_index = index * (layout.native_horizon - 1) / intervals[:, None]
+            progress = ((native_index - layout.padding) / layout.reference_intervals).clamp(0, 1)
+            self._set_dense_reference_samples(progress, last_tstep)
         return state, last_tstep, interpolation_buffer_reallocated
 
     def _validate_bspline_interpolation_buffer(self) -> None:
         """Validate the fixed buffer against the configured maximum trajectory dt."""
-        control_space = self.auxiliary_rollout.transition_model.control_space
-        max_knot_dt = self.config.maximum_trajectory_dt * self.interpolation_steps
-        max_steps_per_waypoint = math.ceil(max_knot_dt / self.config.interpolation_dt) + 1
-        required_waypoints = ControlSpace.spline_total_interpolation_steps(
-            control_space,
-            self.action_horizon,
-            max_steps_per_waypoint,
-        )
+        required_waypoints = self.config.minimum_interpolation_buffer_size
         if self.config.interpolation_buffer_size < required_waypoints:
             self._raise_interpolation_buffer_size_error(required_waypoints)
         self._interpolation_buffer_is_validated = True
@@ -960,6 +1263,11 @@ class TrajOptSolver:
         finetune_dt_scale: float = 0.6,
         initial_dt_scale: Optional[float] = 1.25,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
+        *,
+        track_intermediate: bool = False,
+        track_orientation: bool = True,
+        path_tolerance: Optional[Tuple[float, float]] = None,
+        final_tolerance: Optional[Tuple[float, float]] = None,
     ) -> TrajOptSolverResult:
         """Solve trajectory optimization for target tool poses in Cartesian space.
 
@@ -986,16 +1294,17 @@ class TrajOptSolver:
                 :attr:`config.num_seeds` when ``None``.
             dt: Optional trajectory time-step tensor of shape ``[batch, num_seeds]``
                 overriding the automatically computed dt.
-            use_implicit_goal: When ``True``, the solver treats the last trajectory
-                waypoint as a free variable rather than pinning it to the goal.
+            use_implicit_goal: When ``True``, spline endpoint constraints fix the
+                terminal state to the supplied per-seed goal configuration.
             finetune_attempts: Number of additional time-optimal refinement passes
                 after the initial solve. Each pass shrinks dt by
                 *finetune_dt_scale*.
             goal_state: Optional explicit goal joint state with position tensor of
                 shape ``[batch, dof]``. Used to seed the goal end of the
                 trajectory.
-            initial_iters: Override for the number of optimizer iterations on the
-                first pass. ``None`` keeps the config default.
+            initial_iters: Override the configured initial iteration cap (default 50).
+                Success is checked every 50 iterations by default, with native
+                and dense validation. Finetune iteration counts are separate.
             time_optimal_iters: Override for the number of optimizer iterations on
                 the second (time-optimal) pass.
             finetune_iters: Override for the number of optimizer iterations on
@@ -1008,6 +1317,16 @@ class TrajOptSolver:
             tool_relative_transform_target: Optional target transforms relative
                 to one moving tool frame. One target group is shared by every
                 problem; otherwise provide one group per problem.
+            track_intermediate: Follow every sample of a native-horizon Cartesian
+                reference with goalset size one. Requires the fixed cubic spline
+                with the configured control count and native horizon. Otherwise only the
+                final target applies.
+            track_orientation: When tracking waypoints, enforce their rotations as well as
+                positions. ``False`` ignores rotations, including at the final target.
+            path_tolerance: Required when tracking: intermediate position meters
+                and shortest rotation radians, shared across samples and tool links.
+            final_tolerance: Required when tracking: endpoint position meters and
+                shortest rotation radians. Both tolerance pairs must be positive.
 
         Returns:
             :class:`TrajOptSolverResult` containing the best trajectories ranked by
@@ -1017,6 +1336,49 @@ class TrajOptSolver:
             :attr:`~TrajOptSolverResult.rotation_error`.
         """
         max_batch = self.config.max_batch_size
+        if goal_tool_poses.horizon not in (1, self.horizon):
+            log_and_raise("goal horizon must be one or match the native rollout horizon")
+        if track_intermediate and (
+            goal_tool_poses.horizon != self.horizon or goal_tool_poses.num_goalset != 1
+        ):
+            log_and_raise(
+                "waypoint tracking requires a native-horizon reference and goalset size one"
+            )
+        if track_intermediate:
+            self._validate_waypoint_layout()
+            position, quaternion = goal_tool_poses.position, goal_tool_poses.quaternion
+            if (
+                position.shape[-1] != 3
+                or quaternion.shape != (*position.shape[:-1], 4)
+                or goal_tool_poses.tool_frames != self.tool_frames
+            ):
+                log_and_raise("waypoint reference shapes and ordered frames must match the robot")
+            norm = quaternion.norm(dim=-1, keepdim=True)
+            if (
+                position.dtype != torch.float32
+                or quaternion.dtype != torch.float32
+                or position.device != self.device_cfg.device
+                or quaternion.device != position.device
+            ):
+                log_and_raise("waypoint references must use float32 on the solver device")
+            if not bool(
+                torch.isfinite(position).all()
+                & torch.isfinite(quaternion).all()
+                & (norm > 0).all()
+            ):
+                log_and_raise("waypoint reference poses must be finite with nonzero quaternions")
+            quaternion = quaternion / norm
+            goal_tool_poses = GoalToolPose(
+                goal_tool_poses.tool_frames,
+                position.contiguous(),
+                quaternion.contiguous(),
+            )
+        if not track_intermediate and goal_tool_poses.horizon != 1:
+            goal_tool_poses = GoalToolPose(
+                goal_tool_poses.tool_frames,
+                goal_tool_poses.position[:, -1:].contiguous(),
+                goal_tool_poses.quaternion[:, -1:].contiguous(),
+            )
         batch_size = goal_tool_poses.batch_size
         if num_seeds is None:
             num_seeds = self.config.num_seeds
@@ -1089,25 +1451,33 @@ class TrajOptSolver:
             tool_frames=goal_tool_poses.tool_frames,
         )
 
-        result = self._solve_impl(
-            current_state=current_state,
-            solve_state=solve_state,
-            goal_tool_poses=goal_tool_poses,
-            num_seeds=num_seeds,
-            seed_config=seed_config,
-            seed_traj=seed_traj,
-            return_seeds=return_seeds,
-            dt=dt,
-            use_implicit_goal=use_implicit_goal,
-            finetune_attempts=finetune_attempts,
-            goal_state=goal_state,
-            initial_iters=initial_iters,
-            time_optimal_iters=time_optimal_iters,
-            finetune_iters=finetune_iters,
-            finetune_dt_scale=finetune_dt_scale,
-            initial_dt_scale=initial_dt_scale,
-            tool_relative_transform_target=tool_relative_transform_target,
-        )
+        with self._waypoint_tracking(
+            track_intermediate, path_tolerance, final_tolerance, track_orientation
+        ):
+            result = self._solve_impl(
+                current_state=current_state,
+                solve_state=solve_state,
+                goal_tool_poses=goal_tool_poses,
+                num_seeds=num_seeds,
+                seed_config=seed_config,
+                seed_traj=seed_traj,
+                return_seeds=return_seeds,
+                dt=dt,
+                use_implicit_goal=use_implicit_goal,
+                finetune_attempts=finetune_attempts,
+                goal_state=goal_state,
+                initial_iters=initial_iters,
+                time_optimal_iters=time_optimal_iters,
+                finetune_iters=finetune_iters,
+                finetune_dt_scale=finetune_dt_scale,
+                initial_dt_scale=initial_dt_scale,
+                tool_relative_transform_target=tool_relative_transform_target,
+                actual_batch_size=actual_batch_size,
+            )
+            result.path_position_error = result.path_rotation_error = None
+            result.waypoint_indices = None
+            if track_intermediate:
+                self._attach_path_errors(result, goal_tool_poses)
         if needs_pad:
             from curobo._src.solver.solver_ik import _slice_batch_result
 
@@ -1159,8 +1529,9 @@ class TrajOptSolver:
             initial_dt_scale: Optional multiplicative factor applied to the
                 seed-derived dt before the initial optimization pass (default 1.25). ``None``
                 preserves the legacy behavior of using *finetune_dt_scale*.
-            initial_iters: Override for the number of optimizer iterations on the
-                first pass. ``None`` keeps the config default.
+            initial_iters: Override the configured initial iteration cap (default 50).
+                Success is checked every 50 iterations by default, with native
+                and dense validation. Finetune iteration counts are separate.
             time_optimal_iters: Override for the number of optimizer iterations on
                 the second (time-optimal) pass.
             finetune_iters: Override for the number of optimizer iterations on
@@ -1208,16 +1579,17 @@ class TrajOptSolver:
                 [current_state.position, current_state.position[:1].expand(pad, -1)],
                 dim=0,
             )
-            if current_state.velocity is not None:
-                current_state.velocity = torch.cat(
-                    [current_state.velocity, current_state.velocity[:1].expand(pad, -1)],
-                    dim=0,
-                )
-            if current_state.acceleration is not None:
-                current_state.acceleration = torch.cat(
-                    [current_state.acceleration, current_state.acceleration[:1].expand(pad, -1)],
-                    dim=0,
-                )
+            for name in ("velocity", "acceleration", "jerk"):
+                value = getattr(current_state, name)
+                if value is not None:
+                    setattr(
+                        current_state,
+                        name,
+                        torch.cat(
+                            [value, value[:1].expand(pad, -1)],
+                            dim=0,
+                        ),
+                    )
             goal_state = goal_state.clone()
             goal_state.position = torch.cat(
                 [goal_state.position, goal_state.position[:1].expand(pad, -1)],
@@ -1273,6 +1645,7 @@ class TrajOptSolver:
             finetune_dt_scale=finetune_dt_scale,
             initial_dt_scale=initial_dt_scale,
             tool_relative_transform_target=tool_relative_transform_target,
+            actual_batch_size=actual_batch_size,
         )
         if needs_pad:
             from curobo._src.solver.solver_ik import _slice_batch_result

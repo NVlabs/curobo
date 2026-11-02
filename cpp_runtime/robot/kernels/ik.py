@@ -93,9 +93,12 @@ def create_seed_ik_kernels(
         orientation_weight: wp.float32,
         joint_limit_weight: wp.float32,
         include_joint_limits: wp.uint8,
+        orientation_tracking: wp.array(dtype=wp.int32),
     ):
         problem_idx, lane = wp.tid()
         goal_idx = problem_idx / num_seeds
+        if orientation_tracking[0] == 0:
+            orientation_weight = 0.0
         identity = wp.mat33(
             1.0,
             0.0,
@@ -230,13 +233,16 @@ def create_seed_ik_kernels(
                     )
                     jt_error[problem_idx, joint_idx] += linear_contribution + angular_contribution
                     scaled_jacobian[problem_idx, row_offset + 0, joint_idx] = (
-                        wp.sqrt(position_weight) * raw_jacobian[problem_idx, row_offset + 0, joint_idx]
+                        wp.sqrt(position_weight)
+                        * raw_jacobian[problem_idx, row_offset + 0, joint_idx]
                     )
                     scaled_jacobian[problem_idx, row_offset + 1, joint_idx] = (
-                        wp.sqrt(position_weight) * raw_jacobian[problem_idx, row_offset + 1, joint_idx]
+                        wp.sqrt(position_weight)
+                        * raw_jacobian[problem_idx, row_offset + 1, joint_idx]
                     )
                     scaled_jacobian[problem_idx, row_offset + 2, joint_idx] = (
-                        wp.sqrt(position_weight) * raw_jacobian[problem_idx, row_offset + 2, joint_idx]
+                        wp.sqrt(position_weight)
+                        * raw_jacobian[problem_idx, row_offset + 2, joint_idx]
                     )
                     scaled_jacobian[problem_idx, row_offset + 3, joint_idx] = (
                         wp.sqrt(2.0 * orientation_weight)
@@ -272,13 +278,19 @@ def create_seed_ik_kernels(
 
             error_norm[problem_idx] = total_cost
             position_error[problem_idx] = max_position_error
-            orientation_error[problem_idx] = max_orientation_error
+            orientation_error[problem_idx] = (
+                max_orientation_error if orientation_tracking[0] != 0 else 0.0
+            )
 
     error = warp_kernel(f"seed_ik_error_{dof}_{num_links}", enable_backward=False)(_error_template)
 
     def _update_template(
         joint_position: wp.array2d(dtype=wp.float32),
         candidate: wp.array2d(dtype=wp.float32),
+        jacobian: wp.array3d(dtype=wp.float32),
+        candidate_jacobian: wp.array3d(dtype=wp.float32),
+        jt_error: wp.array2d(dtype=wp.float32),
+        candidate_jt_error: wp.array2d(dtype=wp.float32),
         current_error: wp.array(dtype=wp.float32),
         candidate_error: wp.array(dtype=wp.float32),
         predicted_reduction: wp.array(dtype=wp.float32),
@@ -288,18 +300,24 @@ def create_seed_ik_kernels(
         damping_min: wp.float32,
         damping_max: wp.float32,
     ):
-        problem_idx = wp.tid()
+        problem_idx, joint_idx = wp.tid()
         denominator = predicted_reduction[problem_idx] + 1.0e-8
         trust_ratio = (current_error[problem_idx] - candidate_error[problem_idx]) / denominator
         accepted = trust_ratio >= rho_min and wp.isfinite(candidate_error[problem_idx])
-        current_damping = damping[problem_idx]
         if accepted:
-            for joint_idx in range(coord):
-                joint_position[problem_idx, joint_idx] = candidate[problem_idx, joint_idx]
-            current_damping = current_damping / damping_factor
-        else:
-            current_damping = current_damping * damping_factor
-        damping[problem_idx] = wp.clamp(current_damping, damping_min, damping_max)
+            joint_position[problem_idx, joint_idx] = candidate[problem_idx, joint_idx]
+            jt_error[problem_idx, joint_idx] = candidate_jt_error[problem_idx, joint_idx]
+            for row in range(residuals):
+                jacobian[problem_idx, row, joint_idx] = candidate_jacobian[
+                    problem_idx, row, joint_idx
+                ]
+        if joint_idx == 0:
+            current_damping = damping[problem_idx]
+            if accepted:
+                current_damping = current_damping / damping_factor
+            else:
+                current_damping = current_damping * damping_factor
+            damping[problem_idx] = wp.clamp(current_damping, damping_min, damping_max)
 
     update = warp_kernel(f"seed_ik_update_{dof}_{num_links}", enable_backward=False)(
         _update_template
@@ -360,6 +378,7 @@ def create_seed_ik_kernels(
         orientation_rank_weight: wp.float32,
         cspace_rank_weight: wp.float32,
         effort_active: wp.uint8,
+        lm_ranking: wp.uint8,
     ):
         problem_idx = wp.tid()
         batch_idx = problem_idx / num_seeds
@@ -385,20 +404,15 @@ def create_seed_ik_kernels(
                 )
             ):
                 candidate_bounds_success = False
-        candidate_collision_cost = (
-            collision_cost[problem_idx] + self_collision_cost[problem_idx]
-        )
+        candidate_collision_cost = collision_cost[problem_idx] + self_collision_cost[problem_idx]
         candidate_success = (
-            candidate_pose_success
-            and candidate_bounds_success
-            and candidate_collision_cost <= 0.0
+            candidate_pose_success and candidate_bounds_success and candidate_collision_cost <= 0.0
         )
         candidate_cspace = wp.float32(0.0)
         if use_current_position == wp.uint8(1):
             for joint_idx in range(coord):
                 delta = (
-                    joint_position[problem_idx, joint_idx]
-                    - current_position[batch_idx, joint_idx]
+                    joint_position[problem_idx, joint_idx] - current_position[batch_idx, joint_idx]
                 )
                 candidate_cspace += (
                     start_cspace_weight[0] * start_cspace_dof_weight[joint_idx] * delta * delta
@@ -408,6 +422,32 @@ def create_seed_ik_kernels(
             + orientation_rank_weight * orientation_error[problem_idx]
             + cspace_rank_weight * candidate_cspace
         )
+
+        if lm_ranking != wp.uint8(0):
+            # Match SeedIKSolver's stable pose-only ranking before collision checks.
+            candidate_success = (
+                position_error[problem_idx] < 0.005 and orientation_error[problem_idx] < 0.05
+            )
+            distance_squared = wp.float32(0.0)
+            for joint_idx in range(coord):
+                value = joint_position[problem_idx, joint_idx]
+                if not (
+                    value > position_bounds[joint_idx]
+                    and value < position_bounds[coord + joint_idx]
+                ):
+                    candidate_success = False
+                if use_current_position != wp.uint8(0):
+                    delta = value - current_position[batch_idx, joint_idx]
+                    distance_squared += delta * delta
+            candidate_score = (
+                position_error[problem_idx]
+                + orientation_error[problem_idx]
+                + 0.01 * wp.sqrt(distance_squared)
+            )
+            if not candidate_success:
+                candidate_score += 1.0e10
+            # Python stable_topk ranks the penalized float32 scores, including ties.
+            candidate_success = True
 
         rank_success[problem_idx] = wp.uint8(candidate_success)
         rank_score[problem_idx] = candidate_score

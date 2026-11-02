@@ -13,6 +13,29 @@ from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
 
 
+def test_copy_batch_rows_keeps_spline_controls_and_timing_consistent() -> None:
+    """Merging owned results must update spline metadata along with the selected solution."""
+    results = []
+    for value in (0.0, 1.0):
+        controls = torch.full((2, 1, 16, 2), value, dtype=torch.float32)
+        state = JointState.from_position(torch.full((2, 1, 81, 2), value))
+        state.knot = controls.clone()
+        state.knot_dt = torch.full((2, 1), value + 0.1, dtype=torch.float32)
+        results.append(
+            TrajOptSolverResult(
+                success=torch.ones((2, 1), dtype=torch.bool),
+                solution=controls,
+                js_solution=state,
+            )
+        )
+    results[0].copy_at_batch_indices(results[1], torch.tensor([False, True]))
+    torch.testing.assert_close(results[0].js_solution.knot, results[0].solution)
+    torch.testing.assert_close(
+        results[0].js_solution.knot_dt,
+        torch.tensor([[0.1], [1.1]], dtype=torch.float32),
+    )
+
+
 @pytest.fixture
 def sample_trajopt_result():
     """Create a sample TrajOptSolverResult for testing."""

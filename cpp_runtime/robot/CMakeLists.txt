@@ -20,7 +20,7 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-find_package(CUDAToolkit REQUIRED)
+find_package(CUDAToolkit 12.3 REQUIRED)
 
 set(WARP_NATIVE_INCLUDE_DIR "" CACHE PATH
     "Path to Warp's native headers; enables mesh acceleration support")
@@ -52,6 +52,7 @@ add_library(curobo_robot_runtime SHARED
   src/trajectory_seed_fitter_runtime.cpp
   src/trajectory_timeopt.cpp
   src/trajectory_timeopt_cuda.cu
+  src/trajectory_waypoints_cuda.cu
 )
 
 set_source_files_properties(src/trajectory_seed_fitter_cuda.cu src/trajectory_timeopt_cuda.cu PROPERTIES
@@ -90,6 +91,10 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(curobo_robot_waypoints_test tests/waypoints_test.cpp)
+  target_include_directories(curobo_robot_waypoints_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(curobo_robot_waypoints_test PRIVATE curobo_robot_runtime)
+  add_test(NAME curobo_robot_waypoints_test COMMAND curobo_robot_waypoints_test)
   add_executable(curobo_robot_timeopt_output_test tests/timeopt_output_test.cpp)
   target_include_directories(curobo_robot_timeopt_output_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(curobo_robot_timeopt_output_test PRIVATE curobo_robot_runtime)
@@ -134,6 +139,10 @@ if(BUILD_TESTING)
   add_executable(curobo_robot_trajopt_parallelism_test tests/trajopt_parallelism_test.cpp)
   target_link_libraries(curobo_robot_trajopt_parallelism_test PRIVATE curobo_robot_runtime)
 
+  add_executable(curobo_robot_rollout_forward_test tests/rollout_forward_test.cpp)
+  target_include_directories(curobo_robot_rollout_forward_test PRIVATE src)
+  target_link_libraries(curobo_robot_rollout_forward_test PRIVATE curobo_robot_runtime)
+
   add_executable(curobo_robot_ik_test tests/ik_test.cpp)
   target_include_directories(curobo_robot_ik_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(curobo_robot_ik_test PRIVATE curobo_robot_runtime)
@@ -163,4 +172,8 @@ if(BUILD_TESTING)
 
   add_executable(curobo_robot_seed_fitter_test tests/trajectory_seed_fitter_test.cpp)
   target_link_libraries(curobo_robot_seed_fitter_test PRIVATE curobo_robot_runtime)
+  add_executable(curobo_robot_seed_fitter_kernel_test tests/trajectory_seed_fitter_kernel_test.cpp)
+  target_include_directories(curobo_robot_seed_fitter_kernel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(curobo_robot_seed_fitter_kernel_test PRIVATE curobo_robot_runtime)
+  add_test(NAME curobo_robot_seed_fitter_kernel_test COMMAND curobo_robot_seed_fitter_kernel_test)
 endif()

@@ -379,6 +379,7 @@ class RNEAForwardFunction(Function):
             num_original_links=num_original_links,
             project_external_forces=project_external_forces,
             f_ext=f_ext,
+            save_for_backward=any(ctx.needs_input_grad),
         )
 
         # Save for backward pass: q needed for R,p recomputation, qd for adjoint

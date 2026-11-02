@@ -9,9 +9,10 @@
 #include <memory>
 #include <string>
 
-#include "curobo_robot_runtime/attachment.h"
 #include "curobo_robot_runtime/api.h"
+#include "curobo_robot_runtime/attachment.h"
 #include "curobo_robot_runtime/inertial.h"
+#include "curobo_robot_runtime/spline_layout.h"
 
 namespace curobo::robot {
 
@@ -25,6 +26,7 @@ class TrajectoryOptimizerRuntime;
 struct TrajectoryOptimizationConfig {
   int device_ordinal{0};
   int num_seeds{4};
+  /** Maximum iterations in the initial solve, before optional refinement. */
   int max_iterations{50};
   /** Iterations in each refinement pass after the initial solve. */
   int refinement_iterations{25};
@@ -46,6 +48,13 @@ struct TrajectoryOptimizationConfig {
   bool enable_timeopt{true};
   /** Also validate timeopt candidates at this constant execution speed. */
   float execution_speed_scale{1.0F};
+  /** Initial iterations between native/dense success checks. */
+  int initial_check_interval{50};
+  /** Fixed spatial control count in [12,1024]; must match the exported artifact.
+   * More knots generally increase motion duration and may increase planning time,
+   * but can reduce waypoint tracking error. Choose the count based on the required
+   * waypoint tracking tolerance and obstacle density. */
+  int num_knots{16};
 };
 
 /** Borrowed executable trajectory for the selected timeopt seed.
@@ -80,6 +89,9 @@ struct TrajectoryOptimizationInfo {
   int num_knots{0};
   int trajectory_steps{0};
   int num_tool_frames{0};
+  SplineLayout spline_layout{};
+  /** Native state count before dense interpolation. */
+  int native_horizon() const { return spline_layout.native_horizon; }
 };
 
 /** Borrowed per-seed solutions, valid until the next optimization call.
@@ -94,6 +106,8 @@ struct TrajectoryOptimizationCandidates {
   const float *jerk{nullptr};
   const float *dt{nullptr};
   const uint8_t *success{nullptr};
+  /** CUDA scalar reporting initial iterations executed before success or the cap. */
+  const int32_t *initial_iterations{nullptr};
 };
 
 /** Validate externally sampled states against the optimizer's model and scene.
@@ -145,7 +159,7 @@ struct TrajectoryOptimizationRequest {
   /** Negative values use the optimizer configuration defaults. */
   int finetune_attempts{-1};
   float finetune_dt_scale{-1.0F};
-  /** Optional single-pose Cartesian path objective for constrained phases. */
+  /** Goal poses [tools,3/4], or [native_horizon,tools,3/4] when track_waypoints is true. */
   const float* goal_tool_positions{nullptr};
   const float* goal_tool_quaternions{nullptr};
   bool constrain_tool_path{false};
@@ -155,13 +169,22 @@ struct TrajectoryOptimizationRequest {
   float path_orientation_tolerance{-1.0F};
   const float* start_velocity{nullptr};
   const float* start_acceleration{nullptr};
+  /** Optional aligned [trajectory_steps,num_tool_frames,3/4] Cartesian reference. */
+  bool track_waypoints{false};
+  bool track_orientation{true};
+  float final_position_tolerance{-1.0F};
+  float final_orientation_tolerance{-1.0F};
+  /** Maximum initial solve/check passes, each initial_check_interval iterations.
+   * -1 uses max_iterations. Refinement keeps its own budget. */
+  int outer_iterations{-1};
 };
 
 /**
  * Standalone, fixed-shape cuRobo joint-space trajectory optimizer.
  *
- * Calls are asynchronous and CUDA graph capturable after construction. One
- * instance must not execute concurrent optimize calls. The Scene must outlive
+ * Calls support external CUDA graph capture after construction. Eager calls
+ * synchronize at initial success checkpoints; graph replay remains asynchronous.
+ * One instance must not execute concurrent optimize calls. The Scene must outlive
  * the optimizer. Pose IK and graph search are deliberately separate: their
  * joint goals and fitted paths can be passed through this request.
  */
@@ -180,6 +203,8 @@ class TrajectoryOptimizer final {
 
   CuroboRobotInfo robot_info() const;
   TrajectoryOptimizationInfo info() const;
+  /** Query the fixed native state count from the exported spline layout. */
+  int native_horizon() const;
   const TrajectoryOptimizationConfig& config() const;
 
   /** Return the artifact's preallocated collision-sphere slots for a link. */

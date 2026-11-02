@@ -4,6 +4,7 @@
 
 #include <cuda.h>
 
+#include <functional>
 #include <string>
 
 #include "curobo_robot_runtime/trajectory_optimization.h"
@@ -17,6 +18,7 @@ struct RobotCollisionModel;
 class MotionPlannerRuntime;
 class RolloutStreams;
 class RolloutRuntime;
+enum class OptimizationCondition;
 
 class TrajectoryOptimizerRuntime final {
  public:
@@ -53,19 +55,26 @@ class TrajectoryOptimizerRuntime final {
   // overwrite them with host scalar arguments captured during the first solve.
   bool prepare_pose_criteria_{true};
 
-  // Graphable stages used by MotionPlannerRuntime. The optimization pass is
-  // uses the initial or refinement iteration budget for the requested stage.
+  // Internal optimization stages. Initial continuation keeps the iterate and
+  // L-BFGS history; refinement uses its independent budget.
   void validate_request(const TrajectoryOptimizationRequest& request) const;
+  void prepare_request(const TrajectoryOptimizationRequest &request) const;
   int resolved_finetune_attempts(
       const TrajectoryOptimizationRequest& request) const;
   void begin_optimization(const TrajectoryOptimizationRequest& request) const;
-  void run_optimization_pass(
-      const TrajectoryOptimizationRequest& request, bool refinement = false) const;
+  void run_optimization_pass(const TrajectoryOptimizationRequest &request, int iterations,
+                             bool refinement = false, bool continuation = false) const;
   void accumulate_optimization_pass(
       bool first_pass, const TrajectoryOptimizationRequest& request) const;
   void prepare_finetune_pass(
       const TrajectoryOptimizationRequest& request) const;
   bool base_pass_succeeded(cudaStream_t stream) const;
+  bool result_succeeded(const TrajectoryOptimizationRequest &request) const;
+  void save_initial_pass(cudaStream_t stream) const;
+  void restore_initial_pass(const TrajectoryOptimizationRequest &request) const;
+  void enqueue_conditional(const TrajectoryOptimizationRequest &request,
+                           OptimizationCondition condition,
+                           const std::function<void(cudaStream_t)> &enqueue) const;
   void finish_optimization(
       const TrajectoryOptimizationRequest& request) const;
   void validate_config() const;
@@ -79,10 +88,12 @@ class TrajectoryOptimizerRuntime final {
                            const TrajectoryOptimizationRequest& request,
                            CUstream stream) const;
   void expand_trajectory_dt(int trajectories, CUstream stream) const;
+  RolloutStreams* rollout_streams(CUstream stream) const;
+  // A null knot_gradients pointer requests only costs and forward states.
   void evaluate(CUdeviceptr knots, int trajectories, CUdeviceptr costs,
                 CUdeviceptr knot_gradients,
                 const TrajectoryOptimizationRequest& request,
-                CUstream stream) const;
+                CUstream stream, bool prepare_dt = true) const;
   void launch_bspline(CUdeviceptr knots, int trajectories,
                       const TrajectoryOptimizationRequest& request,
                       CUstream stream) const;
@@ -111,7 +122,7 @@ class TrajectoryOptimizerRuntime final {
       int trajectories, const TrajectoryOptimizationRequest& request,
       CUstream stream) const;
   void launch_cspace(int trajectories, CUstream stream) const;
-  void combine_rollout(int trajectories, CUdeviceptr costs,
+  void reduce_rollout_cost(int trajectories, CUdeviceptr costs,
                        bool pose_constraint_active, CUstream stream) const;
   void launch_bspline_backward(int trajectories, CUdeviceptr knot_gradients,
                                CUstream stream) const;
@@ -119,10 +130,10 @@ class TrajectoryOptimizerRuntime final {
   void prepare_search_actions(CUstream stream) const;
   void line_search(CUstream stream) const;
   void lbfgs_step(CUstream stream) const;
-  void optimize_pass(const TrajectoryOptimizationRequest& request,
-                     CUstream stream, int iterations) const;
+  void optimize_pass(const TrajectoryOptimizationRequest &request, CUstream stream, int iterations,
+                     bool continuation = false) const;
   void validate_interpolated(CUdeviceptr knots, CUstream stream) const;
-  void validate_states(CUstream stream, bool timeopt = false) const;
+  void validate_states(CUstream stream, bool timeopt = false, bool check_tool_path = true) const;
   void accumulate(bool first_pass,
                   const TrajectoryOptimizationRequest& request,
                   CUstream stream) const;
@@ -150,6 +161,16 @@ class TrajectoryOptimizerRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer timeopt_timing_controls_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_spatial_controls_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_scaled_states_;
+  mutable curobo_robot_runtime::DeviceBuffer path_settings_;
+  mutable curobo_robot_runtime::DeviceBuffer path_goal_position_;
+  mutable curobo_robot_runtime::DeviceBuffer path_goal_quaternion_;
+  mutable curobo_robot_runtime::DeviceBuffer pose_valid_steps_;
+  mutable curobo_robot_runtime::DeviceBuffer validation_progress_;
+  mutable curobo_robot_runtime::DeviceBuffer optimization_dt_;
+  mutable curobo_robot_runtime::DeviceBuffer initial_action_;
+  mutable curobo_robot_runtime::DeviceBuffer initial_dt_;
+  mutable curobo_robot_runtime::DeviceBuffer initial_iterations_;
+  cudaStream_t conditional_stream_{nullptr};
   curobo_robot_runtime::DeviceBuffer execution_speed_scale_;
 
   curobo_robot_runtime::DeviceBuffer position_bounds_;
@@ -325,12 +346,13 @@ class TrajectoryOptimizerRuntime final {
   curobo_robot_runtime::KernelModule validate_interpolated_kernel_;
   curobo_robot_runtime::KernelModule prepare_initial_state_kernel_;
   curobo_robot_runtime::KernelModule prepare_search_actions_kernel_;
-  curobo_robot_runtime::KernelModule combine_rollout_kernel_;
+  curobo_robot_runtime::KernelModule reduce_rollout_cost_kernel_;
   curobo_robot_runtime::KernelModule accumulate_kernel_;
   curobo_robot_runtime::KernelModule finalize_kernel_;
   curobo_robot_runtime::KernelModule line_search_kernel_;
   curobo_robot_runtime::KernelModule lbfgs_kernel_;
   std::unique_ptr<RolloutStreams> rollout_streams_;
+  std::unique_ptr<RolloutStreams> conditional_rollout_streams_;
 };
 
 }  // namespace curobo::robot::detail

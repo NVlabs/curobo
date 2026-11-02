@@ -34,6 +34,11 @@ def test_derivative_scale_matches_reference(lanes: int, steps: int, dof: int) ->
     acceleration = torch.randn_like(velocity)
     limits = [torch.rand(dof, device="cuda") + 0.5 for _ in range(3)]
     bases = [torch.randn((steps, 15), device="cuda") for _ in range(3)]
+    span = torch.arange(steps, device="cuda")[:, None] // 4
+    control = torch.arange(15, device="cuda")[None, :]
+    support = (control >= span - 6) & (control < span)
+    for basis in bases:
+        basis.masked_fill_(~support, 0)
     workspaces = [torch.empty_like(velocity) for _ in range(3)]
     output = torch.full((lanes,), torch.nan, device="cuda")
     backend.launch_derivative_scale_kernel(
@@ -41,6 +46,7 @@ def test_derivative_scale_matches_reference(lanes: int, steps: int, dof: int) ->
         acceleration,
         *limits,
         *bases,
+        4,
         12.0,
         10.0,
         1e-6,
@@ -68,9 +74,9 @@ def _make_fitter(
     acceleration_regularization: float = 5.0e-1,
     n_knots: int = 16,
     num_lanes: int = 4,
+    control_space: ControlSpace = ControlSpace.BSPLINE_3,
+    interpolation_steps: int = 4,
 ) -> BSplineTimeOptimalSeedFitter:
-    control_space = ControlSpace.BSPLINE_3
-    interpolation_steps = 4
     horizon = ControlSpace.spline_total_interpolation_steps(
         control_space,
         n_knots,
@@ -139,7 +145,7 @@ def _make_paths(
     return target.contiguous(), JointState.from_position(start.contiguous()), goal.contiguous()
 
 
-@pytest.mark.parametrize("n_knots", [16, 128])
+@pytest.mark.parametrize("n_knots", [16, 128, 1024])
 def test_fit_tracks_route_reduces_direct_seed_dt_and_pins_goal(n_knots: int) -> None:
     """Fit the graph route while lowering the timing score of direct controls."""
     fitter = _make_fitter(use_cuda_graph=False, n_knots=n_knots)
@@ -226,7 +232,7 @@ def test_batched_fits_match_independent_paths(use_cuda_graph: bool, n_knots: int
     torch.testing.assert_close(batched.last_required_dt, actual_dt[order], rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("n_knots", [16, 128])
+@pytest.mark.parametrize("n_knots", [16, 128, 1024])
 def test_cuda_graph_replays_with_fixed_output_storage(n_knots: int) -> None:
     """Capture all IRLS iterations into one reusable CUDA graph."""
     fitter = _make_fitter(use_cuda_graph=True, n_knots=n_knots)
@@ -249,6 +255,99 @@ def test_cuda_graph_replays_with_fixed_output_storage(n_knots: int) -> None:
 
     fitter.reset_cuda_graph()
     assert not fitter.is_cuda_graph_initialized
+
+
+@pytest.mark.parametrize(
+    "n_knots,control_space,interpolation_steps",
+    [
+        (2, ControlSpace.BSPLINE_3, 4),
+        (3, ControlSpace.BSPLINE_5, 4),
+        (12, ControlSpace.BSPLINE_3, 1),
+        (17, ControlSpace.BSPLINE_4, 3),
+        (64, ControlSpace.BSPLINE_5, 7),
+        (129, ControlSpace.BSPLINE_3, 4),
+        (1024, ControlSpace.BSPLINE_3, 4),
+        (1024, ControlSpace.BSPLINE_5, 4),
+    ],
+)
+def test_banded_irls_matches_dense_system(
+    n_knots: int,
+    control_space: ControlSpace,
+    interpolation_steps: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Solve the full weighted spline system, including moving boundary terms."""
+    fitter = _make_fitter(
+        use_cuda_graph=False,
+        n_knots=n_knots,
+        num_lanes=1,
+        control_space=control_space,
+        interpolation_steps=interpolation_steps,
+    )
+    target, start, goal = _make_paths(fitter)
+    start = JointState(
+        position=start.position,
+        velocity=torch.full_like(start.position, 0.04),
+        acceleration=torch.full_like(start.position, -0.02),
+        jerk=torch.full_like(start.position, 0.01),
+    )
+    fitter.fit(target, start, goal)
+    controls = fitter._current_knots.clone()
+    actual = fitter._solve_irls_step(
+        controls, fitter._current_velocity, fitter._current_acceleration, goal
+    ).clone()
+    # Compare against IEEE FP32, matching the scalar CUDA solver even when IK
+    # imports have enabled TF32 matrix products elsewhere in the process.
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
+    bases = (fitter._basis_velocity, fitter._basis_acceleration, fitter._basis_jerk)
+    limits = (fitter._max_velocity, fitter._max_acceleration, fitter._max_jerk)
+    weights = (
+        3.0
+        * (fitter._current_velocity.abs() / limits[0]).clamp_min(1e-6).pow(4)
+        / limits[0].square(),
+        1.5
+        * (fitter._current_acceleration.abs() / limits[1]).clamp_min(1e-6)
+        / limits[1].square(),
+        torch.ones_like(fitter._current_velocity) / limits[2].square(),
+    )
+    trace = (
+        sum(
+            (basis.square().sum(-1)[None, :, None] * weight).sum()
+            for basis, weight in zip(bases, weights)
+        )
+        / fitter.config.dof
+    )
+    scale = fitter.config.timing_regularization * fitter._path_normal.trace() / trace
+    boundaries = (
+        fitter._boundary_velocity,
+        fitter._boundary_acceleration,
+        fitter._boundary_jerk,
+    )
+    free_knots = n_knots - 1
+    indices = torch.arange(free_knots, device="cuda")
+    outside_band = (indices[:, None] - indices[None, :]).abs() > fitter.degree
+    assert torch.count_nonzero(fitter._path_normal[outside_band]) == 0
+    for joint in (0, 3, 6):
+        normal = fitter._path_normal.clone()
+        rhs = fitter._basis_position.T @ fitter._position_residual[0, :, joint]
+        for basis, weight, boundary in zip(bases, weights, boundaries):
+            normal += scale * (basis.T @ (weight[0, :, joint, None] * basis))
+            rhs -= scale * (basis.T @ (weight[0, :, joint] * boundary[0, :, joint]))
+        normal.diagonal().add_(
+            (fitter.config.regularization + fitter.config.trust_region_regularization)
+            * fitter._path_diagonal_scale
+        )
+        rhs += (
+            fitter.config.trust_region_regularization
+            * fitter._path_diagonal_scale
+            * controls[0, :-1, joint]
+        )
+        expected = torch.linalg.solve(normal, rhs)
+        torch.testing.assert_close(actual[0, :-1, joint], expected, rtol=2e-4, atol=3e-5)
+        residual = (normal @ actual[0, :-1, joint] - rhs).abs()
+        magnitude = normal.abs() @ actual[0, :-1, joint].abs() + rhs.abs()
+        assert (residual / magnitude.clamp_min(1e-6)).max() < 2e-6
+    torch.testing.assert_close(actual[:, -1], goal, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("use_rrt", [False, True])
@@ -399,3 +498,16 @@ def test_irls_iteration_defaults_are_consistent() -> None:
 
     assert field.default == 2
     assert factory_default == 2
+
+
+def test_initialization_preserves_precision_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep exported coefficients identical when an IK import has enabled TF32."""
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
+    reference = _make_fitter(use_cuda_graph=False)
+    reference._initialize_normal_operator()
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", True)
+    actual = _make_fitter(use_cuda_graph=False)
+    actual._initialize_normal_operator()
+    assert torch.backends.cuda.matmul.allow_tf32
+    torch.testing.assert_close(actual._fit_matrix, reference._fit_matrix, rtol=0, atol=0)
+    torch.testing.assert_close(actual._path_normal, reference._path_normal, rtol=0, atol=0)

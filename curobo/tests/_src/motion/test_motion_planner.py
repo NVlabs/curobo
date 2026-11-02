@@ -4,6 +4,7 @@
 """Unit tests for MotionPlanner class."""
 
 # Standard Library
+import math
 from dataclasses import replace
 from inspect import signature
 from types import SimpleNamespace
@@ -13,12 +14,10 @@ from typing import Any, Callable
 import pytest
 import torch
 
-from curobo._src.cost.tool_pose_criteria import PoseErrorFrame, ToolPoseCriteria
 from curobo._src.motion.motion_planner import MotionPlanner, _fit_linear_seed_trajectories
 from curobo._src.motion.motion_planner_cfg import MotionPlannerCfg
 from curobo._src.motion.planner_grasp import (
     GraspPhasePlanner,
-    get_result_goal_configuration,
 )
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
@@ -62,6 +61,21 @@ def test_default_refinement_budget() -> None:
         assert params["finetune_dt_scale"].default == 0.6
     for method in (TrajOptSolver.solve_pose, TrajOptSolver.solve_cspace):
         assert signature(method).parameters["initial_dt_scale"].default == 1.25
+    for method in (MotionPlanner.plan_pose, BatchMotionPlanner.plan_pose):
+        assert signature(method).parameters["outer_iterations"].default == 1
+    for method in (MotionPlanner.plan_pose_waypoints, BatchMotionPlanner.plan_pose_waypoints):
+        assert signature(method).parameters["outer_iterations"].default == 4
+
+
+@pytest.mark.parametrize("passes", [0, -1, 1.5, True])
+def test_pose_outer_iterations_reject_invalid_counts(passes: int | float) -> None:
+    """Reject invalid pass counts before invoking IK or trajectory optimization."""
+    planner = object.__new__(MotionPlanner)
+    planner._destroyed = True
+    planner.trajopt_solver = SimpleNamespace(config=SimpleNamespace(initial_check_interval=50))
+    state = JointState.from_position(torch.zeros((1, 7), dtype=torch.float32))
+    with pytest.raises(ValueError, match="outer_iterations must be a positive integer"):
+        planner.plan_pose(SimpleNamespace(num_goalset=1), state, outer_iterations=passes)
 
 
 @pytest.fixture(scope="module")
@@ -642,129 +656,81 @@ class TestMotionPlannerPlanGrasp:
 
 
 class TestMotionPlannerGraspUpdateCache:
-    """Test fixed-address grasp criteria and collision preset reuse."""
+    """Cover waypoint phase policy and cached grasp-contact collision updates."""
+
+    @pytest.mark.parametrize(
+        "tolerance", [(-0.01, 0.1), (0.02, 0.0), (0.02, math.pi + 0.1), (math.nan, 0.1)]
+    )
+    def test_invalid_path_tolerances_rejected(self, tolerance: tuple[float, float]) -> None:
+        """Reject invalid phase bounds before collision state changes."""
+        with pytest.raises(ValueError, match="path .* tolerance"):
+            GraspPhasePlanner.validate_linear_path_tolerance(tolerance)
 
     @staticmethod
     def _make_phase_planner(
-        criteria_updates: list[dict[str, ToolPoseCriteria]],
         collision_updates: list[tuple[str, tuple[str, ...]]],
-        *,
-        constrained_rrt_planner: object | None = None,
-        ik_solver: object | None = None,
-        plan_pose: Callable[..., object] | None = None,
+        plan_waypoints: Callable[..., object] = lambda *_args, **_kwargs: None,
     ) -> GraspPhasePlanner:
-        """Create one CPU-only grasp-phase planner for cache tests."""
-        config = SimpleNamespace(
-            device_cfg=DeviceCfg(device=torch.device("cpu")),
-            trajopt_solver_config=SimpleNamespace(use_cuda_graph=False),
-            ik_solver_config=SimpleNamespace(
-                position_tolerance=0.005,
-                orientation_tolerance=0.05,
-                multi_env=False,
-            ),
-        )
+        """Create a CPU phase planner without CUDA graph allocation."""
         return GraspPhasePlanner(
-            config=config,
-            batch_size=1,
+            config=SimpleNamespace(
+                device_cfg=DeviceCfg(device=torch.device("cpu")),
+                trajopt_solver_config=SimpleNamespace(
+                    use_cuda_graph=False, position_tolerance=0.005, orientation_tolerance=0.05
+                ),
+            ),
             kinematics=SimpleNamespace(),
-            ik_solver=ik_solver or SimpleNamespace(),
-            trajopt_solver=SimpleNamespace(config=SimpleNamespace(num_seeds=1)),
-            constrained_rrt_planner=constrained_rrt_planner,
-            constrained_rrt_seed_fitter=None,
-            plan_pose=plan_pose or (lambda *_args, **_kwargs: None),
-            update_tool_pose_criteria=lambda criteria: criteria_updates.append(criteria),
+            plan_pose_waypoints=plan_waypoints,
+            max_attempts=20,
             disable_link_collision=lambda links: collision_updates.append(
                 ("disable", tuple(links))
             ),
             enable_link_collision=lambda links: collision_updates.append(("enable", tuple(links))),
         )
 
-    def test_grasp_updates_reuse_fixed_preset_executors(self) -> None:
-        """Reuse one executor for each criteria and collision preset."""
-        criteria_updates: list[dict[str, ToolPoseCriteria]] = []
-        collision_updates: list[tuple[str, tuple[str, ...]]] = []
-        phase_planner = self._make_phase_planner(criteria_updates, collision_updates)
+    def test_grasp_collision_updates_reuse_executors(self) -> None:
+        """Reuse the contact-link update graph across insertion and lift."""
+        updates = []
+        phase = self._make_phase_planner(updates)
+        phase.activate_collision(["ee_link"], enable=False)
+        key = ("collision", ("ee_link",), False)
+        executor = phase._update_executors[key]
+        phase.activate_collision(["ee_link"], enable=False)
+        assert phase._update_executors[key] is executor
+        assert updates[-1] == ("disable", ("ee_link",))
+        phase.activate_collision(["ee_link"], enable=True)
+        assert updates[-1] == ("enable", ("ee_link",))
+        phase.destroy()
 
-        phase_planner.activate_tool_pose_criteria(
-            ["ee_link"],
-            axis="x",
-            in_tool_frame=False,
-        )
-        criteria_key = ("tool_pose", ("ee_link",), "x", False)
-        criteria_executor = phase_planner._update_executors[criteria_key]
-        criteria = criteria_updates[-1]["ee_link"]
-        criteria_update_count = len(criteria_updates)
-        phase_planner.activate_tool_pose_criteria(
-            ["ee_link"],
-            axis="x",
-            in_tool_frame=False,
-        )
+    def test_linear_phase_uses_grasp_budget(self) -> None:
+        """Use one endpoint with explicit phase budgets rather than waypoint defaults."""
+        calls = []
+        expected = object()
 
-        assert phase_planner._update_executors[criteria_key] is criteria_executor
-        assert len(criteria_updates) == criteria_update_count
-        assert criteria_updates[-1]["ee_link"] is criteria
-        torch.testing.assert_close(
-            criteria.path_position_projector,
-            torch.diag(torch.tensor([0.0, 1.0, 1.0])),
-        )
-        assert criteria.error_frame.item() == PoseErrorFrame.WORLD
-        torch.testing.assert_close(
-            criteria.path_tolerance,
-            torch.tensor([0.005, 0.05]),
-        )
+        def solve(*args: object, **kwargs: object) -> object:
+            calls.append((args, kwargs))
+            return expected
 
-        phase_planner.activate_collision(["ee_link"], enable=False)
-        collision_key = ("collision", ("ee_link",), False)
-        collision_executor = phase_planner._update_executors[collision_key]
-        phase_planner.activate_collision(["ee_link"], enable=False)
-
-        assert phase_planner._update_executors[collision_key] is collision_executor
-        assert collision_updates[-1] == ("disable", ("ee_link",))
-        phase_planner.destroy()
-
-    def test_grasp_linear_phase_keeps_trajopt_fallback(self) -> None:
-        """Fall back to TrajOpt after a projected-RRT attempt fails."""
-        endpoint_calls: list[bool] = []
-        rrt_calls: list[bool] = []
-        criteria_calls: list[dict[str, ToolPoseCriteria]] = []
-        collision_calls: list[tuple[str, tuple[str, ...]]] = []
-        trajopt_result = SimpleNamespace(success=torch.tensor([True]))
-
-        def solve_goalset(*_args: object, **_kwargs: object) -> SimpleNamespace:
-            endpoint_calls.append(True)
-            return SimpleNamespace(
-                solution=torch.zeros(1, 1, 7),
-                success=torch.tensor([[True]]),
+        phase = self._make_phase_planner([], solve)
+        goal = SimpleNamespace(horizon=1)
+        start = object()
+        assert (
+            phase.plan_linear_phase(
+                goal,
+                start,
+                finetune_attempts=0,
+                path_tolerance=(0.01, 0.1),
             )
-
-        phase_planner = self._make_phase_planner(
-            criteria_calls,
-            collision_calls,
-            constrained_rrt_planner=object(),
-            ik_solver=SimpleNamespace(solve_goalset=solve_goalset),
-            plan_pose=lambda *_args, **_kwargs: trajopt_result,
+            is expected
         )
-
-        def plan_rrt(*_args: object) -> None:
-            rrt_calls.append(True)
-            return None
-
-        phase_planner._plan_rrt_phase = plan_rrt
-        result = phase_planner.plan_linear_phase(
-            SimpleNamespace(tool_frames=["ee_link"]),
-            SimpleNamespace(),
-            axis="z",
-            in_tool_frame=True,
-            use_rrt=True,
-            finetune_attempts=0,
-        )
-
-        assert result is trajopt_result
-        assert len(endpoint_calls) == 1
-        assert len(rrt_calls) == 1
-        assert ("tool_pose", ("ee_link",), "z", True) in phase_planner._update_executors
-        assert ("tool_pose", ("ee_link",), None, True) in phase_planner._update_executors
-        phase_planner.destroy()
+        args, kwargs = calls[0]
+        assert args == (goal, start)
+        assert kwargs["outer_iterations"] == 1
+        assert kwargs["finetune_attempts"] == 0
+        assert kwargs["max_attempts"] == 20
+        assert kwargs["path_tolerance"] == (0.01, 0.1)
+        assert kwargs["final_tolerance"] == (0.005, 0.05)
+        phase.destroy()
 
 
 class TestMotionPlannerUpdateMethods:
@@ -831,12 +797,14 @@ class TestMotionPlannerPlanSingleGoalset:
 
         class CapturingTrajoptSolver:
             def __init__(self) -> None:
-                self.config = SimpleNamespace(num_seeds=2)
+                self.config = SimpleNamespace(num_seeds=2, initial_check_interval=50)
                 self.action_horizon = 4
                 self.calls = 0
+                self.initial_budgets = []
 
             def solve_pose(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
                 self.calls += 1
+                self.initial_budgets.append(kwargs["initial_iters"])
                 return SimpleNamespace(
                     success=torch.tensor([[self.calls == 3]], dtype=torch.bool),
                     total_time=0.2,
@@ -869,18 +837,20 @@ class TestMotionPlannerPlanSingleGoalset:
             lambda *args, **kwargs: False,
         )
 
-        result = planner._plan_pose_single(
-            object(),
+        result = planner.plan_pose(
+            SimpleNamespace(num_goalset=1),
             JointState.from_position(torch.zeros((1, 2), dtype=torch.float32)),
             use_implicit_goal=True,
             max_attempts=3,
             enable_graph_attempt=1,
+            outer_iterations=3,
         )
 
         assert result is not None
         assert bool(result.success.item())
         assert planner.ik_solver.calls == 2
         assert planner.trajopt_solver.calls == 3
+        assert planner.trajopt_solver.initial_budgets == [150, 150, 150]
         assert len(graph_calls) == 2
         assert planner.last_planning_attempts == 3
 
@@ -1098,7 +1068,6 @@ class TestMotionPlannerUpdateInertial:
         planner.config = SimpleNamespace(graph_planner_algorithm="rrt")
         planner.ik_solver = CapturingComponent()
         planner.graph_planner = CapturingComponent()
-        planner.constrained_rrt_planner = CapturingComponent()
         planner.trajopt_solver = CapturingComponent()
 
         planner.update_link_inertial("attached_object", mass=3.0)
@@ -1108,7 +1077,6 @@ class TestMotionPlannerUpdateInertial:
         for component in (
             planner.ik_solver,
             planner.graph_planner,
-            planner.constrained_rrt_planner,
             planner.trajopt_solver,
         ):
             assert component.single_calls == [("attached_object", 3.0, None, None)]
@@ -1747,6 +1715,7 @@ class TestMotionPlannerPlanGraspFullWorkflow:
 
         assert isinstance(result, GraspPlanResult)
         assert motion_planner.last_graph_calls == 0
+        assert result.success.all(), result.status
         assert result.grasp_trajectory.control_space in ControlSpace.bspline_types()
         assert result.lift_trajectory.control_space in ControlSpace.bspline_types()
         action_horizon = motion_planner.trajopt_solver.action_horizon
@@ -1866,11 +1835,17 @@ class TestMotionPlannerPlanGraspFullWorkflow:
             plan_pose_calls.append(kwargs)
             return original_plan_pose(*args, **kwargs)
 
-        def reject_rrt(*args: object, **kwargs: object) -> None:
-            raise AssertionError("projected RRT must be bypassed on the explicit TrajOpt path")
+        original_waypoints = motion_planner._grasp_phase_planner._plan_pose_waypoints
+
+        def count_waypoint_calls(*args: object, **kwargs: object) -> TrajOptSolverResult | None:
+            plan_pose_calls.append(kwargs)
+            assert kwargs["outer_iterations"] == 1
+            return original_waypoints(*args, **kwargs)
 
         monkeypatch.setattr(motion_planner, "plan_pose", count_plan_pose_calls)
-        monkeypatch.setattr(motion_planner._grasp_phase_planner, "_plan_rrt_phase", reject_rrt)
+        monkeypatch.setattr(
+            motion_planner._grasp_phase_planner, "_plan_pose_waypoints", count_waypoint_calls
+        )
 
         result = motion_planner.plan_grasp(
             current_state=sample_start_state,
@@ -1909,30 +1884,14 @@ class TestMotionPlannerPlanGraspFullWorkflow:
         ]
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_plan_grasp_rejects_conflicting_constrained_phase_flags(
-        self,
-        motion_planner,
-        sample_start_state,
-    ) -> None:
-        """Reject simultaneous RRT and double-pass TrajOpt selection."""
-        grasp_poses = motion_planner.compute_kinematics(sample_start_state).tool_poses.as_goal()
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            motion_planner.plan_grasp(
-                current_state=sample_start_state,
-                grasp_poses=grasp_poses,
-                use_rrt_for_constrained_phases=True,
-                use_double_pass_trajopt_for_constrained_phases=True,
-            )
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-    def test_plan_grasp_reuses_selected_grasp_configuration(
+    def test_plan_grasp_insertion_ik_uses_approach_state(
         self,
         motion_planner,
         sample_start_state,
         cuda_device_cfg,
         monkeypatch,
     ) -> None:
-        """Connect the approach endpoint to the grasp configuration already selected."""
+        """Choose insertion endpoint IK from the reached approach, preserving its arm branch."""
         tool_frames = motion_planner.tool_frames
         position = torch.tensor([[0.5, 0.0, 0.3]], **cuda_device_cfg.as_torch_dict())
         quaternion = torch.tensor([[1.0, 0.0, 0.0, 0.0]], **cuda_device_cfg.as_torch_dict())
@@ -1940,33 +1899,23 @@ class TestMotionPlannerPlanGraspFullWorkflow:
             {tool_frames[0]: Pose(position=position, quaternion=quaternion)},
             ordered_tool_frames=tool_frames,
         )
-        original_rrt_plan = motion_planner._grasp_phase_planner._plan_rrt_phase
-        rrt_starts: list[torch.Tensor] = []
-        rrt_goals: list[torch.Tensor] = []
+        waypoint_starts = []
+        ik_starts = []
+        original_waypoints = motion_planner._grasp_phase_planner._plan_pose_waypoints
+        solve_ik = motion_planner.ik_solver.solve_pose
 
-        def record_rrt_plan(
-            goal_tool_poses: GoalToolPose,
-            current_state: JointState,
-            goal_configuration: torch.Tensor,
-            goal_valid: torch.Tensor,
-            axis: str,
-            in_tool_frame: bool,
-        ) -> object:
-            rrt_starts.append(current_state.position.clone())
-            rrt_goals.append(goal_configuration.clone())
-            return original_rrt_plan(
-                goal_tool_poses,
-                current_state,
-                goal_configuration,
-                goal_valid,
-                axis,
-                in_tool_frame,
-            )
+        def record_ik(*args: object, **kwargs: object) -> object:
+            ik_starts.append(kwargs["current_state"].position.clone())
+            return solve_ik(*args, **kwargs)
 
+        def record_waypoints(goal: GoalToolPose, state: JointState, **kwargs: object) -> object:
+            waypoint_starts.append(state.position.clone())
+            ik_starts.clear()
+            return original_waypoints(goal, state, **kwargs)
+
+        monkeypatch.setattr(motion_planner.ik_solver, "solve_pose", record_ik)
         monkeypatch.setattr(
-            motion_planner._grasp_phase_planner,
-            "_plan_rrt_phase",
-            record_rrt_plan,
+            motion_planner._grasp_phase_planner, "_plan_pose_waypoints", record_waypoints
         )
 
         result = motion_planner.plan_grasp(
@@ -1974,16 +1923,13 @@ class TestMotionPlannerPlanGraspFullWorkflow:
             grasp_poses=grasp_tool_pose,
             grasp_approach_offset=0.1,
             plan_grasp_to_lift=False,
-            use_rrt_for_constrained_phases=True,
         )
 
         assert result.success.any()
-        assert len(rrt_starts) == 1
-        expected_goal = get_result_goal_configuration(
-            result.goalset_result,
-            motion_planner.kinematics,
-        )
-        assert torch.allclose(expected_goal, rrt_goals[0])
+        assert len(waypoint_starts) == 1
+        assert ik_starts
+        for state in ik_starts:
+            torch.testing.assert_close(state, waypoint_starts[0])
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_grasp_with_custom_axes(

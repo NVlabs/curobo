@@ -835,7 +835,7 @@ void RrtRuntime::evaluate_positions(CUdeviceptr positions, int states,
     rollout_->launch_inverse_dynamics(
         positions, zero_derivatives_.ptr(), zero_derivatives_.ptr(),
         joint_effort_.ptr(), rnea_forward_cache_.ptr(), states,
-        streams->driver_stream(RolloutStream::DYNAMICS));
+        streams->driver_stream(RolloutStream::DYNAMICS), false);
     streams->record(RolloutEvent::DYNAMICS_READY, dynamics);
   }
 

@@ -17,6 +17,7 @@ from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
 from curobo._src.state.state_joint import JointState
 from curobo._src.trajectory.timeopt.timeopt_basis import CubicTimingBasis, TimeOptProblem
 from curobo._src.trajectory.timeopt.timeopt_solver import CudaTimeOptSolver
+from curobo._src.types.spline_layout import MAX_SPLINE_KNOTS
 from curobo._src.util.cuda_graph_util import GraphExecutor
 from curobo._src.util.logging import log_and_raise
 
@@ -50,6 +51,8 @@ class TrajectoryTimeOpt:
                 log_and_raise(f"{name} must be an integer >= {minimum}")
         if config.timing_controls != 32:
             log_and_raise("timing_controls must be 32")
+        if config.n_knots > MAX_SPLINE_KNOTS:
+            log_and_raise(f"n_knots must not exceed {MAX_SPLINE_KNOTS}")
         if any(
             not math.isfinite(x) or not 0 < x <= 1
             for x in (config.limit_scale, config.jerk_limit_scale)
@@ -153,6 +156,7 @@ class TrajectoryTimeOpt:
             clone_outputs=False,
         )
         self._sample_count: int | None = None
+        self._sample_progress: torch.Tensor | None = None
         self._setup_path(reference=False)
 
     def _setup_path(self, reference: bool) -> None:
@@ -341,7 +345,7 @@ class TrajectoryTimeOpt:
         if self._sample_count is not None and self._sample_count != times.shape[1]:
             log_and_raise("Sample count changed; reset_cuda_graph before using a new sample count")
         self._sample_count = times.shape[1]
-        output = (
+        output, self._sample_progress = (
             self._sample(times)
             if torch.cuda.is_current_stream_capturing()
             else self._sample_executor(times)
@@ -354,9 +358,10 @@ class TrajectoryTimeOpt:
             joint_names=self._result.joint_state.joint_names.copy(),
         )
 
-    def _sample(self, times: torch.Tensor) -> torch.Tensor:
+    def _sample(self, times: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Invert monotone quadrature with safeguarded Newton steps and apply the chain rule."""
         output = self._grid.new_empty((4, self.batch_size, times.shape[1], self.dof))
+        progress = self._grid.new_empty(times.shape)
         timeopt_cu.sample(
             self._controls,
             self._start_boundary,
@@ -370,9 +375,10 @@ class TrajectoryTimeOpt:
             self._success,
             self._stationary,
             output,
+            progress,
             int(not self._reference),
         )
-        return output
+        return output, progress
 
     def reset_cuda_graph(self) -> None:
         """Reset captured graphs, retaining fixed model and solver buffers."""

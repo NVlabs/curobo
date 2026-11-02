@@ -76,7 +76,7 @@ cudaError_t launch_seed_fitter_derivative_scale(
     const float* max_velocity, const float* max_acceleration,
     const float* max_jerk, const float* basis_velocity,
     const float* basis_acceleration, const float* basis_jerk, int seeds,
-    int steps, int dof, int knots, float path_normal_trace,
+    int steps, int dof, int knots, int interpolation_steps, float path_normal_trace,
     float timing_regularization, float irls_epsilon,
     float* velocity_trace_workspace, float* acceleration_trace_workspace,
     float* jerk_trace_workspace, float* derivative_scale,
@@ -85,6 +85,7 @@ cudaError_t launch_seed_fitter_derivative_scale(
   curobo::trajectory::seed_fitter::derivative_scale_kernel<<<seeds, THREADS_PER_BLOCK, 0, stream>>>(
       current_velocity, current_acceleration, max_velocity, max_acceleration, max_jerk,
       basis_velocity, basis_acceleration, basis_jerk, seeds, steps, dof, knots - 1,
+      interpolation_steps,
       path_normal_trace, timing_regularization, irls_epsilon, velocity_trace_workspace,
       acceleration_trace_workspace, jerk_trace_workspace, derivative_scale);
   return cudaGetLastError();
@@ -100,14 +101,14 @@ cudaError_t launch_seed_fitter_solve_irls(
     const float* basis_velocity, const float* basis_acceleration,
     const float* basis_jerk, const float* path_normal,
     const float* derivative_scale, int seeds, int steps, int dof, int knots,
+    int interpolation_steps,
     float regularization, float trust_region_regularization,
     float path_diagonal_scale, float irls_epsilon, float* candidate_knots,
     cudaStream_t stream) {
   using curobo::trajectory::seed_fitter::THREADS_PER_BLOCK;
   const int free_knots = knots - 1;
-  const size_t shared_values = static_cast<size_t>(2 * steps) +
-                               static_cast<size_t>(free_knots * free_knots) +
-                               static_cast<size_t>(free_knots);
+  const size_t shared_values = static_cast<size_t>(free_knots) *
+      (curobo::trajectory::seed_fitter::NORMAL_BANDWIDTH + 1);
   curobo::trajectory::seed_fitter::solve_irls_kernel
       <<<seeds * dof, THREADS_PER_BLOCK, shared_values * sizeof(float),
          stream>>>(
@@ -115,7 +116,7 @@ cudaError_t launch_seed_fitter_solve_irls(
           boundary_jerk, current_velocity, current_acceleration, current_knots,
           goal_position, max_velocity, max_acceleration, max_jerk,
           basis_position, basis_velocity, basis_acceleration, basis_jerk,
-          path_normal, derivative_scale, steps, dof, knots, regularization,
+          path_normal, derivative_scale, steps, dof, knots, interpolation_steps, regularization,
           trust_region_regularization, path_diagonal_scale, irls_epsilon,
           candidate_knots);
   return cudaGetLastError();

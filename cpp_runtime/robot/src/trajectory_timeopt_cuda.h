@@ -36,7 +36,7 @@ struct TimeOptWorkspace {
   float *output_torque{nullptr}, *output_time{nullptr}, *duration{nullptr}, *dt{nullptr};
   bool *output_numerical{nullptr}, *success{nullptr};
   int *status{nullptr};
-  float *sample_times{nullptr}, *sample_joints{nullptr};
+  float *sample_times{nullptr}, *sample_joints{nullptr}, *sample_progress{nullptr};
 };
 
 cudaError_t launch_timeopt_path(const TimeOptWorkspace &w, cudaStream_t stream);

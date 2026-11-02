@@ -26,6 +26,7 @@ enum class RolloutEvent : std::size_t {
   STATE_READY,
   DYNAMICS_READY,
   KINEMATICS_READY,
+  CSPACE_COST_READY,
   CSPACE_DONE,
   POSE_DONE,
   WORLD_DONE,

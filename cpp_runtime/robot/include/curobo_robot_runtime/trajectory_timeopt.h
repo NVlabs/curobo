@@ -20,6 +20,7 @@ class RolloutRuntime;
 struct TrajectoryTimeOptConfig {
   int device_ordinal{0};
   int num_seeds{4};
+  /** Spatial controls in [2,1024], independent of the uniform constraint grid. */
   int num_knots{16};
   /** Shared duration/constraint intervals (512 nodes by default), at least one. */
   int num_intervals{511};
@@ -94,6 +95,7 @@ class TrajectoryTimeOpt final {
 
  private:
   friend class detail::TrajectoryOptimizerRuntime;
+  const float *sample_progress() const;
   /** Borrow the owning optimizer's dynamics model and kernel modules. */
   TrajectoryTimeOpt(const std::string& artifact_directory,
                     const TrajectoryTimeOptConfig& config,

@@ -76,13 +76,3 @@ class TestSharedKinematicsParams:
         graph_kparams = planner.graph_planner.kinematics.config.kinematics_config
         trajopt_kparams = planner.trajopt_solver.kinematics.config.kinematics_config
         assert graph_kparams is trajopt_kparams
-
-    def test_constrained_rrt_rollouts_share_kinematics_params(self, planner):
-        """Every dedicated RRT rollout must observe attachment and sphere mutations."""
-        constrained_rrt = planner.constrained_rrt_planner
-        assert constrained_rrt is not None
-        trajopt_kparams = planner.trajopt_solver.kinematics.config.kinematics_config
-
-        for rollout in constrained_rrt.get_all_rollout_instances():
-            rollout_kparams = rollout.transition_model.robot_model.config.kinematics_config
-            assert rollout_kparams is trajopt_kparams

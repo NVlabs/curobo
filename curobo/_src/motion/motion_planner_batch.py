@@ -14,7 +14,8 @@ each problem; PRM graph seeding remains disabled.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Union
+import math
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 
@@ -28,8 +29,11 @@ from curobo._src.motion.motion_planner import (
     _can_evaluate_seed,
     _create_graph_seed_fitter,
     _fit_linear_seed_trajectories,
+    _initial_iteration_budget,
     _make_warmup_goalset_poses,
     _merge_graph_seed_trajectories,
+    _plan_pose_waypoints,
+    _prepare_waypoint_problem,
     _should_evaluate_seed_before_trajopt,
 )
 from curobo._src.motion.motion_planner_cfg import (
@@ -39,7 +43,6 @@ from curobo._src.motion.motion_planner_cfg import (
 from curobo._src.motion.motion_planner_result import GraspPlanResult
 from curobo._src.motion.planner_grasp import (
     GraspPhasePlanner,
-    get_result_goal_configuration,
 )
 from curobo._src.motion.planner_grasp import axis_string_to_vector as _axis_string_to_vector
 from curobo._src.robot.kinematics.kinematics import Kinematics
@@ -87,8 +90,6 @@ class BatchMotionPlanner:
         )
 
         self.graph_planner = None
-        self.constrained_rrt_planner = None
-        self.constrained_rrt_seed_fitter = None
         self.graph_seed_fitter = _create_graph_seed_fitter(
             self.config,
             self.trajopt_solver,
@@ -131,42 +132,13 @@ class BatchMotionPlanner:
                     self.config.prm_graph_planner_config,
                     self.scene_collision_checker,
                 )
-        if self.config.constrained_rrt_planner_config is not None:
-            from curobo._src.graph_planner.rrt import BiRRTPlanner, RRTPlannerResources
-
-            constrained_config = self.config.constrained_rrt_planner_config
-            required_lanes = self.config.ik_solver_config.max_batch_size
-            if required_lanes > constrained_config.planner_config.max_batched_lanes:
-                log_and_raise(
-                    "Constrained RRT batch exceeds max_batched_lanes: "
-                    f"{required_lanes} > "
-                    f"{constrained_config.planner_config.max_batched_lanes}"
-                )
-            self.constrained_rrt_planner = BiRRTPlanner(
-                RRTPlannerResources(
-                    constrained_config.resources_config,
-                    self.scene_collision_checker,
-                ),
-                constrained_config.planner_config,
-            )
-            self.constrained_rrt_planner.initialize_query_shape(required_lanes)
-            self.constrained_rrt_seed_fitter = _create_graph_seed_fitter(
-                self.config,
-                self.trajopt_solver,
-                num_lanes=required_lanes,
-            )
         self._grasp_phase_planner = GraspPhasePlanner(
             config=self.config,
-            batch_size=self.config.ik_solver_config.max_batch_size,
             kinematics=self.kinematics,
-            ik_solver=self.ik_solver,
-            trajopt_solver=self.trajopt_solver,
-            constrained_rrt_planner=self.constrained_rrt_planner,
-            constrained_rrt_seed_fitter=self.constrained_rrt_seed_fitter,
-            plan_pose=lambda *args, **kwargs: self.plan_pose(*args, **kwargs),
-            update_tool_pose_criteria=lambda criteria: self.update_tool_pose_criteria(criteria),
-            enable_link_collision=lambda links: self.enable_link_collision(links),
-            disable_link_collision=lambda links: self.disable_link_collision(links),
+            plan_pose_waypoints=self.plan_pose_waypoints,
+            max_attempts=1,
+            enable_link_collision=self.enable_link_collision,
+            disable_link_collision=self.disable_link_collision,
         )
 
     # -- Lifecycle --
@@ -187,15 +159,9 @@ class BatchMotionPlanner:
         self.trajopt_solver.destroy()
         if self.graph_planner is not None and hasattr(self.graph_planner, "reset_cuda_graph"):
             self.graph_planner.reset_cuda_graph()
-        constrained_rrt_planner = getattr(self, "constrained_rrt_planner", None)
-        if constrained_rrt_planner is not None:
-            constrained_rrt_planner.reset_cuda_graph()
         graph_seed_fitter = getattr(self, "graph_seed_fitter", None)
         if graph_seed_fitter is not None:
             graph_seed_fitter.reset_cuda_graph()
-        constrained_rrt_seed_fitter = getattr(self, "constrained_rrt_seed_fitter", None)
-        if constrained_rrt_seed_fitter is not None:
-            constrained_rrt_seed_fitter.reset_cuda_graph()
 
     def __del__(self):
         self.destroy()
@@ -206,6 +172,11 @@ class BatchMotionPlanner:
     def __exit__(self, *exc):
         self.destroy()
         return False
+
+    @property
+    def native_horizon(self) -> int:
+        """Number of native trajectory states for this planner's fixed spline."""
+        return self.config.native_horizon
 
     @property
     def attachment_manager(self) -> AttachmentManager:
@@ -284,38 +255,52 @@ class BatchMotionPlanner:
                 num_warmup_iterations=num_warmup_iterations,
                 max_batch_size=batch_size * self.trajopt_solver.config.num_seeds,
             )
-        constrained_rrt_planner = getattr(self, "constrained_rrt_planner", None)
-        if enable_graph and constrained_rrt_planner is not None:
-            constrained_state = JointState.from_position(
-                self.default_joint_state.position.unsqueeze(0).repeat(batch_size, 1),
-                joint_names=self.joint_names,
-            )
-            constrained_goal = self.compute_kinematics(constrained_state).tool_poses.as_goal()
-            self._grasp_phase_planner.install_rrt_constraint(constrained_goal)
-            constrained_rrt_planner.warmup(
-                num_warmup_iterations=num_warmup_iterations,
-                max_batch_size=batch_size,
-            )
-            self._grasp_phase_planner.activate_rrt_constraint(
-                constrained_goal,
-                axis="z",
-                in_tool_frame=True,
-            )
-            self.ik_solver.solve_goalset(
-                constrained_goal,
-                current_state=constrained_state,
-                return_seeds=1,
-            )
         graph_seed_fitter = getattr(self, "graph_seed_fitter", None)
         if graph_seed_fitter is not None:
             graph_seed_fitter.warmup()
-        constrained_rrt_seed_fitter = getattr(self, "constrained_rrt_seed_fitter", None)
-        if constrained_rrt_seed_fitter is not None:
-            constrained_rrt_seed_fitter.warmup()
 
         self.ik_solver.config.exit_early = og_exit_early
         self._warming_up = False
         return True
+
+    def prepare_pose_waypoints(
+        self, waypoints: GoalToolPose, current_state: JointState
+    ) -> GoalToolPose:
+        """Resample each batch's 1..256 poses that fit its configured native grid."""
+        return _prepare_waypoint_problem(self, waypoints, current_state)[1]
+
+    def plan_pose_waypoints(
+        self,
+        waypoints: GoalToolPose,
+        current_state: JointState,
+        *,
+        path_tolerance: Tuple[float, float],
+        final_tolerance: Tuple[float, float],
+        max_attempts: int = 1,
+        finetune_attempts: int = 1,
+        track_orientation: bool = True,
+        outer_iterations: int = 4,
+    ) -> Optional[TrajOptSolverResult]:
+        """Plan rest-to-rest Cartesian paths, with meter/radian tolerance pairs.
+
+        All problems share a target count and mode. Successful batch rows are
+        retained across attempts; the geometric spline keeps its configured control count.
+        Up to 256 targets are accepted when they fit the native reference intervals.
+        ``track_orientation=False`` ignores waypoint rotations, including the goal.
+        ``outer_iterations`` caps initial solve/check passes (default four), with 50
+        optimizer iterations per pass by default. Refinement is separate.
+        """
+        return _plan_pose_waypoints(
+            self,
+            waypoints,
+            current_state,
+            path_tolerance=path_tolerance,
+            final_tolerance=final_tolerance,
+            max_attempts=max_attempts,
+            finetune_attempts=finetune_attempts,
+            track_orientation=track_orientation,
+            outer_iterations=outer_iterations,
+        )
 
     def plan_pose(
         self,
@@ -326,7 +311,7 @@ class BatchMotionPlanner:
         success_ratio: float = 1.0,
         enable_graph_attempt: int = 0,
         finetune_attempts: int = 1,
-        initial_iters: Optional[int] = None,
+        outer_iterations: int = 1,
         time_optimal_iters: Optional[int] = 25,
         finetune_iters: Optional[int] = 25,
         finetune_dt_scale: float = 0.6,
@@ -351,8 +336,8 @@ class BatchMotionPlanner:
                 seeding (when graph planner is available).
             finetune_attempts: Number of additional time-optimal refinement
                 passes after the initial solve.
-            initial_iters: Optional optimizer iteration override for the
-                initial solve.
+            outer_iterations: Maximum initial solve/check passes per optimization.
+                Each pass uses 50 optimizer iterations by default; stop early on success.
             time_optimal_iters: Optional optimizer iteration override for the
                 first refinement pass.
             finetune_iters: Optional optimizer iteration override for later
@@ -367,6 +352,7 @@ class BatchMotionPlanner:
             never found any solution across all attempts.
         """
         batch_size = self.batch_size
+        initial_iters = _initial_iteration_budget(self.trajopt_solver, outer_iterations)
         num_seeds = self.trajopt_solver.config.num_seeds
         device = current_state.position.device
 
@@ -605,23 +591,29 @@ class BatchMotionPlanner:
         plan_grasp_to_lift: bool = True,
         disable_collision_links: Optional[List[str]] = None,
         use_trajopt_for_goalset_selection: bool = False,
-        use_rrt_for_constrained_phases: bool = False,
         use_double_pass_trajopt_for_constrained_phases: bool = False,
+        *,
+        grasp_path_tolerance: Tuple[float, float] = (0.02, math.radians(10.0)),
+        lift_path_tolerance: Tuple[float, float] = (0.02, math.radians(10.0)),
     ) -> GraspPlanResult:
         """Plan grasp motions for a batch: goalset -> approach -> grasp -> lift.
 
         All B problems are planned at every stage (CUDA graph stability).
         Problems that fail a stage get their current state substituted as
         the goal for subsequent stages so the optimizer doesn't diverge.
-        Goalset selection uses ranked IK and constrained phases use one TrajOpt
-        pass by default. Full goalset TrajOpt, projected RRT, and a second
-        constrained TrajOpt pass are opt-in.
+        Goalset selection uses ranked IK. Insertion and lift require enabled TrajOpt
+        and track linear Cartesian references from their reached starts to their
+        endpoints, using one initial solve/check pass. Full goalset TrajOpt and a
+        second phase refinement are opt-in.
+
+        ``grasp_path_tolerance`` and ``lift_path_tolerance`` bound reference-tracking
+        error in meters and radians. Both default to
+        2 cm and 10 degrees; final pose tolerances remain configured separately.
         """
-        if use_rrt_for_constrained_phases and use_double_pass_trajopt_for_constrained_phases:
-            log_and_raise(
-                "use_rrt_for_constrained_phases and "
-                "use_double_pass_trajopt_for_constrained_phases are mutually exclusive"
-            )
+        if plan_approach_to_grasp and not self.config.enable_trajopt:
+            log_and_raise("grasp insertion and lift require enabled TrajOpt")
+        GraspPhasePlanner.validate_linear_path_tolerance(grasp_path_tolerance)
+        GraspPhasePlanner.validate_linear_path_tolerance(lift_path_tolerance)
         if disable_collision_links is None:
             disable_collision_links = (
                 self.kinematics.config.kinematics_config.grasp_contact_link_names
@@ -663,10 +655,6 @@ class BatchMotionPlanner:
             return result
 
         result.goalset_index = goalset_result.goalset_index.clone()
-        grasp_goal_configuration = get_result_goal_configuration(
-            goalset_result,
-            self.kinematics,
-        )
 
         # Extract per-problem grasp pose using each problem's goalset_index
         selected_grasp = self._extract_per_problem_grasp(
@@ -730,12 +718,8 @@ class BatchMotionPlanner:
         grasp_result = self._grasp_phase_planner.plan_linear_phase(
             grasp_tool_pose,
             approach_end,
-            grasp_approach_axis,
-            grasp_approach_in_tool_frame,
-            use_rrt=use_rrt_for_constrained_phases,
             finetune_attempts=int(use_double_pass_trajopt_for_constrained_phases),
-            goal_configuration=grasp_goal_configuration,
-            goal_valid=goalset_ok,
+            path_tolerance=grasp_path_tolerance,
         )
         self._grasp_phase_planner.activate_collision(disable_collision_links, enable=True)
 
@@ -782,10 +766,8 @@ class BatchMotionPlanner:
         lift_result = self._grasp_phase_planner.plan_linear_phase(
             lift_tool_pose,
             lift_start,
-            grasp_lift_axis,
-            grasp_lift_in_tool_frame,
-            use_rrt=use_rrt_for_constrained_phases,
             finetune_attempts=int(use_double_pass_trajopt_for_constrained_phases),
+            path_tolerance=lift_path_tolerance,
         )
         self._grasp_phase_planner.activate_collision(disable_collision_links, enable=True)
 
@@ -979,18 +961,12 @@ class BatchMotionPlanner:
         self.scene_collision_checker.load_collision_model(scene_cfg, env_idx=env_idx)
         if self.graph_planner is not None:
             self.graph_planner.reset_buffer()
-        constrained_rrt_planner = getattr(self, "constrained_rrt_planner", None)
-        if constrained_rrt_planner is not None:
-            constrained_rrt_planner.reset_buffer()
 
     def clear_scene_cache(self):
         """Clear fixed world storage and graph-planner nodes, retaining captures."""
         self.scene_collision_checker.clear_cache()
         if self.graph_planner is not None:
             self.graph_planner.reset_buffer()
-        constrained_rrt_planner = getattr(self, "constrained_rrt_planner", None)
-        if constrained_rrt_planner is not None:
-            constrained_rrt_planner.reset_buffer()
 
     def reset_seed(self):
         self.ik_solver.reset_seed()
@@ -998,10 +974,6 @@ class BatchMotionPlanner:
         if self.graph_planner is not None:
             self.graph_planner.reset_buffer()
             self.graph_planner.reset_seed()
-        constrained_rrt_planner = getattr(self, "constrained_rrt_planner", None)
-        if constrained_rrt_planner is not None:
-            constrained_rrt_planner.reset_buffer()
-            constrained_rrt_planner.reset_seed()
 
     def enable_link_collision(self, enable_collision_links: List[str]):
         for link_name in enable_collision_links:
@@ -1012,9 +984,6 @@ class BatchMotionPlanner:
             self.kinematics.config.kinematics_config.disable_link_spheres(link_name)
 
     def update_tool_pose_criteria(self, tool_pose_criteria: Dict[str, "ToolPoseCriteria"]):
-        grasp_phase_planner = getattr(self, "_grasp_phase_planner", None)
-        if grasp_phase_planner is not None:
-            grasp_phase_planner.invalidate_tool_pose_criteria()
         self.ik_solver.update_tool_pose_criteria(tool_pose_criteria)
         self.trajopt_solver.update_tool_pose_criteria(tool_pose_criteria)
 
@@ -1046,8 +1015,6 @@ class BatchMotionPlanner:
             self.config.graph_planner_algorithm
         ):
             self.graph_planner.update_link_inertial(link_name, mass, com, inertia)
-        if self.constrained_rrt_planner is not None:
-            self.constrained_rrt_planner.update_link_inertial(link_name, mass, com, inertia)
         self.trajopt_solver.update_link_inertial(link_name, mass, com, inertia)
 
     def update_links_inertial(
@@ -1060,6 +1027,4 @@ class BatchMotionPlanner:
             self.config.graph_planner_algorithm
         ):
             self.graph_planner.update_links_inertial(link_properties)
-        if self.constrained_rrt_planner is not None:
-            self.constrained_rrt_planner.update_links_inertial(link_properties)
         self.trajopt_solver.update_links_inertial(link_properties)

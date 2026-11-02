@@ -5,9 +5,10 @@
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Callable, Dict, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Mapping, Optional, Tuple, Union
 
 import torch
 
@@ -24,7 +25,6 @@ from curobo._src.motion.motion_planner_cfg import (
 from curobo._src.motion.motion_planner_result import GraspPlanResult
 from curobo._src.motion.planner_grasp import (
     GraspPhasePlanner,
-    get_result_goal_configuration,
 )
 from curobo._src.motion.planner_grasp import axis_string_to_vector as _axis_string_to_vector
 from curobo._src.robot.kinematics.kinematics import Kinematics
@@ -37,11 +37,19 @@ from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_joint_ops import repeat_joint_state_seeds
 from curobo._src.state.state_joint_trajectory_ops import get_joint_state_at_horizon_index
 from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType
+from curobo._src.trajectory.trajectory_pose_reference import (
+    interpolate_pose_waypoints,
+    pose_errors,
+    validate_pose_tolerance,
+)
 from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.pose import Pose
 from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose
 from curobo._src.util.logging import log_and_raise
+
+if TYPE_CHECKING:
+    from curobo._src.motion.motion_planner_batch import BatchMotionPlanner
 
 
 def _make_warmup_goalset_poses(
@@ -155,8 +163,12 @@ def _merge_graph_seed_trajectories(
 ) -> torch.Tensor:
     """Prepare RRT paths and linear fallbacks in one CUDA graph replay."""
     return _prepare_seed_trajectories(
-        current_state, seed_config, graph_waypoints, graph_success,
-        action_horizon, graph_seed_fitter,
+        current_state,
+        seed_config,
+        graph_waypoints,
+        graph_success,
+        action_horizon,
+        graph_seed_fitter,
     )
 
 
@@ -172,20 +184,30 @@ def _prepare_seed_trajectories(
     from curobo._src.util.cuda_graph_util import GraphExecutor
 
     inputs = (
-        current_state.position, current_state.velocity, current_state.acceleration,
-        current_state.jerk, seed_config, graph_waypoints,
+        current_state.position,
+        current_state.velocity,
+        current_state.acceleration,
+        current_state.jerk,
+        seed_config,
+        graph_waypoints,
         graph_success if graph_waypoints is not None else None,
     )
     executors = getattr(seed_fitter, "_preparation_executors", None)
     if executors is None:
         return _merge_graph_seed_trajectories_eager(
-            current_state, seed_config, graph_waypoints, graph_success,
-            action_horizon, seed_fitter,
+            current_state,
+            seed_config,
+            graph_waypoints,
+            graph_success,
+            action_horizon,
+            seed_fitter,
         )
-    key = (action_horizon, tuple(
-        (tuple(t.shape), t.dtype, t.device) if t is not None else None for t in inputs
-    ))
+    key = (
+        action_horizon,
+        tuple((tuple(t.shape), t.dtype, t.device) if t is not None else None for t in inputs),
+    )
     if key not in executors:
+
         def prepare(
             position: torch.Tensor,
             velocity: Optional[torch.Tensor],
@@ -195,15 +217,18 @@ def _prepare_seed_trajectories(
             waypoints: Optional[torch.Tensor],
             success: Optional[torch.Tensor],
         ) -> torch.Tensor:
-            state = JointState(position=position, velocity=velocity,
-                               acceleration=acceleration, jerk=jerk)
+            state = JointState(
+                position=position, velocity=velocity, acceleration=acceleration, jerk=jerk
+            )
             return _merge_graph_seed_trajectories_eager(
                 state, goals, waypoints, success, action_horizon, seed_fitter
             )
 
         executors[key] = GraphExecutor(
-            capture_fn=prepare, device=seed_config.device,
-            use_cuda_graph=seed_fitter.config.use_cuda_graph, clone_outputs=False,
+            capture_fn=prepare,
+            device=seed_config.device,
+            use_cuda_graph=seed_fitter.config.use_cuda_graph,
+            clone_outputs=False,
         )
     return executors[key](*inputs)
 
@@ -396,6 +421,185 @@ class GraphCallTelemetry:
         )
 
 
+def _waypoint_start_state(
+    planner: Union[MotionPlanner, BatchMotionPlanner], current_state: JointState
+) -> JointState:
+    """Validate the fixed spline and return an owned stationary active-joint state."""
+    solver = planner.trajopt_solver
+    solver._validate_waypoint_layout()
+    state = solver.get_active_js(current_state).clone()
+    if state.position.ndim != 2 or not bool(torch.isfinite(state.position).all()):
+        log_and_raise("waypoint current_state must be finite with shape [batch, dof]")
+    if state.position.shape[0] != getattr(planner, "batch_size", 1):
+        log_and_raise("waypoint batch must match the configured planner batch size")
+    for name in ("velocity", "acceleration", "jerk"):
+        value = getattr(state, name)
+        if value is not None and not bool(torch.isfinite(value).all() & (value == 0).all()):
+            log_and_raise("high-level waypoint planning requires a rest-to-rest current state")
+        # Omitted derivatives already select owned zero boundary buffers in TrajOpt.
+        # Preserve their optional layout so seed preparation reuses the same graph.
+    return state
+
+
+def _prepare_waypoint_problem(
+    planner: Union[MotionPlanner, BatchMotionPlanner],
+    waypoints: GoalToolPose,
+    current_state: JointState,
+) -> Tuple[JointState, GoalToolPose]:
+    """Validate the start and prepare its fixed reference without IK or optimization."""
+    state = _waypoint_start_state(planner, current_state)
+    reference = interpolate_pose_waypoints(
+        waypoints,
+        planner.compute_kinematics(state).tool_poses,
+        horizon=planner.native_horizon,
+        padding=planner.config.spline_layout.padding,
+    )
+    return state, reference
+
+
+@contextmanager
+def _waypoint_ik_orientation(
+    planner: Union[MotionPlanner, BatchMotionPlanner],
+    track_orientation: bool,
+) -> Iterator[None]:
+    """Temporarily disable terminal IK rotations, including LM seeds, without recapture."""
+    if track_orientation:
+        yield
+        return
+    costs = []
+    for rollout in planner.ik_solver.get_all_rollout_instances():
+        costs.extend(
+            cost for cost in rollout.get_cost_component_by_name("tool_pose") if cost is not None
+        )
+    seed_solver = planner.ik_solver.seed_ik_solver
+    if seed_solver is not None:
+        costs.append(seed_solver.error_calculator.pose_cost)
+    saved = []
+    try:
+        for cost in costs:
+            scale = cost._stacked_tool_pose_criteria.terminal_rotation_axis_scale
+            saved.append((cost, scale.clone()))
+            scale.zero_()
+            cost._refresh_pose_metric_buffers()
+        yield
+    finally:
+        for cost, scale in saved:
+            cost._stacked_tool_pose_criteria.terminal_rotation_axis_scale.copy_(scale)
+            cost._refresh_pose_metric_buffers()
+
+
+def _initial_iteration_budget(solver: TrajOptSolver, outer_iterations: int) -> int:
+    """Convert a positive solve/check pass count to the solver's initial iteration budget."""
+    if (
+        isinstance(outer_iterations, bool)
+        or not isinstance(outer_iterations, int)
+        or outer_iterations < 1
+    ):
+        log_and_raise("outer_iterations must be a positive integer")
+    return outer_iterations * solver.config.initial_check_interval
+
+
+def _plan_pose_waypoints(
+    planner: Union[MotionPlanner, BatchMotionPlanner],
+    waypoints: GoalToolPose,
+    current_state: JointState,
+    *,
+    path_tolerance: Tuple[float, float],
+    final_tolerance: Tuple[float, float],
+    max_attempts: int,
+    finetune_attempts: int,
+    outer_iterations: int,
+    track_orientation: bool,
+) -> Optional[TrajOptSolverResult]:
+    """Share terminal-IK initialization and fixed-control path planning across planners."""
+    validate_pose_tolerance(path_tolerance)
+    validate_pose_tolerance(final_tolerance)
+    initial_iters = _initial_iteration_budget(planner.trajopt_solver, outer_iterations)
+    if max_attempts < 1 or not planner.config.enable_trajopt:
+        log_and_raise("waypoint planning requires positive max_attempts and enabled TrajOpt")
+    state, reference = _prepare_waypoint_problem(planner, waypoints, current_state)
+    terminal = GoalToolPose(
+        reference.tool_frames,
+        reference.position[:, -1:].contiguous(),
+        reference.quaternion[:, -1:].contiguous(),
+    )
+    solver = planner.trajopt_solver
+    batch, seeds, dof = state.position.shape[0], solver.config.num_seeds, solver.action_dim
+    best: Optional[TrajOptSolverResult] = None
+    solved = torch.zeros(batch, device=state.position.device, dtype=torch.bool)
+    total_time = 0.0
+    for _ in range(max_attempts):
+        with _waypoint_ik_orientation(planner, track_orientation):
+            ik = planner.ik_solver.solve_pose(terminal, current_state=state, return_seeds=seeds)
+        total_time += ik.total_time
+        poses = planner.compute_kinematics(
+            JointState.from_position(
+                ik.solution.reshape(-1, dof),
+                joint_names=solver.joint_names,
+            )
+        ).tool_poses
+        position_error, rotation_error = pose_errors(
+            poses.position.reshape(batch, seeds, reference.num_links, 3),
+            poses.quaternion.reshape(batch, seeds, reference.num_links, 4),
+            terminal.position[:, 0, :, 0].unsqueeze(1),
+            terminal.quaternion[:, 0, :, 0].unsqueeze(1),
+        )
+        valid = ik.success & (position_error <= final_tolerance[0]).all(dim=-1)
+        if track_orientation:
+            valid = valid & (rotation_error <= final_tolerance[1]).all(dim=-1)
+        if not bool(valid.any()):
+            continue
+        has_endpoint = valid.any(dim=-1)
+        row = torch.arange(batch, device=state.position.device)
+        chosen = ik.solution[row, valid.to(torch.int32).argmax(dim=-1)]
+        chosen = torch.where(has_endpoint[:, None], chosen, state.position)
+        seed_config = torch.where(valid.unsqueeze(-1), ik.solution, chosen[:, None])
+        seed = _fit_linear_seed_trajectories(
+            state,
+            seed_config,
+            solver.action_horizon,
+            getattr(planner, "graph_seed_fitter", None),
+        )
+        result = solver.solve_pose(
+            reference,
+            state,
+            seed_config=seed_config,
+            seed_traj=seed,
+            use_implicit_goal=True,
+            finetune_attempts=finetune_attempts,
+            initial_iters=initial_iters,
+            track_intermediate=True,
+            path_tolerance=path_tolerance,
+            final_tolerance=final_tolerance,
+            track_orientation=track_orientation,
+        )
+        result.success &= has_endpoint[:, None]
+        result.debug_info["terminal_ik_valid"] = has_endpoint.clone()
+        total_time += result.total_time
+        result.waypoint_indices = torch.tensor(
+            solver.spline_layout.waypoint_indices(waypoints.horizon),
+            device=state.position.device,
+            dtype=torch.long,
+        )
+        result.debug_info["trajectory_source"] = "waypoints"
+        result.trajectory_source = "waypoints"
+        if best is None:
+            best = result
+        else:
+            newly_solved = result.success.any(dim=-1) & ~solved
+            if bool(newly_solved.any()):
+                best.copy_at_batch_indices(result, newly_solved)
+        solved |= result.success.any(dim=-1)
+        if bool(solved.all()):
+            break
+        # Captured solver result storage is reused on the next attempt.
+        if best is result:
+            best = result.clone()
+    if best is not None:
+        best.total_time = total_time
+    return best
+
+
 class MotionPlanner:
     """Single-problem motion planner with retry logic and graph-planner seeding.
 
@@ -452,8 +656,6 @@ class MotionPlanner:
             self.config.trajopt_solver_config, self.scene_collision_checker
         )
         self.graph_planner = None
-        self.constrained_rrt_planner = None
-        self.constrained_rrt_seed_fitter = None
         self.graph_seed_fitter = _create_graph_seed_fitter(
             self.config,
             self.trajopt_solver,
@@ -487,41 +689,13 @@ class MotionPlanner:
                 self.config.prm_graph_planner_config,
                 self.scene_collision_checker,
             )
-        if self.config.constrained_rrt_planner_config is not None:
-            from curobo._src.graph_planner.rrt import (
-                BiRRTPlanner,
-                RRTPlannerResources,
-            )
-
-            constrained_config = self.config.constrained_rrt_planner_config
-            self.constrained_rrt_planner = BiRRTPlanner(
-                RRTPlannerResources(
-                    constrained_config.resources_config,
-                    self.scene_collision_checker,
-                ),
-                constrained_config.planner_config,
-            )
-            self.constrained_rrt_planner.initialize_query_shape(1)
-            self.constrained_rrt_seed_fitter = _create_graph_seed_fitter(
-                self.config,
-                self.trajopt_solver,
-                num_lanes=1,
-            )
         self._grasp_phase_planner = GraspPhasePlanner(
             config=self.config,
-            batch_size=1,
             kinematics=self.kinematics,
-            ik_solver=self.ik_solver,
-            trajopt_solver=self.trajopt_solver,
-            constrained_rrt_planner=self.constrained_rrt_planner,
-            constrained_rrt_seed_fitter=self.constrained_rrt_seed_fitter,
-            plan_pose=lambda *args, **kwargs: self.plan_pose(*args, **kwargs),
-            update_tool_pose_criteria=lambda criteria: self.update_tool_pose_criteria(criteria),
-            enable_link_collision=lambda links: self.enable_link_collision(links),
-            disable_link_collision=lambda links: self.disable_link_collision(links),
-            record_graph_result=lambda result: self._last_graph_call_telemetry.append(
-                GraphCallTelemetry.from_result(result)
-            ),
+            plan_pose_waypoints=self.plan_pose_waypoints,
+            max_attempts=20,
+            enable_link_collision=self.enable_link_collision,
+            disable_link_collision=self.disable_link_collision,
         )
 
     # -- Lifecycle --
@@ -546,14 +720,9 @@ class MotionPlanner:
         self.trajopt_solver.destroy()
         if self.graph_planner is not None and hasattr(self.graph_planner, "reset_cuda_graph"):
             self.graph_planner.reset_cuda_graph()
-        if self.constrained_rrt_planner is not None:
-            self.constrained_rrt_planner.reset_cuda_graph()
         graph_seed_fitter = getattr(self, "graph_seed_fitter", None)
         if graph_seed_fitter is not None:
             graph_seed_fitter.reset_cuda_graph()
-        constrained_rrt_seed_fitter = getattr(self, "constrained_rrt_seed_fitter", None)
-        if constrained_rrt_seed_fitter is not None:
-            constrained_rrt_seed_fitter.reset_cuda_graph()
 
     def __del__(self):
         self.destroy()
@@ -564,6 +733,11 @@ class MotionPlanner:
     def __exit__(self, *exc):
         self.destroy()
         return False
+
+    @property
+    def native_horizon(self) -> int:
+        """Number of native trajectory states for this planner's fixed spline."""
+        return self.config.native_horizon
 
     @property
     def attachment_manager(self) -> AttachmentManager:
@@ -663,33 +837,9 @@ class MotionPlanner:
                 num_warmup_iterations=num_warmup_iterations,
                 max_batch_size=self.trajopt_solver.config.num_seeds,
             )
-        constrained_rrt_planner = getattr(self, "constrained_rrt_planner", None)
-        if enable_graph and constrained_rrt_planner is not None:
-            constrained_warmup_state = self.default_joint_state.clone().unsqueeze(0)
-            constrained_warmup_goal = self.compute_kinematics(
-                constrained_warmup_state
-            ).tool_poses.as_goal()
-            self._grasp_phase_planner.install_rrt_constraint(constrained_warmup_goal)
-            constrained_rrt_planner.warmup(
-                num_warmup_iterations=num_warmup_iterations,
-                max_batch_size=1,
-            )
-            self._grasp_phase_planner.activate_rrt_constraint(
-                constrained_warmup_goal,
-                axis="z",
-                in_tool_frame=True,
-            )
-            self.ik_solver.solve_goalset(
-                constrained_warmup_goal,
-                current_state=constrained_warmup_state,
-                return_seeds=1,
-            )
         graph_seed_fitter = getattr(self, "graph_seed_fitter", None)
         if graph_seed_fitter is not None:
             graph_seed_fitter.warmup()
-        constrained_rrt_seed_fitter = getattr(self, "constrained_rrt_seed_fitter", None)
-        if constrained_rrt_seed_fitter is not None:
-            constrained_rrt_seed_fitter.warmup()
 
         self.ik_solver.config.exit_early = og_exit_early
         # Warmup is not a user planning request; do not expose its synthetic
@@ -715,6 +865,49 @@ class MotionPlanner:
 
     # -- Planning --
 
+    def prepare_pose_waypoints(
+        self, waypoints: GoalToolPose, current_state: JointState
+    ) -> GoalToolPose:
+        """Resample up to 256 poses that fit the native grid, using linear positions and SLERP."""
+        return _prepare_waypoint_problem(self, waypoints, current_state)[1]
+
+    def plan_pose_waypoints(
+        self,
+        waypoints: GoalToolPose,
+        current_state: JointState,
+        *,
+        path_tolerance: Tuple[float, float],
+        final_tolerance: Tuple[float, float],
+        max_attempts: int = 20,
+        finetune_attempts: int = 1,
+        track_orientation: bool = True,
+        outer_iterations: int = 4,
+    ) -> Optional[TrajOptSolverResult]:
+        """Follow ordered Cartesian poses with the configured fixed-shape joint-space optimization.
+
+        Waypoints are ``[batch,1..256,links,1,3/4]``, excluding the current FK pose.
+        The target count must fit the configured spline's reference intervals:
+        default 16 controls retain up to 72 targets; 64 controls retain up to 256.
+        Positions interpolate linearly between waypoints; rotations use SLERP.
+        Set ``track_orientation=False`` to ignore rotations, including the final target.
+        Tolerances are ``(position_m, orientation_rad)``. Every native and dense
+        sample must pass; terminal IK and linear seeds initialize the fixed endpoints.
+        ``outer_iterations`` caps initial solve/check passes (default four). Each pass
+        uses 50 optimizer iterations by default; success stops continuation early.
+        Refinement keeps its separate 25-iteration budget.
+        """
+        return _plan_pose_waypoints(
+            self,
+            waypoints,
+            current_state,
+            path_tolerance=path_tolerance,
+            final_tolerance=final_tolerance,
+            max_attempts=max_attempts,
+            finetune_attempts=finetune_attempts,
+            track_orientation=track_orientation,
+            outer_iterations=outer_iterations,
+        )
+
     def plan_pose(
         self,
         goal_tool_poses: GoalToolPose,
@@ -724,6 +917,7 @@ class MotionPlanner:
         enable_graph_attempt: int = 1,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
         finetune_attempts: int = 1,
+        outer_iterations: int = 1,
     ) -> Optional[TrajOptSolverResult]:
         """Plan a trajectory to reach target tool poses.
 
@@ -731,10 +925,13 @@ class MotionPlanner:
         ``num_goalset > 1`` the planner uses a simpler IK+TrajOpt loop without
         graph seeding. ``finetune_attempts`` controls the number of additional
         time-optimal TrajOpt passes after the initial solve.
-        The default configuration uses 50 initial iterations and one 25-iteration pass.
+        ``outer_iterations`` caps initial solve/check passes per optimization, including
+        RRT-seeded retries. The default is one pass of 50 optimizer iterations.
+        Additional passes stop on success; refinement keeps its separate 25-iteration budget.
         """
         if current_state.ndim > 2:
             log_and_raise(f"current_state must be a 2D tensor, got shape: {current_state.shape}")
+        initial_iters = _initial_iteration_budget(self.trajopt_solver, outer_iterations)
 
         if goal_tool_poses.num_goalset > 1:
             return self._plan_pose_goalset(
@@ -744,6 +941,7 @@ class MotionPlanner:
                 max_attempts,
                 tool_relative_transform_target=tool_relative_transform_target,
                 finetune_attempts=finetune_attempts,
+                initial_iters=initial_iters,
             )
 
         return self._plan_pose_single(
@@ -754,6 +952,7 @@ class MotionPlanner:
             enable_graph_attempt,
             tool_relative_transform_target=tool_relative_transform_target,
             finetune_attempts=finetune_attempts,
+            initial_iters=initial_iters,
         )
 
     def _plan_pose_single(
@@ -765,6 +964,7 @@ class MotionPlanner:
         enable_graph_attempt: int,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
         finetune_attempts: int = 1,
+        initial_iters: Optional[int] = None,
     ) -> Optional[TrajOptSolverResult]:
         """Plan one goal, reusing direct-attempt IK once for graph fallback."""
         self._reset_graph_telemetry()
@@ -872,6 +1072,7 @@ class MotionPlanner:
                 use_implicit_goal=use_implicit_goal,
                 finetune_attempts=finetune_attempts,
                 finetune_dt_scale=finetune_dt_scale,
+                initial_iters=initial_iters,
                 time_optimal_iters=time_optimal_iters,
                 finetune_iters=finetune_iters,
                 tool_relative_transform_target=tool_relative_transform_target,
@@ -896,6 +1097,7 @@ class MotionPlanner:
         max_attempts: int = 10,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
         finetune_attempts: int = 1,
+        initial_iters: Optional[int] = None,
     ) -> Optional[TrajOptSolverResult]:
         """Goalset planning: IK + TrajOpt, no graph seeding."""
         self._reset_graph_telemetry()
@@ -942,6 +1144,7 @@ class MotionPlanner:
                 seed_traj=seed_traj,
                 use_implicit_goal=use_implicit_goal,
                 finetune_attempts=finetune_attempts,
+                initial_iters=initial_iters,
                 tool_relative_transform_target=tool_relative_transform_target,
             )
             trajopt_result.debug_info["trajectory_source"] = "trajopt"
@@ -1146,10 +1349,17 @@ class MotionPlanner:
         plan_grasp_to_lift: bool = True,
         disable_collision_links: Optional[List[str]] = None,
         use_trajopt_for_goalset_selection: bool = False,
-        use_rrt_for_constrained_phases: bool = False,
         use_double_pass_trajopt_for_constrained_phases: bool = False,
+        *,
+        grasp_path_tolerance: Tuple[float, float] = (0.02, math.radians(10.0)),
+        lift_path_tolerance: Tuple[float, float] = (0.02, math.radians(10.0)),
     ) -> GraspPlanResult:
-        """Plan a grasp motion: goalset -> approach -> grasp -> lift.
+        """Plan goalset -> approach -> grasp -> lift with linear Cartesian references.
+
+        Insertion and lift track an interpolated reference from the reached start
+        pose to the phase endpoint and require enabled TrajOpt. Each uses one
+        50-step initial solve/check pass by default, with optional separate refinement.
+        Tracking is tolerance-based, not a strict monotonic-progress guarantee.
 
         Args:
             grasp_poses: Candidate grasp poses with ``num_goalset`` entries per link.
@@ -1171,21 +1381,20 @@ class MotionPlanner:
                 the grasp goal. By default, use the IK solver's highest-ranked
                 successful configuration. IK ranking includes distance from
                 ``current_state``.
-            use_rrt_for_constrained_phases: Attempt projected RRT for insertion
-                and lift, with single-pass constrained TrajOpt as the failure fallback.
-                By default, both phases use single-pass constrained TrajOpt.
             use_double_pass_trajopt_for_constrained_phases: Add one time-optimal
-                TrajOpt refinement pass to insertion and lift. This cannot be
-                combined with ``use_rrt_for_constrained_phases``.
+                TrajOpt refinement pass to insertion and lift.
+            grasp_path_tolerance: Insertion reference-tracking tolerance in meters and
+                orientation tolerance in radians. Defaults to 2 cm and 10 degrees.
+            lift_path_tolerance: Lift reference-tracking/orientation tolerances, with
+                the same units and defaults. Terminal pose tolerances are unchanged.
 
         Returns:
             Per-phase success, trajectories, and selected goalset metadata.
         """
-        if use_rrt_for_constrained_phases and use_double_pass_trajopt_for_constrained_phases:
-            log_and_raise(
-                "use_rrt_for_constrained_phases and "
-                "use_double_pass_trajopt_for_constrained_phases are mutually exclusive"
-            )
+        if plan_approach_to_grasp and not self.config.enable_trajopt:
+            log_and_raise("grasp insertion and lift require enabled TrajOpt")
+        GraspPhasePlanner.validate_linear_path_tolerance(grasp_path_tolerance)
+        GraspPhasePlanner.validate_linear_path_tolerance(lift_path_tolerance)
 
         if disable_collision_links is None:
             disable_collision_links = (
@@ -1226,10 +1435,6 @@ class MotionPlanner:
             return result
 
         result.goalset_index = goalset_result.goalset_index.clone()
-        grasp_goal_configuration = get_result_goal_configuration(
-            goalset_result,
-            self.kinematics,
-        )
         goal_index = int(goalset_result.goalset_index.view(-1)[0].item())
 
         grasp_poses_dict = {}
@@ -1292,12 +1497,8 @@ class MotionPlanner:
         grasp_result = self._grasp_phase_planner.plan_linear_phase(
             grasp_tool_pose,
             approach_end,
-            grasp_approach_axis,
-            grasp_approach_in_tool_frame,
-            use_rrt=use_rrt_for_constrained_phases,
             finetune_attempts=int(use_double_pass_trajopt_for_constrained_phases),
-            goal_configuration=grasp_goal_configuration,
-            goal_valid=goalset_result.success.any(dim=-1),
+            path_tolerance=grasp_path_tolerance,
         )
 
         if grasp_result is None or not grasp_result.success.any():
@@ -1343,10 +1544,8 @@ class MotionPlanner:
         lift_result = self._grasp_phase_planner.plan_linear_phase(
             lift_tool_pose,
             lift_start,
-            grasp_lift_axis,
-            grasp_lift_in_tool_frame,
-            use_rrt=use_rrt_for_constrained_phases,
             finetune_attempts=int(use_double_pass_trajopt_for_constrained_phases),
+            path_tolerance=lift_path_tolerance,
         )
         self._grasp_phase_planner.activate_collision(disable_collision_links, enable=True)
 
@@ -1380,18 +1579,12 @@ class MotionPlanner:
         self.scene_collision_checker.load_collision_model(scene_cfg)
         if self.graph_planner is not None:
             self.graph_planner.reset_buffer()
-        constrained_rrt_planner = getattr(self, "constrained_rrt_planner", None)
-        if constrained_rrt_planner is not None:
-            constrained_rrt_planner.reset_buffer()
 
     def clear_scene_cache(self):
         """Clear fixed world storage and graph-planner nodes, retaining captures."""
         self.scene_collision_checker.clear_cache()
         if self.graph_planner is not None:
             self.graph_planner.reset_buffer()
-        constrained_rrt_planner = getattr(self, "constrained_rrt_planner", None)
-        if constrained_rrt_planner is not None:
-            constrained_rrt_planner.reset_buffer()
 
     def reset_seed(self):
         self.ik_solver.reset_seed()
@@ -1399,8 +1592,6 @@ class MotionPlanner:
         if self.graph_planner is not None:
             self.graph_planner.reset_buffer()
             self.graph_planner.reset_seed()
-        if self.constrained_rrt_planner is not None:
-            self.constrained_rrt_planner.reset_seed()
 
     def update_link_inertial(
         self,
@@ -1415,8 +1606,6 @@ class MotionPlanner:
             self.config.graph_planner_algorithm
         ):
             self.graph_planner.update_link_inertial(link_name, mass, com, inertia)
-        if self.constrained_rrt_planner is not None:
-            self.constrained_rrt_planner.update_link_inertial(link_name, mass, com, inertia)
         self.trajopt_solver.update_link_inertial(link_name, mass, com, inertia)
 
     def update_links_inertial(
@@ -1429,17 +1618,12 @@ class MotionPlanner:
             self.config.graph_planner_algorithm
         ):
             self.graph_planner.update_links_inertial(link_properties)
-        if self.constrained_rrt_planner is not None:
-            self.constrained_rrt_planner.update_links_inertial(link_properties)
         self.trajopt_solver.update_links_inertial(link_properties)
 
     def update_tool_pose_criteria(
         self,
         tool_pose_criteria: Dict[str, ToolPoseCriteria],
     ) -> None:
-        grasp_phase_planner = getattr(self, "_grasp_phase_planner", None)
-        if grasp_phase_planner is not None:
-            grasp_phase_planner.invalidate_tool_pose_criteria()
         self.ik_solver.update_tool_pose_criteria(tool_pose_criteria)
         self.trajopt_solver.update_tool_pose_criteria(tool_pose_criteria)
 

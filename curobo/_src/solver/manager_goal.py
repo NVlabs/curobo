@@ -177,6 +177,11 @@ class GoalManager:
             or self._goal_buffer is None
             or (self._goal_buffer.goal_js is None and goal_js is not None)
             or (self._goal_buffer.link_goal_poses is None and goal_tool_poses is not None)
+            or (
+                goal_tool_poses is not None
+                and self._goal_buffer.link_goal_poses is not None
+                and goal_tool_poses.horizon != self._goal_buffer.link_goal_poses.horizon
+            )
             or (self._goal_buffer.current_js is None and current_js is not None)
             or (self._goal_buffer.seed_goal_js is None and seed_goal_js is not None)
             or (
@@ -264,6 +269,11 @@ class GoalManager:
         if (
             self._solve_state is None
             or self._goal_buffer is None
+            or (
+                self._goal_buffer.link_goal_poses is not None
+                and goal.link_goal_poses is not None
+                and self._goal_buffer.link_goal_poses.horizon != goal.link_goal_poses.horizon
+            )
             or (self._goal_buffer.goal_js is None and goal.goal_js is not None)
             or (self._goal_buffer.goal_js is not None and goal.goal_js is None)
             or (self._goal_buffer.seed_goal_js is not None and goal.seed_goal_js is None)
@@ -495,6 +505,8 @@ class GoalManager:
             possible.
         """
         if links_goal_pose is None or current_goal_buffer.link_goal_poses is None:
+            return None
+        if links_goal_pose.horizon != current_goal_buffer.link_goal_poses.horizon:
             return None
 
         if solve_state.solve_type != current_solve_state.solve_type:

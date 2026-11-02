@@ -247,10 +247,10 @@ cudaError_t launch_timeopt_solve(const TimeOptWorkspace &w, cudaStream_t stream)
 }
 
 cudaError_t launch_timeopt_sample(const TimeOptWorkspace &w, cudaStream_t stream) {
-  rt::sample_kernel<<<(w.batch * w.samples + 255) / 256, 256, 0, stream>>>(
+  rt::sample_with_progress_kernel<<<(w.batch * w.samples + 255) / 256, 256, 0, stream>>>(
       w.controls, w.start, w.goal, w.output_timing, w.polynomial, w.nodes, w.time_weights,
-      w.output_time, w.sample_times, w.success, w.stationary, w.sample_joints, w.batch, w.samples,
-      w.dof, w.knots, w.intervals, w.start_offset);
+      w.output_time, w.sample_times, w.success, w.stationary, w.sample_joints, w.sample_progress,
+      w.batch, w.samples, w.dof, w.knots, w.intervals, w.start_offset);
   return cudaGetLastError();
 }
 }  // namespace curobo::robot::detail

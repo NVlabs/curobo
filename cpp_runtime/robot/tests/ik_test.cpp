@@ -199,6 +199,33 @@ int main(int argc, char** argv) {
     check_cuda(cudaDeviceSynchronize());
     require_success(solve_buffers, config.position_tolerance,
                     config.orientation_tolerance, "LM plus L-BFGS graph replay");
+    // The exact seed is last in a larger LM pool; compaction must retain it.
+    for (bool graph : {false, true}) {
+      auto compact_config = config;
+      compact_config.num_seeds = 1;
+      compact_config.lm_num_seeds = 32;
+      compact_config.lm_iterations = 1;
+      compact_config.lbfgs_iterations = 1;
+      compact_config.exit_early = false;
+      compact_config.check_effort_limits = false;
+      compact_config.use_cuda_graph = graph;
+      curobo::robot::InverseKinematics compact_ik(artifact_directory, compact_config);
+      std::vector<float> exact(info.num_dof);
+      target_joint_device.download(exact.data());
+      std::vector<float> seeds(32 * info.num_dof);
+      for (int s = 0; s < 32; ++s)
+        for (int j = 0; j < info.num_dof; ++j)
+          seeds[s * info.num_dof + j] = exact[j] + (s == 31 ? 0.0F : 0.5F);
+      DeviceValue<float> seed_pool(seeds.size());
+      seed_pool.upload(seeds.data());
+      auto compact_request = request;
+      compact_request.seed_positions = seed_pool.get();
+      compact_ik.solve(compact_request);
+      compact_ik.solve(compact_request);
+      check_cuda(cudaDeviceSynchronize());
+      require_success(solve_buffers, config.position_tolerance,
+                      config.orientation_tolerance, "LM seed compaction and replay");
+    }
     payload.mass = 1000.0F;
     payload.center_of_mass = std::array<float, 3>{0.5F, 0.0F, 0.1F};
     inverse_kinematics.update_link_inertial(payload);

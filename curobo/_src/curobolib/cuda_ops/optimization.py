@@ -202,11 +202,33 @@ def wolfe_line_search(
     return iteration_state, exploration_idx, selected_idx
 
 
+def _check_lbfgs_candidates(
+    direction: torch.Tensor,
+    candidates: torch.Tensor,
+    scales: torch.Tensor,
+    beta: torch.Tensor,
+) -> None:
+    """Validate mandatory candidate output [batch, scales, variables]."""
+    check_float32_tensors(direction.device, candidates=candidates, scales=scales, beta=beta)
+    batch, dimension = direction.shape
+    if scales.ndim != 1 or scales.numel() == 0:
+        log_and_raise("L-BFGS candidate scales must be a nonempty vector")
+    if beta.shape != (batch,) or candidates.shape != (batch, scales.numel(), dimension):
+        log_and_raise(
+            "L-BFGS candidates must have shape (batch, scales, variables), beta (batch,)"
+        )
+
+
 class LBFGScu(Function):
+    """Update L-BFGS history and write both the limited direction and candidates."""
+
     @staticmethod
     def forward(
         ctx,
         step_vec,
+        candidates: torch.Tensor,
+        candidate_scales: torch.Tensor,
+        candidate_beta: torch.Tensor,
         rho_buffer,
         y_buffer,
         s_buffer,
@@ -231,6 +253,7 @@ class LBFGScu(Function):
             curvature_update_valid = torch.ones(
                 step_vec.shape[0], dtype=torch.bool, device=step_vec.device
             )
+        _check_lbfgs_candidates(step_vec, candidates, candidate_scales, candidate_beta)
         device = step_vec.device
         if line_search_status is None:
             line_search_status = torch.zeros(step_vec.shape[0], dtype=torch.int32, device=device)
@@ -260,6 +283,9 @@ class LBFGScu(Function):
             )
         R = optimization_cu.launch_lbfgs_step(
             step_vec,  # .view(-1),
+            candidates,
+            candidate_scales,
+            candidate_beta,
             rho_buffer,  # .view(-1),
             y_buffer,  # .view(-1),
             s_buffer,  # .view(-1),
@@ -292,12 +318,15 @@ class LBFGScu(Function):
 
 
 class LBFGSCompactCu(Function):
-    """Launch the compact tensor-core L-BFGS direction operator."""
+    """Update compact L-BFGS history and write direction and candidate outputs."""
 
     @staticmethod
     def forward(
         ctx,
         step_vec: torch.Tensor,
+        candidates: torch.Tensor,
+        candidate_scales: torch.Tensor,
+        candidate_beta: torch.Tensor,
         rho_buffer: torch.Tensor,
         y_buffer: torch.Tensor,
         s_buffer: torch.Tensor,
@@ -317,7 +346,8 @@ class LBFGSCompactCu(Function):
         use_geometric_scaling: bool = True,
         line_search_status: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Update compact L-BFGS state and return the next direction."""
+        """Update history, write candidates, and return the limited direction."""
+        _check_lbfgs_candidates(step_vec, candidates, candidate_scales, candidate_beta)
         device = step_vec.device
         if curvature_update_valid is None:
             curvature_update_valid = torch.ones(
@@ -355,6 +385,9 @@ class LBFGSCompactCu(Function):
             )
         result = optimization_cu.launch_lbfgs_compact_step(
             step_vec,
+            candidates,
+            candidate_scales,
+            candidate_beta,
             rho_buffer,
             y_buffer,
             s_buffer,

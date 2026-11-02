@@ -6,6 +6,7 @@
 ## Latest Commit
 
 ### New Features
+- Add Cartesian Waypoints as a goal representation for motion planning.
 - Add deferred fused-feature rendering with `Mapper.render_features()`. Compact int32 block and
   int16 node images support full images, absolute-coordinate patches, batched cameras, optional
   semantic filtering, and fp16/fp32 materialization of contiguous feature-channel slices.

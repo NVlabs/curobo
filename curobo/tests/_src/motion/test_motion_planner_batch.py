@@ -224,7 +224,7 @@ class TestBatchMotionPlannerPlanPose:
             current_state=current_states,
             max_attempts=3,
             success_ratio=0.5,
-            initial_iters=50,
+            outer_iterations=1,
             time_optimal_iters=50,
             finetune_iters=50,
             finetune_attempts=2,
@@ -350,7 +350,6 @@ class TestBatchMotionPlannerWarmup:
             max_goalset=max_goalset,
             num_ik_seeds=4,
             num_trajopt_seeds=2,
-            create_constrained_rrt=False,
             use_cuda_graph=True,
         )
         planner = BatchMotionPlanner(config)
@@ -388,17 +387,6 @@ class TestBatchMotionPlannerWarmup:
 
 class TestBatchMotionPlannerPlanGrasp:
     """Test BatchMotionPlanner.plan_grasp."""
-
-    def test_constrained_phase_modes_are_explicit_and_mutually_exclusive(self) -> None:
-        planner = object.__new__(BatchMotionPlanner)
-
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            planner.plan_grasp(
-                None,
-                None,
-                use_rrt_for_constrained_phases=True,
-                use_double_pass_trajopt_for_constrained_phases=True,
-            )
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_plan_grasp_returns_result(self, cuda_device_cfg):
@@ -576,7 +564,6 @@ class TestBatchMotionPlannerUpdateInertial:
         planner.config = SimpleNamespace(graph_planner_algorithm="rrt")
         planner.ik_solver = CapturingComponent()
         planner.graph_planner = CapturingComponent()
-        planner.constrained_rrt_planner = CapturingComponent()
         planner.trajopt_solver = CapturingComponent()
 
         planner.update_link_inertial("attached_object", mass=3.0)
@@ -586,7 +573,6 @@ class TestBatchMotionPlannerUpdateInertial:
         for component in (
             planner.ik_solver,
             planner.graph_planner,
-            planner.constrained_rrt_planner,
             planner.trajopt_solver,
         ):
             assert component.single_calls == [("attached_object", 3.0, None, None)]

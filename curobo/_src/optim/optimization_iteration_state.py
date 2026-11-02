@@ -41,6 +41,9 @@ class OptimizationIterationState:
     #: step direction tensor. Shape: (num_problems, action_dim)
     step_direction: Optional[torch.Tensor] = None
 
+    #: Prepared line-search candidates for L-BFGS. Shape: (problems, probes, variables).
+    search_actions: Optional[torch.Tensor] = None
+
     #: Selected exploration probe, or -1 for the cached baseline. Shape: (num_problems)
     line_search_index: Optional[torch.Tensor] = None
 
@@ -105,6 +108,8 @@ class OptimizationIterationState:
             log_and_raise(
                 f"Step direction tensor must have shape (num_problems, action_horizon, action_dim). Got {self.step_direction.shape}"
             )
+        if self.search_actions is not None and self.search_actions.ndim != 3:
+            log_and_raise("search_actions must have shape (problems, probes, variables)")
         for name, value in (
             ("line_search_index", self.line_search_index),
             ("line_search_status", self.line_search_status),
@@ -148,6 +153,9 @@ class OptimizationIterationState:
             step_direction=self.step_direction.clone()
             if self.step_direction is not None
             else None,
+            search_actions=(
+                self.search_actions.clone() if self.search_actions is not None else None
+            ),
             line_search_index=(
                 self.line_search_index.clone() if self.line_search_index is not None else None
             ),
@@ -207,6 +215,7 @@ class OptimizationIterationState:
             self.step_direction.copy_(other.step_direction)
 
         for name in (
+            "search_actions",
             "line_search_index",
             "line_search_status",
             "curvature_update_valid",

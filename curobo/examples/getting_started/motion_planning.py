@@ -106,12 +106,12 @@ trajectory segments:
    this phase.
 
 2. **Grasp**: Plan the final approach from the pre-grasp pose to the grasp
-   pose itself. Contact-link collisions are disabled and projected RRT is used
-   by default, with constrained TrajOpt as a failure fallback.
+   pose itself. Contact-link collisions are disabled and trajectory optimization
+   tracks a linear Cartesian waypoint reference from the pre-grasp pose.
 
 3. **Lift**: Plan a retraction from the grasp pose, offset along
-   ``grasp_lift_axis`` by ``grasp_lift_offset``. This constrained phase also
-   uses projected RRT by default.
+   ``grasp_lift_axis`` by ``grasp_lift_offset``. This phase also tracks a linear
+   Cartesian waypoint reference.
 
 The planner accepts a *goal set* of candidate grasp poses via ``ToolPose``,
 selects the most reachable one, and returns all three trajectory segments in
@@ -388,7 +388,6 @@ def grasp_planning_example(
     enable_trajopt: bool = True,
     always_run_trajopt: bool = True,
     run_trajopt_on_graph_seed: bool = True,
-    use_rrt_for_constrained_phases: bool = False,
     use_double_pass_trajopt_for_constrained_phases: bool = False,
 ) -> bool:
     """Plan a three-phase grasp motion (approach, grasp, lift).
@@ -402,9 +401,8 @@ def grasp_planning_example(
         always_run_trajopt: Always refine eligible graph seeds with TrajOpt.
         run_trajopt_on_graph_seed: Refine graph seeds when the general fast path
             is enabled.
-        use_rrt_for_constrained_phases: Use projected RRT for grasp and lift.
         use_double_pass_trajopt_for_constrained_phases: Add a second TrajOpt pass
-            to grasp and lift. Cannot be combined with the RRT option.
+            to grasp and lift.
 
     Returns:
         True if grasp planning succeeded.
@@ -451,7 +449,6 @@ def grasp_planning_example(
         plan_approach_to_grasp=True,
         plan_grasp_to_lift=True,
         grasp_lift_in_tool_frame=True,
-        use_rrt_for_constrained_phases=use_rrt_for_constrained_phases,
         use_double_pass_trajopt_for_constrained_phases=(
             use_double_pass_trajopt_for_constrained_phases
         ),
@@ -517,7 +514,6 @@ def interactive_motion_planning(
     enable_trajopt: bool = True,
     always_run_trajopt: bool = True,
     run_trajopt_on_graph_seed: bool = True,
-    use_rrt_for_constrained_phases: bool = False,
     use_double_pass_trajopt_for_constrained_phases: bool = False,
 ) -> None:
     """Launch an interactive Viser viewer for motion planning.
@@ -644,10 +640,6 @@ def interactive_motion_planning(
             "TrajOpt grasp selection",
             initial_value=False,
         )
-        rrt_constrained_phases_cb = server.gui.add_checkbox(
-            "RRT grasp/lift phases",
-            initial_value=use_rrt_for_constrained_phases,
-        )
         double_pass_constrained_phases_cb = server.gui.add_checkbox(
             "Double-pass TrajOpt grasp/lift",
             initial_value=use_double_pass_trajopt_for_constrained_phases,
@@ -673,12 +665,10 @@ def interactive_motion_planning(
         grasp_selection = (
             "TrajOpt selection" if trajopt_grasp_selection_cb.value else "IK selection"
         )
-        if rrt_constrained_phases_cb.value:
-            constrained_phases = "projected RRT phases"
-        elif double_pass_constrained_phases_cb.value:
-            constrained_phases = "double-pass TrajOpt phases"
+        if double_pass_constrained_phases_cb.value:
+            constrained_phases = "linear waypoints + refinement"
         else:
-            constrained_phases = "single-pass TrajOpt phases"
+            constrained_phases = "linear waypoints"
         planner_mode_text.value = f"Pose: {mode} | Grasp: {grasp_selection} + {constrained_phases}"
 
     @rrt_only_btn.on_click
@@ -711,16 +701,8 @@ def interactive_motion_planning(
     def _update_trajopt_grasp_selection(_):
         _sync_planner_policy()
 
-    @rrt_constrained_phases_cb.on_update
-    def _update_rrt_constrained_phases(_):
-        if rrt_constrained_phases_cb.value:
-            double_pass_constrained_phases_cb.value = False
-        _sync_planner_policy()
-
     @double_pass_constrained_phases_cb.on_update
     def _update_double_pass_constrained_phases(_):
-        if double_pass_constrained_phases_cb.value:
-            rrt_constrained_phases_cb.value = False
         _sync_planner_policy()
 
     _sync_planner_policy()
@@ -814,7 +796,6 @@ def interactive_motion_planning(
                 plan_grasp_to_lift=True,
                 grasp_lift_in_tool_frame=True,
                 use_trajopt_for_goalset_selection=bool(trajopt_grasp_selection_cb.value),
-                use_rrt_for_constrained_phases=bool(rrt_constrained_phases_cb.value),
                 use_double_pass_trajopt_for_constrained_phases=bool(
                     double_pass_constrained_phases_cb.value
                 ),
@@ -949,13 +930,7 @@ def main():
         default=True,
         help=("Refine RRT seeds when --no-always-run-trajopt is used (default: enabled)."),
     )
-    grasp_phase_group = parser.add_mutually_exclusive_group()
-    grasp_phase_group.add_argument(
-        "--grasp-rrt-constrained-phases",
-        action="store_true",
-        help="Use projected RRT for grasp and lift instead of single-pass TrajOpt.",
-    )
-    grasp_phase_group.add_argument(
+    parser.add_argument(
         "--grasp-double-pass-trajopt",
         action="store_true",
         help="Add one TrajOpt refinement pass to grasp and lift.",
@@ -974,7 +949,6 @@ def main():
             enable_trajopt=args.enable_trajopt,
             always_run_trajopt=args.always_run_trajopt,
             run_trajopt_on_graph_seed=args.run_trajopt_on_graph_seed,
-            use_rrt_for_constrained_phases=args.grasp_rrt_constrained_phases,
             use_double_pass_trajopt_for_constrained_phases=(args.grasp_double_pass_trajopt),
         )
         return
@@ -1004,7 +978,6 @@ def main():
             enable_trajopt=args.enable_trajopt,
             always_run_trajopt=args.always_run_trajopt,
             run_trajopt_on_graph_seed=args.run_trajopt_on_graph_seed,
-            use_rrt_for_constrained_phases=args.grasp_rrt_constrained_phases,
             use_double_pass_trajopt_for_constrained_phases=(args.grasp_double_pass_trajopt),
         )
 

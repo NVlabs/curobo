@@ -429,9 +429,19 @@ class RobotCostManager:
                     goal.link_goal_poses,
                     goal.idxs_link_pose,
                 )
-                convergence.add(position_error, "tool_pose_position_tolerance")
-                convergence.add(rotation_error, "tool_pose_orientation_tolerance")
+                position_convergence, rotation_convergence = tool_pose_cost.get_convergence_errors(
+                    position_error, rotation_error
+                )
+                convergence.add(position_convergence, "tool_pose_position_tolerance")
+                convergence.add(rotation_convergence, "tool_pose_orientation_tolerance")
                 convergence.add(goalset_idx, "tool_pose_goalset_index")
+                convergence.add(
+                    tool_pose_cost.get_path_feasibility(
+                        position_error, rotation_error, state.tool_poses
+                    ),
+                    "tool_pose_path_valid",
+                )
+                convergence.add(tool_pose_cost._out_path_error, "tool_pose_path_error")
 
         if (
             self.has_cost("tool_relative_transform")

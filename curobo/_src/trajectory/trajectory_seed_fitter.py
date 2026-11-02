@@ -30,6 +30,7 @@ from curobo._src.curobolib.backends import trajectory_seed_fitter as seed_fitter
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.types.spline_layout import SplineLayout
 from curobo._src.util.cuda_graph_util import GraphExecutor
 
 if TYPE_CHECKING:
@@ -84,6 +85,13 @@ class BSplineTimeOptimalSeedFitterCfg:
     irls_epsilon: float = 1.0e-6
     dt_epsilon: float = 1.0e-3
 
+    @property
+    def native_horizon(self) -> int:
+        """Native state count from the same layout used by trajectory optimization."""
+        return SplineLayout(
+            self.n_knots, self.control_space, self.interpolation_steps
+        ).native_horizon
+
     def __post_init__(self) -> None:
         """Validate representation and fixed-shape constraints."""
         if self.control_space not in ControlSpace.bspline_types():
@@ -113,11 +121,7 @@ class BSplineTimeOptimalSeedFitterCfg:
         if self.dt_epsilon < 0.0:
             raise ValueError("dt_epsilon must be non-negative")
 
-        expected_horizon = ControlSpace.spline_total_interpolation_steps(
-            self.control_space,
-            self.n_knots,
-            self.interpolation_steps,
-        )
+        expected_horizon = self.native_horizon
         if self.rollout_horizon != expected_horizon:
             raise ValueError(
                 f"rollout_horizon must be {expected_horizon} for "
@@ -139,6 +143,11 @@ class BSplineTimeOptimalSeedFitter:
     fitter and is overwritten by the next call to :meth:`fit`; clone it when it must
     survive another fit. Each path is fitted independently of other batch lanes.
     """
+
+    @property
+    def native_horizon(self) -> int:
+        """Number of native samples shared with the configured optimizer."""
+        return self.config.native_horizon
 
     def __init__(
         self,
@@ -355,35 +364,6 @@ class BSplineTimeOptimalSeedFitter:
             self.degree,
         )
 
-    def _launch_backward(
-        self,
-        out_gradient: torch.Tensor,
-        position_gradient: torch.Tensor,
-        velocity_gradient: torch.Tensor,
-        acceleration_gradient: torch.Tensor,
-        jerk_gradient: torch.Tensor,
-        lane_idx: torch.Tensor,
-        use_implicit_goal: torch.Tensor,
-        trajectory_dt: torch.Tensor,
-    ) -> None:
-        """Launch cuRobo's exact TrajOpt B-spline backward kernel."""
-        trajectory_cu.launch_bspline_interpolation_backward_kernel(
-            out_gradient,
-            position_gradient,
-            velocity_gradient,
-            acceleration_gradient,
-            jerk_gradient,
-            trajectory_dt,
-            lane_idx,
-            use_implicit_goal,
-            position_gradient.shape[0],
-            position_gradient.shape[1],
-            position_gradient.shape[2],
-            self.config.n_knots,
-            self.degree,
-            False,
-        )
-
     def _resample_by_arc_length(self, graph_position: torch.Tensor) -> None:
         """Resample a fixed-size graph polyline onto the spline's active interval."""
         seed_fitter_cu.launch_resample_dense_kernel(
@@ -394,10 +374,18 @@ class BSplineTimeOptimalSeedFitter:
 
     @torch.no_grad()
     def _initialize_normal_operator(self) -> None:
-        """Build the position-plus-acceleration normal inverse with CUDA kernels."""
+        """Prepare fixed FP32 coefficients, preserving the caller's TF32 setting."""
         if self._normal_inverse is not None:
             return
+        allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+        try:
+            torch.backends.cuda.matmul.allow_tf32 = False
+            self._build_normal_operator()
+        finally:
+            torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
+    def _build_normal_operator(self) -> None:
+        """Build the position-plus-acceleration fit from the exact spline basis."""
         free_knots = self.n_free_knots
         n_knots = self.config.n_knots
         horizon = self.config.rollout_horizon
@@ -453,10 +441,7 @@ class BSplineTimeOptimalSeedFitter:
         self._basis_velocity = basis_velocity[:, :, 0].transpose(0, 1).contiguous()
         self._basis_acceleration = basis_acceleration[:, :, 0].transpose(0, 1).contiguous()
         self._basis_jerk = basis_jerk[:, :, 0].transpose(0, 1).contiguous()
-        self._path_normal = torch.sum(
-            self._basis_position.unsqueeze(2) * self._basis_position.unsqueeze(1),
-            dim=0,
-        )
+        self._path_normal = self._basis_position.transpose(0, 1) @ self._basis_position
         self._path_normal = 0.5 * (self._path_normal + self._path_normal.transpose(0, 1))
         self._path_normal_trace = torch.diagonal(self._path_normal).sum()
         self._path_diagonal_scale = torch.diagonal(self._path_normal).mean()
@@ -475,29 +460,11 @@ class BSplineTimeOptimalSeedFitter:
         else:
             self._scaled_acceleration_regularization = 0.0
 
-        # Applying the exact B-spline backward kernel to every impulse rollout
-        # builds A_p.T A_p + lambda A_a.T A_a without a second spline model.
-        normal_columns = torch.empty((free_knots, n_knots, 1), **tensor_args)
-        zero_gradient = torch.zeros_like(basis_position)
-        scaled_basis_acceleration = basis_acceleration * self._scaled_acceleration_regularization
-        trajectory_cu.launch_bspline_interpolation_backward_kernel(
-            normal_columns,
-            basis_position,
-            zero_gradient,
-            scaled_basis_acceleration,
-            zero_gradient,
-            trajectory_dt,
-            lane_idx,
-            use_implicit_goal,
-            free_knots,
-            horizon,
-            1,
-            n_knots,
-            self.degree,
-            False,
+        # Form A_p.T A_p + lambda A_a.T A_a from the exact forward basis.
+        # Matrix products avoid [horizon, free_knots, free_knots] temporaries.
+        normal = self._path_normal + self._scaled_acceleration_regularization * (
+            self._basis_acceleration.transpose(0, 1) @ self._basis_acceleration
         )
-
-        normal = normal_columns[:, :free_knots, 0].transpose(0, 1).contiguous()
         # Remove tiny reduction-order asymmetry before factorization.
         normal = 0.5 * (normal + normal.transpose(0, 1))
         if self.config.regularization > 0.0:
@@ -510,9 +477,8 @@ class BSplineTimeOptimalSeedFitter:
 
         # Fold the fixed inverse and boundary responses into the constants used
         # by the shared CUDA initializer. C++ exports these exact tensors.
-        self._fit_matrix = torch.sum(
-            self._normal_inverse.unsqueeze(2) * self._basis_position.transpose(0, 1).unsqueeze(0),
-            dim=1,
+        self._fit_matrix = (
+            self._normal_inverse @ self._basis_position.transpose(0, 1)
         ).contiguous()
         boundary_controls = torch.zeros((1, n_knots, 1), **tensor_args)
         boundary_lane = torch.zeros(1, device=self._device, dtype=torch.int32)
@@ -653,6 +619,7 @@ class BSplineTimeOptimalSeedFitter:
             self._basis_velocity,
             self._basis_acceleration,
             self._basis_jerk,
+            self.config.interpolation_steps,
             self._path_normal_trace_value,
             self.config.timing_regularization,
             self.config.irls_epsilon,
@@ -679,6 +646,7 @@ class BSplineTimeOptimalSeedFitter:
             self._basis_jerk,
             self._path_normal,
             self._derivative_scale,
+            self.config.interpolation_steps,
             self.config.regularization,
             self.config.trust_region_regularization,
             self._path_diagonal_scale_value,
@@ -877,8 +845,12 @@ class BSplineTimeOptimalSeedFitter:
         # Replaying a PyTorch CUDAGraph inside another capture is unsupported.
         if torch.cuda.is_current_stream_capturing():
             return self._fit_fixed_shape(
-                target_position, start_state.position, velocity, acceleration,
-                jerk, goal_position,
+                target_position,
+                start_state.position,
+                velocity,
+                acceleration,
+                jerk,
+                goal_position,
             )
         return self._executor(
             target_position,

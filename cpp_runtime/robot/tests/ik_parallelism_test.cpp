@@ -5,6 +5,7 @@
 #include "cuda_check.h"
 #include "robot_runtime.h"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -64,7 +65,11 @@ std::vector<float> evaluate(const std::string& artifact, bool graph) {
         config.max_batch_size = batch;
         config.max_goalset = goals;
         config.num_seeds = seeds;
-        config.lm_iterations = 1;
+        // Exercise batched top-k LM compaction alongside the equal-count path.
+        const int lm_seeds = seeds == 17 ? std::min(32, manifest.max_seeds) : seeds;
+        config.lm_num_seeds = lm_seeds;
+        // Multiple steps also exercise retention when the selected goal changes.
+        config.lm_iterations = 3;
         config.lbfgs_iterations = 1;
         config.exit_early = false;
         config.check_effort_limits = goals == 17;
@@ -72,15 +77,15 @@ std::vector<float> evaluate(const std::string& artifact, bool graph) {
         curobo::robot::InverseKinematics ik(artifact, config);
         Buffer<float> positions(batch * links * goals * 3);
         Buffer<float> quaternions(batch * links * goals * 4);
-        Buffer<float> current(batch * dof), seed_positions(batch * seeds * dof);
+        Buffer<float> current(batch * dof), seed_positions(batch * lm_seeds * dof);
         std::vector<float> p(batch * links * goals * 3), q(batch * links * goals * 4);
-        std::vector<float> start(batch * dof), seed_values(batch * seeds * dof);
+        std::vector<float> start(batch * dof), seed_values(batch * lm_seeds * dof);
         for (int b = 0; b < batch; ++b) {
           for (int j = 0; j < dof; ++j) {
             start[b * dof + j] = home[j] + 0.15F * b;
-            for (int s = 0; s < seeds; ++s) {
+            for (int s = 0; s < lm_seeds; ++s) {
               // Duplicate seeds exercise stable ties; others require actual refinement.
-              seed_values[(b * seeds + s) * dof + j] =
+              seed_values[(b * lm_seeds + s) * dof + j] =
                   home[j] + 0.025F * static_cast<float>((s / 2 + j * b) % 7);
             }
           }
@@ -137,6 +142,100 @@ std::vector<float> evaluate(const std::string& artifact, bool graph) {
   return results;
 }
 
+// Expose every retained LM seed before L-BFGS can hide a state-selection error.
+std::vector<float> evaluate_lm(const std::string& artifact, bool graph) {
+  const auto manifest = curobo_robot_runtime::load_ik_manifest(artifact);
+  const int dof = manifest.num_dof;
+  const int links = manifest.num_tool_frames;
+  const int batch = 2;
+  const int seeds = std::min(17, manifest.max_seeds);
+  const int count = batch * seeds;
+  curobo_robot_runtime::DeviceBuffer home_buffer;
+  home_buffer.upload(curobo_robot_runtime::load_tensor_data(
+      artifact, manifest.default_joint_position, "default_joint_position"));
+  std::vector<float> home(dof);
+  CRR_CUDA_CHECK(cudaMemcpy(home.data(), reinterpret_cast<void*>(home_buffer.ptr()),
+                           dof * sizeof(float), cudaMemcpyDeviceToHost));
+  curobo::robot::Kinematics fk(artifact);
+  Buffer<float> positions(batch * links * 3), quaternions(batch * links * 4);
+  Buffer<float> raw_jacobian(batch * links * 6 * dof), targets(batch * dof);
+  Buffer<float> initial(count * dof), solution(count * dof);
+  Buffer<float> position_error(count), orientation_error(count), collision_cost(count);
+  Buffer<uint8_t> success(count);
+  std::vector<float> results;
+  // Zero requests the runtime default of 16 iterations.
+  for (const int iterations : {0, 1, 2, 16}) {
+    for (const bool reject_all : {false, true}) {
+      curobo::robot::InverseKinematicsConfig config;
+      config.max_batch_size = batch;
+      config.num_seeds = seeds;
+      config.lm_iterations = iterations;
+      config.use_cuda_graph = graph;
+      config.check_self_collision = false;
+      // Make every in-bounds seed valid so the public solve returns after LM.
+      config.position_tolerance = 100.0F;
+      config.orientation_tolerance = 100.0F;
+      config.minimum_trust_ratio = reject_all ? 1.0e30F : 1.0e-5F;
+      curobo::robot::InverseKinematics ik(artifact, config);
+      curobo::robot::IkSolveRequest request;
+      request.goal_positions = positions.data();
+      request.goal_quaternions = quaternions.data();
+      request.seed_positions = initial.data();
+      request.solution = solution.data();
+      request.success = success.data();
+      request.position_error = position_error.data();
+      request.orientation_error = orientation_error.data();
+      request.collision_cost = collision_cost.data();
+      request.batch_size = batch;
+      request.num_solutions = seeds;
+      for (int replay = 0; replay < 2; ++replay) {
+        std::vector<float> target(batch * dof), seed_values(count * dof);
+        for (int b = 0; b < batch; ++b) {
+          for (int j = 0; j < dof; ++j) {
+            target[b * dof + j] = home[j] + 0.04F * (b + replay + 1);
+            for (int seed = 0; seed < seeds; ++seed) {
+              seed_values[(b * seeds + seed) * dof + j] =
+                  home[j] - 0.01F * (1 + (seed + j + replay) % 7);
+            }
+          }
+        }
+        targets.upload(target);
+        initial.upload(seed_values);
+        fk.forward(targets.data(), positions.data(), quaternions.data(),
+                   raw_jacobian.data(), batch, 1);
+        ik.solve(request);
+        const auto valid = success.download();
+        if (std::any_of(valid.begin(), valid.end(), [](uint8_t v) { return v != 1U; })) {
+          throw std::runtime_error("LM retention test did not return valid seeds");
+        }
+        const auto selected = solution.download();
+        if (reject_all) {
+          // Ranking may reorder seeds, but rejected steps must retain each input.
+          for (int b = 0; b < batch; ++b) {
+            for (int out = 0; out < seeds; ++out) {
+              bool found = false;
+              for (int in = 0; in < seeds; ++in) {
+                bool equal = true;
+                for (int j = 0; j < dof; ++j) {
+                  equal = equal && selected[(b * seeds + out) * dof + j] ==
+                                       seed_values[(b * seeds + in) * dof + j];
+                }
+                found = found || equal;
+              }
+              if (!found) throw std::runtime_error("rejected LM step changed a seed");
+            }
+          }
+        }
+        append(results, selected);
+        append(results, valid);
+        append(results, position_error.download());
+        append(results, orientation_error.download());
+      }
+    }
+  }
+  return results;
+}
+
 void compare(const std::vector<float>& actual, const std::vector<float>& expected) {
   if (actual.size() != expected.size()) throw std::runtime_error("reference size mismatch");
   for (size_t i = 0; i < actual.size(); ++i) {
@@ -154,8 +253,11 @@ int main(int argc, char** argv) {
     if (argc != 2 && argc != 4) {
       throw std::runtime_error("usage: ik_parallelism_test ARTIFACT [--write-reference|--reference FILE]");
     }
-    const auto result = evaluate(argv[1], true);
+    auto result = evaluate(argv[1], true);
     compare(evaluate(argv[1], false), result);
+    const auto lm_result = evaluate_lm(argv[1], true);
+    compare(evaluate_lm(argv[1], false), lm_result);
+    append(result, lm_result);
     if (argc == 4) {
       if (std::string(argv[2]) == "--write-reference") {
         std::ofstream output(argv[3]);
@@ -172,7 +274,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("unknown reference option");
       }
     }
-    std::cout << "PASS IK batch, goalset ties, top-k, effort checks and graph parity ("
+    std::cout << "PASS IK batch, goalset ties, top-k, effort, LM retention and graph parity ("
               << result.size() << " values)\n";
     return 0;
   } catch (const std::exception& error) {

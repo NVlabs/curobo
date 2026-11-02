@@ -156,6 +156,179 @@ def _make_candidate(dt: torch.Tensor, action_offset: float = 0.0) -> TrajOptResu
     )
 
 
+@pytest.mark.parametrize("dense", [False, True])
+def test_path_violation_rejects_seed_before_selection(
+    processor: TorchTrajOptResultProcessor, dense: bool
+) -> None:
+    """A good endpoint cannot hide an intermediate native or dense violation."""
+    processor.update_batch_size(batch_size=1, num_seeds=2, return_seeds=1)
+    dt = torch.tensor([[0.05, 0.08]], dtype=torch.float32)
+    processor.reset(dt)
+    candidate = _make_candidate(dt)
+    path_valid = torch.ones((2, 7 if dense else 32), dtype=torch.bool)
+    path_valid[0, 3] = False
+    if dense:
+        candidate.interpolated_metrics = RolloutMetrics(
+            feasible=torch.ones_like(path_valid), convergence=CostCollection()
+        )
+        metrics = candidate.interpolated_metrics
+    else:
+        metrics = candidate.metrics
+    metrics.convergence.add(path_valid, "tool_pose_path_valid")
+
+    processor.update(candidate)
+
+    assert processor._snapshot.success.tolist() == [[False, True]]
+
+
+def test_unsuccessful_seed_ranking_includes_intermediate_errors(
+    processor: TorchTrajOptResultProcessor,
+) -> None:
+    """A better endpoint cannot hide substantially worse intermediate tracking."""
+    processor.update_batch_size(batch_size=1, num_seeds=2, return_seeds=1)
+    dt = torch.tensor([[0.05, 0.05]], dtype=torch.float32)
+    processor.reset(dt)
+    candidate = _make_candidate(dt)
+    candidate.metrics.convergence.add(
+        torch.zeros((2, 32), dtype=torch.bool), "tool_pose_path_valid"
+    )
+    errors = torch.zeros((2, 32, 1), dtype=torch.float32)
+    errors[0, 4] = 0.3
+    errors[1, 4] = 0.01
+    candidate.metrics.convergence.add(errors, "tool_pose_path_error")
+    processor.update(candidate)
+    assert processor._snapshot.seed_cost[0, 1] < processor._snapshot.seed_cost[0, 0]
+    processor._rank_final_candidates(
+        torch.zeros((1, 2), dtype=torch.bool),
+        torch.tensor([[0.5, 1.0]], dtype=torch.float32),
+    )
+    assert processor._seed_rank.tolist() == [[1, 0]]
+
+
+def test_timeopt_cannot_repair_path_constraint_violation(
+    processor: TorchTrajOptResultProcessor,
+) -> None:
+    """Retiming a bad path cannot make it outrank a valid longer-duration seed."""
+    processor.update_batch_size(batch_size=1, num_seeds=2, return_seeds=1)
+    dt = torch.tensor([[0.05, 0.08]], dtype=torch.float32)
+    processor.reset(dt)
+    candidate = _make_candidate(dt)
+    path_valid = torch.ones((2, 32), dtype=torch.bool)
+    path_valid[0, 4] = False
+    candidate.metrics.convergence.add(path_valid, "tool_pose_path_valid")
+    processor.update(candidate)
+    processor._rank_final_candidates(
+        torch.ones((1, 2), dtype=torch.bool),
+        torch.tensor([[0.5, 1.0]], dtype=torch.float32),
+    )
+
+    assert processor._final_success.tolist() == [[False, True]]
+    assert processor._seed_rank.tolist() == [[1, 0]]
+
+
+@pytest.mark.parametrize("use_cuda_graph", [False, True])
+def test_checkpoint_retains_path_progress_before_dynamic_success(
+    processor: TorchTrajOptResultProcessor,
+    use_cuda_graph: bool,
+) -> None:
+    """A path suitable for retiming replaces an invalid path without reporting success."""
+    device = torch.device("cuda:0" if use_cuda_graph else "cpu")
+    processor = TorchTrajOptResultProcessor(
+        replace(
+            processor._config, device_cfg=DeviceCfg(device=device), use_cuda_graph=use_cuda_graph
+        ),
+        lambda state: state,
+    )
+    dt = torch.full((1, 2), 0.05, device=device, dtype=torch.float32)
+    processor.update_batch_size(1, 2, 2)
+    processor.reset(dt)
+    candidate = _make_candidate(dt.flatten())
+    candidate.metrics.feasible.zero_()
+    path_valid = torch.zeros((2, 32), device=device, dtype=torch.bool)
+    candidate.metrics.convergence.add(path_valid, "tool_pose_path_valid")
+    processor.update(candidate)
+    candidate.metrics.actions.add_(5)
+    candidate.metrics.state.joint_state.dt.mul_(2)
+    path_valid.fill_(True)
+    update = processor.update(candidate)
+    assert not update.success.any() and not update.any_success and not update.improved
+    assert processor._snapshot.path_valid.all()
+    torch.testing.assert_close(
+        processor._snapshot.actions.flatten(0, 1), candidate.metrics.actions
+    )
+
+
+@pytest.mark.parametrize("use_cuda_graph", [False, True])
+def test_valid_checkpoint_replaces_invalid_faster_candidate(
+    processor: TorchTrajOptResultProcessor,
+    use_cuda_graph: bool,
+) -> None:
+    """Accept a newly feasible seed even when its dt exceeds the previous invalid seed's dt."""
+    device = torch.device("cuda:0" if use_cuda_graph else "cpu")
+    processor = TorchTrajOptResultProcessor(
+        replace(
+            processor._config, device_cfg=DeviceCfg(device=device), use_cuda_graph=use_cuda_graph
+        ),
+        lambda state: state,
+    )
+    dt = torch.full((1, 2), 0.05, device=device, dtype=torch.float32)
+    processor.update_batch_size(1, 2, 2)
+    processor.reset(dt)
+    candidate = _make_candidate(dt.flatten())
+    candidate.metrics.feasible.zero_()
+    update = processor.update(candidate)
+    assert not update.success.any()
+    candidate.metrics.feasible.fill_(True)
+    candidate.metrics.state.joint_state.dt.mul_(2)
+    update = processor.update(candidate)
+    assert update.success.all() and update.any_success
+    torch.testing.assert_close(update.best_dt, torch.full_like(dt, 0.1))
+
+
+@pytest.mark.parametrize("use_cuda_graph", [False, True])
+@pytest.mark.parametrize("mode", ["pose", "cspace", "waypoints"])
+def test_failed_refinement_returns_initial_solution(
+    processor: TorchTrajOptResultProcessor,
+    use_cuda_graph: bool,
+    mode: str,
+) -> None:
+    """A failed faster refinement cannot overwrite a validated initial trajectory."""
+    device = torch.device("cuda:0" if use_cuda_graph else "cpu")
+    processor = TorchTrajOptResultProcessor(
+        replace(
+            processor._config, device_cfg=DeviceCfg(device=device), use_cuda_graph=use_cuda_graph
+        ),
+        lambda state: state,
+    )
+    dt = torch.full((1, 2), 0.1, device=device, dtype=torch.float32)
+    processor.update_batch_size(1, 2, 2)
+    processor.reset(dt)
+    candidate = _make_candidate(dt.flatten())
+    if mode == "cspace":
+        candidate.metrics.convergence = CostCollection()
+    if mode == "waypoints":
+        candidate.metrics.convergence.add(
+            torch.ones((2, 32), device=device, dtype=torch.bool),
+            "tool_pose_path_valid",
+        )
+    processor.update(candidate)
+    original = candidate.metrics.actions.clone().view(1, 2, 32, 7)
+    candidate.metrics.actions.add_(10)
+    candidate.metrics.state.joint_state.position.add_(10)
+    candidate.metrics.state.joint_state.dt.mul_(0.5)
+    if mode == "waypoints":
+        candidate.metrics.convergence.values[-1][:, 4] = False
+    else:
+        candidate.metrics.feasible[:, 4] = False
+    update = processor.update(candidate)
+    result = _finalize(processor, return_seeds=2)
+    assert not update.improved and update.any_success
+    assert result.success.all()
+    torch.testing.assert_close(result.solution, original)
+    torch.testing.assert_close(result.js_solution.dt, torch.full_like(dt, 0.1))
+    processor.reset_cuda_graph()
+
+
 def _make_interpolation_output(
     processor: TorchTrajOptResultProcessor,
 ) -> tuple[JointState, torch.Tensor]:

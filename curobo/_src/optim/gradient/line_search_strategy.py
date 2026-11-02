@@ -163,6 +163,7 @@ class LineSearchStrategy(ABC):
         step_direction: torch.Tensor,
         context: LineSearchContext,
         line_search_scale: torch.Tensor,
+        search_actions: torch.Tensor | None = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Prepare points to evaluate during line search.
 
@@ -172,6 +173,9 @@ class LineSearchStrategy(ABC):
                 Shape: (num_problems, action_horizon, action_dim)
             context: The context containing parameters needed for line search.
             line_search_scale: Positive scales with shape ``(n_linesearch,)``.
+            search_actions: L-BFGS trial output with shape
+                ``(num_problems, n_linesearch, opt_dim)``. Other direction
+                methods leave this unset and generate their trials here.
 
         Returns:
             x_set: The set of points to evaluate.
@@ -203,10 +207,13 @@ class LineSearchStrategy(ABC):
         step_direction = step_direction.detach()
 
         x = x.detach()
-        probe_scales = line_search_scale.view(1, -1, 1, 1)
-        if context.line_search_backtracking:
-            probe_scales = context.beta.view(-1, 1, 1, 1) * probe_scales
-        x_set = self.jit_get_x_set(step_direction, x, probe_scales)
+        if search_actions is None:
+            probe_scales = line_search_scale.view(1, -1, 1, 1)
+            if context.line_search_backtracking:
+                probe_scales = context.beta.view(-1, 1, 1, 1) * probe_scales
+            x_set = self.jit_get_x_set(step_direction, x, probe_scales)
+        else:
+            x_set = search_actions
 
         x_set = x_set.view(
             x_set.shape[0],
@@ -258,6 +265,7 @@ class LineSearchStrategy(ABC):
             ).contiguous(),
             cost=line_search_result.selected_state.cost,
             step_direction=iteration_state.step_direction,
+            search_actions=iteration_state.search_actions,
             best_action=iteration_state.best_action,
             best_cost=iteration_state.best_cost,
             current_iteration=iteration_state.current_iteration,
@@ -411,7 +419,7 @@ class GreedyLineSearchStrategy(LineSearchStrategy):
         step_direction = iteration_state.step_direction
         line_search_scale = self._get_search_scales(context)
         x_set, step_direction = self._prepare_search_points(
-            x, step_direction, context, line_search_scale
+            x, step_direction, context, line_search_scale, iteration_state.search_actions
         )
         b, n_line_search, _ = x_set.shape
 
@@ -471,7 +479,7 @@ class ArmijoLineSearchStrategy(LineSearchStrategy):
         step_direction = iteration_state.step_direction
         line_search_scale = self._get_search_scales(context)
         x_set, step_direction = self._prepare_search_points(
-            x, step_direction, context, line_search_scale
+            x, step_direction, context, line_search_scale, iteration_state.search_actions
         )
         b, n_line_search, _ = x_set.shape
 
@@ -555,7 +563,7 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
         step_direction = iteration_state.step_direction
         # Prepare search points
         x_set, step_vec = self._prepare_search_points(
-            x, step_direction, context, line_search_scale
+            x, step_direction, context, line_search_scale, iteration_state.search_actions
         )
 
         # Compute costs and gradients

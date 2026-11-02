@@ -31,6 +31,8 @@ TrajectoryOptimizationInfo TrajectoryOptimizer::info() const {
   return runtime_->info();
 }
 
+int TrajectoryOptimizer::native_horizon() const { return info().native_horizon(); }
+
 const TrajectoryOptimizationConfig& TrajectoryOptimizer::config() const {
   return runtime_->config();
 }

@@ -32,8 +32,8 @@ class OptimizationKernelCfg(CudaCoreKernelCfg):
         """
         kernel_files = {
             "line_search": ["line_search/line_search_kernel.cuh"],
-            "lbfgs": ["lbfgs/lbfgs_step_kernel.cuh"],
-            "lbfgs_compact": ["lbfgs/lbfgs_compact_step_kernel.cuh"],
+            "lbfgs": ["lbfgs/lbfgs_candidates.cuh", "lbfgs/lbfgs_step_kernel.cuh"],
+            "lbfgs_compact": ["lbfgs/lbfgs_candidates.cuh", "lbfgs/lbfgs_compact_step_kernel.cuh"],
             "pose_refiner_lm": ["pose_refiner/pose_refiner_lm_kernel.cuh"],
         }
         return kernel_files.get(kernel_type, [])

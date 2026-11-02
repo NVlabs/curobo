@@ -43,19 +43,31 @@ def sample(
     success: torch.Tensor,
     stationary: torch.Tensor,
     output: torch.Tensor,
+    progress: torch.Tensor,
     start_offset: int,
 ) -> None:
-    """Invert time and evaluate joint states [4,B,N,D] with the native CUDA sampler."""
+    """Write joint states ``[4,B,N,D]`` and active reference progress ``[B,N]``."""
     batch, knots, dof = controls.shape
     _launch(
-        "sample_kernel",
+        "sample_with_progress_kernel",
         output,
         batch * requested.shape[1],
         *[
             x.data_ptr()
             for x in (
-                controls, start, goal, timing, polynomial, nodes, weights, time,
-                requested, success, stationary, output,
+                controls,
+                start,
+                goal,
+                timing,
+                polynomial,
+                nodes,
+                weights,
+                time,
+                requested,
+                success,
+                stationary,
+                output,
+                progress,
             )
         ],
         batch,

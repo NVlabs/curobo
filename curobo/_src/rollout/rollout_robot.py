@@ -786,9 +786,13 @@ class RobotRollout:
     def _compute_metrics_from_state_impl(self, state: JointState, **kwargs) -> RolloutMetrics:
         costs_and_constraints = self._compute_costs_and_constraints_metrics_impl(state, **kwargs)
         convergence = self._compute_convergence_metrics_impl(state, **kwargs)
+        feasible = costs_and_constraints.get_feasible()
+        for name, values in zip(convergence.names, convergence.values):
+            if name == "tool_pose_path_valid":
+                feasible = values & feasible
         return RolloutMetrics(
             costs_and_constraints=costs_and_constraints,
-            feasible=costs_and_constraints.get_feasible(),
+            feasible=feasible,
             state=state,
             convergence=convergence,
         )

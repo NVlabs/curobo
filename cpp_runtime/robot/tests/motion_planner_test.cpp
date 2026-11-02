@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
     const bool layered_grasp = argc == 3;
     curobo::robot::MotionPlanningConfig config;
     if (config.trajectory_optimization.max_iterations != 50 ||
+        config.trajectory_optimization.initial_check_interval != 50 ||
         config.trajectory_optimization.refinement_iterations != 25 ||
         config.trajectory_optimization.finetune_attempts != 1 ||
         !config.trajectory_optimization.enable_timeopt ||
@@ -131,7 +132,9 @@ int main(int argc, char** argv) {
         curobo::robot::PoseMotionPlanningRequest{}.max_attempts != 20 ||
         config.trajectory_optimization.initial_dt_scale != 1.25F ||
         config.trajectory_optimization.finetune_dt_scale != 0.6F) {
-      throw std::runtime_error("motion-planner defaults must use fitted 50+25 with timeopt");
+      throw std::runtime_error(
+          "motion-planner defaults must use 50 initial iterations and 25 refinement "
+          "with timeopt");
     }
     if (config.inverse_kinematics.cspace_rank_weight != 5.0F) {
       throw std::runtime_error(
@@ -296,6 +299,52 @@ int main(int argc, char** argv) {
       throw std::runtime_error("post-detachment motion graph replay failed");
     }
 
+    // Changing the number of refinement passes must invalidate a captured solve,
+    // including transitions between two nonzero counts and back to an old count.
+    {
+      auto eager_config = config;
+      eager_config.use_cuda_graph = false;
+      curobo::robot::MotionPlanner eager_planner(argv[1], eager_config);
+      eager_planner.update_links_inertial({payload});
+      const auto snapshot = [&](const curobo::robot::MotionPlanner& planner) {
+        success.download(&success_value);
+        used_rrt.download(&used_rrt_value);
+        if (success_value != 1 || used_rrt_value != 0) {
+          throw std::runtime_error("refinement override must preserve direct planning success");
+        }
+        int32_t iterations = 0;
+        check_cuda(cudaMemcpy(&iterations, planner.candidates().initial_iterations,
+                              sizeof(iterations), cudaMemcpyDeviceToHost));
+        std::vector<float> result{static_cast<float>(iterations)};
+        std::vector<float> values(knot_values);
+        knots.download(values.data());
+        result.insert(result.end(), values.begin(), values.end());
+        values.resize(trajectory_values);
+        for (const auto* output : {&position, &velocity, &acceleration, &jerk}) {
+          output->download(values.data());
+          result.insert(result.end(), values.begin(), values.end());
+        }
+        trajectory_dt.download(&trajectory_dt_value);
+        result.push_back(trajectory_dt_value);
+        return result;
+      };
+      for (const int refinements : {0, 1, 2, 1}) {
+        request.finetune_attempts = refinements;
+        eager_planner.plan(request);
+        const auto expected = snapshot(eager_planner);
+        // The second solve must replay the cached graph with the same policy.
+        for (int repeat = 0; repeat < 2; ++repeat) {
+          direct_planner.plan(request);
+          const auto actual = snapshot(direct_planner);
+          for (size_t i = 0; i < expected.size(); ++i) {
+            require_near(actual[i], expected[i], 1.0E-3F + 1.0E-4F * std::abs(expected[i]),
+                         "cached optimizer versus eager optimizer");
+          }
+        }
+      }
+      request.finetune_attempts = -1;
+    }
+
     const auto robot_info = direct_planner.robot_info();
     const size_t pose_position_values =
         static_cast<size_t>(robot_info.num_tool_frames * 3);
@@ -337,6 +386,30 @@ int main(int argc, char** argv) {
     pose_request.rrt_iterations = rrt_iterations.get();
     pose_request.selected_seed = selected_seed.get();
     pose_request.planning_attempts = planning_attempts.get();
+    {
+      auto seed_pool_config = config;
+      seed_pool_config.inverse_kinematics.num_seeds = 4;
+      seed_pool_config.inverse_kinematics.lm_num_seeds = 32;
+      seed_pool_config.inverse_kinematics.lm_iterations = 1;
+      seed_pool_config.inverse_kinematics.lbfgs_iterations = 1;
+      curobo::robot::MotionPlanner seed_pool_planner(argv[1], seed_pool_config);
+      std::vector<float> seed_values(32 * robot_info.num_dof);
+      std::vector<float> exact(robot_info.num_dof);
+      goal_device.download(exact.data());
+      for (int s = 0; s < 32; ++s)
+        for (int j = 0; j < robot_info.num_dof; ++j)
+          seed_values[s * robot_info.num_dof + j] = exact[j] + (s == 31 ? 0.0F : 0.5F);
+      DeviceValue<float> seed_pool(seed_values.size());
+      seed_pool.upload(seed_values.data());
+      pose_request.ik_seed_positions = seed_pool.get();
+      for (int repeat = 0; repeat < 2; ++repeat) {
+        seed_pool_planner.plan_pose(pose_request);
+        success.download(&success_value);
+        if (success_value != 1)
+          throw std::runtime_error("motion planning lost the larger LM seed pool during staging");
+      }
+      pose_request.ik_seed_positions = nullptr;
+    }
     direct_planner.plan_pose(pose_request);
 
     float position_error_value = 0.0F;
@@ -506,17 +579,6 @@ int main(int argc, char** argv) {
       throw std::runtime_error(
           "grasp planning did not complete goalset, approach, insertion, and lift");
     }
-    std::vector<float> selected_grasp_host(static_cast<size_t>(info.num_dof));
-    std::vector<float> insertion_position_host(trajectory_values);
-    selected_grasp.download(selected_grasp_host.data());
-    grasp_phase.position.download(insertion_position_host.data());
-    for (int joint = 0; joint < info.num_dof; ++joint) {
-      require_near(
-          insertion_position_host.at(static_cast<size_t>(info.trajectory_steps - 1) *
-                               info.num_dof + joint),
-          selected_grasp_host.at(static_cast<size_t>(joint)), 1.0E-5F,
-          "insertion must reuse the selected grasp joint configuration");
-    }
     approach_phase.velocity.download(velocity_host.data());
     approach_phase.acceleration.download(acceleration_host.data());
     for (int joint = 0; joint < info.num_dof; ++joint) {
@@ -585,11 +647,18 @@ int main(int argc, char** argv) {
             difference.at(axis) = phase_position_host.at(state_p + axis) - target;
             along += difference.at(axis) * direction.at(axis);
           }
-          float perpendicular_squared = 0.0F;
+          // Grasp phases constrain progress as well as distance from the line.
+          const float progress = std::clamp(
+              float(state - info.spline_layout.padding) / info.spline_layout.reference_intervals,
+              0.0F, 1.0F);
+          float reference_error_squared = 0.0F;
           for (int axis = 0; axis < 3; ++axis) {
-            const float perpendicular =
-                difference.at(axis) - along * direction.at(axis);
-            perpendicular_squared += perpendicular * perpendicular;
+            const float target = goal_position_host.at(goal_p + axis) +
+                                 goal_axis_offset * direction.at(axis);
+            const float initial = phase_position_host.at(goal_p + axis);
+            const float reference = initial + progress * (target - initial);
+            const float error = phase_position_host.at(state_p + axis) - reference;
+            reference_error_squared += error * error;
           }
           float quaternion_dot = 0.0F;
           for (int component = 0; component < 4; ++component) {
@@ -598,12 +667,16 @@ int main(int argc, char** argv) {
           }
           const float orientation_distance =
               2.0F * std::acos(std::min(std::abs(quaternion_dot), 1.0F));
-          if (std::sqrt(perpendicular_squared) >
-                  config.trajectory_optimization.position_tolerance + 1.0E-3F ||
-              orientation_distance >
-                  config.trajectory_optimization.orientation_tolerance + 1.0E-3F) {
+          if (std::sqrt(reference_error_squared) >
+                  (goal_axis_offset == 0.0F ? grasp_request.grasp_path_position_tolerance
+                                            : grasp_request.lift_path_position_tolerance) +
+                      1.0E-3F ||
+              orientation_distance > (goal_axis_offset == 0.0F
+                                          ? grasp_request.grasp_path_orientation_tolerance
+                                          : grasp_request.lift_path_orientation_tolerance) +
+                                         1.0E-3F) {
             throw std::runtime_error(
-                "grasp phase violated its Cartesian line constraint");
+                "grasp phase violated its ordered Cartesian reference");
           }
           if (state == info.trajectory_steps - 1 &&
               std::abs(along) >
@@ -728,6 +801,15 @@ int main(int argc, char** argv) {
     scene.add_cuboid(obstacle);
     config.attempt_direct_trajectory_optimization = false;
     curobo::robot::MotionPlanner graph_planner(argv[1], config, &scene);
+    bool grasp_requires_trajopt = false;
+    try {
+      graph_planner.plan_grasp(grasp_request);
+    } catch (const std::invalid_argument&) {
+      grasp_requires_trajopt = true;
+    }
+    if (!grasp_requires_trajopt) {
+      throw std::runtime_error("waypoint grasp phases require trajectory optimization");
+    }
     graph_planner.plan(request);
     success.download(&success_value);
     used_rrt.download(&used_rrt_value);

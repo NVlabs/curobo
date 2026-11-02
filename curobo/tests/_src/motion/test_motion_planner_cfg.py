@@ -63,7 +63,6 @@ class TestMotionPlannerCfgDataclassDefinition:
         """Keep PRM and RRT construction configurations mutually explicit."""
         assert "prm_graph_planner_config" in MotionPlannerCfg.__dataclass_fields__
         assert "rrt_graph_planner_config" in MotionPlannerCfg.__dataclass_fields__
-        assert "constrained_rrt_planner_config" in MotionPlannerCfg.__dataclass_fields__
 
     def test_has_scene_collision_cfg_field(self):
         """Test dataclass has scene_collision_cfg field."""
@@ -306,7 +305,6 @@ class TestMotionPlannerCfgDirectConstruction:
 
         assert fields["prm_graph_planner_config"].default is None
         assert fields["rrt_graph_planner_config"].default is None
-        assert fields["constrained_rrt_planner_config"].default is None
 
         # scene_collision_cfg should have a default
         assert fields["scene_collision_cfg"].default is None
@@ -346,7 +344,6 @@ class TestMotionPlannerCfgDirectConstruction:
         assert config.device_cfg is device_config
         assert config.graph_planner_algorithm == "prm"
         assert config.rrt_graph_planner_config is None
-        assert config.constrained_rrt_planner_config is None
         assert config.fit_graph_seed_to_bspline is True
         assert config.always_run_trajopt is True
         assert config.run_trajopt_on_graph_seed is True
@@ -403,7 +400,7 @@ class TestMotionPlannerCfgDefaults:
         import inspect
 
         parameter_names = list(inspect.signature(MotionPlannerCfg.create).parameters)
-        assert parameter_names[-11:-5] == [
+        assert parameter_names[-10:-4] == [
             "graph_planner_algorithm",
             "rrt_planner_config",
             "fit_graph_seed_to_bspline",
@@ -411,20 +408,12 @@ class TestMotionPlannerCfgDefaults:
             "run_trajopt_on_graph_seed",
             "enable_trajopt",
         ]
-        assert parameter_names[-5:] == [
+        assert parameter_names[-4:] == [
             "ik_metrics_rollout",
             "trajopt_metrics_rollout",
-            "create_constrained_rrt",
-            "constrained_rrt_planner_config",
             "enable_timeopt",
+            "num_knots",
         ]
-
-    def test_default_create_constrained_rrt_parameter(self):
-        """Create the dedicated constrained RRT by default."""
-        import inspect
-
-        sig = inspect.signature(MotionPlannerCfg.create)
-        assert sig.parameters["create_constrained_rrt"].default is True
 
     def test_default_graph_seed_bspline_fit_parameter(self):
         """Fit fixed-horizon graph samples to B-spline knots by default."""

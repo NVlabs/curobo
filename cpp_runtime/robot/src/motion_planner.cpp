@@ -46,6 +46,8 @@ const MotionPlanningConfig& MotionPlanner::config() const {
   return runtime_->config();
 }
 
+int MotionPlanner::native_horizon() const { return info().native_horizon(); }
+
 double MotionPlanner::last_ik_time() const { return runtime_->last_ik_time(); }
 
 double MotionPlanner::last_rrt_time() const {
@@ -92,6 +94,10 @@ void MotionPlanner::plan(const MotionPlanningRequest& request) const {
 void MotionPlanner::plan_pose(
     const PoseMotionPlanningRequest& request) const {
   runtime_->plan_pose(request);
+}
+
+void MotionPlanner::plan_pose_waypoints(const WaypointMotionPlanningRequest &request) const {
+  runtime_->plan_pose_waypoints(request);
 }
 
 std::unique_ptr<InverseKinematics> MotionPlanner::create_inverse_kinematics(

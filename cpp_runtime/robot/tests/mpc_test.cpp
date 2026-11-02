@@ -318,7 +318,8 @@ void check_lift_progress_with_path_validation(MotionPlanner &planner, Kinematics
 
 int main(int argc, char **argv) {
   try {
-    require(argc == 2, "usage: curobo_robot_mpc_test ARTIFACT_DIRECTORY");
+    require(argc == 2 || (argc == 3 && std::string(argv[2]) == "--cartesian-only"),
+            "usage: curobo_robot_mpc_test ARTIFACT_DIRECTORY [--cartesian-only]");
     constexpr int GRID_SIDE = 64;
     constexpr int GRID_COUNT = GRID_SIDE * GRID_SIDE * GRID_SIDE;
     constexpr float VOXEL_SIZE = 0.025F;
@@ -349,6 +350,10 @@ int main(int argc, char **argv) {
     Kinematics fk(argv[1]);
     check_lift_progress_with_path_validation(planner, fk);
     check_stationary_cartesian_recovery(planner, fk);
+    if (argc == 3) {
+      std::cout << "Cartesian MPC acceptance and graph reuse passed\n";
+      return 0;
+    }
     const auto info = planner.info();
     require(info.num_dof == DOF, "MPC fake controller test expects Franka");
     const Joints initial{0, -1.3F, 0, -2.5F, 0, 1.5F, 0.8F};

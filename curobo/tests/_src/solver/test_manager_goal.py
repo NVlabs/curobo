@@ -18,6 +18,27 @@ from curobo._src.types.target_tool_relative_transform import ToolRelativeTransfo
 from curobo._src.types.tool_pose import GoalToolPose
 
 
+@pytest.mark.parametrize("registry", [False, True])
+def test_goal_horizon_changes_reallocate_instead_of_broadcasting(registry: bool) -> None:
+    """Both manager update paths own and validate the temporal pose shape."""
+    device_cfg = DeviceCfg(device=torch.device("cpu"), dtype=torch.float32)
+    manager = GoalManager(device_cfg)
+    state = SolveState(solve_type=SolveMode.BATCH, batch_size=1, num_envs=1, num_ik_seeds=2)
+    for horizon in (81, 1, 81):
+        poses = GoalToolPose(
+            ["tool"],
+            torch.zeros((1, horizon, 1, 1, 3), dtype=torch.float32),
+            torch.tensor([1.0, 0.0, 0.0, 0.0]).view(1, 1, 1, 1, 4).repeat(1, horizon, 1, 1, 1),
+        )
+        if registry:
+            goal = GoalRegistry(link_goal_poses=poses)
+            buffer, changed = manager.update_from_goal_registry(state, goal)
+        else:
+            buffer, changed = manager.update_goal_buffer(state, goal_tool_poses=poses)
+        assert changed
+        assert buffer.link_goal_poses.horizon == horizon
+
+
 @pytest.fixture
 def cpu_device_cfg():
     """Create a CPU device configuration for testing."""

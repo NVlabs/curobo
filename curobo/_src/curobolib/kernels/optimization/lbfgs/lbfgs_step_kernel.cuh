@@ -10,6 +10,7 @@
 #include "common/curobo_constants.h"
 #include "common/math.cuh"
 #include "optimization/line_search/line_search_helpers.cuh"
+#include "optimization/lbfgs/lbfgs_candidates.cuh"
 
 namespace curobo{
 namespace optimization{
@@ -150,11 +151,19 @@ void kernel_lbfgs_step_circular(
   int32_t *history_count,
   const bool scale_step,
   const bool *curvature_update_allowed,
-  const int32_t *line_search_status)
+  const int32_t *line_search_status,
+  const ScalarType *candidate_scales,
+  const ScalarType *candidate_beta,
+  ScalarType *candidates,
+  const int candidate_count)
 {
   // Block-uniform exit preserves the shortened direction and every history
   // and reference buffer while the next captured iteration retries.
-  if (line_search_status[blockIdx.x] == line_search::STATUS_BACKTRACK) return;
+  if (line_search_status[blockIdx.x] == line_search::STATUS_BACKTRACK) {
+    write_lbfgs_candidates(q, step_vec, candidate_scales, candidate_beta,
+                           candidates, v_dim, candidate_count);
+    return;
+  }
   constexpr bool is_compile_time = (FIXED_M > 0);
   const int effective_m = is_compile_time ? FIXED_M : history_m;
 
@@ -625,6 +634,8 @@ void kernel_lbfgs_step_circular(
       history_count[batch] = active_count;
     }
   }
+  write_lbfgs_candidates(q, step_vec, candidate_scales, candidate_beta,
+                           candidates, v_dim, candidate_count);
 }
 }
 }

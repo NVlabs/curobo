@@ -5,6 +5,9 @@
 namespace curobo::trajectory::seed_fitter {
 
 constexpr int THREADS_PER_BLOCK = 256;
+// Degrees 3..5 have at most six overlapping free-control basis functions.
+// Store the lower normal-matrix band, including the diagonal, for every size.
+constexpr int NORMAL_BANDWIDTH = 6;
 
 __global__ void resample_dense_kernel(
     const float* target_path, const float* arc_progress, float* arc_target,
@@ -169,14 +172,12 @@ __global__ void required_dt_kernel(
 }
 
 __global__ void derivative_scale_kernel(
-    const float* current_velocity, const float* current_acceleration,
-    const float* max_velocity, const float* max_acceleration,
-    const float* max_jerk, const float* basis_velocity,
-    const float* basis_acceleration, const float* basis_jerk, int seeds,
-    int steps, int dof, int free_knots, float path_normal_trace,
-    float timing_regularization, float irls_epsilon,
-    float* velocity_trace_workspace, float* acceleration_trace_workspace,
-    float* jerk_trace_workspace, float* derivative_scale) {
+    const float *current_velocity, const float *current_acceleration, const float *max_velocity,
+    const float *max_acceleration, const float *max_jerk, const float *basis_velocity,
+    const float *basis_acceleration, const float *basis_jerk, int seeds, int steps, int dof,
+    int free_knots, int interpolation_steps, float path_normal_trace, float timing_regularization,
+    float irls_epsilon, float *velocity_trace_workspace, float *acceleration_trace_workspace,
+    float *jerk_trace_workspace, float *derivative_scale) {
   __shared__ float trace_sums[THREADS_PER_BLOCK];
   float local_trace = 0.0F;
   const int seed = static_cast<int>(blockIdx.x);
@@ -189,37 +190,32 @@ __global__ void derivative_scale_kernel(
     float velocity_basis_squared = 0.0F;
     float acceleration_basis_squared = 0.0F;
     float jerk_basis_squared = 0.0F;
-    for (int knot = 0; knot < free_knots; ++knot) {
+    // The exact forward kernel reads controls [span - degree - 1, span).
+    // A six-control envelope covers every supported degree without a size path.
+    const int span = step / interpolation_steps;
+    for (int knot = max(0, span - NORMAL_BANDWIDTH); knot < min(free_knots, span); ++knot) {
       const int basis_index = step * free_knots + knot;
       const float velocity_basis = basis_velocity[basis_index];
       const float acceleration_basis = basis_acceleration[basis_index];
       const float jerk_basis = basis_jerk[basis_index];
       velocity_basis_squared += velocity_basis * velocity_basis;
-      acceleration_basis_squared +=
-          acceleration_basis * acceleration_basis;
+      acceleration_basis_squared += acceleration_basis * acceleration_basis;
       jerk_basis_squared += jerk_basis * jerk_basis;
     }
-    const float inverse_velocity_squared =
-        1.0F / (max_velocity[joint] * max_velocity[joint]);
+    const float inverse_velocity_squared = 1.0F / (max_velocity[joint] * max_velocity[joint]);
     const float inverse_acceleration_squared =
         1.0F / (max_acceleration[joint] * max_acceleration[joint]);
-    const float inverse_jerk_squared =
-        1.0F / (max_jerk[joint] * max_jerk[joint]);
-    const float velocity_ratio = fmaxf(
-        fabsf(current_velocity[index]) / max_velocity[joint], irls_epsilon);
+    const float inverse_jerk_squared = 1.0F / (max_jerk[joint] * max_jerk[joint]);
+    const float velocity_ratio =
+        fmaxf(fabsf(current_velocity[index]) / max_velocity[joint], irls_epsilon);
     const float acceleration_ratio =
-        fmaxf(fabsf(current_acceleration[index]) / max_acceleration[joint],
-              irls_epsilon);
+        fmaxf(fabsf(current_acceleration[index]) / max_acceleration[joint], irls_epsilon);
     const float velocity_ratio_squared = velocity_ratio * velocity_ratio;
     const float velocity_weight =
-        3.0F * velocity_ratio_squared * velocity_ratio_squared *
-        inverse_velocity_squared;
-    const float acceleration_weight =
-        1.5F * acceleration_ratio * inverse_acceleration_squared;
-    velocity_trace_workspace[index] =
-        velocity_weight * velocity_basis_squared;
-    acceleration_trace_workspace[index] =
-        acceleration_weight * acceleration_basis_squared;
+        3.0F * velocity_ratio_squared * velocity_ratio_squared * inverse_velocity_squared;
+    const float acceleration_weight = 1.5F * acceleration_ratio * inverse_acceleration_squared;
+    velocity_trace_workspace[index] = velocity_weight * velocity_basis_squared;
+    acceleration_trace_workspace[index] = acceleration_weight * acceleration_basis_squared;
     jerk_trace_workspace[index] = inverse_jerk_squared * jerk_basis_squared;
     local_trace += velocity_weight * velocity_basis_squared;
     local_trace += acceleration_weight * acceleration_basis_squared;
@@ -239,125 +235,110 @@ __global__ void derivative_scale_kernel(
   }
 }
 
-__global__ void solve_irls_kernel(
-    const float* position_residual, const float* boundary_velocity,
-    const float* boundary_acceleration, const float* boundary_jerk,
-    const float* current_velocity, const float* current_acceleration,
-    const float* current_knots, const float* goal_position,
-    const float* max_velocity, const float* max_acceleration,
-    const float* max_jerk, const float* basis_position,
-    const float* basis_velocity, const float* basis_acceleration,
-    const float* basis_jerk, const float* path_normal,
-    const float* derivative_scale, int steps, int dof, int knots,
-    float regularization, float trust_region_regularization,
-    float path_diagonal_scale, float irls_epsilon, float* candidate_knots) {
+__global__ void solve_irls_kernel(const float *position_residual, const float *boundary_velocity,
+                                  const float *boundary_acceleration, const float *boundary_jerk,
+                                  const float *current_velocity, const float *current_acceleration,
+                                  const float *current_knots, const float *goal_position,
+                                  const float *max_velocity, const float *max_acceleration,
+                                  const float *max_jerk, const float *basis_position,
+                                  const float *basis_velocity, const float *basis_acceleration,
+                                  const float *basis_jerk, const float *path_normal,
+                                  const float *derivative_scale, int steps, int dof, int knots,
+                                  int interpolation_steps, float regularization,
+                                  float trust_region_regularization, float path_diagonal_scale,
+                                  float irls_epsilon, float *candidate_knots) {
   extern __shared__ float workspace[];
   const int free_knots = knots - 1;
-  float* velocity_weight = workspace;
-  float* acceleration_weight = velocity_weight + steps;
-  float* normal = acceleration_weight + steps;
-  float* rhs = normal + free_knots * free_knots;
+  float *normal = workspace;
+  float *rhs = normal + free_knots * NORMAL_BANDWIDTH;
   const int lane = static_cast<int>(blockIdx.x);
   const int seed = lane / dof;
   const int joint = lane - seed * dof;
   const int state_base = seed * steps * dof;
-  const float inverse_velocity_squared =
-      1.0F / (max_velocity[joint] * max_velocity[joint]);
+  const float inverse_velocity_squared = 1.0F / (max_velocity[joint] * max_velocity[joint]);
   const float inverse_acceleration_squared =
       1.0F / (max_acceleration[joint] * max_acceleration[joint]);
-  const float inverse_jerk_squared =
-      1.0F / (max_jerk[joint] * max_jerk[joint]);
-
-  for (int step = static_cast<int>(threadIdx.x); step < steps;
-       step += static_cast<int>(blockDim.x)) {
-    const int state_index = state_base + step * dof + joint;
-    const float velocity_ratio = fmaxf(
-        fabsf(current_velocity[state_index]) / max_velocity[joint],
-        irls_epsilon);
-    const float acceleration_ratio = fmaxf(
-        fabsf(current_acceleration[state_index]) / max_acceleration[joint],
-        irls_epsilon);
-    const float velocity_ratio_squared = velocity_ratio * velocity_ratio;
-    velocity_weight[step] =
-        3.0F * velocity_ratio_squared * velocity_ratio_squared *
-        inverse_velocity_squared;
-    acceleration_weight[step] =
-        1.5F * acceleration_ratio * inverse_acceleration_squared;
-  }
-  __syncthreads();
-
-  const int matrix_values = free_knots * free_knots;
-  for (int matrix_index = static_cast<int>(threadIdx.x);
-       matrix_index < matrix_values;
-       matrix_index += static_cast<int>(blockDim.x)) {
-    const int row = matrix_index / free_knots;
-    const int column = matrix_index - row * free_knots;
-    if (column <= row) {
-      float derivative_normal = 0.0F;
-      for (int step = 0; step < steps; ++step) {
-        const int row_index = step * free_knots + row;
-        const int column_index = step * free_knots + column;
-        derivative_normal +=
-            basis_velocity[row_index] * velocity_weight[step] *
-                basis_velocity[column_index] +
-            basis_acceleration[row_index] * acceleration_weight[step] *
-                basis_acceleration[column_index] +
-            basis_jerk[row_index] * inverse_jerk_squared *
-                basis_jerk[column_index];
-      }
-      float value = path_normal[matrix_index] + derivative_scale[seed] * derivative_normal;
-      if (row == column) {
-        value += (regularization + trust_region_regularization) *
-                 path_diagonal_scale;
-      }
-      normal[matrix_index] = value;
-    }
-  }
+  const float inverse_jerk_squared = 1.0F / (max_jerk[joint] * max_jerk[joint]);
 
   for (int row = static_cast<int>(threadIdx.x); row < free_knots;
        row += static_cast<int>(blockDim.x)) {
+    float derivative_normal[NORMAL_BANDWIDTH] = {};
     float path_rhs = 0.0F;
     float derivative_rhs = 0.0F;
-    for (int step = 0; step < steps; ++step) {
-      const int state_index = state_base + step * dof + joint;
+    const int first_step = (row + 1) * interpolation_steps;
+    const int end_step = min(steps, (row + NORMAL_BANDWIDTH + 1) * interpolation_steps);
+    for (int step = first_step; step < end_step; ++step) {
       const int basis_index = step * free_knots + row;
-      path_rhs += position_residual[state_index] * basis_position[basis_index];
+      const float position_basis = basis_position[basis_index];
+      const float velocity_basis = basis_velocity[basis_index];
+      const float acceleration_basis = basis_acceleration[basis_index];
+      const float jerk_basis = basis_jerk[basis_index];
+      if (position_basis == 0.0F && velocity_basis == 0.0F && acceleration_basis == 0.0F &&
+          jerk_basis == 0.0F) {
+        continue;
+      }
+      const int state_index = state_base + step * dof + joint;
+      const float velocity_ratio =
+          fmaxf(fabsf(current_velocity[state_index]) / max_velocity[joint], irls_epsilon);
+      const float acceleration_ratio =
+          fmaxf(fabsf(current_acceleration[state_index]) / max_acceleration[joint], irls_epsilon);
+      const float velocity_ratio_squared = velocity_ratio * velocity_ratio;
+      const float velocity_weight =
+          3.0F * velocity_ratio_squared * velocity_ratio_squared * inverse_velocity_squared;
+      const float acceleration_weight = 1.5F * acceleration_ratio * inverse_acceleration_squared;
+#pragma unroll
+      for (int offset = 0; offset < NORMAL_BANDWIDTH; ++offset) {
+        if (offset <= row) {
+          const int column_index = basis_index - offset;
+          derivative_normal[offset] +=
+              velocity_basis * velocity_weight * basis_velocity[column_index] +
+              acceleration_basis * acceleration_weight * basis_acceleration[column_index] +
+              jerk_basis * inverse_jerk_squared * basis_jerk[column_index];
+        }
+      }
+      path_rhs += position_residual[state_index] * position_basis;
       derivative_rhs -=
-          basis_velocity[basis_index] * velocity_weight[step] *
-              boundary_velocity[state_index] +
-          basis_acceleration[basis_index] * acceleration_weight[step] *
-              boundary_acceleration[state_index] +
-          basis_jerk[basis_index] * inverse_jerk_squared *
-              boundary_jerk[state_index];
+          velocity_basis * velocity_weight * boundary_velocity[state_index] +
+          acceleration_basis * acceleration_weight * boundary_acceleration[state_index] +
+          jerk_basis * inverse_jerk_squared * boundary_jerk[state_index];
     }
+#pragma unroll
+    for (int offset = 0; offset < NORMAL_BANDWIDTH; ++offset) {
+      if (offset <= row) {
+        normal[row * NORMAL_BANDWIDTH + offset] =
+            path_normal[row * free_knots + row - offset] +
+            derivative_scale[seed] * derivative_normal[offset];
+      }
+    }
+    normal[row * NORMAL_BANDWIDTH] +=
+        (regularization + trust_region_regularization) * path_diagonal_scale;
     const int knot_index = (seed * knots + row) * dof + joint;
     rhs[row] = path_rhs + derivative_scale[seed] * derivative_rhs +
                trust_region_regularization * path_diagonal_scale * current_knots[knot_index];
   }
   __syncthreads();
 
-  // Each column depends on previous columns; its off-diagonal rows are independent.
-  // Keep the factorization within one warp so synchronization does not stall the block.
+  // Banded Cholesky preserves the exact spline normal system while using O(K)
+  // storage and work for factorization. One warp owns the dependent columns.
   if (threadIdx.x < 32) {
     for (int column = 0; column < free_knots; ++column) {
       if (threadIdx.x == 0) {
-        float value = normal[column * free_knots + column];
-        for (int inner = 0; inner < column; ++inner) {
-          const float entry = normal[column * free_knots + inner];
+        float value = normal[column * NORMAL_BANDWIDTH];
+        for (int inner = max(0, column - NORMAL_BANDWIDTH + 1); inner < column; ++inner) {
+          const float entry = normal[column * NORMAL_BANDWIDTH + column - inner];
           value -= entry * entry;
         }
-        normal[column * free_knots + column] = sqrtf(fmaxf(value, 1.0E-20F));
+        normal[column * NORMAL_BANDWIDTH] = sqrtf(fmaxf(value, 1.0E-20F));
       }
       __syncwarp();
       for (int row = column + 1 + static_cast<int>(threadIdx.x);
-           row < free_knots; row += 32) {
-        float value = normal[row * free_knots + column];
-        for (int inner = 0; inner < column; ++inner) {
-          value -= normal[row * free_knots + inner] *
-                   normal[column * free_knots + inner];
+           row < min(free_knots, column + NORMAL_BANDWIDTH); row += 32) {
+        float value = normal[row * NORMAL_BANDWIDTH + row - column];
+        for (int inner = max(0, row - NORMAL_BANDWIDTH + 1); inner < column; ++inner) {
+          value -= normal[row * NORMAL_BANDWIDTH + row - inner] *
+                   normal[column * NORMAL_BANDWIDTH + column - inner];
         }
-        normal[row * free_knots + column] =
-            value / normal[column * free_knots + column];
+        normal[row * NORMAL_BANDWIDTH + row - column] = value / normal[column * NORMAL_BANDWIDTH];
       }
       __syncwarp();
     }
@@ -365,26 +346,23 @@ __global__ void solve_irls_kernel(
   if (threadIdx.x == 0) {
     for (int row = 0; row < free_knots; ++row) {
       float value = rhs[row];
-      for (int column = 0; column < row; ++column) {
-        value -= normal[row * free_knots + column] * rhs[column];
+      for (int column = max(0, row - NORMAL_BANDWIDTH + 1); column < row; ++column) {
+        value -= normal[row * NORMAL_BANDWIDTH + row - column] * rhs[column];
       }
-      rhs[row] = value / normal[row * free_knots + row];
+      rhs[row] = value / normal[row * NORMAL_BANDWIDTH];
     }
     for (int reverse_row = 0; reverse_row < free_knots; ++reverse_row) {
       const int row = free_knots - 1 - reverse_row;
       float value = rhs[row];
-      for (int column = row + 1; column < free_knots; ++column) {
-        const int candidate_index =
-            (seed * knots + column) * dof + joint;
-        value -= normal[column * free_knots + row] *
-                 candidate_knots[candidate_index];
+      for (int column = row + 1; column < min(free_knots, row + NORMAL_BANDWIDTH); ++column) {
+        const int candidate_index = (seed * knots + column) * dof + joint;
+        value -=
+            normal[column * NORMAL_BANDWIDTH + column - row] * candidate_knots[candidate_index];
       }
       const int candidate_index = (seed * knots + row) * dof + joint;
-      candidate_knots[candidate_index] =
-          value / normal[row * free_knots + row];
+      candidate_knots[candidate_index] = value / normal[row * NORMAL_BANDWIDTH];
     }
-    candidate_knots[(seed * knots + free_knots) * dof + joint] =
-        goal_position[seed * dof + joint];
+    candidate_knots[(seed * knots + free_knots) * dof + joint] = goal_position[seed * dof + joint];
   }
 }
 

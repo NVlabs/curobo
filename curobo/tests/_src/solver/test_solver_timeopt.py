@@ -22,7 +22,10 @@ from curobo.content import get_robot_configs_path
 def test_timeopt_solver_cspace_replay(use_cuda_graph: bool, capacity: int) -> None:
     """Every seed is timeopt, selected output is executable, and replay refreshes it."""
     config = TrajOptSolverCfg.create(
-        "franka.yml", num_seeds=2, enable_timeopt=True, use_cuda_graph=use_cuda_graph,
+        "franka.yml",
+        num_seeds=2,
+        enable_timeopt=True,
+        use_cuda_graph=use_cuda_graph,
         interpolation_buffer_size=capacity,
     )
     solver = TrajOptSolver(config)
@@ -79,7 +82,6 @@ def test_ik_rrt_timeopt_without_optimization(monkeypatch: pytest.MonkeyPatch) ->
         graph_planner_algorithm="rrt",
         enable_trajopt=False,
         enable_timeopt=True,
-        create_constrained_rrt=False,
         use_cuda_graph=True,
     )
     with MotionPlanner(config) as planner:
@@ -182,7 +184,6 @@ def test_batched_timeopt_selects_per_problem() -> None:
         num_trajopt_seeds=2,
         max_batch_size=2,
         enable_timeopt=True,
-        create_constrained_rrt=False,
     )
     planner = BatchMotionPlanner(config)
     try:

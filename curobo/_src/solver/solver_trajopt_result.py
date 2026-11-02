@@ -127,17 +127,29 @@ class TrajOptSolverResult(BaseSolverResult):
     maximum_trajectory_dt: Optional[torch.Tensor] = None
     minimum_trajectory_dt: Optional[torch.Tensor] = None
 
-    #: Origin of the returned trajectory: linear_fit, graph_fit, trajopt, or mixed.
+    #: Origin of the returned trajectory: linear_fit, graph_fit, trajopt, waypoints, or mixed.
     trajectory_source: Optional[str] = None
 
     #: Fixed-path timeopt duration [batch, return_seeds], when timeopt is enabled.
     timeopt_duration: Optional[torch.Tensor] = None
     #: Seconds spent on timeopt and validation for all candidates in this solve.
     timeopt_time: float = 0.0
+    #: Selected native reference errors in meters, shaped ``[batch,seeds,horizon,links]``.
+    path_position_error: Optional[torch.Tensor] = None
+    #: Selected native reference rotation errors in radians, with the same shape.
+    path_rotation_error: Optional[torch.Tensor] = None
+    #: Native target indices corresponding to user waypoints, excluding the prepended start.
+    waypoint_indices: Optional[torch.Tensor] = None
 
     def copy_at_batch_indices(self, other: "TrajOptSolverResult", mask: torch.Tensor) -> None:
         """Extend base method to also copy interpolated trajectory fields."""
         super().copy_at_batch_indices(other, mask)
+        if self.js_solution is not None and other.js_solution is not None:
+            for name in ("knot", "knot_dt"):
+                destination = getattr(self.js_solution, name)
+                source = getattr(other.js_solution, name)
+                if destination is not None and source is not None:
+                    destination[mask] = source[mask]
         if self.interpolated_trajectory is not None and other.interpolated_trajectory is not None:
             for attr in ("position", "velocity", "acceleration", "jerk", "dt"):
                 dst = getattr(self.interpolated_trajectory, attr, None)
@@ -148,6 +160,18 @@ class TrajOptSolverResult(BaseSolverResult):
             self.interpolated_last_tstep[mask] = other.interpolated_last_tstep[mask]
         if self.timeopt_duration is not None and other.timeopt_duration is not None:
             self.timeopt_duration[mask] = other.timeopt_duration[mask]
+        for name in ("path_position_error", "path_rotation_error"):
+            destination, source = getattr(self, name), getattr(other, name)
+            if destination is not None and source is not None:
+                destination[mask] = source[mask]
+        for name, destination in self.debug_info.get("validation", {}).items():
+            source = other.debug_info.get("validation", {}).get(name)
+            if source is not None:
+                destination[mask] = source[mask]
+        if "terminal_ik_valid" in self.debug_info and "terminal_ik_valid" in other.debug_info:
+            self.debug_info["terminal_ik_valid"][mask] = other.debug_info["terminal_ik_valid"][
+                mask
+            ]
 
     def motion_time(self) -> torch.Tensor:
         """Return executable duration; js_solution retains native timing for comparison."""
@@ -167,6 +191,10 @@ class TrajOptSolverResult(BaseSolverResult):
             if self.seed_rank is not None:
                 og_data_ptr = self.seed_rank.data_ptr()
         base_clone = super().clone()
+        if "validation" in self.debug_info:
+            base_clone.debug_info["validation"] = {
+                name: value.clone() for name, value in self.debug_info["validation"].items()
+            }
         if self.seed_rank is not None:
             if curobo_runtime.debug:
                 new_data_ptr = base_clone.seed_rank.data_ptr()
@@ -203,7 +231,9 @@ class TrajOptSolverResult(BaseSolverResult):
             optimized_seeds=base_clone.optimized_seeds,
             metrics=base_clone.metrics,
             interpolated_metrics=(
-                self.interpolated_metrics.clone() if self.interpolated_metrics is not None else None
+                self.interpolated_metrics.clone()
+                if self.interpolated_metrics is not None
+                else None
             ),
             position_tolerance=base_clone.position_tolerance,
             orientation_tolerance=base_clone.orientation_tolerance,
@@ -222,6 +252,15 @@ class TrajOptSolverResult(BaseSolverResult):
                 self.timeopt_duration.clone() if self.timeopt_duration is not None else None
             ),
             timeopt_time=self.timeopt_time,
+            path_position_error=(
+                self.path_position_error.clone() if self.path_position_error is not None else None
+            ),
+            path_rotation_error=(
+                self.path_rotation_error.clone() if self.path_rotation_error is not None else None
+            ),
+            waypoint_indices=(
+                self.waypoint_indices.clone() if self.waypoint_indices is not None else None
+            ),
         )
 
     @profiler.record_function("trajopt_solver_result/get_interpolated_plan")

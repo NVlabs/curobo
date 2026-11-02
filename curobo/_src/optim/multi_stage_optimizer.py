@@ -10,7 +10,7 @@ can use it interchangeably with single-stage optimizers.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.autograd.profiler as profiler
@@ -128,6 +128,15 @@ class MultiStageOptimizer:
 
         self.opt_dt = timer.stop()
         return iteration_state.best_action
+
+    def continue_optimization(self, action: torch.Tensor) -> torch.Tensor:
+        """Continue only the final stage, preserving its existing optimizer state."""
+        optimizer = self.optimizers[-1]
+        if hasattr(optimizer, "continue_optimization"):
+            return optimizer.continue_optimization()
+        # Optimizers without an explicit iteration state retain their native history.
+        optimizer.reinitialize(action, clear_optimizer_state=False)
+        return optimizer.optimize(action)
 
     def _opt_iters(
         self, iteration_state: OptimizationIterationState

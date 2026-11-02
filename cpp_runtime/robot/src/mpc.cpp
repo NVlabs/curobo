@@ -37,6 +37,7 @@ class MpcRuntime final {
     TrajectoryOptimizationConfig optimizer_config;
     optimizer_config.device_ordinal = source.config_.trajectory_optimization.device_ordinal;
     optimizer_config.num_seeds = CANDIDATES;
+    optimizer_config.num_knots = source.config_.trajectory_optimization.num_knots;
     optimizer_config.max_iterations = config.iterations;
     optimizer_config.line_search_backtracking = config.line_search_backtracking;
     optimizer_config.finetune_attempts = 0;
@@ -454,6 +455,10 @@ class MpcRuntime final {
     // Each lane optimizes the same spatial seed at its fixed phase timing.
     opt.optimize_pass(request_, reinterpret_cast<CUstream>(stream),
                       opt.config_.max_iterations);
+    // MPC retains fixed phase timing and consumes this pass's best-state metrics.
+    opt.evaluate(opt.best_action_.ptr(), opt.config_.num_seeds, opt.search_costs_.ptr(),
+                 opt.search_gradients_.ptr(), request_, reinterpret_cast<CUstream>(stream));
+    opt.launch_metrics_collisions(opt.config_.num_seeds, reinterpret_cast<CUstream>(stream));
     opt.validate_interpolated(opt.best_action_.ptr(), reinterpret_cast<CUstream>(stream));
     // Apply the same sampling-density guard to the native candidate, not only
     // to execution-layer checks. Padding is the terminal hold, as in TrajOpt.

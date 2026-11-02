@@ -4,6 +4,7 @@
 
 #include <cuda.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,14 +27,14 @@ class RolloutRuntime final {
 
   int num_links() const { return manifest_.num_links; }
   int cache_floats_per_link() const {
-    return profile_.cache_floats_per_link;
+    return manifest_.forward_profiles.empty() ? profile_.cache_floats_per_link : 32;
   }
   CUdeviceptr effort_bounds() const { return effort_bounds_.ptr(); }
 
   void launch_inverse_dynamics(CUdeviceptr position, CUdeviceptr velocity,
                                CUdeviceptr acceleration, CUdeviceptr effort,
                                CUdeviceptr forward_cache, int states,
-                               CUstream stream) const;
+                               CUstream stream, bool save_for_backward = true) const;
   void launch_inverse_dynamics_backward(
       CUdeviceptr effort_gradient, CUdeviceptr position, CUdeviceptr velocity,
       CUdeviceptr forward_cache, CUdeviceptr gradient_position,
@@ -72,6 +73,7 @@ class RolloutRuntime final {
   curobo_robot_runtime::DeviceBuffer effort_bounds_;
   curobo_robot_runtime::KernelModule forward_kernel_;
   curobo_robot_runtime::KernelModule backward_kernel_;
+  std::vector<std::unique_ptr<curobo_robot_runtime::KernelModule>> forward_kernels_;
 };
 
 }  // namespace curobo::robot::detail

@@ -31,6 +31,7 @@ def create_goalset_pose_distance_kernel_with_constants(num_goalset: int):
         goal_position: wp.array(dtype=wp.vec3),
         goal_quat: wp.array(dtype=wp.vec4),
         idxs_goal: wp.array(dtype=wp.int32),
+        valid_steps: wp.array(dtype=wp.int32),
         position_orientation_weight: wp.array(dtype=wp.float32),
         position_metric: wp.array(dtype=wp.mat33),
         rotation_metric: wp.array(dtype=wp.mat33),
@@ -44,6 +45,7 @@ def create_goalset_pose_distance_kernel_with_constants(num_goalset: int):
         out_goalset_idx: wp.array(dtype=wp.int32),
         batch_size: wp.int32,
         horizon: wp.int32,
+        goal_horizon: wp.int32,
         num_links: wp.int32,
     ):
         thread_index = wp.tid()
@@ -55,7 +57,7 @@ def create_goalset_pose_distance_kernel_with_constants(num_goalset: int):
         link_index = thread_index - batch_index * horizon * num_links - horizon_index * num_links
 
         criteria_index = link_index
-        if horizon_index < horizon - 1:
+        if horizon_index < valid_steps[batch_index] - 1:
             criteria_index = num_links + link_index
 
         tolerance = pose_tolerance[criteria_index]
@@ -69,7 +71,14 @@ def create_goalset_pose_distance_kernel_with_constants(num_goalset: int):
             + local_rotation_metric[1, 1]
             + local_rotation_metric[2, 2]
         )
-        if metric_trace <= 0.0:
+        if metric_trace <= 0.0 or horizon_index >= valid_steps[batch_index]:
+            out_distance[2 * thread_index] = 0.0
+            out_distance[2 * thread_index + 1] = 0.0
+            out_position_distance[thread_index] = 0.0
+            out_rotation_distance[thread_index] = 0.0
+            out_position_gradient[thread_index] = wp.vec3(0.0, 0.0, 0.0)
+            out_rotation_gradient[thread_index] = wp.vec4(0.0, 0.0, 0.0, 0.0)
+            out_goalset_idx[thread_index] = 0
             return
         position_weight = position_orientation_weight[0]
         rotation_weight = position_orientation_weight[1]
@@ -97,8 +106,11 @@ def create_goalset_pose_distance_kernel_with_constants(num_goalset: int):
         )
 
         for goalset_index in range(num_goalset):
+            target_step = wp.int32(0)
+            if goal_horizon > 1:
+                target_step = horizon_index
             goal_flat_index = (
-                selected_goal_batch * num_links * num_goalset
+                (selected_goal_batch * goal_horizon + target_step) * num_links * num_goalset
                 + link_index * num_goalset
                 + goalset_index
             )
@@ -186,7 +198,7 @@ def create_goalset_pose_distance_kernel_with_constants(num_goalset: int):
         out_rotation_gradient[thread_index] = quaternion_gradient_wxyz
         out_goalset_idx[thread_index] = best_goal_index
 
-    kernel_name = f"goalset_pose_distance_{num_goalset}_inactive_exit"
+    kernel_name = f"goalset_pose_distance_{num_goalset}_temporal_v1"
     return warp_kernel(kernel_name)(_goalset_pose_distance_template)
 
 
@@ -214,6 +226,7 @@ class ToolPoseDistance(torch.autograd.Function):
         out_goalset_idx: torch.Tensor,
         use_grad_input: bool,
         warp_kernel,
+        valid_steps: Optional[torch.Tensor] = None,
     ):
         """Compute absolute tool-pose costs for all batch, horizon, and link entries."""
         ctx.set_materialize_grads(False)
@@ -221,14 +234,17 @@ class ToolPoseDistance(torch.autograd.Function):
             log_and_raise("current_position must be a 4D tensor")
         if current_quat.ndim != 4:
             log_and_raise("current_quat must be a 4D tensor")
-        if goal_position.ndim != 4:
+        if goal_position.ndim == 4:
+            goal_position = goal_position.unsqueeze(1)
+            goal_quat = goal_quat.unsqueeze(1)
+        if goal_position.ndim != 5:
             log_and_raise(
-                "goal_position must have shape (-1, num_links, num_goalset, 3), "
+                "goal_position must have shape (goals, horizon, links, goalset, 3), "
                 + f"got {goal_position.shape}"
             )
-        if goal_quat.ndim != 4:
+        if goal_quat.ndim != 5:
             log_and_raise(
-                "goal_quat must have shape (-1, num_links, num_goalset, 4), "
+                "goal_quat must have shape (goals, horizon, links, goalset, 4), "
                 + f"got {goal_quat.shape}"
             )
 
@@ -243,8 +259,17 @@ class ToolPoseDistance(torch.autograd.Function):
             log_and_raise("goal_quat must end in dimension 4")
         if goal_position.shape[:-1] != goal_quat.shape[:-1]:
             log_and_raise("goal_position and goal_quat must have matching leading shapes")
-        if goal_position.shape[1] != num_links:
+        if goal_position.shape[2] != num_links:
             log_and_raise("goal poses must have the same number of links as current poses")
+        goal_horizon = goal_position.shape[1]
+        if goal_horizon not in (1, horizon):
+            log_and_raise("goal horizon must be one or match the evaluation horizon")
+        if valid_steps is None:
+            valid_steps = torch.full(
+                (batch_size,), horizon, device=current_position.device, dtype=torch.int32
+            )
+        if valid_steps.shape != (batch_size,) or valid_steps.dtype != torch.int32:
+            log_and_raise("valid_steps must be int32 with shape (batch_size,)")
         if idxs_goal.shape != (batch_size, 1):
             log_and_raise(f"idxs_goal must have shape ({batch_size}, 1), got {idxs_goal.shape}")
         if position_orientation_weight.shape != (2,):
@@ -279,6 +304,7 @@ class ToolPoseDistance(torch.autograd.Function):
             log_and_raise("out_goalset_idx has an invalid shape")
 
         ctx.use_grad_input = use_grad_input
+        ctx.input_count = len(ctx.needs_input_grad)
         wp_device, wp_stream = get_warp_device_stream(current_position)
         launch_dim = batch_size * horizon * num_links
         wp.launch(
@@ -290,6 +316,7 @@ class ToolPoseDistance(torch.autograd.Function):
                 wp.from_torch(goal_position.detach().view(-1, 3), dtype=wp.vec3),
                 wp.from_torch(goal_quat.detach().view(-1, 4), dtype=wp.vec4),
                 wp.from_torch(idxs_goal.detach().view(-1), dtype=wp.int32),
+                wp.from_torch(valid_steps.view(-1), dtype=wp.int32),
                 wp.from_torch(position_orientation_weight.view(-1), dtype=wp.float32),
                 wp.from_torch(position_metric.view(-1, 3, 3), dtype=wp.mat33),
                 wp.from_torch(rotation_metric.view(-1, 3, 3), dtype=wp.mat33),
@@ -303,6 +330,7 @@ class ToolPoseDistance(torch.autograd.Function):
                 wp.from_torch(out_goalset_idx.view(-1), dtype=wp.int32),
                 batch_size,
                 horizon,
+                goal_horizon,
                 num_links,
             ],
             device=wp_device,
@@ -346,4 +374,6 @@ class ToolPoseDistance(torch.autograd.Function):
                 else:
                     quaternion_input_gradient = rotation_gradient
 
-        return (position_input_gradient, quaternion_input_gradient) + (None,) * 16
+        return (position_input_gradient, quaternion_input_gradient) + (None,) * (
+            ctx.input_count - 2
+        )

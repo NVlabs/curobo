@@ -4,12 +4,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Optional
 
 import torch
 
 from curobo._src.motion.motion_trajectory_timeopt import TrajectoryTimeOpt
 from curobo._src.motion.motion_trajectory_timeopt_cfg import TrajectoryTimeOptCfg
+from curobo._src.rollout.metrics import RolloutMetrics
 from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_joint_ops import repeat_joint_state_seeds
 from curobo._src.types.control_space import ControlSpace
@@ -17,6 +18,31 @@ from curobo._src.util.logging import log_and_raise
 
 if TYPE_CHECKING:
     from curobo._src.solver.solver_trajopt import TrajOptSolver
+
+
+def trajectory_validation_masks(
+    metrics: RolloutMetrics, dynamics_valid: Optional[torch.Tensor] = None
+) -> Dict[str, torch.Tensor]:
+    """Separate per-lane pose, collision, and joint-limit/dynamic acceptance for diagnostics."""
+    position = metrics.state.joint_state.position
+    lanes = position.shape[0]
+    path = torch.ones(lanes, device=position.device, dtype=torch.bool)
+    collision = torch.ones_like(path)
+    dynamic = torch.ones_like(path) if dynamics_valid is None else dynamics_valid.clone()
+    constraints = metrics.costs_and_constraints
+    for collection in (constraints.constraints, constraints.hybrid_costs_constraints):
+        for name, values in zip(collection.names, collection.values):
+            valid = (values <= 0).reshape(lanes, -1).all(dim=-1)
+            if "collision" in name:
+                collision = collision & valid
+            elif "pose" in name or "relative_transform" in name:
+                path = path & valid
+            else:
+                dynamic = dynamic & valid
+    for name, values in zip(metrics.convergence.names, metrics.convergence.values):
+        if name == "tool_pose_path_valid":
+            path = path & values.reshape(lanes, -1).all(dim=-1)
+    return {"path_valid": path, "collision_valid": collision, "limits_and_dynamics_valid": dynamic}
 
 
 class TimeOptSolver:
@@ -27,6 +53,7 @@ class TimeOptSolver:
         if solver.transition_model.control_space != ControlSpace.BSPLINE_3:
             log_and_raise("TrajOpt timeopt requires cubic B-spline trajectories")
         self.config = solver.config
+        self._set_reference_samples = solver._set_dense_reference_samples
         self.rollout = solver.additional_metrics_rollouts["interpolated_rollout"]
         self.limits = solver.kinematics.config.kinematics_config.joint_limits
         self.lanes = lanes
@@ -70,6 +97,9 @@ class TimeOptSolver:
         self._sample_dt.copy_(duration / intervals)
         times = self._sample_dt[:, None] * self._sample_index
         sampled = self.optimizer.sample(times.contiguous())
+        self._set_reference_samples(
+            self.optimizer._sample_progress, intervals.to(dtype=torch.int32) + 1
+        )
         sampled.dt = self._sample_dt
         finite = torch.ones_like(timeopt.success)
         for name in ("position", "velocity", "acceleration", "jerk"):
@@ -95,6 +125,10 @@ class TimeOptSolver:
         if isinstance(feasible, torch.Tensor):
             feasible = feasible.reshape(self.lanes, -1).all(dim=-1)
         success = timeopt.success & fits & finite & feasible
+        self.validation_masks = trajectory_validation_masks(
+            metrics,
+            timeopt.success & fits & finite,
+        )
         return sampled, intervals.to(torch.int64) + 1, success, duration
 
     def reset_cuda_graph(self) -> None:

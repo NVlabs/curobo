@@ -162,6 +162,9 @@ def launch_line_search(
 
 def launch_lbfgs_step(
     step_vec: torch.Tensor,
+    candidates: torch.Tensor,
+    candidate_scales: torch.Tensor,
+    candidate_beta: torch.Tensor,
     rho_buffer: torch.Tensor,
     y_buffer: torch.Tensor,
     s_buffer: torch.Tensor,
@@ -186,6 +189,9 @@ def launch_lbfgs_step(
     """Launch LBFGS step kernel using cuda.core runtime compilation.
 
     Args:
+        candidates: Output trial points, shape ``(batch_size, probes, v_dim)``.
+        candidate_scales: Positive step multipliers, shape ``(probes,)``.
+        candidate_beta: Current backtracking multiplier, shape ``(batch_size,)``.
         All tensor arguments and parameters as expected by LBFGS step kernel
 
     Returns:
@@ -315,6 +321,10 @@ def launch_lbfgs_step(
         scale_step,
         curvature_update_valid.data_ptr(),
         line_search_status.data_ptr(),
+        candidate_scales.data_ptr(),
+        candidate_beta.data_ptr(),
+        candidates.data_ptr(),
+        candidate_scales.numel(),
     )
 
     # Launch kernel
@@ -325,6 +335,9 @@ def launch_lbfgs_step(
 
 def launch_lbfgs_compact_step(
     step_vec: torch.Tensor,
+    candidates: torch.Tensor,
+    candidate_scales: torch.Tensor,
+    candidate_beta: torch.Tensor,
     rho_buffer: torch.Tensor,
     y_buffer: torch.Tensor,
     s_buffer: torch.Tensor,
@@ -351,6 +364,9 @@ def launch_lbfgs_compact_step(
 
     Args:
         step_vec: Output direction buffer with shape ``(batch_size, v_dim)``.
+        candidates: Output trial points, shape ``(batch_size, probes, v_dim)``.
+        candidate_scales: Positive step multipliers, shape ``(probes,)``.
+        candidate_beta: Current backtracking multiplier, shape ``(batch_size,)``.
         rho_buffer: Reciprocal curvature history with shape
             ``(history_m, batch_size, 1, 1)``.
         y_buffer: Gradient-difference history with shape
@@ -469,6 +485,10 @@ def launch_lbfgs_compact_step(
         history_count.data_ptr(),
         curvature_update_valid.data_ptr(),
         line_search_status.data_ptr(),
+        candidate_scales.data_ptr(),
+        candidate_beta.data_ptr(),
+        candidates.data_ptr(),
+        candidate_scales.numel(),
     )
     launch_kernel(kernel_name, stream, config, kernel, *kernel_args)
     return [step_vec, rho_buffer, y_buffer, s_buffer, x_0, grad_0]

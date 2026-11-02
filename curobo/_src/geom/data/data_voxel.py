@@ -17,6 +17,7 @@ from __future__ import annotations
 
 # Standard Library
 from dataclasses import dataclass, field
+from math import isfinite, prod
 from typing import List, Optional
 
 # Third Party
@@ -405,6 +406,75 @@ class VoxelData:
     # -------------------------------------------------------------------------
     # Load / Add Methods
     # -------------------------------------------------------------------------
+
+    def add(self, voxel_grid: VoxelGrid, env_idx: int = 0) -> int:
+        """Append one grid to existing storage without changing other grids.
+
+        Args:
+            voxel_grid: Grid with ESDF features matching its dimensions and voxel size.
+            env_idx: Environment to append to.
+
+        Returns:
+            Index of the appended grid in the environment.
+
+        Raises:
+            ValueError: If the environment, name, capacity, or grid data is invalid.
+                Validation failures leave existing storage unchanged.
+        """
+        if not 0 <= env_idx < self.num_envs:
+            log_and_raise("Voxel environment index is out of range")
+        current_count = self.get_active_count(env_idx)
+        if current_count >= self.max_n:
+            log_and_raise(f"Cannot add voxel grid, cache is full ({self.max_n} grids)")
+        if voxel_grid.name in self.names[env_idx]:
+            log_and_raise(f"Voxel grid already exists with name: {voxel_grid.name}")
+        if voxel_grid.feature_tensor is None:
+            log_and_raise("Voxel grid feature_tensor is required")
+        if (
+            not isfinite(voxel_grid.voxel_size)
+            or voxel_grid.voxel_size <= 0
+            or len(voxel_grid.dims) != 3
+            or any(not isfinite(dim) or dim <= 0 for dim in voxel_grid.dims)
+        ):
+            log_and_raise("Voxel grid dimensions and voxel size must be finite and positive")
+        grid_shape = voxel_grid.get_grid_shape()[0]
+        if any(size <= 0 for size in grid_shape):
+            log_and_raise("Voxel grid must contain at least one voxel in each dimension")
+        num_features = voxel_grid.feature_tensor.numel()
+        capacity = self.features.shape[2]
+        if num_features > capacity:
+            log_and_raise(
+                f"Feature tensor too large for buffer: capacity={capacity} new={num_features}"
+            )
+        if num_features != prod(grid_shape):
+            log_and_raise(
+                f"Feature tensor size {num_features} doesn't match grid dims {grid_shape}"
+            )
+
+        # Prepare every input before writing the new slot or publishing its count.
+        inverse_pose = (
+            Pose.from_list(voxel_grid.pose, self.device_cfg).inverse().get_pose_vector().reshape(7)
+        )
+        dimensions = torch.as_tensor(voxel_grid.dims, device=self.dims.device, dtype=self.dims.dtype)
+        params = torch.tensor(
+            [dim / voxel_grid.voxel_size for dim in voxel_grid.dims] + [voxel_grid.voxel_size],
+            device=self.params.device,
+            dtype=self.params.dtype,
+        )
+        features = voxel_grid.feature_tensor.to(
+            device=self.features.device, dtype=self.features.dtype
+        ).reshape(-1, 1)
+
+        self.params[env_idx, current_count].copy_(params)
+        self.dims[env_idx, current_count, :3].copy_(dimensions)
+        self.inv_pose[env_idx, current_count, :7].copy_(inverse_pose)
+        self.features[env_idx, current_count, :num_features].copy_(features)
+        self.features[env_idx, current_count, num_features:] = 0
+        self.obstacle_layers[env_idx, current_count] = 1
+        self.enable[env_idx, current_count] = 1
+        self.names[env_idx][current_count] = voxel_grid.name
+        self.count[env_idx] = current_count + 1
+        return current_count
 
     def load_batch(self, voxel_grids: List[VoxelGrid], env_idx: int) -> None:
         """Load a batch of voxel grids into an environment, replacing existing ones.

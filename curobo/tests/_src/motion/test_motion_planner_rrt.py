@@ -4,7 +4,6 @@
 
 # Standard Library
 from types import SimpleNamespace
-from typing import Any
 
 # Third Party
 import pytest
@@ -27,9 +26,7 @@ from curobo._src.motion.motion_planner import (
 )
 from curobo._src.motion.motion_planner_batch import BatchMotionPlanner
 from curobo._src.motion.motion_planner_cfg import MotionPlannerCfg
-from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
-from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
@@ -157,7 +154,7 @@ def test_rrt_disables_dynamics_without_changing_trajectory_validation(
     try:
         assert robot.dynamics is not None
         shared_params = robot.kinematics.kinematics_config
-        for rrt in (planner.graph_planner, planner.constrained_rrt_planner):
+        for rrt in (planner.graph_planner,):
             rrt._get_batched_workspace(1)
             rrt._get_direct_connector(2)
             for rollout in rrt.get_all_rollout_instances():
@@ -180,49 +177,6 @@ def test_rrt_disables_dynamics_without_changing_trajectory_validation(
                 assert rollout.config.constraint_cfg.cspace_cfg.compute_effort
         planner.update_link_inertial("attached_object", mass=1.0)
         planner.update_links_inertial({"attached_object": {"mass": 0.1}})
-    finally:
-        planner.destroy()
-
-
-def test_motion_planner_owns_separate_constrained_rrt(device_cfg) -> None:
-    """Keep projected grasp planning separate from the general graph planner."""
-    config = MotionPlannerCfg.create(
-        robot="franka.yml",
-        scene_model="collision_test.yml",
-        device_cfg=device_cfg,
-        graph_planner_algorithm="prm",
-        num_ik_seeds=4,
-        num_trajopt_seeds=2,
-        use_cuda_graph=False,
-    )
-    planner = MotionPlanner(config)
-    try:
-        assert isinstance(planner.graph_planner, PRMGraphPlanner)
-        assert isinstance(planner.constrained_rrt_planner, BiRRTPlanner)
-        assert planner.constrained_rrt_planner is not planner.graph_planner
-        assert planner.constrained_rrt_planner.config.sample_projection is not None
-        assert (
-            planner.constrained_rrt_planner.resources.scene_collision_checker
-            is planner.scene_collision_checker
-        )
-    finally:
-        planner.destroy()
-
-
-def test_motion_planner_can_skip_separate_constrained_rrt(device_cfg) -> None:
-    """Retain the TrajOpt constrained-phase path when projected RRT is not created."""
-    config = MotionPlannerCfg.create(
-        robot="franka.yml",
-        device_cfg=device_cfg,
-        create_constrained_rrt=False,
-        num_ik_seeds=4,
-        num_trajopt_seeds=2,
-        use_cuda_graph=False,
-    )
-    planner = MotionPlanner(config)
-    try:
-        assert config.constrained_rrt_planner_config is None
-        assert planner.constrained_rrt_planner is None
     finally:
         planner.destroy()
 
@@ -326,19 +280,9 @@ def test_batch_motion_planner_selects_rrt_for_shared_environment(device_cfg):
     try:
         assert config.graph_planner_algorithm == "rrt"
         assert isinstance(planner.graph_planner, BiRRTPlanner)
-        assert isinstance(planner.constrained_rrt_planner, BiRRTPlanner)
-        assert planner.constrained_rrt_planner is not planner.graph_planner
         assert (
             planner.graph_planner.resources.scene_collision_checker
             is planner.scene_collision_checker
-        )
-        assert (
-            planner.constrained_rrt_planner.resources.scene_collision_checker
-            is planner.scene_collision_checker
-        )
-        assert (
-            planner.constrained_rrt_planner.kinematics.config.kinematics_config
-            is planner.trajopt_solver.kinematics.config.kinematics_config
         )
     finally:
         planner.destroy()
@@ -362,110 +306,14 @@ def test_batch_motion_planner_selects_rrt_for_multiple_environments(device_cfg):
     try:
         assert config.graph_planner_algorithm == "rrt"
         assert isinstance(planner.graph_planner, BiRRTPlanner)
-        assert isinstance(planner.constrained_rrt_planner, BiRRTPlanner)
-        assert planner.constrained_rrt_planner is not planner.graph_planner
         assert planner.scene_collision_checker.num_envs == batch_size
         assert (
             planner.graph_planner.resources.scene_collision_checker
             is planner.scene_collision_checker
         )
-        assert (
-            planner.constrained_rrt_planner.resources.scene_collision_checker
-            is planner.scene_collision_checker
-        )
         graph_kinematics = planner.graph_planner.kinematics.config.kinematics_config
         assert graph_kinematics.num_envs == batch_size
         assert graph_kinematics.link_spheres.shape[0] == batch_size
-        constrained_kinematics = (
-            planner.constrained_rrt_planner.kinematics.config.kinematics_config
-        )
-        assert constrained_kinematics is planner.trajopt_solver.kinematics.config.kinematics_config
-    finally:
-        planner.destroy()
-
-
-@pytest.mark.parametrize("multi_env", [False, True], ids=["shared", "multi_env"])
-def test_batch_plan_grasp_uses_projected_rrt_end_to_end(
-    device_cfg: DeviceCfg,
-    monkeypatch: pytest.MonkeyPatch,
-    multi_env: bool,
-) -> None:
-    """Plan batched grasp and lift with validated RRT paths in either world mode."""
-    batch_size = 2
-    config = MotionPlannerCfg.create(
-        robot="franka.yml",
-        collision_cache={"primitive": 1} if multi_env else None,
-        device_cfg=device_cfg,
-        max_batch_size=batch_size,
-        max_goalset=1,
-        multi_env=multi_env,
-        num_ik_seeds=16,
-        num_trajopt_seeds=2,
-        use_cuda_graph=False,
-    )
-    planner = BatchMotionPlanner(config)
-    rrt_calls: list[tuple[dict[str, Any], torch.Tensor]] = []
-    validated_seed_results: list[torch.Tensor] = []
-    try:
-        current_position = planner.default_joint_state.position.unsqueeze(0).repeat(
-            batch_size,
-            1,
-        )
-        current_position[1, 0] += 0.1
-        current_state = JointState.from_position(
-            current_position,
-            joint_names=planner.joint_names,
-        )
-        grasp_poses = planner.compute_kinematics(current_state).tool_poses.as_goal()
-
-        original_find_path = planner.constrained_rrt_planner.find_path
-        original_evaluate_pose_seed = planner.trajopt_solver.evaluate_pose_seed
-
-        def record_find_path(*args: Any, **kwargs: Any) -> GraphPlannerResult:
-            graph_result = original_find_path(*args, **kwargs)
-            rrt_calls.append((kwargs, graph_result.success.clone()))
-            return graph_result
-
-        def record_evaluate_pose_seed(*args: Any, **kwargs: Any) -> TrajOptSolverResult:
-            seed_result = original_evaluate_pose_seed(*args, **kwargs)
-            if kwargs.get("trajectory_source") == "constrained_rrt_fit":
-                validated_seed_results.append(seed_result.success.clone())
-            return seed_result
-
-        monkeypatch.setattr(planner.constrained_rrt_planner, "find_path", record_find_path)
-        monkeypatch.setattr(
-            planner.trajopt_solver,
-            "evaluate_pose_seed",
-            record_evaluate_pose_seed,
-        )
-
-        result = planner.plan_grasp(
-            grasp_poses,
-            current_state,
-            grasp_approach_offset=-0.03,
-            grasp_lift_offset=-0.03,
-            use_rrt_for_constrained_phases=True,
-        )
-
-        assert result.success.all(), result.status
-        assert result.grasp_success.all()
-        assert result.lift_success.all()
-        assert len(rrt_calls) == 2
-        assert len(validated_seed_results) == 2
-        assert all(success.all() for _, success in rrt_calls)
-        assert all(success.all() for success in validated_seed_results)
-        for kwargs, _ in rrt_calls:
-            assert "query_group_id" not in kwargs
-            assert kwargs["group_count"] == batch_size
-            if multi_env:
-                torch.testing.assert_close(
-                    kwargs["env_query_idx"],
-                    torch.arange(batch_size, device=device_cfg.device, dtype=torch.int32),
-                )
-            else:
-                assert kwargs["env_query_idx"] is None
-        assert result.grasp_trajectory.control_space in ControlSpace.bspline_types()
-        assert result.lift_trajectory.control_space in ControlSpace.bspline_types()
     finally:
         planner.destroy()
 

@@ -1392,15 +1392,29 @@ class SceneCfg(Sequence):
                 return i
         return None
 
-    def remove_obstacle(self, name: str):
-        """Remove obstacle by name.
+    def remove_obstacle(self, name: str) -> None:
+        """Remove the first named obstacle from the combined and typed lists.
 
         Args:
             name: Name of obstacle to remove.
         """
         for i in range(len(self.objects)):
             if self.objects[i].name == name:
-                del self.objects[i]
+                obstacle = self.objects.pop(i)
+                for typed_obstacles in (
+                    self.sphere,
+                    self.cuboid,
+                    self.capsule,
+                    self.mesh,
+                    self.cylinder,
+                    self.voxel,
+                ):
+                    if typed_obstacles is self.objects:
+                        continue
+                    for index, candidate in enumerate(typed_obstacles):
+                        if candidate is obstacle:
+                            del typed_obstacles[index]
+                            break
                 return
 
     def remove_absolute_paths(self):

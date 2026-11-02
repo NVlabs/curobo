@@ -27,6 +27,7 @@
  *   - ALL_MOVABLE: Removes fixed-joint checks when every retained link moves
  *   - DIRECT_JOINTS: Removes identity joint-map and joint-offset loads
  *   - PROJECT_EXTERNAL_FORCES: Projects original fixed-link wrenches into retained bodies
+ *   - SAVE_FORWARD_CACHE: Persist intermediates only when a backward pass will consume them
  */
 
 #pragma once
@@ -60,7 +61,8 @@ template<
     bool HAS_EXTERNAL_FORCES = false,
     bool ALL_MOVABLE = false,
     bool DIRECT_JOINTS = false,
-    bool PROJECT_EXTERNAL_FORCES = false>
+    bool PROJECT_EXTERNAL_FORCES = false,
+    bool SAVE_FORWARD_CACHE = true>
 __global__ void rnea_forward_kernel(
     float * __restrict__ tau,
     const float * __restrict__ q,
@@ -227,11 +229,13 @@ __global__ void rnea_forward_kernel(
             float *af_k = &sf[k * 6];
 
             // Flush v+a to forward cache while a is still in sf
-            float *cache_k = &forward_cache[
-                batch * N_LINKS * CACHE_STRIDE + k * CACHE_STRIDE];
-            cache_save_va(v_k, af_k, &cache_k[CACHE_VA_OFFSET]);
-            if constexpr (TPB > 1) {
-                cache_save_rp(&srp[k * 12], &cache_k[CACHE_RP_OFFSET]);
+            if constexpr (SAVE_FORWARD_CACHE) {
+                float *cache_k = &forward_cache[
+                    batch * N_LINKS * CACHE_STRIDE + k * CACHE_STRIDE];
+                cache_save_va(v_k, af_k, &cache_k[CACHE_VA_OFFSET]);
+                if constexpr (TPB > 1) {
+                    cache_save_rp(&srp[k * 12], &cache_k[CACHE_RP_OFFSET]);
+                }
             }
 
             // Now compute f[k] = I·a + v ×* (I·v), overwriting a with f
@@ -311,7 +315,11 @@ __global__ void rnea_forward_kernel(
                             ? make_float2(1.0f, 0.0f)
                             : *(const float2 *)&joint_offset_map[k * 2];
                         const int s_idx = get_s_index(j_type);
-                        atomicAdd(&tau[q_base + j_idx], j_off.x * f_k[s_idx]);
+                        if constexpr (DIRECT_JOINTS) {
+                            tau[q_base + j_idx] = f_k[s_idx];
+                        } else {
+                            atomicAdd(&tau[q_base + j_idx], j_off.x * f_k[s_idx]);
+                        }
                     }
 
                     if (!is_root) {
@@ -354,7 +362,11 @@ __global__ void rnea_forward_kernel(
                             ? make_float2(1.0f, 0.0f)
                             : *(const float2 *)&joint_offset_map[k * 2];
                         const int s_idx = get_s_index(j_type);
-                        tau[q_base + j_idx] += j_off.x * f_k[s_idx];
+                        if constexpr (DIRECT_JOINTS) {
+                            tau[q_base + j_idx] = f_k[s_idx];
+                        } else {
+                            tau[q_base + j_idx] += j_off.x * f_k[s_idx];
+                        }
                     }
 
                     if (!is_root) {
@@ -376,7 +388,7 @@ __global__ void rnea_forward_kernel(
     // ==================================================================
     // Save final forces to forward cache (for backward kernel reuse)
     // ==================================================================
-    if (active) {
+    if (SAVE_FORWARD_CACHE && active) {
         for (int k = worker; k < N_LINKS; k += TPB) {
             float *cache_k = &forward_cache[
                 batch * N_LINKS * CACHE_STRIDE + k * CACHE_STRIDE];

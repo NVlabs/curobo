@@ -596,6 +596,47 @@ class TestCUDAvsPinocchio:
 class TestDynamicsInterface:
     """Test the Dynamics high-level interface."""
 
+    @pytest.mark.parametrize("robot_yml", ["franka.yml", "dual_ur10e.yml", "unitree_g1.yml"])
+    @pytest.mark.parametrize("use_cuda_graph", [False, True])
+    def test_forward_only_preserves_cache_and_can_resume_gradients(
+        self, robot_yml: str, use_cuda_graph: bool
+    ) -> None:
+        """Inference leaves the VJP cache untouched; a later differentiable call refreshes it."""
+        from curobo._src.robot.dynamics.dynamics import Dynamics
+        from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+        from curobo._src.state.state_joint import JointState
+
+        kp, device_cfg = _load_robot(robot_yml)
+        dynamics = Dynamics(DynamicsCfg(kinematics_config=kp, device_cfg=device_cfg))
+        dynamics.setup_batch_size(batch_size=10)
+        q = torch.randn(10, kp.num_dof, device=device_cfg.device, dtype=torch.float32)
+        qd = torch.randn_like(q)
+        qdd = torch.randn_like(q)
+        state = JointState(position=q, velocity=qd, acceleration=qdd)
+        # Warm compilation before capture and poison every cache slot.
+        dynamics.compute_inverse_dynamics(state)
+        dynamics._forward_cache.fill_(float("nan"))
+        if use_cuda_graph:
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                torque = dynamics.compute_inverse_dynamics(state)
+            graph.replay()
+            graph.replay()
+        else:
+            torque = dynamics.compute_inverse_dynamics(state)
+        expected = torque.clone()
+        assert torch.isfinite(expected).all()
+        assert torch.isnan(dynamics._forward_cache).all()
+        q.requires_grad_(True)
+        qd.requires_grad_(True)
+        qdd.requires_grad_(True)
+        differentiable = dynamics.compute_inverse_dynamics(state)
+        torch.testing.assert_close(differentiable, expected, rtol=1e-4, atol=1e-4)
+        differentiable.sum().backward()
+        for value in (q, qd, qdd):
+            assert value.grad is not None
+            assert torch.isfinite(value.grad).all()
+
     def test_setup_and_compute(self):
         """Basic setup_batch_size + compute_inverse_dynamics flow."""
         from curobo._src.robot.dynamics.dynamics import Dynamics
@@ -703,7 +744,9 @@ class TestDynamicsInterface:
         assert other._tau_buffer.data_ptr() != dynamics._tau_buffer.data_ptr()
         assert other._forward_cache.data_ptr() != dynamics._forward_cache.data_ptr()
         independent = Dynamics(DynamicsCfg(kinematics_config=kp.clone(), device_cfg=device_cfg))
-        assert independent._reduced_model.link_masses_com is not other._reduced_model.link_masses_com
+        assert (
+            independent._reduced_model.link_masses_com is not other._reduced_model.link_masses_com
+        )
         independent_mass = independent._reduced_model.link_masses_com.clone()
 
         q_np = np.linspace(-0.4, 0.5, kp.num_dof, dtype=np.float32)

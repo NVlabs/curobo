@@ -21,6 +21,11 @@ from cuda import pathfinder
 from cuda.core import Device, ObjectCode, Program, ProgramOptions
 
 CUROBO_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+if str(CUROBO_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(CUROBO_REPOSITORY_ROOT))
+
+from cpp_runtime.robot.tools.export_device import ExportDevice  # noqa: E402
+
 MAX_RRT_PLANS = 128
 RRT_SAMPLE_BUFFER_SIZE = 2000
 
@@ -492,11 +497,12 @@ def compile_kinematics_kernel(
     num_dof: int,
     num_tool_frames: int,
     num_spheres: int,
+    target: ExportDevice | None = None,
 ) -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Compile the existing fused cuRobo FK/Jacobian specialization."""
     device = Device()
     device.set_current()
-    arch = f"sm_{int(device.arch)}"
+    arch = target.arch if target is not None else f"sm_{int(device.arch)}"
     requested_symbol = (
         "curobo::kinematics::kinematics_forward_spheres_jacobian_kernel"
         f"<{num_links}, 32, false, false, {num_dof}, 0, {num_tool_frames}, 1>"
@@ -542,13 +548,7 @@ def compile_kinematics_kernel(
     cubin_path = output_dir / cubin_name
     cubin_path.write_bytes(obj.code)
 
-    reloaded = ObjectCode.from_cubin(
-        str(cubin_path),
-        symbol_mapping={key: value.encode("utf-8") for key, value in symbol_mapping.items()},
-    )
-    reloaded.get_kernel(requested_symbol)
-    reloaded.get_kernel(ik_requested_symbol)
-    reloaded.get_kernel(trajopt_requested_symbol)
+    validate_native_cubin(cubin_path, arch, symbol_mapping)
     base_kernel = {
         "cubin": cubin_name,
         "symbol": load_symbol,
@@ -609,6 +609,19 @@ def _export_warp_kernel(
     }
 
 
+def validate_native_cubin(path: Path, arch: str, symbols: dict[str, str]) -> None:
+    """Load-check native cubins; foreign cubins require validation on their target GPU."""
+    device = Device()
+    device.set_current()
+    if arch != f"sm_{int(device.arch)}":
+        return
+    reloaded = ObjectCode.from_cubin(
+        str(path), symbol_mapping={key: value.encode("utf-8") for key, value in symbols.items()}
+    )
+    for symbol in symbols:
+        reloaded.get_kernel(symbol)
+
+
 def _compile_cuda_specializations(
     output_dir: Path,
     arch: str,
@@ -656,12 +669,7 @@ def _compile_cuda_specializations(
     cubin_name = f"{artifact_name}.{arch}.cubin"
     cubin_path = output_dir / cubin_name
     cubin_path.write_bytes(obj.code)
-    reloaded = ObjectCode.from_cubin(
-        str(cubin_path),
-        symbol_mapping={key: value.encode("utf-8") for key, value in symbol_mapping.items()},
-    )
-    for requested_symbol in requested_symbols:
-        reloaded.get_kernel(requested_symbol)
+    validate_native_cubin(cubin_path, arch, symbol_mapping)
     return cubin_name, symbol_mapping
 
 
@@ -706,6 +714,7 @@ def compile_lbfgs_kernels(
     optimization_dimension: int,
     max_problems: int,
     optimizer: Any,
+    target: ExportDevice | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Compile cuRobo's current L-BFGS direction and line-search kernels."""
     from curobo._src.curobolib.backends.cuda_core_backend.optimization_config import (
@@ -721,11 +730,14 @@ def compile_lbfgs_kernels(
     )
     if items_per_thread == 0:
         raise ValueError("L-BFGS optimization dimension exceeds the native kernel limit")
-    properties = torch.cuda.get_device_properties(optimizer.device_cfg.device)
-    device_shared_memory = int(
-        getattr(properties, "shared_memory_per_block_optin", 0)
-        or properties.shared_memory_per_block
-    )
+    if target is None:
+        properties = torch.cuda.get_device_properties(optimizer.device_cfg.device)
+        device_shared_memory = int(
+            getattr(properties, "shared_memory_per_block_optin", 0)
+            or properties.shared_memory_per_block
+        )
+    else:
+        device_shared_memory = target.max_shared_memory_per_block
     _, use_shared_history, lbfgs_shared = LBFGSLaunchCfg.calculate_config(
         max_problems,
         optimization_dimension,
@@ -807,6 +819,7 @@ def export_ik_kernels(
     optimizer: Any,
     max_seeds: int,
     scene_capacities: dict[str, int],
+    target: ExportDevice | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Export current cuRobo LM, L-BFGS, cost, and collision kernels for IK."""
     ensure_curobo_on_path()
@@ -829,7 +842,10 @@ def export_ik_kernels(
     kernels = create_seed_ik_kernels(num_dof, num_tool_frames, num_line_search)
     num_residuals = int(kernels.pop("num_residuals"))
     exported = {
-        name: _export_warp_kernel(kernel, output_dir, f"ik_{name}", arch)
+        name: _export_warp_kernel(
+            kernel, output_dir, f"ik_{name}", arch,
+            block_dim=32 if name == "prepare_initial_state" else 128,
+        )
         for name, kernel in kernels.items()
     }
     lm_kernel = LevenbergMarquardtStep.create_lm_warp_kernel(num_dof, num_residuals)
@@ -851,6 +867,7 @@ def export_ik_kernels(
             num_dof,
             max_seeds,
             optimizer,
+            target,
         )
     )
 
@@ -1080,7 +1097,10 @@ def build_ik_tensors(
 
 
 def build_trajopt_config(
-    robot_config: Path, max_seeds: int, interpolation_buffer_size: int = 2000
+    robot_config: Path,
+    max_seeds: int,
+    interpolation_buffer_size: int | None = None,
+    num_knots: int = 16,
 ) -> tuple[Any, Any, Any]:
     """Load the current default B-spline TrajOpt configuration."""
     ensure_curobo_on_path()
@@ -1090,10 +1110,18 @@ def build_trajopt_config(
     config = TrajOptSolverCfg.create(
         str(robot_config.resolve()),
         num_seeds=max_seeds,
+        num_knots=num_knots,
         use_cuda_graph=True,
         # Native MPC shares these kernels and validates slower timing lanes at <=4 ms.
         interpolation_buffer_size=interpolation_buffer_size,
     )
+    if interpolation_buffer_size is None:
+        config.interpolation_buffer_size = max(2000, config.minimum_interpolation_buffer_size)
+    if config.interpolation_buffer_size < config.minimum_interpolation_buffer_size:
+        raise ValueError(
+            "interpolation buffer needs at least "
+            f"{config.minimum_interpolation_buffer_size} samples"
+        )
     rollout = config.optimizer_rollout_configs[0]
     optimizer = config.optimizer_configs[0]
     transition = rollout.transition_model_cfg
@@ -1168,12 +1196,75 @@ def build_trajopt_tensors(
     }
 
 
+def build_rollout_forward_profiles(
+    output_dir: Path,
+    arch: str,
+    num_links: int,
+    num_dof: int,
+    max_level_width: int,
+    num_levels: int,
+    all_movable: bool,
+    direct_joints: bool,
+    policy_sm_count: int,
+) -> dict[str, Any]:
+    """Export batch-aware forward profiles using the shared Python launch policy."""
+    from curobo._src.curobolib.backends.cuda_core_backend.dynamics_config import (
+        DynamicsKernelCfg,
+        DynamicsLaunchCfg,
+    )
+    from curobo._src.robot.dynamics.dynamics import _compute_runtime_threads_per_batch
+
+    # Include traversal-width and state-packing boundaries of the shared policy.
+    limits = sorted({max(1, size * policy_sm_count // 170) for size in (512, 1024, 4096, 8192)}
+                    | {4096, 2**31 - 1})
+    profiles: list[dict[str, Any]] = []
+    compiled: dict[int, tuple[str, dict[str, str]]] = {}
+    for limit in limits:
+        width = _compute_runtime_threads_per_batch(
+            max_level_width, num_links, num_levels, limit, policy_sm_count
+        )
+        config = DynamicsLaunchCfg.calculate_forward_config(
+            limit, num_links, width, policy_sm_count=policy_sm_count
+        )
+        if profiles and (
+            profiles[-1]["threads_per_batch"] == width
+            and profiles[-1]["kernel"]["block_dim"] == int(config.block[0])
+            and profiles[-1]["kernel"]["shared_memory"] == int(config.shmem_size)
+        ):
+            profiles[-1]["max_states"] = limit
+            continue
+        symbol = (
+            f"curobo::dynamics::rnea_forward_kernel<{num_links}, {num_dof}, {width}, false, "
+            f"{str(all_movable).lower()}, {str(direct_joints).lower()}, false, false>"
+        )
+        if width not in compiled:
+            compiled[width] = _compile_cuda_specializations(
+                output_dir, arch, f"forward_only_rnea_{width}", DynamicsKernelCfg(),
+                ["forward"], [symbol]
+            )
+        cubin, symbols = compiled[width]
+        profiles.append({
+            "max_states": limit,
+            "threads_per_batch": width,
+            "kernel": {
+                "cubin": cubin,
+                "symbol": symbols.get(symbol, symbol),
+                "requested_symbol": symbol,
+                "source": "curobo_rnea_kernel",
+                "shared_memory": int(config.shmem_size),
+                "block_dim": int(config.block[0]),
+            },
+        })
+    return {"count": len(profiles), **{f"profile_{i}": p for i, p in enumerate(profiles)}}
+
+
 def build_rollout_artifact(
     output_dir: Path,
     arch: str,
     params: Any,
     profile_max_states: dict[str, int],
-) -> tuple[dict[str, torch.Tensor], dict[str, dict[str, Any]], dict[str, int]]:
+    target: ExportDevice | None = None,
+) -> tuple[dict[str, torch.Tensor], dict[str, dict[str, Any]], dict[str, Any]]:
     """Export one mutable RNEA model and solver-specific launch profiles."""
     import curobo._src.runtime as curobo_runtime
     from curobo._src.curobolib.backends.cuda_core_backend.dynamics_config import (
@@ -1187,10 +1278,13 @@ def build_rollout_artifact(
     from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
 
     model = _collapse_fixed_bodies(params)
-    properties = torch.cuda.get_device_properties(params.fixed_transforms.device)
-    policy_sm_count = curobo_runtime.resolve_kernel_launch_sm_count(
-        properties.multi_processor_count
-    )
+    if target is None:
+        properties = torch.cuda.get_device_properties(params.fixed_transforms.device)
+        policy_sm_count = curobo_runtime.resolve_kernel_launch_sm_count(
+            properties.multi_processor_count
+        )
+    else:
+        policy_sm_count = target.sm_count
 
     def bool_literal(value: bool) -> str:
         return str(value).lower()
@@ -1287,6 +1381,10 @@ def build_rollout_artifact(
         "num_original_links": model.num_original_links,
         "num_levels": model.num_levels,
         "level_link_indices": int(model.level_links.numel()),
+        "forward_profiles": build_rollout_forward_profiles(
+            output_dir, arch, model.num_links, params.num_dof, model.max_level_width,
+            model.num_levels, model.all_movable, model.direct_joints, policy_sm_count
+        ),
     }
     return tensors, profiles, metadata
 
@@ -1579,6 +1677,35 @@ def compile_trajopt_self_collision_kernel(
     return compile_self_collision_kernel(output_dir, arch, self_collision_config, num_spheres)
 
 
+def compile_trajopt_gradient_kernels(output_dir: Path, arch: str) -> dict[str, dict[str, Any]]:
+    """Compile C++ gradient assembly fused with the shared cubic B-spline backward."""
+    from curobo._src.curobolib.backends.cuda_core_backend.trajectory_config import (
+        TrajectoryKernelCfg,
+    )
+
+    class GradientKernelCfg(TrajectoryKernelCfg):
+        def get_kernel_files(self, kernel_type: str) -> list[str]:
+            source = CUROBO_REPOSITORY_ROOT / "cpp_runtime/robot/kernels/trajectory_gradient.cuh"
+            return [str(source)]
+
+    kernel_name = "curobo_robot_runtime::trajectory_gradient_kernel"
+    expressions = {
+        "bspline_backward": f"{kernel_name}<3, false>",
+        "bspline_backward_effort": f"{kernel_name}<3, true>",
+    }
+    cubin, symbols = _compile_cuda_specializations(
+        output_dir, arch, "trajopt_gradient", GradientKernelCfg(),
+        ["gradient"], list(expressions.values()),
+    )
+    return {
+        name: {
+            "cubin": cubin, "symbol": symbols[expression],
+            "source": "curobo_trajopt_gradient_kernel", "shared_memory": 0, "block_dim": 128,
+        }
+        for name, expression in expressions.items()
+    }
+
+
 def export_trajopt_kernels(
     output_dir: Path,
     arch: str,
@@ -1590,6 +1717,7 @@ def export_trajopt_kernels(
     optimizer: Any,
     scene_capacities: dict[str, int],
     max_seeds: int,
+    target: ExportDevice | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Export current cuRobo kernels used by fixed-dt joint-space TrajOpt."""
     from cpp_runtime.robot.kernels.trajopt import (
@@ -1634,10 +1762,6 @@ def export_trajopt_kernels(
         "curobo::trajectory::bspline::interpolate_bspline_kernel"
         f"<float, {degree}, (curobo::trajectory::bspline::BasisBackend)2>"
     )
-    backward_symbol = (
-        "curobo::trajectory::bspline::bspline_backward_kernel"
-        f"<{degree}, float, (curobo::trajectory::bspline::BasisBackend)2>"
-    )
     time_scaled_dt_symbol = (
         "curobo::trajectory::bspline::bspline_time_scaled_dt_kernel"
         f"<float, {degree}, (curobo::trajectory::bspline::BasisBackend)2>"
@@ -1653,11 +1777,10 @@ def export_trajopt_kernels(
         TrajectoryKernelCfg(),
         [
             "bspline_forward",
-            "bspline_backward",
             "bspline_time_scaled_dt",
             "bspline_single_dt",
         ],
-        [forward_symbol, backward_symbol, time_scaled_dt_symbol, single_dt_symbol],
+        [forward_symbol, time_scaled_dt_symbol, single_dt_symbol],
     )
     kernels["bspline_forward"] = {
         "cubin": cubin_name,
@@ -1666,13 +1789,7 @@ def export_trajopt_kernels(
         "shared_memory": 0,
         "block_dim": 128,
     }
-    kernels["bspline_backward"] = {
-        "cubin": cubin_name,
-        "symbol": symbols.get(backward_symbol, backward_symbol),
-        "source": "curobo_bspline_kernel",
-        "shared_memory": 0,
-        "block_dim": 128,
-    }
+    kernels.update(compile_trajopt_gradient_kernels(output_dir, arch))
     kernels["time_scaled_dt"] = {
         "cubin": cubin_name,
         "symbol": symbols.get(time_scaled_dt_symbol, time_scaled_dt_symbol),
@@ -1696,6 +1813,7 @@ def export_trajopt_kernels(
             opt_dim,
             max_seeds,
             optimizer,
+            target,
         )
     )
 
@@ -1728,7 +1846,7 @@ def export_trajopt_kernels(
                 output_dir,
                 f"trajopt_{name}",
                 arch,
-                block_dim=128,
+                block_dim=32 if name == "prepare_initial_state" else 128,
             )
             for name, glue_kernel in glue_kernels.items()
         }
@@ -1855,8 +1973,31 @@ def export_trajopt_kernels(
     return kernels
 
 
+def validate_export_target(target: ExportDevice) -> None:
+    """Require both CUDA compilers to support the requested cubin architecture."""
+    from cuda.bindings import nvrtc
+
+    arch = int(target.arch.removeprefix("sm_"))
+    status, supported = nvrtc.nvrtcGetSupportedArchs()
+    if int(status) != 0 or arch not in supported:
+        raise ValueError(
+            f"NVRTC cannot compile {target.arch}; use a toolkit supporting the target"
+        )
+    wp.init()
+    if arch not in wp.get_cuda_supported_archs():
+        raise ValueError(
+            f"Warp's bundled CUDA compiler cannot compile {target.arch}; "
+            "install a Warp wheel built with a CUDA toolkit supporting the target "
+            "(Thor requires a CUDA 13 build, such as a +cu13 wheel) on the export host"
+        )
+
+
 def export_robot(args: argparse.Namespace) -> Path:
     """Export the selected robot into an artifact directory."""
+    target_path = getattr(args, "target_device", None)
+    target = ExportDevice.from_file(target_path) if target_path is not None else None
+    if target is not None:
+        validate_export_target(target)
     output_dir = args.out.resolve()
     selected_robot_config = args.robot_config
     if args.attachment_parent_link is not None:
@@ -1899,12 +2040,17 @@ def export_robot(args: argparse.Namespace) -> Path:
         num_dof=params.num_dof,
         num_tool_frames=params.num_pose_links,
         num_spheres=params.total_spheres,
+        target=target,
     )
     manifest = {
         "schema_version": 1,
         "arch": arch,
         "curobo_source_dir": str(ensure_curobo_on_path()),
         "source": source,
+        "target_device": (
+            target.to_dict() if target is not None
+            else ExportDevice.current(torch.cuda.current_device()).to_dict()
+        ),
         "base_link": params.base_link,
         "num_links": params.num_links,
         "num_dof": params.num_dof,
@@ -1946,6 +2092,7 @@ def export_robot(args: argparse.Namespace) -> Path:
             ik_optimizer,
             args.max_ik_seeds,
             scene_capacities,
+            target,
         )
         kinematics_backward_kernel = compile_kinematics_backward_kernel(
             output_dir,
@@ -1960,7 +2107,7 @@ def export_robot(args: argparse.Namespace) -> Path:
         if self_collision_kernel is not None:
             ik_kernels["self_collision"] = self_collision_kernel
         ik_manifest = {
-            "schema_version": 13,
+            "schema_version": 18,
             "arch": arch,
             "num_links": params.num_links,
             "num_dof": params.num_dof,
@@ -2000,7 +2147,10 @@ def export_robot(args: argparse.Namespace) -> Path:
         )
         if selected_robot_config is not None:
             trajopt_config, trajopt_rollout, trajopt_optimizer = build_trajopt_config(
-                selected_robot_config, args.max_trajopt_seeds, args.interpolation_buffer_size
+                selected_robot_config,
+                args.max_trajopt_seeds,
+                args.interpolation_buffer_size,
+                args.num_knots,
             )
             transition = trajopt_rollout.transition_model_cfg
             if transition.robot_config.kinematics.kinematics_config.num_dof != params.num_dof:
@@ -2041,6 +2191,7 @@ def export_robot(args: argparse.Namespace) -> Path:
                     * len(trajopt_optimizer.line_search_scale)
                     * transition.horizon,
                 },
+                target,
             )
             rollout_tensors = {
                 name.removeprefix("rnea_"): export_tensor(name, value, output_dir)
@@ -2081,9 +2232,10 @@ def export_robot(args: argparse.Namespace) -> Path:
                 trajopt_optimizer,
                 scene_capacities,
                 args.max_trajopt_seeds,
+                target,
             )
             trajopt_manifest = {
-                "schema_version": 18,
+                "schema_version": 23,
                 "arch": arch,
                 "num_dof": params.num_dof,
                 "num_links": params.num_links,
@@ -2097,6 +2249,14 @@ def export_robot(args: argparse.Namespace) -> Path:
                 "num_knots": transition.n_knots,
                 "trajectory_steps": transition.horizon,
                 "spline_degree": 3,
+                "spline_layout": {
+                    "num_knots": trajopt_config.spline_layout.num_knots,
+                    "degree": trajopt_config.spline_layout.degree,
+                    "native_horizon": trajopt_config.native_horizon,
+                    "interpolation_steps": trajopt_config.spline_layout.interpolation_steps,
+                    "padding": trajopt_config.spline_layout.padding,
+                    "reference_intervals": trajopt_config.spline_layout.reference_intervals,
+                },
                 "max_seeds": args.max_trajopt_seeds,
                 "history": trajopt_optimizer.history,
                 "num_line_search": len(trajopt_optimizer.line_search_scale),
@@ -2105,6 +2265,9 @@ def export_robot(args: argparse.Namespace) -> Path:
                 "maximum_dt": trajopt_config.maximum_trajectory_dt,
                 "interpolation_dt": trajopt_config.interpolation_dt,
                 "interpolation_buffer_size": trajopt_config.interpolation_buffer_size,
+                "minimum_interpolation_buffer_size": (
+                    trajopt_config.minimum_interpolation_buffer_size
+                ),
                 "optimizer": {
                     "epsilon": trajopt_optimizer.epsilon,
                     "initial_step_scale": trajopt_optimizer.initial_step_scale,
@@ -2211,7 +2374,8 @@ def export_robot(args: argparse.Namespace) -> Path:
                 "arch": arch,
                 "num_dof": params.num_dof,
                 "num_knots": transition.n_knots,
-                "trajectory_steps": transition.horizon,
+                "trajectory_steps": trajopt_config.native_horizon,
+                "spline_layout": trajopt_manifest["spline_layout"],
                 "interpolation_steps": transition.interpolation_steps,
                 "max_rrt_path_nodes": max_path_nodes,
                 "max_trajopt_seeds": args.max_trajopt_seeds,
@@ -2235,6 +2399,8 @@ def export_robot(args: argparse.Namespace) -> Path:
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
+    from curobo._src.types.spline_layout import MAX_SPLINE_KNOTS, MIN_TRAJOPT_KNOTS
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot-config", type=Path)
     parser.add_argument("--urdf", type=Path)
@@ -2251,12 +2417,29 @@ def parse_args() -> argparse.Namespace:
         help="fixed collision-sphere capacity for attached_object (default: 32)",
     )
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--target-device", type=Path,
+        help="device JSON from export_device.py; defaults to the active export GPU",
+    )
     parser.add_argument("--kinematics-only", action="store_true")
     parser.add_argument("--max-ik-seeds", type=int, default=64)
     parser.add_argument("--ik-seed-samples", type=int, default=2000)
     parser.add_argument("--max-ik-goalset", type=int, default=64)
+    parser.add_argument(
+        "--num-knots",
+        type=int,
+        default=16,
+        choices=range(MIN_TRAJOPT_KNOTS, MAX_SPLINE_KNOTS + 1),
+        metavar="N",
+        help=f"fixed B-spline spatial control count ({MIN_TRAJOPT_KNOTS}..{MAX_SPLINE_KNOTS})",
+    )
     parser.add_argument("--max-trajopt-seeds", type=int, default=8)
-    parser.add_argument("--interpolation-buffer-size", type=int, default=2000)
+    parser.add_argument(
+        "--interpolation-buffer-size",
+        type=int,
+        default=None,
+        help="dense capacity; defaults to the spline requirement or 2000, whichever is larger",
+    )
     parser.add_argument(
         "--joint-limit-expansion",
         type=float,
@@ -2286,7 +2469,7 @@ def parse_args() -> argparse.Namespace:
         parser.error("--max-ik-goalset must be positive")
     if args.max_trajopt_seeds <= 0:
         parser.error("--max-trajopt-seeds must be positive")
-    if args.interpolation_buffer_size < 2:
+    if args.interpolation_buffer_size is not None and args.interpolation_buffer_size < 2:
         parser.error("--interpolation-buffer-size must be at least two")
     if not math.isfinite(args.joint_limit_expansion) or args.joint_limit_expansion < 0.0:
         parser.error("--joint-limit-expansion must be finite and non-negative")

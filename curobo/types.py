@@ -41,6 +41,7 @@ from curobo._src.types.content_path import ContentPath
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.lidar import LidarObservation
 from curobo._src.types.pose import Pose
+from curobo._src.types.spline_layout import SplineLayout
 from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 
@@ -59,4 +60,5 @@ __all__ = [
     "LidarObservation",
     "ContentPath",
     "DeviceCfg",
+    "SplineLayout",
 ]

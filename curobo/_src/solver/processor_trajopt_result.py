@@ -69,7 +69,7 @@ class TrajOptResultProcessorConfig:
 
 @dataclass
 class TrajOptResultCandidate:
-    """Transient inputs produced for one trajectory-optimization finetune attempt."""
+    """Transient inputs produced for an initial checkpoint or refinement attempt."""
 
     #: Metrics for the optimized knot trajectory with flattened batch and seed dimensions.
     metrics: RolloutMetrics
@@ -83,13 +83,16 @@ class TrajOptResultCandidate:
 
 @dataclass(frozen=True)
 class TrajOptResultUpdate:
-    """State returned after processing one finetune candidate."""
+    """State returned after processing one trajectory candidate."""
 
     #: Whether at least one candidate replaced the existing best trajectory.
     improved: bool
 
     #: Whether the accumulated result contains at least one successful trajectory.
     any_success: bool
+
+    #: Accumulated native and dense success mask shaped ``[batch, num_seeds]``.
+    success: torch.Tensor
 
     #: Best trajectory timesteps shaped ``[batch, num_seeds]``.
     best_dt: torch.Tensor
@@ -100,7 +103,7 @@ class TrajOptResultUpdate:
 
 @dataclass
 class _TrajOptResultSnapshot:
-    """Minimal shape-managed state retained across finetune candidates."""
+    """Minimal shape-managed state retained across checkpoints and refinements."""
 
     #: Optimized actions shaped ``[batch, num_seeds, action_horizon, dof]``.
     actions: torch.Tensor
@@ -110,6 +113,9 @@ class _TrajOptResultSnapshot:
 
     #: Success mask shaped ``[batch, num_seeds]``.
     success: torch.Tensor
+
+    #: Native/dense path tolerance validity retained independently of dynamic feasibility.
+    path_valid: torch.Tensor
 
     #: Final position error shaped ``[batch, num_seeds]``.
     position_error: torch.Tensor
@@ -143,6 +149,7 @@ class _ProcessedTrajOptCandidate:
     actions: torch.Tensor
     js_solution: JointState
     success: torch.Tensor
+    path_valid: torch.Tensor
     position_error: torch.Tensor
     rotation_error: torch.Tensor
     goalset_index: Optional[torch.Tensor]
@@ -354,6 +361,11 @@ class TorchTrajOptResultProcessor:
                 device=self._config.device_cfg.device,
                 dtype=torch.bool,
             ),
+            path_valid=torch.empty(
+                (batch_size, num_seeds),
+                device=self._config.device_cfg.device,
+                dtype=torch.bool,
+            ),
             position_error=torch.empty(
                 (batch_size, num_seeds),
                 device=self._config.device_cfg.device,
@@ -409,7 +421,7 @@ class TorchTrajOptResultProcessor:
 
     @profiler.record_function("trajopt_result_processor/update")
     def update(self, candidate: TrajOptResultCandidate) -> TrajOptResultUpdate:
-        """Process and accumulate one finetune candidate using the configured shape."""
+        """Accumulate a candidate, retaining earlier valid seeds whenever it fails."""
         self._require_shape_initialized()
         self._validate_candidate_shape(candidate)
         if self._use_cuda_graph:
@@ -424,13 +436,10 @@ class TorchTrajOptResultProcessor:
             self._any_success = bool(torch.any(self._snapshot.success).item())
             self._invalidate_rank()
         else:
-            update_mask = torch.logical_and(
-                candidate_result.success,
-                candidate_result.js_solution.dt <= self._best_dt,
-            )
+            update_mask, successful_update = self._candidate_update_masks(candidate_result)
             batch_indices, seed_indices = update_mask.nonzero(as_tuple=True)
-            improved = batch_indices.numel() > 0
-            if improved:
+            improved = bool(successful_update.any())
+            if batch_indices.numel() > 0:
                 if batch_indices.numel() == update_mask.numel():
                     self._copy_candidate_result(candidate_result)
                 else:
@@ -439,7 +448,7 @@ class TorchTrajOptResultProcessor:
                         batch_indices,
                         seed_indices,
                     )
-                self._any_success = True
+                self._any_success = self._any_success or improved
                 self._invalidate_rank()
 
         next_seed = self._snapshot.actions.view(
@@ -450,6 +459,7 @@ class TorchTrajOptResultProcessor:
         return TrajOptResultUpdate(
             improved=improved,
             any_success=self._any_success,
+            success=self._snapshot.success,
             best_dt=self._best_dt,
             next_seed=next_seed,
         )
@@ -489,6 +499,13 @@ class TorchTrajOptResultProcessor:
         snapshot = self._snapshot
         snapshot.js_solution.joint_names = candidate.metrics.state.joint_state.joint_names
         snapshot.js_solution.control_space = candidate.metrics.state.joint_state.control_space
+        if self._masked_update_graph is None:
+            self._masked_update_graph = create_graph_executor(
+                capture_fn=self._masked_update_graph_impl,
+                device=self._config.device_cfg.device,
+                use_cuda_graph=True,
+                clone_outputs=False,
+            )
 
         improved = True
         if not self._has_result:
@@ -503,20 +520,15 @@ class TorchTrajOptResultProcessor:
             self._has_result = True
             self._any_success = bool(any_success_tensor.item())
             snapshot.debug_info = self._clone_debug_info(candidate.debug_info)
+            # The bound candidate already matches the snapshot, so capture is idempotent.
+            # Capture now rather than on a later solve's first continuation checkpoint.
+            self._masked_update_graph.warmup()
             self._invalidate_rank()
         else:
-            if self._masked_update_graph is None:
-                self._masked_update_graph = create_graph_executor(
-                    capture_fn=self._masked_update_graph_impl,
-                    device=self._config.device_cfg.device,
-                    use_cuda_graph=True,
-                    clone_outputs=False,
-                )
             improved_tensor = self._masked_update_graph()
             improved = bool(improved_tensor.item())
             self._any_success = self._any_success or improved
-            if improved:
-                self._invalidate_rank()
+            self._invalidate_rank()
 
         next_seed = snapshot.actions.view(
             self._batch_size * self._num_seeds,
@@ -526,6 +538,7 @@ class TorchTrajOptResultProcessor:
         return TrajOptResultUpdate(
             improved=improved,
             any_success=self._any_success,
+            success=snapshot.success,
             best_dt=self._best_dt,
             next_seed=next_seed,
         )
@@ -539,12 +552,33 @@ class TorchTrajOptResultProcessor:
     def _masked_update_graph_impl(self) -> torch.Tensor:
         """Apply one bound candidate through a fixed-shape improvement mask."""
         candidate_result = self._process_candidate_metrics(self._bound_candidate)
-        update_mask = torch.logical_and(
-            candidate_result.success,
-            candidate_result.js_solution.dt <= self._best_dt,
-        )
+        update_mask, successful_update = self._candidate_update_masks(candidate_result)
         self._copy_candidate_result_masked(candidate_result, update_mask)
-        return torch.any(update_mask)
+        return torch.any(successful_update)
+
+    def _candidate_update_masks(
+        self,
+        candidate: _ProcessedTrajOptCandidate,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Retain valid seeds and geometric progress in lanes still needing a solution."""
+        snapshot = self._snapshot
+        successful_update = candidate.success & (
+            ~snapshot.success | (candidate.js_solution.dt <= self._best_dt)
+        )
+        # A later path may become suitable for timeopt before its native dynamics pass.
+        # Preserve that progress without counting an invalid candidate as a success.
+        failed_update = (
+            ~snapshot.success
+            & ~candidate.success
+            & (
+                (candidate.path_valid & ~snapshot.path_valid)
+                | (
+                    (candidate.path_valid == snapshot.path_valid)
+                    & (candidate.seed_cost <= snapshot.seed_cost)
+                )
+            )
+        )
+        return successful_update | failed_update, successful_update
 
     @staticmethod
     def _masked_copy(
@@ -589,6 +623,7 @@ class TorchTrajOptResultProcessor:
         )
         self._masked_copy(snapshot.js_solution.dt, candidate_result.js_solution.dt, update_mask)
         self._masked_copy(snapshot.success, candidate_result.success, update_mask)
+        self._masked_copy(snapshot.path_valid, candidate_result.path_valid, update_mask)
         self._masked_copy(snapshot.position_error, candidate_result.position_error, update_mask)
         self._masked_copy(snapshot.rotation_error, candidate_result.rotation_error, update_mask)
         self._masked_copy(snapshot.seed_cost, candidate_result.seed_cost, update_mask)
@@ -752,12 +787,20 @@ class TorchTrajOptResultProcessor:
             # and require a new full rollout check of the timeopt trajectory.
             self._final_success = (
                 timeopt_success
+                & snapshot.path_valid
                 & torch.isfinite(timeopt_duration)
                 & (snapshot.position_error < self._config.position_tolerance)
                 & (snapshot.rotation_error < self._config.orientation_tolerance)
             )
             self._total_cost = torch.where(self._final_success, timeopt_duration, torch.inf)
-            self._seed_rank = torch.argsort(self._total_cost, dim=-1, stable=True)
+            # Retain error-based ordering when all timeopt candidates fail.
+            # Successful paths still rank first by executable duration.
+            fallback_cost = torch.where(self._final_success, 0.0, snapshot.seed_cost)
+            fallback_rank = torch.argsort(fallback_cost, dim=-1, stable=True)
+            duration_rank = torch.argsort(
+                self._total_cost.gather(1, fallback_rank), dim=-1, stable=True
+            )
+            self._seed_rank = fallback_rank.gather(1, duration_rank)
 
     def _get_topk_result(
         self,
@@ -934,6 +977,7 @@ class TorchTrajOptResultProcessor:
             snapshot.actions.copy_(candidate_actions)
             snapshot.js_solution.copy_(candidate_result.js_solution, allow_clone=False)
             snapshot.success.copy_(candidate_result.success)
+            snapshot.path_valid.copy_(candidate_result.path_valid)
             snapshot.position_error.copy_(candidate_result.position_error)
             snapshot.rotation_error.copy_(candidate_result.rotation_error)
             snapshot.seed_cost.copy_(candidate_result.seed_cost)
@@ -950,6 +994,9 @@ class TorchTrajOptResultProcessor:
                 seed_indices,
             )
             snapshot.success[batch_indices, seed_indices] = candidate_result.success[
+                batch_indices, seed_indices
+            ]
+            snapshot.path_valid[batch_indices, seed_indices] = candidate_result.path_valid[
                 batch_indices, seed_indices
             ]
             snapshot.position_error[batch_indices, seed_indices] = candidate_result.position_error[
@@ -980,6 +1027,14 @@ class TorchTrajOptResultProcessor:
         metrics = candidate.metrics
         problem_count = self._batch_size * self._num_seeds
         feasible = self._reduce_feasibility(metrics, "candidate.metrics")
+        path_valid = torch.ones_like(feasible)
+        for rollout_metrics in (metrics, candidate.interpolated_metrics):
+            if rollout_metrics is not None:
+                for name, values in zip(
+                    rollout_metrics.convergence.names, rollout_metrics.convergence.values
+                ):
+                    if name == "tool_pose_path_valid":
+                        path_valid = path_valid & values.reshape(problem_count, -1).all(dim=-1)
         if candidate.interpolated_metrics is not None:
             interpolated_feasible = self._reduce_feasibility(
                 candidate.interpolated_metrics,
@@ -1008,7 +1063,7 @@ class TorchTrajOptResultProcessor:
         )
         position_error = zero_error
         rotation_error = zero_error
-        success = feasible
+        success = feasible & path_valid
         pose_cost_values = []
         if position_values is not None:
             position_error = torch.amax(position_values, dim=-1)
@@ -1035,6 +1090,10 @@ class TorchTrajOptResultProcessor:
         else:
             seed_cost = zero_error
 
+        for name, values in zip(metrics.convergence.names, metrics.convergence.values):
+            if name == "tool_pose_path_error":
+                seed_cost = seed_cost + values.reshape(problem_count, -1).sum(dim=-1)
+
         batch_seed_shape = (self._batch_size, self._num_seeds)
         if goalset_index is not None:
             goalset_index = goalset_index.view(*batch_seed_shape, goalset_index.shape[-1])
@@ -1047,6 +1106,7 @@ class TorchTrajOptResultProcessor:
             ),
             js_solution=self._view_candidate_joint_state(metrics.state.joint_state),
             success=success.view(batch_seed_shape),
+            path_valid=path_valid.view(batch_seed_shape),
             position_error=position_error.view(batch_seed_shape),
             rotation_error=rotation_error.view(batch_seed_shape),
             goalset_index=goalset_index,

@@ -445,11 +445,13 @@ namespace curobo{
      *         multiple interpolation points that influence each control point
      *       - Thread indices computed via `compute_thread_indices<Degree>()` helper
      */
-    template<int Degree, typename ScalarType, BasisBackend BasisImpl = BasisBackend::FACTORED>
-    __global__ void bspline_backward_kernel(
-        ScalarType *out_grad_knots, const ScalarType *grad_position,
-        const ScalarType *grad_velocity, const ScalarType *grad_acceleration,
-        const ScalarType *grad_jerk, const ScalarType *traj_dt,
+    template<int Degree, typename ScalarType, BasisBackend BasisImpl,
+             typename PositionGradient, typename VelocityGradient,
+             typename AccelerationGradient, typename JerkGradient>
+    __device__ __forceinline__ void bspline_backward_impl(
+        ScalarType *out_grad_knots, PositionGradient grad_position,
+        VelocityGradient grad_velocity, AccelerationGradient grad_acceleration,
+        JerkGradient grad_jerk, const ScalarType *traj_dt,
         const int32_t *dt_idx,
         const uint8_t *use_implicit_goal_state,
         const int batch_size,
@@ -495,7 +497,19 @@ namespace curobo{
         }
     }
 
-
+    template<int Degree, typename ScalarType, BasisBackend BasisImpl = BasisBackend::FACTORED>
+    __global__ void bspline_backward_kernel(
+        ScalarType *out_grad_knots, const ScalarType *grad_position,
+        const ScalarType *grad_velocity, const ScalarType *grad_acceleration,
+        const ScalarType *grad_jerk, const ScalarType *traj_dt,
+        const int32_t *dt_idx, const uint8_t *use_implicit_goal_state,
+        const int batch_size, const int horizon, const int dof, const int n_knots)
+    {
+        bspline_backward_impl<Degree, ScalarType, BasisImpl>(
+            out_grad_knots, grad_position, grad_velocity, grad_acceleration,
+            grad_jerk, traj_dt, dt_idx, use_implicit_goal_state,
+            batch_size, horizon, dof, n_knots);
+    }
 
     }
   }

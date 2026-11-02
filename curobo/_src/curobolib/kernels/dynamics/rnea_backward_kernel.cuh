@@ -275,7 +275,9 @@ __global__ void rnea_backward_kernel(
                             const float gq_contrib = multiplier * dot_crf_S(
                                 X_fbar_p, f_k, s_idx
                             );
-                            if (TPB > 1) {
+                            if constexpr (DIRECT_JOINTS) {
+                                grad_q[q_base + j_idx] = gq_contrib;
+                            } else if (TPB > 1) {
                                 atomicAdd(&grad_q[q_base + j_idx], gq_contrib);
                             } else {
                                 grad_q[q_base + j_idx] += gq_contrib;
@@ -390,6 +392,11 @@ __global__ void rnea_backward_kernel(
                     const float *inertia = &s_inertia[k * 8];
                     const float *v_k = &sv[k * 6];
 
+                    // Direct joints have one link writer. Keep this sweep's
+                    // contributions local; shared joint mappings still accumulate atomically.
+                    float direct_grad_q = DIRECT_JOINTS ? grad_q[q_base + j_idx] : 0.0f;
+                    float direct_grad_qd = 0.0f;
+
                     // Read accumulated a_bar, v_bar from children (or zero if leaf)
                     float a_bar_k[6], v_bar_k[6];
                     for (int i = 0; i < 6; i++) {
@@ -432,7 +439,9 @@ __global__ void rnea_backward_kernel(
 
                         // grad_qdd += mult · S^T · a_bar
                         const float gqdd = link_multiplier * a_bar_k[s_idx];
-                        if (TPB > 1) {
+                        if constexpr (DIRECT_JOINTS) {
+                            grad_qdd[q_base + j_idx] = gqdd;
+                        } else if (TPB > 1) {
                             atomicAdd(&grad_qdd[q_base + j_idx], gqdd);
                         } else {
                             grad_qdd[q_base + j_idx] += gqdd;
@@ -442,7 +451,9 @@ __global__ void rnea_backward_kernel(
                         const float gqd_crm = link_multiplier * force_cross_extract_s(
                             v_k, a_bar_k, s_idx
                         );
-                        if (TPB > 1) {
+                        if constexpr (DIRECT_JOINTS) {
+                            direct_grad_qd = -gqd_crm;
+                        } else if (TPB > 1) {
                             atomicAdd(&grad_qd[q_base + j_idx], -gqd_crm);
                         } else {
                             grad_qd[q_base + j_idx] -= gqd_crm;
@@ -505,7 +516,9 @@ __global__ void rnea_backward_kernel(
                             const float gq_a = link_multiplier * dot_crm_S(
                                 a_bar_k, Xa_parent, s_idx
                             );
-                            if (TPB > 1) {
+                            if constexpr (DIRECT_JOINTS) {
+                                direct_grad_q -= gq_a;
+                            } else if (TPB > 1) {
                                 atomicAdd(&grad_q[q_base + j_idx], -gq_a);
                             } else {
                                 grad_q[q_base + j_idx] -= gq_a;
@@ -519,7 +532,9 @@ __global__ void rnea_backward_kernel(
                             const float gq_g = link_multiplier * dot_crm_S(
                                 a_bar_k, Xa_grav, s_idx
                             );
-                            if (TPB > 1) {
+                            if constexpr (DIRECT_JOINTS) {
+                                direct_grad_q -= gq_g;
+                            } else if (TPB > 1) {
                                 atomicAdd(&grad_q[q_base + j_idx], -gq_g);
                             } else {
                                 grad_q[q_base + j_idx] -= gq_g;
@@ -531,7 +546,9 @@ __global__ void rnea_backward_kernel(
                     if (ALL_MOVABLE || (j_type != FIXED && j_idx >= 0)) {
                         const int s_idx = get_s_index(j_type);
                         const float gqd_v = link_multiplier * v_bar_k[s_idx];
-                        if (TPB > 1) {
+                        if constexpr (DIRECT_JOINTS) {
+                            direct_grad_qd += gqd_v;
+                        } else if (TPB > 1) {
                             atomicAdd(&grad_qd[q_base + j_idx], gqd_v);
                         } else {
                             grad_qd[q_base + j_idx] += gqd_v;
@@ -566,7 +583,9 @@ __global__ void rnea_backward_kernel(
                             const float gq_v = link_multiplier * dot_crm_S(
                                 v_bar_k, Xv_parent, s_idx
                             );
-                            if (TPB > 1) {
+                            if constexpr (DIRECT_JOINTS) {
+                                direct_grad_q -= gq_v;
+                            } else if (TPB > 1) {
                                 atomicAdd(&grad_q[q_base + j_idx], -gq_v);
                             } else {
                                 grad_q[q_base + j_idx] -= gq_v;
@@ -574,6 +593,10 @@ __global__ void rnea_backward_kernel(
                         }
                     }
                     // Root: v_parent = 0, so X·v_parent = 0, no contribution
+                    if constexpr (DIRECT_JOINTS) {
+                        grad_q[q_base + j_idx] = direct_grad_q;
+                        grad_qd[q_base + j_idx] = direct_grad_qd;
+                    }
                     if (k == segment_root) break;
                     k = parent;
                 }

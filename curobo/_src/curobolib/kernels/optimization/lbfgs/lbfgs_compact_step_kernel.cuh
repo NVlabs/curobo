@@ -5,6 +5,7 @@
 
 #include <mma.h>
 #include "optimization/line_search/line_search_helpers.cuh"
+#include "optimization/lbfgs/lbfgs_candidates.cuh"
 
 namespace curobo {
 namespace optimization {
@@ -167,9 +168,17 @@ void kernel_lbfgs_step_compact(
   int32_t* history_head,
   int32_t* history_count,
   const bool* curvature_update_allowed,
-  const int32_t* line_search_status)
+  const int32_t* line_search_status,
+  const float* candidate_scales,
+  const float* candidate_beta,
+  float* candidates,
+  const int candidate_count)
 {
-  if (line_search_status[blockIdx.x] == line_search::STATUS_BACKTRACK) return;
+  if (line_search_status[blockIdx.x] == line_search::STATUS_BACKTRACK) {
+    write_lbfgs_candidates(position, step, candidate_scales, candidate_beta,
+                           candidates, Dimension, candidate_count);
+    return;
+  }
   using namespace nvcuda;
   static_assert(History > 0, "History must be positive");
   static_assert(
@@ -579,6 +588,8 @@ void kernel_lbfgs_step_compact(
       history_head[batch] = head + 1 == OP_HISTORY ? 0 : head + 1;
       history_count[batch] = active_pair_count;
     }
+    write_lbfgs_candidates(position, step, candidate_scales, candidate_beta,
+                           candidates, Dimension, candidate_count);
     return;
   }
 
@@ -750,6 +761,8 @@ void kernel_lbfgs_step_compact(
       history_count[batch] = active_pair_count;
     }
   }
+  write_lbfgs_candidates(position, step, candidate_scales, candidate_beta,
+                           candidates, Dimension, candidate_count);
 }
 
 }  // namespace optimization

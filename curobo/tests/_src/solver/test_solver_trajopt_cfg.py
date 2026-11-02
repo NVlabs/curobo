@@ -15,6 +15,44 @@ from curobo._src.types.robot import RobotCfg
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
 
 
+@pytest.mark.parametrize(
+    "cap,interval",
+    [
+        (0, 50),
+        (200, 0),
+        (-1, 50),
+        (200, -1),
+        (200.5, 50),
+        (200, True),
+    ],
+)
+def test_initial_iteration_budgets_must_be_positive(cap: int, interval: int) -> None:
+    """Reject invalid initial iteration budgets before constructing solver resources."""
+    with pytest.raises(ValueError, match="must be positive"):
+        TrajOptSolverCfg.create(
+            robot="franka.yml",
+            initial_max_iters=cap,
+            initial_check_interval=interval,
+        )
+
+
+@pytest.mark.parametrize(
+    "cap,override,expected", [(None, 100, 100), (150, 100, 150), (None, None, 50)]
+)
+def test_explicit_optimizer_override_preserves_initial_iteration_cap(
+    cap: int | None,
+    override: int | None,
+    expected: int,
+) -> None:
+    """Keep explicit optimizer budgets unless the caller supplies the new initial cap."""
+    config = TrajOptSolverCfg.create(
+        robot="franka.yml",
+        override_optimizer_num_iters={"lbfgs": override},
+        initial_max_iters=cap,
+    )
+    assert config.initial_max_iters == expected
+
+
 @pytest.fixture(scope="module")
 def cuda_device_cfg():
     """Create a CUDA device configuration for testing."""

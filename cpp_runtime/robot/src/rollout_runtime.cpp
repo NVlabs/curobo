@@ -254,17 +254,35 @@ RolloutRuntime::RolloutRuntime(std::string artifact_directory,
       "external_force_transforms");
   load_kernel(artifact_directory_, profile_.forward, &forward_kernel_);
   load_kernel(artifact_directory_, profile_.backward, &backward_kernel_);
+  for (const auto& profile : manifest_.forward_profiles) {
+    auto kernel = std::make_unique<curobo_robot_runtime::KernelModule>();
+    load_kernel(artifact_directory_, profile.kernel, kernel.get());
+    forward_kernels_.push_back(std::move(kernel));
+  }
 }
 
 void RolloutRuntime::launch_inverse_dynamics(
     CUdeviceptr position, CUdeviceptr velocity, CUdeviceptr acceleration,
     CUdeviceptr effort, CUdeviceptr forward_cache, int states,
-    CUstream stream) const {
+    CUstream stream, bool save_for_backward) const {
   if (states <= 0) {
     throw std::invalid_argument("inverse-dynamics state count must be positive");
   }
-  const int batches_per_block =
-      profile_.forward.block_dim / profile_.threads_per_batch;
+  const auto* launch = &profile_.forward;
+  const auto* kernel = &forward_kernel_;
+  int threads_per_batch = profile_.threads_per_batch;
+  if (!save_for_backward) {
+    for (size_t i = 0; i < manifest_.forward_profiles.size(); ++i) {
+      const auto& profile = manifest_.forward_profiles[i];
+      if (states <= profile.max_states) {
+        launch = &profile.kernel;
+        kernel = forward_kernels_[i].get();
+        threads_per_batch = profile.threads_per_batch;
+        break;
+      }
+    }
+  }
+  const int batches_per_block = launch->block_dim / threads_per_batch;
   CUdeviceptr fixed_transforms = fixed_transforms_.ptr();
   CUdeviceptr link_masses_com = link_masses_com_.ptr();
   CUdeviceptr link_inertias = link_inertias_.ptr();
@@ -289,10 +307,10 @@ void RolloutRuntime::launch_inverse_dynamics(
       &null_pointer,    &null_pointer,      &null_pointer,
       &states,          &num_levels,        &num_links,
   };
-  forward_kernel_.launch(
+  kernel->launch(
       grid_for(states, batches_per_block),
-      static_cast<unsigned int>(profile_.forward.block_dim),
-      static_cast<unsigned int>(profile_.forward.shared_memory), stream,
+      static_cast<unsigned int>(launch->block_dim),
+      static_cast<unsigned int>(launch->shared_memory), stream,
       arguments);
 }
 

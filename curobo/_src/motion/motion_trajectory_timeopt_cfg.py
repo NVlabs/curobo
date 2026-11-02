@@ -19,7 +19,7 @@ class TrajectoryTimeOptCfg:
     robot: KinematicsCfg
     #: Independent paths sharing one model and limit set.
     batch_size: int = 1
-    #: Native cubic action controls, including the replaced final action.
+    #: Native cubic action controls in [2,1024], including the replaced final action.
     n_knots: int = 16
     #: Independent positive squared-speed spline coefficients; fixed at 32.
     timing_controls: int = 32

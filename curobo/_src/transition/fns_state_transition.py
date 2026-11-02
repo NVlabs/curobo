@@ -20,11 +20,12 @@ from curobo._src.curobolib.cuda_ops.trajectory import (
     get_bspline_time_scaled_dt,
 )
 from curobo._src.state.state_joint import JointState
+from curobo._src.trajectory.trajectory_interpolation import calculate_dt_no_clamp
 from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.types.spline_layout import SplineLayout
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.torch_util import get_torch_jit_decorator
-from curobo._src.trajectory.trajectory_interpolation import calculate_dt_no_clamp
 
 
 class StateFromBase:
@@ -385,9 +386,9 @@ class StateFromBSplineKnot(StateFromBase):
         Only CUDA devices are supported. Double is not supported (only float32 is supported).
 
         n_knots needs to be greater than 5. Given n_knots, the horizon is computed as:
-        - BSPLINE_3: horizon = (n_knots + 2) * interpolation_steps + 1
-        - BSPLINE_4: horizon = (n_knots + 3) * interpolation_steps + 1
-        - BSPLINE_5: horizon = (n_knots + 4) * interpolation_steps + 1
+        - BSPLINE_3: horizon = (n_knots + 4) * interpolation_steps + 1
+        - BSPLINE_4: horizon = (n_knots + 5) * interpolation_steps + 1
+        - BSPLINE_5: horizon = (n_knots + 6) * interpolation_steps + 1
         A good value for interpolation_steps is 4.
 
         Args:
@@ -407,9 +408,9 @@ class StateFromBSplineKnot(StateFromBase):
         self.control_space = control_space
         self.bspline_degree = ControlSpace.spline_degree(control_space)
         self.interpolation_steps = interpolation_steps
-        self.padded_horizon = ControlSpace.spline_total_interpolation_steps(
-            control_space, n_knots, interpolation_steps
-        )
+        self.padded_horizon = SplineLayout(
+            n_knots, control_space, interpolation_steps
+        ).native_horizon
         super().__init__(device_cfg, batch_size=batch_size, horizon=horizon)
 
     def update_batch_size(

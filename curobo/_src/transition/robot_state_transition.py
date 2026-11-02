@@ -44,6 +44,11 @@ if TYPE_CHECKING:
 
 
 class RobotStateTransition:
+    @property
+    def native_horizon(self) -> int:
+        """Number of native states from the shared transition layout."""
+        return self.config.native_horizon
+
     def __init__(
         self,
         config: RobotStateTransitionCfg,

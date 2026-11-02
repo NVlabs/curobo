@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "curobo_robot_runtime/spline_layout.h"
 
 #include <cuda.h>
 #include <cuda_runtime_api.h>
@@ -71,6 +72,12 @@ struct RolloutKernelProfile {
   IkKernelManifest backward;
 };
 
+struct RolloutForwardProfile {
+  int max_states{0};
+  int threads_per_batch{0};
+  IkKernelManifest kernel;
+};
+
 struct RolloutManifest {
   int schema_version{0};
   std::string arch;
@@ -98,6 +105,7 @@ struct RolloutManifest {
   RolloutKernelProfile ik;
   RolloutKernelProfile rrt;
   RolloutKernelProfile trajopt;
+  std::vector<RolloutForwardProfile> forward_profiles;
 };
 
 struct IkManifest {
@@ -177,6 +185,7 @@ struct IkManifest {
 };
 
 struct TrajectoryOptimizationManifest {
+  curobo::robot::SplineLayout spline_layout{};
   int schema_version{0};
   std::string arch;
   int num_dof{0};
@@ -187,6 +196,7 @@ struct TrajectoryOptimizationManifest {
   int num_knots{0};
   int trajectory_steps{0};
   int interpolation_buffer_size{0};
+  int minimum_interpolation_buffer_size{0};
   int spline_degree{0};
   int max_seeds{0};
   int history{0};
@@ -235,6 +245,8 @@ struct TrajectoryOptimizationManifest {
   IkKernelManifest bspline_forward;
   IkKernelManifest bspline_single_dt;
   IkKernelManifest bspline_backward;
+  IkKernelManifest bspline_backward_effort;
+  IkKernelManifest reduce_rollout_cost;
   IkKernelManifest time_scaled_dt;
   IkKernelManifest cspace;
   IkKernelManifest pose;
@@ -263,7 +275,6 @@ struct TrajectoryOptimizationManifest {
   IkKernelManifest prepare_initial_state;
   IkKernelManifest prepare_search_actions;
   IkKernelManifest prepare_search_actions_backtracking;
-  IkKernelManifest combine_rollout;
   IkKernelManifest accumulate;
   IkKernelManifest finalize;
   IkKernelManifest line_search;

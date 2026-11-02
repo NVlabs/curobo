@@ -387,8 +387,7 @@ class SceneData:
         elif isinstance(obstacle, VoxelGrid):
             if self.voxels is None:
                 log_and_raise("Voxel cache not initialized")
-            self.voxels.load_batch([obstacle], env_idx)
-            return 0
+            return self.voxels.add(obstacle, env_idx)
         else:
             log_and_raise(f"Unsupported obstacle type: {type(obstacle)}")
 
@@ -518,8 +517,9 @@ class SceneData:
             for mesh in scene_cfg.mesh:
                 self.add_obstacle(mesh, env_idx)
         if scene_cfg.voxel:
-            for voxel in scene_cfg.voxel:
-                self.add_obstacle(voxel, env_idx)
+            if self.voxels is None:
+                log_and_raise("Voxel cache not initialized")
+            self.voxels.load_batch(scene_cfg.voxel, env_idx)
 
     # -------------------------------------------------------------------------
     # Query Methods

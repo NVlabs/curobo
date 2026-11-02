@@ -9,6 +9,7 @@
 #include "rollout_streams.h"
 #include "scene_runtime.h"
 #include "trajectory_timeopt_cuda.h"
+#include "trajectory_waypoints_cuda.h"
 #include "warp_abi.h"
 
 #include <algorithm>
@@ -258,6 +259,7 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
   load_kernels();
   allocate_workspace();
   rollout_streams_ = std::make_unique<RolloutStreams>();
+  conditional_rollout_streams_ = std::make_unique<RolloutStreams>();
   if (config_.enable_timeopt) {
     TrajectoryTimeOptConfig timeopt_config;
     timeopt_config.device_ordinal = config_.device_ordinal;
@@ -287,10 +289,12 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
     execution_speed_scale_.allocate(sizeof(float));
     set_execution_speed_scale(config_.execution_speed_scale);
   }
+  CRR_CUDA_CHECK(cudaStreamCreateWithFlags(&conditional_stream_, cudaStreamNonBlocking));
 }
 
 TrajectoryOptimizerRuntime::~TrajectoryOptimizerRuntime() {
   cudaSetDevice(config_.device_ordinal);
+  if (conditional_stream_ != nullptr) cudaStreamDestroy(conditional_stream_);
 }
 
 CuroboRobotInfo TrajectoryOptimizerRuntime::robot_info() const {
@@ -299,10 +303,8 @@ CuroboRobotInfo TrajectoryOptimizerRuntime::robot_info() const {
 
 TrajectoryOptimizationInfo TrajectoryOptimizerRuntime::info() const {
   return TrajectoryOptimizationInfo{
-      manifest_.num_dof,
-      manifest_.num_knots,
-      manifest_.trajectory_steps,
-      manifest_.num_tool_frames,
+      manifest_.num_dof,         manifest_.num_knots,     manifest_.trajectory_steps,
+      manifest_.num_tool_frames, manifest_.spline_layout,
   };
 }
 
@@ -348,6 +350,10 @@ void TrajectoryOptimizerRuntime::set_link_collision_enabled(
 }
 
 void TrajectoryOptimizerRuntime::validate_config() const {
+  if (config_.num_knots < 12 || config_.num_knots > 1024 ||
+      config_.num_knots != manifest_.spline_layout.num_knots) {
+    throw std::invalid_argument("num_knots must be in [12,1024] and match the exported artifact");
+  }
   const auto robot_info_value = robot_.info();
   if (manifest_.arch != robot_.manifest().arch ||
       manifest_.num_dof != robot_info_value.num_dof ||
@@ -363,8 +369,8 @@ void TrajectoryOptimizerRuntime::validate_config() const {
         "TrajOpt artifact requires reverse-kinematics topology tensors");
   }
   if (config_.num_seeds <= 0 || config_.num_seeds > manifest_.max_seeds ||
-      config_.max_iterations <= 0 || config_.refinement_iterations <= 0 ||
-      config_.finetune_attempts < 0) {
+      config_.max_iterations <= 0 || config_.initial_check_interval <= 0 ||
+      config_.refinement_iterations <= 0 || config_.finetune_attempts < 0) {
     throw std::invalid_argument(
         "TrajOpt seeds or iteration counts are outside the artifact capacity");
   }
@@ -394,22 +400,8 @@ void TrajectoryOptimizerRuntime::validate_config() const {
     throw std::invalid_argument(
         "TrajOpt scalar configuration is outside its valid range");
   }
-  const int total_knots =
-      manifest_.num_knots + manifest_.spline_degree + 1;
-  const int sparse_interpolation_steps =
-      (manifest_.trajectory_steps - 1) / total_knots;
-  const int maximum_steps_per_waypoint = static_cast<int>(std::ceil(
-                                             manifest_.maximum_dt *
-                                             sparse_interpolation_steps /
-                                             manifest_.interpolation_dt)) +
-                                         1;
-  const int required_validation_steps =
-      total_knots * maximum_steps_per_waypoint + 1;
-  if (sparse_interpolation_steps <= 0 ||
-      (manifest_.trajectory_steps - 1) % total_knots != 0 ||
-      manifest_.interpolation_buffer_size < required_validation_steps) {
-    throw std::runtime_error(
-        "TrajOpt interpolation buffer is too small for the exported dt range");
+  if (manifest_.interpolation_buffer_size < manifest_.minimum_interpolation_buffer_size) {
+    throw std::runtime_error("TrajOpt interpolation buffer is too small for the exported dt range");
   }
 }
 
@@ -526,6 +518,9 @@ void TrajectoryOptimizerRuntime::load_constants() {
 }
 
 void TrajectoryOptimizerRuntime::load_kernels() {
+  if (config_.check_effort_limits) {
+    manifest_.bspline_backward = manifest_.bspline_backward_effort;
+  }
   kinematics_kernel_.load(
       (std::filesystem::path(artifact_directory_) / manifest_.kinematics.cubin)
           .string(),
@@ -594,8 +589,8 @@ void TrajectoryOptimizerRuntime::load_kernels() {
   }
   load_kernel(artifact_directory_, manifest_.prepare_search_actions,
               &prepare_search_actions_kernel_);
-  load_kernel(artifact_directory_, manifest_.combine_rollout,
-              &combine_rollout_kernel_);
+  load_kernel(artifact_directory_, manifest_.reduce_rollout_cost,
+              &reduce_rollout_cost_kernel_);
   load_kernel(artifact_directory_, manifest_.accumulate, &accumulate_kernel_);
   load_kernel(artifact_directory_, manifest_.finalize, &finalize_kernel_);
   load_kernel(artifact_directory_, manifest_.line_search, &line_search_kernel_);
@@ -735,6 +730,23 @@ void TrajectoryOptimizerRuntime::allocate_workspace() {
   allocate_float(&pose_position_gradient_, state_tools * 3);
   allocate_float(&pose_quaternion_gradient_, state_tools * 4);
   pose_goalset_index_.allocate(state_tools * sizeof(int32_t));
+  allocate_float(&path_settings_, TOOL_PATH_SETTINGS);
+  allocate_float(&path_goal_position_, manifest_.trajectory_steps * manifest_.num_tool_frames * 3);
+  allocate_float(&path_goal_quaternion_,
+                 manifest_.trajectory_steps * manifest_.num_tool_frames * 4);
+  allocate_float(&validation_progress_, config_.num_seeds * manifest_.interpolation_buffer_size);
+  const std::vector<int32_t> pose_counts(candidates, manifest_.trajectory_steps);
+  pose_valid_steps_.allocate(pose_counts.size() * sizeof(int32_t));
+  CRR_CUDA_CHECK(cudaMemcpy(reinterpret_cast<void *>(pose_valid_steps_.ptr()), pose_counts.data(),
+                            pose_counts.size() * sizeof(int32_t), cudaMemcpyHostToDevice));
+  allocate_float(&optimization_dt_, max_seeds);
+  allocate_float(&initial_dt_, max_seeds);
+  allocate_float(&initial_action_, max_seeds * opt_dim);
+  initial_iterations_.allocate(sizeof(int32_t));
+  path_settings_.clear();
+  path_goal_position_.clear();
+  path_goal_quaternion_.clear();
+
   allocate_float(&world_collision_cost_, states);
   allocate_float(&world_collision_gradient_, state_spheres * 4);
   allocate_float(&self_collision_cost_, states);
@@ -1003,6 +1015,17 @@ void TrajectoryOptimizerRuntime::compute_required_dt(
       static_cast<unsigned int>(manifest_.reduce_required_dt.block_dim),
       static_cast<unsigned int>(manifest_.reduce_required_dt.shared_memory),
       stream, reduce_arguments);
+  // Moving references must preserve their start derivatives; unlike static
+  // references, TimeOpt cannot slow their entire time law to recover its margin.
+  if (timeopt_) {
+    const float margin = std::max(1.0F / timeopt_->config().limit_scale,
+                                  std::cbrt(1.0F / timeopt_->config().jerk_limit_scale));
+    CRR_CUDA_CHECK(launch_moving_reference_margin(
+        reinterpret_cast<float *>(trajectory_dt_.ptr()),
+        reinterpret_cast<const float *>(resolved_start_velocities_.ptr()),
+        reinterpret_cast<const float *>(resolved_start_accelerations_.ptr()), config_.num_seeds,
+        manifest_.num_dof, margin, manifest_.maximum_dt, reinterpret_cast<cudaStream_t>(stream)));
+  }
 }
 
 void TrajectoryOptimizerRuntime::expand_trajectory_dt(
@@ -1171,7 +1194,7 @@ void TrajectoryOptimizerRuntime::launch_pose(
     CUstream stream) const {
   int states = trajectories * manifest_.trajectory_steps;
   const int state_tools = states * manifest_.num_tool_frames;
-  if (!request.constrain_tool_path) {
+  if (!prepare_pose_criteria_ && !request.constrain_tool_path) {
     CRR_CUDA_CHECK(cudaMemsetAsync(
         reinterpret_cast<void*>(pose_cost_.ptr()), 0,
         static_cast<size_t>(state_tools) * 2 * sizeof(float),
@@ -1187,17 +1210,8 @@ void TrajectoryOptimizerRuntime::launch_pose(
     }
   }
 
-  float path_position_tolerance =
-      request.path_position_tolerance < 0.0F
-          ? config_.position_tolerance
-          : request.path_position_tolerance;
-  float path_orientation_tolerance =
-      request.path_orientation_tolerance < 0.0F
-          ? config_.orientation_tolerance
-          : request.path_orientation_tolerance;
   int num_tool_frames = manifest_.num_tool_frames;
   const int criteria_count = 2 * num_tool_frames;
-  const auto criteria_bounds = warp_bounds_1d(criteria_count);
   auto position_metric =
       array_1d(pose_position_metric_.ptr(), criteria_count, 9 * sizeof(float));
   auto rotation_metric =
@@ -1206,44 +1220,22 @@ void TrajectoryOptimizerRuntime::launch_pose(
       array_1d(pose_tolerance_.ptr(), criteria_count, 2 * sizeof(float));
   auto error_frame =
       array_1d(pose_error_frame_.ptr(), num_tool_frames, sizeof(int32_t));
-  float direction_x = request.free_position_direction.at(0);
-  float direction_y = request.free_position_direction.at(1);
-  float direction_z = request.free_position_direction.at(2);
-  uint8_t direction_in_goal_frame =
-      request.direction_in_goal_frame ? 1U : 0U;
-  std::vector<void*> criteria_arguments{
-      const_cast<WarpLaunchBounds1*>(&criteria_bounds),
-      &position_metric,
-      &rotation_metric,
-      &pose_tolerance,
-      &error_frame,
-      &direction_x,
-      &direction_y,
-      &direction_z,
-      &path_position_tolerance,
-      &path_orientation_tolerance,
-      &direction_in_goal_frame,
-      &num_tool_frames,
-  };
-  if (prepare_pose_criteria_) {
-    prepare_pose_criteria_kernel_.launch(
-        grid_for(criteria_count, manifest_.prepare_pose_criteria.block_dim),
-        static_cast<unsigned int>(manifest_.prepare_pose_criteria.block_dim),
-        static_cast<unsigned int>(manifest_.prepare_pose_criteria.shared_memory),
-        stream, criteria_arguments);
-  }
 
   const auto pose_bounds = warp_bounds_1d(state_tools);
   auto current_position =
       array_1d(link_position_.ptr(), state_tools, 3 * sizeof(float));
   auto current_quaternion =
       array_1d(link_quaternion_.ptr(), state_tools, 4 * sizeof(float));
-  auto goal_position = warp_array_1d(
-      reinterpret_cast<uint64_t>(request.goal_tool_positions),
-      num_tool_frames, 3 * sizeof(float));
+  int goal_horizon = prepare_pose_criteria_ ? manifest_.trajectory_steps : 1;
+  auto goal_position = warp_array_1d(prepare_pose_criteria_
+                                         ? path_goal_position_.ptr()
+                                         : reinterpret_cast<uint64_t>(request.goal_tool_positions),
+                                     goal_horizon * num_tool_frames, 3 * sizeof(float));
   auto goal_quaternion = warp_array_1d(
-      reinterpret_cast<uint64_t>(request.goal_tool_quaternions),
-      num_tool_frames, 4 * sizeof(float));
+      prepare_pose_criteria_ ? path_goal_quaternion_.ptr()
+                             : reinterpret_cast<uint64_t>(request.goal_tool_quaternions),
+      goal_horizon * num_tool_frames, 4 * sizeof(float));
+  auto valid_steps = array_1d(pose_valid_steps_.ptr(), trajectories, sizeof(int32_t));
   auto goal_indices =
       array_1d(scene_indices_.ptr(), trajectories, sizeof(int32_t));
   auto weight = array_1d(tool_pose_weight_.ptr(), 2, sizeof(float));
@@ -1260,13 +1252,14 @@ void TrajectoryOptimizerRuntime::launch_pose(
       array_1d(pose_goalset_index_.ptr(), state_tools, sizeof(int32_t));
   int batch_size = trajectories;
   int horizon = manifest_.trajectory_steps;
-  std::vector<void*> pose_arguments{
-      const_cast<WarpLaunchBounds1*>(&pose_bounds),
+  std::vector<void *> pose_arguments{
+      const_cast<WarpLaunchBounds1 *>(&pose_bounds),
       &current_position,
       &current_quaternion,
       &goal_position,
       &goal_quaternion,
       &goal_indices,
+      &valid_steps,
       &weight,
       &position_metric,
       &rotation_metric,
@@ -1280,6 +1273,7 @@ void TrajectoryOptimizerRuntime::launch_pose(
       &goalset_index,
       &batch_size,
       &horizon,
+      &goal_horizon,
       &num_tool_frames,
   };
   pose_kernel_.launch(grid_for(state_tools, manifest_.pose.block_dim),
@@ -1358,7 +1352,7 @@ void TrajectoryOptimizerRuntime::launch_metrics_world_collision(
 
 void TrajectoryOptimizerRuntime::launch_metrics_collisions(
     int trajectories, CUstream stream) const {
-  auto* streams = rollout_streams_.get();
+  auto* streams = rollout_streams(stream);
   const auto primary = reinterpret_cast<cudaStream_t>(stream);
   const auto world = streams->cuda_stream(RolloutStream::WORLD);
   const auto self = streams->cuda_stream(RolloutStream::SELF);
@@ -1513,10 +1507,10 @@ void TrajectoryOptimizerRuntime::launch_kinematics_backward(
   const int states = trajectories * manifest_.trajectory_steps;
   auto model = robot_.model_device_view();
   CUdeviceptr output = collision_joint_gradient_.ptr();
-  CUdeviceptr position_gradient = request.constrain_tool_path
+  CUdeviceptr position_gradient = (prepare_pose_criteria_ || request.constrain_tool_path)
                                       ? pose_position_gradient_.ptr()
                                       : zero_link_position_gradient_.ptr();
-  CUdeviceptr quaternion_gradient = request.constrain_tool_path
+  CUdeviceptr quaternion_gradient = (prepare_pose_criteria_ || request.constrain_tool_path)
                                         ? pose_quaternion_gradient_.ptr()
                                         : zero_link_quaternion_gradient_.ptr();
   CUdeviceptr sphere_gradient = world_collision_gradient_.ptr();
@@ -1661,7 +1655,7 @@ void TrajectoryOptimizerRuntime::launch_cspace(int trajectories,
                         stream, arguments);
 }
 
-void TrajectoryOptimizerRuntime::combine_rollout(
+void TrajectoryOptimizerRuntime::reduce_rollout_cost(
     int trajectories, CUdeviceptr costs, bool pose_constraint_active,
     CUstream stream) const {
   constexpr int block_size = 128;
@@ -1671,22 +1665,6 @@ void TrajectoryOptimizerRuntime::combine_rollout(
   const auto bounds = warp_bounds_2d(trajectories, block_size);
   auto cspace_cost =
       array_1d(cspace_cost_.ptr(), state_values, sizeof(float));
-  auto gradient_position =
-      array_1d(cspace_gradient_position_.ptr(), state_values, sizeof(float));
-  auto gradient_velocity =
-      array_1d(cspace_gradient_velocity_.ptr(), state_values, sizeof(float));
-  auto gradient_acceleration =
-      array_1d(cspace_gradient_acceleration_.ptr(), state_values, sizeof(float));
-  auto gradient_jerk =
-      array_1d(cspace_gradient_jerk_.ptr(), state_values, sizeof(float));
-  auto effort_gradient_position =
-      array_1d(effort_gradient_position_.ptr(), state_values, sizeof(float));
-  auto effort_gradient_velocity =
-      array_1d(effort_gradient_velocity_.ptr(), state_values, sizeof(float));
-  auto effort_gradient_acceleration =
-      array_1d(effort_gradient_acceleration_.ptr(), state_values, sizeof(float));
-  auto collision_gradient =
-      array_1d(collision_joint_gradient_.ptr(), state_values, sizeof(float));
   auto world_cost =
       array_1d(world_collision_cost_.ptr(), states, sizeof(float));
   auto self_cost =
@@ -1696,35 +1674,21 @@ void TrajectoryOptimizerRuntime::combine_rollout(
   auto output_cost = array_1d(costs, trajectories, sizeof(float));
   int num_tool_frames = manifest_.num_tool_frames;
   uint8_t use_pose_constraint = pose_constraint_active ? 1U : 0U;
-  uint8_t use_effort = config_.check_effort_limits ? 1U : 0U;
   std::vector<void*> arguments{
       const_cast<WarpLaunchBounds2*>(&bounds),
       &cspace_cost,
-      &gradient_position,
-      &gradient_velocity,
-      &gradient_acceleration,
-      &gradient_jerk,
-      &effort_gradient_position,
-      &effort_gradient_velocity,
-      &effort_gradient_acceleration,
-      &collision_gradient,
       &world_cost,
       &self_cost,
       &pose_cost,
       &num_tool_frames,
       &use_pose_constraint,
-      &use_effort,
-      &gradient_position,
-      &gradient_velocity,
-      &gradient_acceleration,
-      &gradient_jerk,
       &output_cost,
   };
   const size_t threads =
       static_cast<size_t>(trajectories) * static_cast<size_t>(block_size);
-  combine_rollout_kernel_.launch(grid_for(threads, block_size),
-      static_cast<unsigned int>(manifest_.combine_rollout.block_dim),
-      static_cast<unsigned int>(manifest_.combine_rollout.shared_memory), stream,
+  reduce_rollout_cost_kernel_.launch(grid_for(threads, block_size),
+      static_cast<unsigned int>(manifest_.reduce_rollout_cost.block_dim),
+      static_cast<unsigned int>(manifest_.reduce_rollout_cost.shared_memory), stream,
       arguments);
 }
 
@@ -1757,8 +1721,14 @@ void TrajectoryOptimizerRuntime::launch_bspline_backward(
       &dof,
       &n_knots,
   };
+  CUdeviceptr collision_gradient = collision_joint_gradient_.ptr();
+  CUdeviceptr effort_position = effort_gradient_position_.ptr();
+  CUdeviceptr effort_velocity = effort_gradient_velocity_.ptr();
+  CUdeviceptr effort_acceleration = effort_gradient_acceleration_.ptr();
+  arguments.insert(arguments.end(), {&collision_gradient, &effort_position,
+                                    &effort_velocity, &effort_acceleration});
   const int total_knots = n_knots + manifest_.spline_degree + 1;
-  const int interpolation_steps = horizon / total_knots;
+  const int interpolation_steps = manifest_.spline_layout.interpolation_steps;
   if (interpolation_steps <= 0 || interpolation_steps > 32 ||
       horizon % total_knots != 0) {
     throw std::runtime_error("TrajOpt artifact has an invalid B-spline layout");
@@ -1777,80 +1747,100 @@ void TrajectoryOptimizerRuntime::launch_bspline_backward(
       arguments);
 }
 
+RolloutStreams* TrajectoryOptimizerRuntime::rollout_streams(CUstream stream) const {
+  // Parent streams remain in the outer capture even after joining. Conditional
+  // bodies need separate streams/events; reuse them after each body ends capture.
+  return reinterpret_cast<cudaStream_t>(stream) == conditional_stream_
+             ? conditional_rollout_streams_.get()
+             : rollout_streams_.get();
+}
+
 void TrajectoryOptimizerRuntime::evaluate(
     CUdeviceptr knots, int trajectories, CUdeviceptr costs,
     CUdeviceptr knot_gradients,
-    const TrajectoryOptimizationRequest& request, CUstream stream) const {
-  expand_trajectory_dt(trajectories, stream);
+    const TrajectoryOptimizationRequest& request, CUstream stream, bool prepare_dt) const {
+  const bool compute_gradients = knot_gradients != 0;
+  if (prepare_dt) expand_trajectory_dt(trajectories, stream);
   launch_bspline(knots, trajectories, request, stream);
-  auto* streams = rollout_streams_.get();
+  auto* streams = rollout_streams(stream);
   const auto primary = reinterpret_cast<cudaStream_t>(stream);
-  const auto dynamics = streams->cuda_stream(RolloutStream::DYNAMICS);
-  const auto kinematics = streams->cuda_stream(RolloutStream::KINEMATICS);
-  const auto cspace = streams->cuda_stream(RolloutStream::CSPACE);
-  const auto pose = streams->cuda_stream(RolloutStream::POSE);
-  const auto world = streams->cuda_stream(RolloutStream::WORLD);
-  const auto self = streams->cuda_stream(RolloutStream::SELF);
-  streams->record(RolloutEvent::STATE_READY, primary);
+  const auto driver = [&](RolloutStream role) {
+    return streams->driver_stream(role);
+  };
+  const auto cuda = [&](RolloutStream role) {
+    return streams->cuda_stream(role);
+  };
+  const auto record = [&](RolloutEvent event, cudaStream_t target) {
+    streams->record(event, target);
+  };
+  const auto wait = [&](cudaStream_t target, RolloutEvent event) {
+    streams->wait(target, event);
+  };
+
+  const auto dynamics = cuda(RolloutStream::DYNAMICS);
+  const auto kinematics = cuda(RolloutStream::KINEMATICS);
+  const auto cspace = cuda(RolloutStream::CSPACE);
+  const auto pose = cuda(RolloutStream::POSE);
+  const auto world = cuda(RolloutStream::WORLD);
+  const auto self = cuda(RolloutStream::SELF);
+  record(RolloutEvent::STATE_READY, primary);
+
+  // Submit geometry first; both transitions still depend only on the spline state.
+  wait(kinematics, RolloutEvent::STATE_READY);
+  launch_kinematics(trajectories, driver(RolloutStream::KINEMATICS));
+  record(RolloutEvent::KINEMATICS_READY, kinematics);
 
   if (config_.check_effort_limits) {
     const int states = trajectories * manifest_.trajectory_steps;
-    streams->wait(dynamics, RolloutEvent::STATE_READY);
+    wait(dynamics, RolloutEvent::STATE_READY);
     rollout_->launch_inverse_dynamics(
-        dense_position_.ptr(), dense_velocity_.ptr(),
-        dense_acceleration_.ptr(), joint_effort_.ptr(),
-        rnea_forward_cache_.ptr(), states,
-        streams->driver_stream(RolloutStream::DYNAMICS));
-    streams->record(RolloutEvent::DYNAMICS_READY, dynamics);
-    streams->wait(cspace, RolloutEvent::DYNAMICS_READY);
+        dense_position_.ptr(), dense_velocity_.ptr(), dense_acceleration_.ptr(),
+        joint_effort_.ptr(), rnea_forward_cache_.ptr(), states, driver(RolloutStream::DYNAMICS));
+    record(RolloutEvent::DYNAMICS_READY, dynamics);
+    wait(cspace, RolloutEvent::DYNAMICS_READY);
   } else {
-    streams->wait(cspace, RolloutEvent::STATE_READY);
+    wait(cspace, RolloutEvent::STATE_READY);
   }
-  launch_cspace(trajectories, streams->driver_stream(RolloutStream::CSPACE));
-  if (config_.check_effort_limits) {
+  launch_cspace(trajectories, driver(RolloutStream::CSPACE));
+  record(RolloutEvent::CSPACE_COST_READY, cspace);
+  if (config_.check_effort_limits && compute_gradients) {
     const int states = trajectories * manifest_.trajectory_steps;
     rollout_->launch_inverse_dynamics_backward(
         effort_gradient_.ptr(), dense_position_.ptr(), dense_velocity_.ptr(),
-        rnea_forward_cache_.ptr(), effort_gradient_position_.ptr(),
-        effort_gradient_velocity_.ptr(), effort_gradient_acceleration_.ptr(),
-        states, streams->driver_stream(RolloutStream::CSPACE));
+        rnea_forward_cache_.ptr(), effort_gradient_position_.ptr(), effort_gradient_velocity_.ptr(),
+        effort_gradient_acceleration_.ptr(), states, driver(RolloutStream::CSPACE));
   }
-  streams->record(RolloutEvent::CSPACE_DONE, cspace);
+  if (compute_gradients) record(RolloutEvent::CSPACE_DONE, cspace);
 
-  streams->wait(kinematics, RolloutEvent::STATE_READY);
-  launch_kinematics(
-      trajectories, streams->driver_stream(RolloutStream::KINEMATICS));
-  streams->record(RolloutEvent::KINEMATICS_READY, kinematics);
   for (const auto cost_stream : {pose, world, self}) {
-    streams->wait(cost_stream, RolloutEvent::KINEMATICS_READY);
+    wait(cost_stream, RolloutEvent::KINEMATICS_READY);
   }
-  launch_pose(trajectories, request,
-              streams->driver_stream(RolloutStream::POSE));
-  streams->record(RolloutEvent::POSE_DONE, pose);
-  launch_world_collision(trajectories,
-                         streams->driver_stream(RolloutStream::WORLD));
-  streams->record(RolloutEvent::WORLD_DONE, world);
-  launch_self_collision(trajectories,
-                        streams->driver_stream(RolloutStream::SELF));
-  streams->record(RolloutEvent::SELF_DONE, self);
+  launch_pose(trajectories, request, driver(RolloutStream::POSE));
+  record(RolloutEvent::POSE_DONE, pose);
+  launch_world_collision(trajectories, driver(RolloutStream::WORLD));
+  record(RolloutEvent::WORLD_DONE, world);
+  launch_self_collision(trajectories, driver(RolloutStream::SELF));
+  record(RolloutEvent::SELF_DONE, self);
+  // Cost reduction overlaps both backward passes; B-spline assembles gradients.
+  for (const auto event : {RolloutEvent::CSPACE_COST_READY, RolloutEvent::POSE_DONE,
+                           RolloutEvent::WORLD_DONE, RolloutEvent::SELF_DONE}) {
+    wait(primary, event);
+  }
+  reduce_rollout_cost(trajectories, costs, true, stream);
+  if (!compute_gradients) return;
   for (const auto event : {
            RolloutEvent::WORLD_DONE,
            RolloutEvent::SELF_DONE,
        }) {
-    streams->wait(kinematics, event);
+    wait(kinematics, event);
   }
-  if (request.constrain_tool_path) {
-    streams->wait(kinematics, RolloutEvent::POSE_DONE);
-  }
-  launch_kinematics_backward(
-      trajectories, request,
-      streams->driver_stream(RolloutStream::KINEMATICS));
-  streams->record(RolloutEvent::KINEMATICS_BACKWARD_DONE, kinematics);
+  wait(kinematics, RolloutEvent::POSE_DONE);
+  launch_kinematics_backward(trajectories, request, driver(RolloutStream::KINEMATICS));
+  record(RolloutEvent::KINEMATICS_BACKWARD_DONE, kinematics);
 
-  streams->wait(primary, RolloutEvent::POSE_DONE);
-  streams->wait(primary, RolloutEvent::CSPACE_DONE);
-  streams->wait(primary, RolloutEvent::KINEMATICS_BACKWARD_DONE);
-  combine_rollout(trajectories, costs, request.constrain_tool_path, stream);
+  wait(primary, RolloutEvent::POSE_DONE);
+  wait(primary, RolloutEvent::CSPACE_DONE);
+  wait(primary, RolloutEvent::KINEMATICS_BACKWARD_DONE);
   launch_bspline_backward(trajectories, knot_gradients, stream);
 }
 
@@ -1863,7 +1853,8 @@ void TrajectoryOptimizerRuntime::prepare_initial_state(
     history_s_.clear(reinterpret_cast<cudaStream_t>(stream));
   }
   const int opt_dim = manifest_.num_knots * manifest_.num_dof;
-  const auto bounds = warp_bounds_1d(config_.num_seeds);
+  const auto bounds = warp_tiled_bounds_2d(
+      config_.num_seeds, manifest_.prepare_initial_state.block_dim);
   auto seed_action =
       array_2d(seed_actions_.ptr(), config_.num_seeds, opt_dim, sizeof(float));
   auto seed_cost =
@@ -1907,7 +1898,7 @@ void TrajectoryOptimizerRuntime::prepare_initial_state(
   float initial_step_scale = manifest_.initial_step_scale;
   uint8_t clear_state = clear_optimizer_state ? 1U : 0U;
   std::vector<void*> arguments{
-      const_cast<WarpLaunchBounds1*>(&bounds),
+      const_cast<WarpLaunchBounds2*>(&bounds),
       &seed_action,
       &seed_cost,
       &seed_gradient,
@@ -1934,7 +1925,7 @@ void TrajectoryOptimizerRuntime::prepare_initial_state(
       &beta,
   };
   prepare_initial_state_kernel_.launch(
-      grid_for(config_.num_seeds, manifest_.prepare_initial_state.block_dim),
+      static_cast<unsigned int>(config_.num_seeds),
       static_cast<unsigned int>(manifest_.prepare_initial_state.block_dim),
       static_cast<unsigned int>(manifest_.prepare_initial_state.shared_memory),
       stream, arguments);
@@ -2041,6 +2032,10 @@ void TrajectoryOptimizerRuntime::line_search(CUstream stream) const {
 void TrajectoryOptimizerRuntime::lbfgs_step(CUstream stream) const {
   CUdeviceptr line_search_status = line_search_status_.ptr();
   CUdeviceptr direction = step_direction_.ptr();
+  CUdeviceptr candidate_scales = line_search_scale_.ptr();
+  CUdeviceptr candidate_beta = line_search_beta_.ptr();
+  CUdeviceptr candidates = search_actions_.ptr();
+  int candidate_count = manifest_.num_line_search;
   CUdeviceptr rho = history_rho_.ptr();
   CUdeviceptr y = history_y_.ptr();
   CUdeviceptr s = history_s_.ptr();
@@ -2078,6 +2073,10 @@ void TrajectoryOptimizerRuntime::lbfgs_step(CUstream stream) const {
       &scale_step,
       &curvature,
       &line_search_status,
+      &candidate_scales,
+      &candidate_beta,
+      &candidates,
+      &candidate_count,
   };
   lbfgs_kernel_.launch(static_cast<unsigned int>(config_.num_seeds),
                        static_cast<unsigned int>(manifest_.lbfgs.block_dim),
@@ -2085,22 +2084,27 @@ void TrajectoryOptimizerRuntime::lbfgs_step(CUstream stream) const {
                        stream, arguments);
 }
 
-void TrajectoryOptimizerRuntime::optimize_pass(
-    const TrajectoryOptimizationRequest& request, CUstream stream, int iterations) const {
-  evaluate(seed_actions_.ptr(), config_.num_seeds, search_costs_.ptr(),
-           search_gradients_.ptr(), request, stream);
-  prepare_initial_state(false, stream);
+void TrajectoryOptimizerRuntime::optimize_pass(const TrajectoryOptimizationRequest &request,
+                                               CUstream stream, int iterations,
+                                               bool continuation) const {
+  if (!continuation) {
+    evaluate(seed_actions_.ptr(), config_.num_seeds, search_costs_.ptr(), search_gradients_.ptr(),
+             request, stream);
+    prepare_initial_state(false, stream);
+  }
   const int candidates = config_.num_seeds * manifest_.num_line_search;
+  // Timesteps and the candidate layout stay fixed throughout this loop. Other
+  // evaluations prepare their own layout, including after dt updates/restores.
+  expand_trajectory_dt(candidates, stream);
+  prepare_search_actions(stream);
   for (int iteration = 0; iteration < iterations; ++iteration) {
-    prepare_search_actions(stream);
     evaluate(search_actions_.ptr(), candidates, search_costs_.ptr(),
-             search_gradients_.ptr(), request, stream);
+             search_gradients_.ptr(), request, stream, false);
     line_search(stream);
     lbfgs_step(stream);
   }
-  evaluate(best_action_.ptr(), config_.num_seeds, search_costs_.ptr(),
-           search_gradients_.ptr(), request, stream);
-  launch_metrics_collisions(config_.num_seeds, stream);
+  // The caller evaluates and validates best_action_ at its final dt. Motion
+  // planning updates dt first; MPC retains its fixed phase timing.
 }
 
 TrajectoryOptimizationCandidates TrajectoryOptimizerRuntime::candidates() const {
@@ -2110,7 +2114,8 @@ TrajectoryOptimizationCandidates TrajectoryOptimizerRuntime::candidates() const 
           reinterpret_cast<const float *>(retained_acceleration_.ptr()),
           reinterpret_cast<const float *>(retained_jerk_.ptr()),
           reinterpret_cast<const float *>(retained_dt_.ptr()),
-          reinterpret_cast<const uint8_t *>(retained_success_.ptr())};
+          reinterpret_cast<const uint8_t *>(retained_success_.ptr()),
+          reinterpret_cast<const int32_t *>(initial_iterations_.ptr())};
 }
 
 const int32_t *TrajectoryOptimizerRuntime::validate(
@@ -2130,7 +2135,7 @@ const int32_t *TrajectoryOptimizerRuntime::validate(
   copy(validation_velocity_.ptr(), request.velocity);
   copy(validation_acceleration_.ptr(), request.acceleration);
   copy(validation_jerk_.ptr(), request.jerk);
-  validate_states(reinterpret_cast<CUstream>(request.stream), timeopt);
+  validate_states(reinterpret_cast<CUstream>(request.stream), timeopt, timeopt);
   return reinterpret_cast<const int32_t *>(validation_violation_.ptr());
 }
 
@@ -2138,8 +2143,7 @@ void TrajectoryOptimizerRuntime::validate_interpolated(
     CUdeviceptr knots, CUstream stream) const {
   int total_knots =
       manifest_.num_knots + manifest_.spline_degree + 1;
-  int sparse_interpolation_steps =
-      (manifest_.trajectory_steps - 1) / total_knots;
+  int sparse_interpolation_steps = manifest_.spline_layout.interpolation_steps;
   const auto horizon_bounds = warp_bounds_1d(config_.num_seeds);
   auto trajectory_dt =
       array_1d(trajectory_dt_.ptr(), config_.num_seeds, sizeof(float));
@@ -2220,60 +2224,65 @@ void TrajectoryOptimizerRuntime::validate_interpolated(
   validate_states(stream);
 }
 
-void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt) const {
+void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
+                                                 bool check_tool_path) const {
   const bool check_effort = config_.check_effort_limits || timeopt;
   const int validation_horizon = manifest_.interpolation_buffer_size;
   const size_t interpolation_values =
       static_cast<size_t>(config_.num_seeds) * validation_horizon * manifest_.num_dof;
-  auto* streams = rollout_streams_.get();
+  auto* streams = rollout_streams(stream);
   const auto primary = reinterpret_cast<cudaStream_t>(stream);
-  const auto dynamics = streams->cuda_stream(RolloutStream::DYNAMICS);
-  const auto kinematics = streams->cuda_stream(RolloutStream::KINEMATICS);
-  const auto world = streams->cuda_stream(RolloutStream::WORLD);
-  const auto self = streams->cuda_stream(RolloutStream::SELF);
-  streams->record(RolloutEvent::STATE_READY, primary);
+  const auto driver = [&](RolloutStream role) {
+    return streams->driver_stream(role);
+  };
+  const auto cuda = [&](RolloutStream role) {
+    return streams->cuda_stream(role);
+  };
+  const auto record = [&](RolloutEvent event, cudaStream_t target) {
+    streams->record(event, target);
+  };
+  const auto wait = [&](cudaStream_t target, RolloutEvent event) {
+    streams->wait(target, event);
+  };
+
+  const auto dynamics = cuda(RolloutStream::DYNAMICS);
+  const auto kinematics = cuda(RolloutStream::KINEMATICS);
+  const auto world = cuda(RolloutStream::WORLD);
+  const auto self = cuda(RolloutStream::SELF);
+  record(RolloutEvent::STATE_READY, primary);
 
   if (check_effort) {
-    streams->wait(dynamics, RolloutEvent::STATE_READY);
+    wait(dynamics, RolloutEvent::STATE_READY);
     rollout_->launch_inverse_dynamics(
-        validation_position_.ptr(), validation_velocity_.ptr(),
-        validation_acceleration_.ptr(), validation_joint_effort_.ptr(),
-        validation_rnea_forward_cache_.ptr(),
-        config_.num_seeds * validation_horizon,
-        streams->driver_stream(RolloutStream::DYNAMICS));
-    streams->record(RolloutEvent::DYNAMICS_READY, dynamics);
+        validation_position_.ptr(), validation_velocity_.ptr(), validation_acceleration_.ptr(),
+        validation_joint_effort_.ptr(), validation_rnea_forward_cache_.ptr(),
+        config_.num_seeds * validation_horizon, driver(RolloutStream::DYNAMICS), false);
+    record(RolloutEvent::DYNAMICS_READY, dynamics);
   }
 
-  streams->wait(kinematics, RolloutEvent::STATE_READY);
-  launch_kinematics_to(
-      config_.num_seeds, validation_horizon, validation_position_.ptr(),
-      validation_link_position_.ptr(), validation_link_quaternion_.ptr(),
-      validation_robot_spheres_.ptr(),
-      validation_global_cumulative_.ptr(),
-      streams->driver_stream(RolloutStream::KINEMATICS));
-  streams->record(RolloutEvent::KINEMATICS_READY, kinematics);
-  streams->wait(world, RolloutEvent::KINEMATICS_READY);
-  streams->wait(self, RolloutEvent::KINEMATICS_READY);
+  wait(kinematics, RolloutEvent::STATE_READY);
+  launch_kinematics_to(config_.num_seeds, validation_horizon, validation_position_.ptr(),
+                       validation_link_position_.ptr(), validation_link_quaternion_.ptr(),
+                       validation_robot_spheres_.ptr(), validation_global_cumulative_.ptr(),
+                       driver(RolloutStream::KINEMATICS));
+  record(RolloutEvent::KINEMATICS_READY, kinematics);
+  wait(world, RolloutEvent::KINEMATICS_READY);
+  wait(self, RolloutEvent::KINEMATICS_READY);
   launch_discrete_world_collision_to(
-      config_.num_seeds, validation_horizon,
-      validation_robot_spheres_.ptr(),
-      validation_world_collision_cost_.ptr(),
-      validation_world_collision_gradient_.ptr(), true,
-      streams->driver_stream(RolloutStream::WORLD));
-  streams->record(RolloutEvent::WORLD_DONE, world);
-  launch_self_collision_to(
-      config_.num_seeds, validation_horizon,
-      validation_robot_spheres_.ptr(),
-      validation_self_collision_cost_.ptr(),
-      validation_self_collision_gradient_.ptr(),
-      validation_self_collision_sparse_index_.ptr(),
-      validation_self_collision_weight_.ptr(),
-      streams->driver_stream(RolloutStream::SELF));
-  streams->record(RolloutEvent::SELF_DONE, self);
-  streams->wait(primary, RolloutEvent::WORLD_DONE);
-  streams->wait(primary, RolloutEvent::SELF_DONE);
+      config_.num_seeds, validation_horizon, validation_robot_spheres_.ptr(),
+      validation_world_collision_cost_.ptr(), validation_world_collision_gradient_.ptr(), true,
+      driver(RolloutStream::WORLD));
+  record(RolloutEvent::WORLD_DONE, world);
+  launch_self_collision_to(config_.num_seeds, validation_horizon, validation_robot_spheres_.ptr(),
+                           validation_self_collision_cost_.ptr(),
+                           validation_self_collision_gradient_.ptr(),
+                           validation_self_collision_sparse_index_.ptr(),
+                           validation_self_collision_weight_.ptr(), driver(RolloutStream::SELF));
+  record(RolloutEvent::SELF_DONE, self);
+  wait(primary, RolloutEvent::WORLD_DONE);
+  wait(primary, RolloutEvent::SELF_DONE);
   if (check_effort) {
-    streams->wait(primary, RolloutEvent::DYNAMICS_READY);
+    wait(primary, RolloutEvent::DYNAMICS_READY);
   }
 
   validation_violation_.clear(reinterpret_cast<cudaStream_t>(stream));
@@ -2349,6 +2358,24 @@ void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt) 
       static_cast<unsigned int>(manifest_.validate_interpolated.block_dim),
       static_cast<unsigned int>(manifest_.validate_interpolated.shared_memory),
       stream, validation_arguments);
+  if (!check_tool_path) return;
+  const auto *counts = reinterpret_cast<const int32_t *>(timeopt ? timeopt_counts_.ptr()
+                                                                 : interpolation_horizon_.ptr());
+  const float *progress = timeopt ? timeopt_->sample_progress()
+                                  : reinterpret_cast<const float *>(validation_progress_.ptr());
+  if (!timeopt) {
+    CRR_CUDA_CHECK(launch_reference_progress(
+        counts, config_.num_seeds, validation_horizon, manifest_.spline_layout,
+        reinterpret_cast<float *>(validation_progress_.ptr()), primary));
+  }
+  CRR_CUDA_CHECK(launch_validate_tool_path(
+      reinterpret_cast<const float *>(validation_link_position_.ptr()),
+      reinterpret_cast<const float *>(validation_link_quaternion_.ptr()),
+      reinterpret_cast<const float *>(path_goal_position_.ptr()),
+      reinterpret_cast<const float *>(path_goal_quaternion_.ptr()), progress, counts,
+      reinterpret_cast<const float *>(path_settings_.ptr()), config_.num_seeds, validation_horizon,
+      manifest_.num_tool_frames, manifest_.spline_layout,
+      reinterpret_cast<int32_t *>(validation_violation_.ptr()), primary));
 }
 
 void TrajectoryOptimizerRuntime::accumulate(
@@ -2442,8 +2469,9 @@ void TrajectoryOptimizerRuntime::accumulate(
   int num_tool_frames = manifest_.num_tool_frames;
   uint8_t pose_constraint_active = request.constrain_tool_path ? 1U : 0U;
   uint8_t effort_active = config_.check_effort_limits ? 1U : 0U;
-  std::vector<void*> arguments{
-      const_cast<WarpLaunchBounds2*>(&bounds),
+  auto settings = array_1d(path_settings_.ptr(), TOOL_PATH_SETTINGS, sizeof(float));
+  std::vector<void *> arguments{
+      const_cast<WarpLaunchBounds2 *>(&bounds),
       &knots,
       &costs,
       &position,
@@ -2489,6 +2517,7 @@ void TrajectoryOptimizerRuntime::accumulate(
       &num_tool_frames,
       &pose_constraint_active,
       &effort_active,
+      &settings,
   };
   accumulate_kernel_.launch(
       static_cast<unsigned int>(config_.num_seeds),
@@ -2583,6 +2612,10 @@ void TrajectoryOptimizerRuntime::finalize(
 
 void TrajectoryOptimizerRuntime::validate_request(
     const TrajectoryOptimizationRequest& request) const {
+  if (request.outer_iterations == 0 || request.outer_iterations < -1 ||
+      request.outer_iterations > std::numeric_limits<int>::max() / config_.initial_check_interval) {
+    throw std::invalid_argument("outer_iterations must be positive or -1 for the default");
+  }
   CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
   if (request.start_position == nullptr || request.goal_position == nullptr ||
       request.optimized_knots == nullptr ||
@@ -2603,7 +2636,18 @@ void TrajectoryOptimizerRuntime::validate_request(
     throw std::invalid_argument(
         "TrajOpt request finetuning override is outside its valid range");
   }
-  if (request.constrain_tool_path) {
+  if (request.track_waypoints && manifest_.spline_degree != 3) {
+    throw std::invalid_argument("waypoints require a configured cubic spline");
+  }
+  if (request.track_waypoints &&
+      (request.goal_tool_positions == nullptr || request.goal_tool_quaternions == nullptr)) {
+    throw std::invalid_argument("waypoints require aligned Cartesian reference buffers");
+  }
+  if (request.constrain_tool_path || request.track_waypoints) {
+    if (request.path_orientation_tolerance > 3.141592654F ||
+        request.final_orientation_tolerance > 3.141592654F) {
+      throw std::invalid_argument("Cartesian angular tolerances cannot exceed pi radians");
+    }
     float direction_norm_squared = 0.0F;
     for (const float value : request.free_position_direction) {
       if (!std::isfinite(value)) {
@@ -2618,14 +2662,80 @@ void TrajectoryOptimizerRuntime::validate_request(
       throw std::invalid_argument(
           "constrained TrajOpt needs goal tool poses and a nonzero free direction");
     }
-    for (const float value : {request.path_position_tolerance,
-                              request.path_orientation_tolerance}) {
+    for (const float value :
+         {request.path_position_tolerance, request.path_orientation_tolerance,
+          request.final_position_tolerance, request.final_orientation_tolerance}) {
       if (!std::isfinite(value) || (value < 0.0F && value != -1.0F) ||
           value == 0.0F) {
         throw std::invalid_argument(
             "TrajOpt Cartesian path tolerances must be positive or -1");
       }
     }
+  }
+}
+
+void TrajectoryOptimizerRuntime::prepare_request(
+    const TrajectoryOptimizationRequest &request) const {
+  if (!prepare_pose_criteria_) return;
+  const bool active = request.constrain_tool_path || request.track_waypoints;
+  const auto mode = request.track_waypoints
+                        ? ToolPathMode::WAYPOINTS
+                        : (active ? ToolPathMode::LINE : ToolPathMode::DISABLED);
+  const auto resolve = [](float value, float fallback) { return value < 0.0F ? fallback : value; };
+  CRR_CUDA_CHECK(launch_tool_path_settings(
+      reinterpret_cast<float *>(path_settings_.ptr()), mode, request.track_orientation,
+      resolve(request.path_position_tolerance, 0.02F),
+      resolve(request.path_orientation_tolerance, 0.174532925F),
+      resolve(request.final_position_tolerance, config_.position_tolerance),
+      resolve(request.final_orientation_tolerance, config_.orientation_tolerance),
+      request.free_position_direction[0], request.free_position_direction[1],
+      request.free_position_direction[2], request.direction_in_goal_frame, request.stream));
+
+  // Criteria depend only on request settings, so prepare them once before
+  // optimization stages. Captured stages keep reading these stable buffers.
+  int num_tool_frames = manifest_.num_tool_frames;
+  const int criteria_count = 2 * num_tool_frames;
+  const auto criteria_bounds = warp_bounds_1d(criteria_count);
+  auto position_metric =
+      array_1d(pose_position_metric_.ptr(), criteria_count, 9 * sizeof(float));
+  auto rotation_metric =
+      array_1d(pose_rotation_metric_.ptr(), criteria_count, 9 * sizeof(float));
+  auto pose_tolerance =
+      array_1d(pose_tolerance_.ptr(), criteria_count, 2 * sizeof(float));
+  auto error_frame =
+      array_1d(pose_error_frame_.ptr(), num_tool_frames, sizeof(int32_t));
+  auto settings = array_1d(path_settings_.ptr(), TOOL_PATH_SETTINGS, sizeof(float));
+  std::vector<void *> criteria_arguments{
+      const_cast<WarpLaunchBounds1 *>(&criteria_bounds),
+      &position_metric,
+      &rotation_metric,
+      &pose_tolerance,
+      &error_frame,
+      &settings,
+      &num_tool_frames,
+  };
+  prepare_pose_criteria_kernel_.launch(
+      grid_for(criteria_count, manifest_.prepare_pose_criteria.block_dim),
+      static_cast<unsigned int>(manifest_.prepare_pose_criteria.block_dim),
+      static_cast<unsigned int>(manifest_.prepare_pose_criteria.shared_memory),
+      reinterpret_cast<CUstream>(request.stream), criteria_arguments);
+  if (!active) return;
+  const size_t tools = manifest_.num_tool_frames;
+  if (request.track_waypoints) {
+    CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(path_goal_position_.ptr()),
+                                   request.goal_tool_positions,
+                                   tools * manifest_.trajectory_steps * 3 * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, request.stream));
+    CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(path_goal_quaternion_.ptr()),
+                                   request.goal_tool_quaternions,
+                                   tools * manifest_.trajectory_steps * 4 * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, request.stream));
+  } else {
+    CRR_CUDA_CHECK(launch_pose_waypoints(
+        request.goal_tool_positions, request.goal_tool_quaternions, 0, nullptr, nullptr,
+        manifest_.num_tool_frames, manifest_.spline_layout,
+        reinterpret_cast<float *>(path_goal_position_.ptr()),
+        reinterpret_cast<float *>(path_goal_quaternion_.ptr()), request.stream));
   }
 }
 
@@ -2641,6 +2751,11 @@ void TrajectoryOptimizerRuntime::begin_optimization(
   initialize_actions(request, stream);
   // The first pass and refinement use independent timestep reductions.
   compute_required_dt(seed_actions_.ptr(), config_.initial_dt_scale, request, stream);
+  initial_iterations_.clear(request.stream);
+  CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(optimization_dt_.ptr()),
+                                 reinterpret_cast<const void *>(trajectory_dt_.ptr()),
+                                 config_.num_seeds * sizeof(float), cudaMemcpyDeviceToDevice,
+                                 request.stream));
   const auto cuda_stream = reinterpret_cast<cudaStream_t>(stream);
   finetune_enabled_.clear(cuda_stream);
   // The reusable pass graph must preserve L-BFGS history for finetuning. Clear
@@ -2652,16 +2767,28 @@ void TrajectoryOptimizerRuntime::begin_optimization(
   history_count_.clear(cuda_stream);
 }
 
-void TrajectoryOptimizerRuntime::run_optimization_pass(
-    const TrajectoryOptimizationRequest& request, bool refinement) const {
+void TrajectoryOptimizerRuntime::run_optimization_pass(const TrajectoryOptimizationRequest &request,
+                                                       int iterations, bool refinement,
+                                                       bool continuation) const {
   const auto stream = reinterpret_cast<CUstream>(request.stream);
-  optimize_pass(request, stream, refinement ? config_.refinement_iterations
-                                          : config_.max_iterations);
+  if (continuation) {
+    CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(trajectory_dt_.ptr()),
+                                   reinterpret_cast<const void *>(optimization_dt_.ptr()),
+                                   config_.num_seeds * sizeof(float), cudaMemcpyDeviceToDevice,
+                                   request.stream));
+  }
+  optimize_pass(request, stream, iterations, continuation);
+  if (!refinement)
+    CRR_CUDA_CHECK(launch_initial_iteration_count(
+        reinterpret_cast<int32_t *>(initial_iterations_.ptr()), iterations, request.stream));
   // Validate and retain the optimized trajectory at its required dt on every
   // pass. This is part of Python's base TrajOpt contract, not only finetuning.
   compute_required_dt(best_action_.ptr(), 1.0F, request, stream);
-  evaluate(best_action_.ptr(), config_.num_seeds, search_costs_.ptr(),
-           search_gradients_.ptr(), request, stream);
+  // Moving boundary controls depend on dt. Re-evaluate their required timing
+  // after the first update before using that spline as a fixed TimeOpt path.
+  if (timeopt_) compute_required_dt(best_action_.ptr(), 1.0F, request, stream);
+  // Validation and retention consume costs and states, not joint gradients.
+  evaluate(best_action_.ptr(), config_.num_seeds, search_costs_.ptr(), 0, request, stream);
   launch_metrics_world_collision(config_.num_seeds, stream);
   validate_interpolated(best_action_.ptr(), stream);
 }
@@ -2706,6 +2833,104 @@ bool TrajectoryOptimizerRuntime::base_pass_succeeded(
   return enabled != 0;
 }
 
+bool TrajectoryOptimizerRuntime::result_succeeded(
+    const TrajectoryOptimizationRequest &request) const {
+  uint8_t success = 0;
+  CRR_CUDA_CHECK(cudaMemcpyAsync(&success, request.success, sizeof(success), cudaMemcpyDeviceToHost,
+                                 request.stream));
+  CRR_CUDA_CHECK(cudaStreamSynchronize(request.stream));
+  return success != 0;
+}
+
+void TrajectoryOptimizerRuntime::save_initial_pass(cudaStream_t stream) const {
+  const size_t actions = static_cast<size_t>(config_.num_seeds) * manifest_.num_knots *
+                         manifest_.num_dof * sizeof(float);
+  CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(initial_action_.ptr()),
+                                 reinterpret_cast<const void *>(retained_action_.ptr()), actions,
+                                 cudaMemcpyDeviceToDevice, stream));
+  CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(initial_dt_.ptr()),
+                                 reinterpret_cast<const void *>(retained_dt_.ptr()),
+                                 config_.num_seeds * sizeof(float), cudaMemcpyDeviceToDevice,
+                                 stream));
+}
+
+void TrajectoryOptimizerRuntime::restore_initial_pass(
+    const TrajectoryOptimizationRequest &request) const {
+  const auto stream = reinterpret_cast<CUstream>(request.stream);
+  const size_t actions = static_cast<size_t>(config_.num_seeds) * manifest_.num_knots *
+                         manifest_.num_dof * sizeof(float);
+  CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(best_action_.ptr()),
+                                 reinterpret_cast<const void *>(initial_action_.ptr()), actions,
+                                 cudaMemcpyDeviceToDevice, request.stream));
+  CRR_CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(trajectory_dt_.ptr()),
+                                 reinterpret_cast<const void *>(initial_dt_.ptr()),
+                                 config_.num_seeds * sizeof(float), cudaMemcpyDeviceToDevice,
+                                 request.stream));
+  evaluate(best_action_.ptr(), config_.num_seeds, search_costs_.ptr(), 0, request, stream);
+  launch_metrics_world_collision(config_.num_seeds, stream);
+  validate_interpolated(best_action_.ptr(), stream);
+  accumulate(true, request, stream);
+  finish_optimization(request);
+}
+
+void TrajectoryOptimizerRuntime::enqueue_conditional(
+    const TrajectoryOptimizationRequest &request, OptimizationCondition condition,
+    const std::function<void(cudaStream_t)> &enqueue) const {
+  cudaStreamCaptureStatus status;
+  cudaGraph_t graph = nullptr;
+  const cudaGraphNode_t *dependencies = nullptr;
+  size_t count = 0;
+#if CUDART_VERSION >= 13000
+  CRR_CUDA_CHECK(cudaStreamGetCaptureInfo(request.stream, &status, nullptr, &graph, &dependencies,
+                                          nullptr, &count));
+#else
+  CRR_CUDA_CHECK(
+      cudaStreamGetCaptureInfo_v2(request.stream, &status, nullptr, &graph, &dependencies, &count));
+#endif
+  cudaGraphConditionalHandle handle;
+  CRR_CUDA_CHECK(cudaGraphConditionalHandleCreate(&handle, graph, 0, 0));
+  CRR_CUDA_CHECK(launch_optimization_condition(
+      handle, reinterpret_cast<const int32_t *>(finetune_enabled_.ptr()), request.success,
+      condition, request.stream));
+#if CUDART_VERSION >= 13000
+  CRR_CUDA_CHECK(cudaStreamGetCaptureInfo(request.stream, &status, nullptr, &graph, &dependencies,
+                                          nullptr, &count));
+#else
+  CRR_CUDA_CHECK(
+      cudaStreamGetCaptureInfo_v2(request.stream, &status, nullptr, &graph, &dependencies, &count));
+#endif
+  cudaGraphNodeParams parameters{};
+  parameters.type = cudaGraphNodeTypeConditional;
+  parameters.conditional.handle = handle;
+  parameters.conditional.type = cudaGraphCondTypeIf;
+  parameters.conditional.size = 1;
+  cudaGraphNode_t node;
+#if CUDART_VERSION >= 13000
+  CRR_CUDA_CHECK(cudaGraphAddNode(&node, graph, dependencies, nullptr, count, &parameters));
+#else
+  CRR_CUDA_CHECK(cudaGraphAddNode(&node, graph, dependencies, count, &parameters));
+#endif
+  CRR_CUDA_CHECK(cudaStreamBeginCaptureToGraph(conditional_stream_,
+                                               parameters.conditional.phGraph_out[0], nullptr,
+                                               nullptr, 0, cudaStreamCaptureModeThreadLocal));
+  try {
+    enqueue(conditional_stream_);
+    cudaGraph_t body = nullptr;
+    CRR_CUDA_CHECK(cudaStreamEndCapture(conditional_stream_, &body));
+  } catch (...) {
+    cudaGraph_t abandoned = nullptr;
+    cudaStreamEndCapture(conditional_stream_, &abandoned);
+    throw;
+  }
+#if CUDART_VERSION >= 13000
+  CRR_CUDA_CHECK(cudaStreamUpdateCaptureDependencies(request.stream, &node, nullptr, 1,
+                                                     cudaStreamSetCaptureDependencies));
+#else
+  CRR_CUDA_CHECK(cudaStreamUpdateCaptureDependencies(request.stream, &node, 1,
+                                                     cudaStreamSetCaptureDependencies));
+#endif
+}
+
 void TrajectoryOptimizerRuntime::finish_optimization(
     const TrajectoryOptimizationRequest& request) const {
   const auto stream = request.stream;
@@ -2715,8 +2940,7 @@ void TrajectoryOptimizerRuntime::finish_optimization(
   }
   const int batch = config_.num_seeds, dof = manifest_.num_dof;
   const int capacity = manifest_.interpolation_buffer_size;
-  const int interpolation_steps =
-      (manifest_.trajectory_steps - 1) / (manifest_.num_knots + manifest_.spline_degree + 1);
+  const int interpolation_steps = manifest_.spline_layout.interpolation_steps;
   auto* boundaries = reinterpret_cast<float*>(timeopt_boundaries_.ptr());
   auto* knot_dt = reinterpret_cast<float*>(timeopt_knot_dt_.ptr());
   CRR_CUDA_CHECK(launch_timeopt_boundaries(
@@ -2792,16 +3016,60 @@ TimeOptTrajectory TrajectoryOptimizerRuntime::timeopt_trajectory() const {
 void TrajectoryOptimizerRuntime::optimize(
     const TrajectoryOptimizationRequest& request) const {
   validate_request(request);
+  prepare_request(request);
   const int finetune_attempts = resolved_finetune_attempts(request);
+  const int initial_iters = request.outer_iterations > 0
+                                ? request.outer_iterations * config_.initial_check_interval
+                                : config_.max_iterations;
   begin_optimization(request);
-  for (int attempt = 0; attempt <= finetune_attempts; ++attempt) {
-    run_optimization_pass(request, attempt > 0);
-    accumulate_optimization_pass(attempt == 0, request);
-    if (attempt < finetune_attempts) {
-      prepare_finetune_pass(request);
+  cudaStreamCaptureStatus capture;
+  CRR_CUDA_CHECK(cudaStreamIsCapturing(request.stream, &capture));
+  const bool capturing = capture != cudaStreamCaptureStatusNone;
+  run_optimization_pass(request, std::min(initial_iters, config_.initial_check_interval));
+  accumulate_optimization_pass(true, request);
+  for (int completed = config_.initial_check_interval; completed < initial_iters;
+       completed += config_.initial_check_interval) {
+    const int iterations =
+        std::min(config_.initial_check_interval, initial_iters - completed);
+    const auto resume = [&](cudaStream_t stream) {
+      auto active = request;
+      active.stream = stream;
+      run_optimization_pass(active, iterations, false, true);
+      accumulate_optimization_pass(false, active);
+    };
+    if (capturing)
+      enqueue_conditional(request, OptimizationCondition::INITIAL_FAILED, resume);
+    else {
+      if (base_pass_succeeded(request.stream)) break;
+      resume(request.stream);
     }
   }
+  if (finetune_attempts > 0) save_initial_pass(request.stream);
+  for (int attempt = 0; attempt < finetune_attempts; ++attempt) {
+    const auto refine = [&](cudaStream_t stream) {
+      auto active = request;
+      active.stream = stream;
+      prepare_finetune_pass(active);
+      run_optimization_pass(active, config_.refinement_iterations, true);
+      accumulate_optimization_pass(false, active);
+    };
+    if (capturing)
+      enqueue_conditional(request, OptimizationCondition::INITIAL_SUCCEEDED, refine);
+    else if (base_pass_succeeded(request.stream))
+      refine(request.stream);
+  }
   finish_optimization(request);
+  if (finetune_attempts > 0) {
+    const auto fallback = [&](cudaStream_t stream) {
+      auto active = request;
+      active.stream = stream;
+      restore_initial_pass(active);
+    };
+    if (capturing)
+      enqueue_conditional(request, OptimizationCondition::REFINEMENT_FAILED, fallback);
+    else if (base_pass_succeeded(request.stream) && !result_succeeded(request))
+      fallback(request.stream);
+  }
 }
 
 }  // namespace curobo::robot::detail

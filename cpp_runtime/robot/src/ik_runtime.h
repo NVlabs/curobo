@@ -82,7 +82,8 @@ class IkRuntime final {
   void launch_error(CUdeviceptr joint_position, CUdeviceptr error,
                     CUdeviceptr position_error, CUdeviceptr orientation_error,
                     const IkSolveRequest& request, int problems,
-                    bool include_joint_limits, CUstream stream) const;
+                    bool include_joint_limits, CUdeviceptr scaled_jacobian,
+                    CUdeviceptr jt_error, CUstream stream) const;
   void launch_collision(int problems, bool optimizer_cost,
                         CUstream stream) const;
   void launch_self_collision(int problems, bool optimizer_cost,
@@ -96,6 +97,9 @@ class IkRuntime final {
   void prepare_search_actions(int problems, CUstream stream) const;
   void line_search(int problems, CUstream stream) const;
   void lbfgs_step(int problems, CUstream stream) const;
+  void select_lm_seeds(const IkSolveRequest& request, int problems, CUstream stream) const;
+  void rank_solutions(CUdeviceptr joints, const IkSolveRequest& request,
+                      int problems, CUstream stream, bool lm_seeds = false) const;
 
   std::string artifact_directory_;
   InverseKinematicsConfig config_;
@@ -105,6 +109,7 @@ class IkRuntime final {
   const curobo_robot_runtime::IkKernelManifest& prepare_search_actions_spec_;
   const curobo_robot_runtime::IkKernelManifest& line_search_spec_;
   mutable curobo_robot_runtime::DeviceBuffer seed_offset_;
+  mutable curobo_robot_runtime::DeviceBuffer orientation_tracking_;
   curobo_robot_runtime::DeviceBuffer collision_weight_;
   curobo_robot_runtime::DeviceBuffer collision_activation_distance_;
   curobo_robot_runtime::DeviceBuffer inactive_effort_bounds_;
@@ -135,6 +140,8 @@ class IkRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer zero_link_quaternion_gradient_;
   mutable curobo_robot_runtime::DeviceBuffer scaled_jacobian_;
   mutable curobo_robot_runtime::DeviceBuffer jt_error_;
+  mutable curobo_robot_runtime::DeviceBuffer candidate_scaled_jacobian_;
+  mutable curobo_robot_runtime::DeviceBuffer candidate_jt_error_;
   mutable curobo_robot_runtime::DeviceBuffer current_error_;
   mutable curobo_robot_runtime::DeviceBuffer candidate_error_;
   mutable curobo_robot_runtime::DeviceBuffer current_position_error_;

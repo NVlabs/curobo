@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 #include <cuda_runtime_api.h>
+#include <cuda_profiler_api.h>
+#include <nvtx3/nvToolsExt.h>
 
 #include <algorithm>
 #include <chrono>
@@ -19,6 +21,8 @@
 
 namespace {
 namespace robot = curobo::robot;
+bool profile_enabled = false;
+constexpr int PROFILE_PLANS = 50;
 
 void check_cuda(cudaError_t status) {
   if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
@@ -73,16 +77,35 @@ void load_scene(std::istream& input, robot::Scene& scene) {
 }
 
 template <typename Function>
-double measure(Function function) {
+double measure(Function function, const std::string& name) {
   check_cuda(cudaDeviceSynchronize());
   const auto start = std::chrono::steady_clock::now();
+  if (profile_enabled) nvtxRangePushA(name.c_str());
   function();
   check_cuda(cudaDeviceSynchronize());
+  if (profile_enabled) nvtxRangePop();
   return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 
+template <typename Function>
+void warmup(Function function) {
+  // Graph initialization alone does not bring an idle GPU to steady clocks.
+  constexpr auto SUSTAINED_WARMUP_DURATION = std::chrono::seconds(5);
+  check_cuda(cudaDeviceSynchronize());
+  const auto start = std::chrono::steady_clock::now();
+  int calls = 0;
+  do {
+    function();
+    check_cuda(cudaDeviceSynchronize());
+    ++calls;
+  } while (std::chrono::steady_clock::now() - start < SUSTAINED_WARMUP_DURATION);
+  std::cerr << "extra_warmup_calls=" << calls << " extra_warmup_seconds="
+            << std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()
+            << "\n";
+}
+
 void run_ik(const std::string& artifact, std::istream& input, std::ostream& output,
-            bool collision_free, bool humanoid) {
+            bool collision_free, const std::string& profile_path) {
   robot::Scene scene;
   load_scene(input, scene);
   int batch_size = 0, batches = 0;
@@ -91,7 +114,11 @@ void run_ik(const std::string& artifact, std::istream& input, std::ostream& outp
   robot::InverseKinematicsConfig config;
   config.max_batch_size = batch_size;
   config.check_self_collision = collision_free;
-  if (humanoid) config.lbfgs_iterations = 160;
+  std::ifstream profile(profile_path);
+  profile >> config.lm_num_seeds >> config.lm_iterations >> config.num_seeds
+          >> config.lbfgs_iterations >> config.position_tolerance
+          >> config.orientation_tolerance >> config.optimizer_collision_activation_distance;
+  if (!profile) throw std::runtime_error("invalid Python IK benchmark configuration");
   robot::InverseKinematics solver(artifact, config, collision_free ? &scene : nullptr);
   robot::Kinematics kinematics(artifact);
   const auto info = solver.info();
@@ -118,9 +145,12 @@ void run_ik(const std::string& artifact, std::istream& input, std::ostream& outp
     if (batch == 0) {
       // Warm the measured instance using the production early-exit policy.
       for (int i = 0; i < 3; ++i) solver.solve(request);
-      check_cuda(cudaDeviceSynchronize());
+      warmup([&] { solver.solve(request); });
+      if (profile_enabled) check_cuda(cudaProfilerStart());
     }
-    const double elapsed = measure([&] { solver.solve(request); });
+    const double elapsed = measure([&] { solver.solve(request); }, "solve_ik/" + std::to_string(batch));
+    if (profile_enabled && batch + 1 == std::min(batches, PROFILE_PLANS))
+      check_cuda(cudaProfilerStop());
     const auto valid = success.download();
     const auto pe = p_error.download(), qe = q_error.download();
     for (int i = 0; i < batch_size; ++i) {
@@ -141,7 +171,8 @@ void write_states(std::ostream& output, const float* pointer, size_t count) {
 }
 
 void run_motion(const std::string& artifact, std::istream& input, std::ostream& output,
-                const std::string& output_path, bool dynamics, int max_cuboids) {
+                const std::string& output_path, bool has_payload, bool inverse_dynamics,
+                int max_cuboids, int num_knots) {
   robot::SceneConfig scene_config;
   scene_config.max_cuboids = max_cuboids;
   scene_config.max_capsules = 0;
@@ -150,13 +181,14 @@ void run_motion(const std::string& artifact, std::istream& input, std::ostream& 
   scene_config.max_voxel_grids = 0;
   robot::Scene scene(scene_config);
   robot::MotionPlanningConfig config;
-  config.trajectory_optimization.check_effort_limits = dynamics;
-  config.inverse_kinematics.check_effort_limits = dynamics;
-  config.rrt.check_effort_limits = dynamics;
+  config.trajectory_optimization.num_knots = num_knots;
+  config.trajectory_optimization.check_effort_limits = inverse_dynamics;
+  config.inverse_kinematics.check_effort_limits = inverse_dynamics;
+  config.rrt.check_effort_limits = inverse_dynamics;
   robot::MotionPlanner planner(artifact, config, &scene);
   robot::LinkInertialUpdate payload;
   payload.link_name = "attached_object";
-  payload.mass = dynamics ? 3.0F : 0.0F;
+  payload.mass = has_payload ? 3.0F : 0.0F;
   planner.update_link_inertial(payload);
   const auto info = planner.info();
   DeviceBuffer<float> start(info.num_dof), positions(3), quaternions(4);
@@ -199,15 +231,30 @@ void run_motion(const std::string& artifact, std::istream& input, std::ostream& 
         request.enable_graph_attempt = graph_attempt;
         planner.plan_pose(request);
       }
+      warmup([&] { planner.plan_pose(request); });
+      if (profile_enabled) check_cuda(cudaProfilerStart());
     }
-    const double elapsed = measure([&] { planner.plan_pose(request); });
+    const double elapsed = measure([&] { planner.plan_pose(request); }, "plan_pose/" + std::to_string(index));
+    if (profile_enabled && index + 1 == std::min(problems, PROFILE_PLANS))
+      check_cuda(cudaProfilerStop());
     const bool valid = success.download()[0] != 0;
     output << "{\"index\":" << index << ",\"success\":" << int(valid)
+           << ",\"payload_mass_kg\":" << payload.mass.value()
+           << ",\"inverse_dynamics\":" << (inverse_dynamics ? "true" : "false")
+           << ",\"num_knots\":" << info.num_knots
+           << ",\"outer_iterations\":" << request.outer_iterations
+           << ",\"initial_max_iterations\":"
+           << request.outer_iterations * config.trajectory_optimization.initial_check_interval
+           << ",\"initial_check_interval\":" << config.trajectory_optimization.initial_check_interval
+           << ",\"refinement_iterations\":" << config.trajectory_optimization.refinement_iterations
            << ",\"plan_time_s\":" << elapsed << ",\"ik_time_s\":" << planner.last_ik_time()
            << ",\"rrt_time_s\":" << planner.last_rrt_time()
            << ",\"rrt_calls\":" << planner.last_rrt_calls()
            << ",\"attempts\":" << attempts.download()[0];
     if (valid) {
+      int initial_iterations = 0;
+      check_cuda(cudaMemcpy(&initial_iterations, planner.candidates().initial_iterations,
+                            sizeof(initial_iterations), cudaMemcpyDeviceToHost));
       const auto trajectory = planner.timeopt_trajectory();
       int count = 0;
       float sample_dt = 0, duration = 0;
@@ -219,6 +266,7 @@ void run_motion(const std::string& artifact, std::istream& input, std::ostream& 
       for (const auto* pointer : {trajectory.position, trajectory.velocity, trajectory.acceleration, trajectory.jerk})
         write_states(states, pointer, static_cast<size_t>(count) * info.num_dof);
       output << ",\"position_error_m\":" << pe.download()[0]
+             << ",\"last_trajopt_initial_iterations\":" << initial_iterations
              << ",\"orientation_error_rad\":" << qe.download()[0]
              << ",\"used_rrt\":" << int(used_rrt.download()[0])
              << ",\"state_offset\":" << offset << ",\"steps\":" << count
@@ -235,17 +283,28 @@ void run_motion(const std::string& artifact, std::istream& input, std::ostream& 
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 7 || argc > 8) throw std::invalid_argument(
-        "usage: curobo_benchmark MODE ARTIFACT INPUT OUTPUT COLLISION_OR_DYNAMICS HUMANOID [MAX_CUBOIDS]");
+    bool inverse_dynamics = true;
+    while (argc > 1) {
+      const std::string option = argv[argc - 1];
+      if (option == "--profile") profile_enabled = true;
+      else if (option == "--disable-inverse-dynamics") inverse_dynamics = false;
+      else break;
+      --argc;
+    }
+    if (argc < 7 || argc > 9) throw std::invalid_argument(
+        "usage: curobo_benchmark MODE ARTIFACT INPUT OUTPUT COLLISION_OR_PAYLOAD_3KG "
+        "IK_CONFIG_OR_UNUSED [MAX_CUBOIDS [NUM_KNOTS]] [--profile] [--disable-inverse-dynamics]");
     const std::string mode = argv[1];
-    if ((mode == "ik" && argc != 7) || (mode == "motion" && argc != 8))
+    if ((mode == "ik" && argc != 7) || (mode == "motion" && argc != 8 && argc != 9))
       throw std::invalid_argument("motion mode requires MAX_CUBOIDS; IK mode does not");
     std::ifstream input(argv[3]);
     std::ofstream output(argv[4]);
     if (!input || !output) throw std::runtime_error("cannot open benchmark input/output");
     output << std::setprecision(10);
-    if (mode == "ik") run_ik(argv[2], input, output, std::stoi(argv[5]) != 0, std::stoi(argv[6]) != 0);
-    else if (mode == "motion") run_motion(argv[2], input, output, argv[4], std::stoi(argv[5]) != 0, std::stoi(argv[7]));
+    if (mode == "ik") run_ik(argv[2], input, output, std::stoi(argv[5]) != 0, argv[6]);
+    else if (mode == "motion") run_motion(argv[2], input, output, argv[4], std::stoi(argv[5]) != 0,
+                                          inverse_dynamics,
+                                          std::stoi(argv[7]), argc == 9 ? std::stoi(argv[8]) : 16);
     else throw std::invalid_argument("unknown benchmark mode");
     return 0;
   } catch (const std::exception& error) {

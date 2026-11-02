@@ -42,10 +42,11 @@ class Buffer {
 std::vector<float> evaluate(const std::string& artifact, bool graph) {
   std::vector<float> result;
   for (const int seeds : {1, 4}) {
-    for (const int finetune : {0, 1}) {
+    for (const int finetune : {0, 2}) {
       curobo::robot::TrajectoryOptimizationConfig config;
       config.num_seeds = seeds;
       config.max_iterations = 6;
+      config.initial_check_interval = 2;
       config.finetune_attempts = finetune;
       config.check_effort_limits = finetune != 0;
       curobo::robot::TrajectoryOptimizer optimizer(artifact, config);
@@ -60,15 +61,20 @@ std::vector<float> evaluate(const std::string& artifact, bool graph) {
       goal = start;
       goal[0] += 0.05F;
       Buffer<float> start_buffer(dof), goal_buffer(dof), knots(variables);
+      Buffer<float> start_velocity(dof), start_acceleration(dof);
       Buffer<float> position(states), velocity(states), acceleration(states), jerk(states);
       Buffer<float> cost(1), collision(1), dt(1);
       Buffer<uint8_t> success(1), valid(seeds);
       Buffer<int32_t> selected(1);
       start_buffer.upload(start);
       goal_buffer.upload(goal);
+      start_velocity.upload(std::vector<float>(dof, 0.0F));
+      start_acceleration.upload(std::vector<float>(dof, 0.0F));
       curobo::robot::TrajectoryOptimizationRequest request;
       request.start_position = start_buffer.data();
       request.goal_position = goal_buffer.data();
+      request.start_velocity = start_velocity.data();
+      request.start_acceleration = start_acceleration.data();
       request.optimized_knots = knots.data();
       request.trajectory_position = position.data();
       request.trajectory_velocity = velocity.data();
@@ -87,12 +93,23 @@ std::vector<float> evaluate(const std::string& artifact, bool graph) {
       cudaGraphExec_t executable = nullptr;
       valid.upload(std::vector<uint8_t>(seeds, 1U));
       if (graph) {
-        check(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
+        const auto capture_mode = seeds == 1 ? cudaStreamCaptureModeGlobal
+                                             : cudaStreamCaptureModeThreadLocal;
+        check(cudaStreamBeginCapture(stream, capture_mode));
         optimizer.optimize(request);
         check(cudaStreamEndCapture(stream, &captured));
         check(cudaGraphInstantiate(&executable, captured, 0));
       }
-      for (const int mode : {0, 1, 2}) {
+      // Revisit valid seeds after a failed solve to exercise both sides of the
+      // continuation/refinement conditions using the same graph and buffers.
+      for (const int mode : {0, 1, 2, 0}) {
+        // Changing the goal changes the required dt. Replays must refresh the
+        // candidate timestep layout before reusing it within optimization.
+        goal[0] = start[0] + (mode == 1 ? 0.12F : 0.05F);
+        goal_buffer.upload(goal);
+        // Moving boundary controls must be rebuilt at the updated dt on replay.
+        start_velocity.upload(std::vector<float>(dof, mode == 1 ? 0.01F : 0.0F));
+        start_acceleration.upload(std::vector<float>(dof, mode == 1 ? 0.005F : 0.0F));
         std::vector<uint8_t> active(seeds, mode == 0 ? 1U : 0U);
         if (mode == 1) active.at(static_cast<size_t>(seeds - 1)) = 1U;
         valid.upload(active);
@@ -101,6 +118,15 @@ std::vector<float> evaluate(const std::string& artifact, bool graph) {
           else optimizer.optimize(request);
         }
         check(cudaStreamSynchronize(stream));
+        int32_t initial_iterations = 0;
+        check(cudaMemcpy(&initial_iterations, optimizer.candidates().initial_iterations,
+                         sizeof(initial_iterations), cudaMemcpyDeviceToHost));
+        if (initial_iterations < config.initial_check_interval ||
+            initial_iterations > config.max_iterations ||
+            (mode == 2 && initial_iterations != config.max_iterations)) {
+          throw std::runtime_error("conditional replay changed the initial iteration budget");
+        }
+        result.push_back(static_cast<float>(initial_iterations));
         success.append(result);
         selected.append(result);
         cost.append(result);

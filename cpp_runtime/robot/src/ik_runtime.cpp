@@ -295,6 +295,9 @@ IkRuntime::IkRuntime(std::string artifact_directory,
   if (config_.lm_iterations == 0) {
     config_.lm_iterations = 16;
   }
+  if (config_.lm_num_seeds == 0) {
+    config_.lm_num_seeds = config_.num_seeds;
+  }
   validate_config();
   validate_scene();
   load_constants();
@@ -379,8 +382,9 @@ void IkRuntime::validate_config() const {
     throw std::invalid_argument(
         "IK workspace dimensions and optimizer iteration counts must be positive");
   }
-  if (config_.num_seeds > manifest_.max_seeds) {
-    throw std::invalid_argument("IK num_seeds exceeds the artifact seed capacity");
+  if (config_.lm_num_seeds < config_.num_seeds ||
+      config_.lm_num_seeds > manifest_.max_seeds) {
+    throw std::invalid_argument("IK lm_num_seeds must be at least num_seeds and fit the artifact");
   }
   if (config_.max_goalset > manifest_.max_goalset) {
     throw std::invalid_argument(
@@ -455,6 +459,7 @@ void IkRuntime::load_constants() {
         artifact_directory_, tensor, name));
   };
   seed_offset_.allocate(sizeof(int32_t));
+  orientation_tracking_.allocate(sizeof(int32_t));
   std::vector<float> inactive_effort_bounds(
       static_cast<size_t>(2 * manifest_.num_dof));
   std::fill_n(inactive_effort_bounds.begin(), manifest_.num_dof,
@@ -497,7 +502,7 @@ void IkRuntime::load_constants() {
   const auto max_evaluations =
       checked_product(
           checked_product(static_cast<size_t>(config_.max_batch_size),
-                          static_cast<size_t>(config_.num_seeds), "IK problem"),
+                          static_cast<size_t>(config_.lm_num_seeds), "IK problem"),
           static_cast<size_t>(manifest_.num_line_search), "IK evaluation");
   zero_indices_.upload(
       as_bytes(std::vector<int32_t>(max_evaluations, 0)));
@@ -553,7 +558,7 @@ void IkRuntime::load_kernels() {
 void IkRuntime::allocate_workspace() {
   const auto max_problems =
       checked_product(static_cast<size_t>(config_.max_batch_size),
-                      static_cast<size_t>(config_.num_seeds), "IK problem");
+                      static_cast<size_t>(config_.lm_num_seeds), "IK problem");
   const auto max_evaluations =
       checked_product(max_problems, static_cast<size_t>(manifest_.num_line_search),
                       "IK evaluation");
@@ -577,6 +582,8 @@ void IkRuntime::allocate_workspace() {
   allocate_float(&zero_link_quaternion_gradient_, max_evaluations * links * 4);
   allocate_float(&scaled_jacobian_, max_evaluations * residuals * dof);
   allocate_float(&jt_error_, max_evaluations * dof);
+  allocate_float(&candidate_scaled_jacobian_, max_problems * residuals * dof);
+  allocate_float(&candidate_jt_error_, max_problems * dof);
   for (auto* buffer : {
            &current_error_,
            &candidate_error_,
@@ -612,7 +619,7 @@ void IkRuntime::allocate_workspace() {
         max_evaluations * static_cast<size_t>(model_->rollout_->num_links()) *
             static_cast<size_t>(model_->rollout_->cache_floats_per_link()));
   }
-  rank_success_.allocate(config_.max_batch_size * config_.num_seeds * sizeof(uint8_t));
+  rank_success_.allocate(max_problems * sizeof(uint8_t));
   goalset_index_.allocate(
       checked_product(max_evaluations, links, "IK goalset index") *
       sizeof(int32_t));
@@ -744,7 +751,8 @@ void IkRuntime::launch_error(CUdeviceptr joint_position, CUdeviceptr error,
                              CUdeviceptr orientation_error,
                              const IkSolveRequest& request, int problems,
                              bool include_joint_limits,
-                             CUstream stream) const {
+                             CUdeviceptr scaled_jacobian_output,
+                             CUdeviceptr jt_error_output, CUstream stream) const {
   const auto bounds = warp_tiled_bounds_2d(problems, manifest_.error.block_dim);
   auto current_positions = array_1d(
       link_position_.ptr(), problems * manifest_.num_tool_frames, 3 * sizeof(float));
@@ -767,10 +775,10 @@ void IkRuntime::launch_error(CUdeviceptr joint_position, CUdeviceptr error,
   auto joints = array_2d(joint_position, problems, manifest_.num_dof, sizeof(float));
   auto lower = array_1d(model_->joint_position_lower_.ptr(), manifest_.num_dof, sizeof(float));
   auto upper = array_1d(model_->joint_position_upper_.ptr(), manifest_.num_dof, sizeof(float));
-  auto scaled_jacobian = array_3d(scaled_jacobian_.ptr(), problems,
+  auto scaled_jacobian = array_3d(scaled_jacobian_output, problems,
                                   manifest_.num_residuals, manifest_.num_dof,
                                   sizeof(float));
-  auto gradient = array_2d(jt_error_.ptr(), problems, manifest_.num_dof, sizeof(float));
+  auto gradient = array_2d(jt_error_output, problems, manifest_.num_dof, sizeof(float));
   auto error_array = array_1d(error, problems, sizeof(float));
   auto position_error_array = array_1d(position_error, problems, sizeof(float));
   auto orientation_error_array = array_1d(orientation_error, problems, sizeof(float));
@@ -784,8 +792,9 @@ void IkRuntime::launch_error(CUdeviceptr joint_position, CUdeviceptr error,
     orientation_weight = manifest_.orientation_weight;
   }
   uint8_t include_joint_limit_cost = include_joint_limits ? 1U : 0U;
-  std::vector<void*> arguments{
-      const_cast<WarpLaunchBounds2*>(&bounds),
+  auto orientation_tracking = array_1d(orientation_tracking_.ptr(), 1, sizeof(int32_t));
+  std::vector<void *> arguments{
+      const_cast<WarpLaunchBounds2 *>(&bounds),
       &current_positions,
       &current_quaternions,
       &goal_positions,
@@ -806,6 +815,7 @@ void IkRuntime::launch_error(CUdeviceptr joint_position, CUdeviceptr error,
       &orientation_weight,
       &joint_limit_weight,
       &include_joint_limit_cost,
+      &orientation_tracking,
   };
   const int error_block_size = manifest_.error.block_dim;
   error_kernel_.launch(static_cast<unsigned int>(problems),
@@ -1054,7 +1064,7 @@ void IkRuntime::evaluate_lbfgs(CUdeviceptr joint_position, int problems,
     model_->rollout_->launch_inverse_dynamics(
         joint_position, zero_derivatives_.ptr(), zero_derivatives_.ptr(),
         zero_effort_.ptr(), rnea_forward_cache_.ptr(), problems,
-        streams->driver_stream(RolloutStream::DYNAMICS));
+        streams->driver_stream(RolloutStream::DYNAMICS), false);
     streams->record(RolloutEvent::DYNAMICS_READY, dynamics);
     streams->wait(cspace, RolloutEvent::DYNAMICS_READY);
   } else {
@@ -1080,7 +1090,7 @@ void IkRuntime::evaluate_lbfgs(CUdeviceptr joint_position, int problems,
   }
   launch_error(joint_position, current_error_.ptr(),
                current_position_error_.ptr(), current_orientation_error_.ptr(),
-               request, problems, false,
+               request, problems, false, scaled_jacobian_.ptr(), jt_error_.ptr(),
                streams->driver_stream(RolloutStream::POSE));
   streams->record(RolloutEvent::POSE_DONE, pose);
   launch_collision(problems, true,
@@ -1142,7 +1152,8 @@ void IkRuntime::prepare_lbfgs(int problems, CUstream stream) const {
   history_rho_.clear(reinterpret_cast<cudaStream_t>(stream));
   history_y_.clear(reinterpret_cast<cudaStream_t>(stream));
   history_s_.clear(reinterpret_cast<cudaStream_t>(stream));
-  const auto bounds = warp_bounds_1d(problems);
+  const auto bounds = warp_tiled_bounds_2d(
+      problems, manifest_.prepare_initial_state.block_dim);
   auto seed_action =
       array_2d(joint_position_.ptr(), problems, manifest_.num_dof, sizeof(float));
   auto seed_cost = array_1d(current_error_.ptr(), problems, sizeof(float));
@@ -1184,7 +1195,7 @@ void IkRuntime::prepare_lbfgs(int problems, CUstream stream) const {
   auto beta = array_1d(line_search_beta_.ptr(), problems, sizeof(float));
   uint8_t clear_optimizer_state = 1U;
   std::vector<void*> arguments{
-      const_cast<WarpLaunchBounds1*>(&bounds),
+      const_cast<WarpLaunchBounds2*>(&bounds),
       &seed_action,
       &seed_cost,
       &seed_gradient,
@@ -1211,8 +1222,7 @@ void IkRuntime::prepare_lbfgs(int problems, CUstream stream) const {
       &beta,
   };
   prepare_initial_state_kernel_.launch(
-      grid_for(static_cast<size_t>(problems),
-               manifest_.prepare_initial_state.block_dim),
+      static_cast<unsigned int>(problems),
       static_cast<unsigned int>(manifest_.prepare_initial_state.block_dim),
       static_cast<unsigned int>(manifest_.prepare_initial_state.shared_memory),
       stream, arguments);
@@ -1316,6 +1326,10 @@ void IkRuntime::line_search(int problems, CUstream stream) const {
 void IkRuntime::lbfgs_step(int problems, CUstream stream) const {
   CUdeviceptr line_search_status = line_search_status_.ptr();
   CUdeviceptr direction = step_direction_.ptr();
+  CUdeviceptr candidate_scales = line_search_scale_.ptr();
+  CUdeviceptr candidate_beta = line_search_beta_.ptr();
+  CUdeviceptr candidates = search_actions_.ptr();
+  int candidate_count = manifest_.num_line_search;
   CUdeviceptr rho = history_rho_.ptr();
   CUdeviceptr y = history_y_.ptr();
   CUdeviceptr s = history_s_.ptr();
@@ -1352,6 +1366,10 @@ void IkRuntime::lbfgs_step(int problems, CUstream stream) const {
       &scale_step,
       &curvature,
       &line_search_status,
+      &candidate_scales,
+      &candidate_beta,
+      &candidates,
+      &candidate_count,
   };
   lbfgs_kernel_.launch(
       static_cast<unsigned int>(problems),
@@ -1487,12 +1505,14 @@ bool IkRuntime::solve(const IkSolveRequest& request, uint8_t* host_success,
         "IK goalset_index output is required when num_goalset is greater than one");
   }
   const auto problem_count =
-      static_cast<int64_t>(request.batch_size) * config_.num_seeds;
+      static_cast<int64_t>(request.batch_size) * config_.lm_num_seeds;
   if (problem_count > std::numeric_limits<int>::max()) {
     throw std::invalid_argument("IK problem count exceeds the kernel integer range");
   }
   // Ordered on the solve stream before graph replay; no host staging lifetime
   // or captured scalar argument. The offset allocation stays fixed per solver.
+  CRR_CU_CHECK(cuMemsetD32Async(orientation_tracking_.ptr(), request.track_orientation ? 1U : 0U, 1,
+                                reinterpret_cast<CUstream>(request.stream)));
   CRR_CU_CHECK(cuMemsetD32Async(seed_offset_.ptr(),
                                request.seed_offset % manifest_.num_seed_samples, 1,
                                reinterpret_cast<CUstream>(request.stream)));
@@ -1524,7 +1544,7 @@ bool IkRuntime::solve_eager(const IkSolveRequest& request, CUstream stream,
 }
 
 void IkRuntime::solve_lm(const IkSolveRequest& request, CUstream stream) const {
-  const int problems = request.batch_size * config_.num_seeds;
+  const int problems = request.batch_size * config_.lm_num_seeds;
 
   const auto initialize_bounds =
       warp_tiled_bounds_2d(problems, manifest_.num_dof);
@@ -1549,7 +1569,7 @@ void IkRuntime::solve_lm(const IkSolveRequest& request, CUstream stream) const {
   auto upper = array_1d(model_->joint_position_upper_.ptr(), manifest_.num_dof, sizeof(float));
   auto joints = array_2d(joint_position_.ptr(), problems, manifest_.num_dof, sizeof(float));
   auto damping = array_1d(damping_.ptr(), problems, sizeof(float));
-  int num_seeds = config_.num_seeds;
+  int num_seeds = config_.lm_num_seeds;
   int max_template_seeds = manifest_.num_seed_samples;
   auto seed_offset = array_1d(seed_offset_.ptr(), 1, sizeof(int32_t));
   uint8_t use_request_seeds = request.seed_positions == nullptr ? 0U : 1U;
@@ -1582,18 +1602,15 @@ void IkRuntime::solve_lm(const IkSolveRequest& request, CUstream stream) const {
 
   // Match Python IK staging: pose-only LM produces seeds for collision-aware
   // L-BFGS. Collision kernels are intentionally absent from this LM loop.
+  launch_kinematics(joint_position_.ptr(), problems, stream);
+  launch_error(joint_position_.ptr(), current_error_.ptr(),
+               current_position_error_.ptr(), current_orientation_error_.ptr(),
+               request, problems, true, scaled_jacobian_.ptr(), jt_error_.ptr(),
+               stream);
   for (int iteration = 0; iteration < config_.lm_iterations; ++iteration) {
-    launch_kinematics(joint_position_.ptr(), problems, stream);
-    launch_error(joint_position_.ptr(), current_error_.ptr(),
-                 current_position_error_.ptr(),
-                 current_orientation_error_.ptr(), request, problems, true,
-                 stream);
     if (iteration > 0) {
-      // SeedIterationStateManager carries the last candidate objective into
-      // the next trust-ratio calculation even when it retains the previous
-      // joint state. Preserve that Python LM state transition while the
-      // recomputed Jacobian and gradient continue to follow the retained
-      // joints.
+      // Python carries the candidate objective even after a rejected step.
+      // Derivatives, however, remain paired with the accepted joint state.
       CRR_CUDA_CHECK(cudaMemcpyAsync(
           reinterpret_cast<void*>(static_cast<uintptr_t>(current_error_.ptr())),
           reinterpret_cast<const void*>(
@@ -1634,9 +1651,15 @@ void IkRuntime::solve_lm(const IkSolveRequest& request, CUstream stream) const {
     launch_error(candidate_position_.ptr(), candidate_error_.ptr(),
                  candidate_position_error_.ptr(),
                  candidate_orientation_error_.ptr(), request, problems, true,
+                 candidate_scaled_jacobian_.ptr(), candidate_jt_error_.ptr(),
                  stream);
 
-    const auto update_bounds = warp_bounds_1d(problems);
+    const auto update_bounds = warp_tiled_bounds_2d(problems, manifest_.num_dof);
+    auto candidate_jacobian = array_3d(
+        candidate_scaled_jacobian_.ptr(), problems, manifest_.num_residuals,
+        manifest_.num_dof, sizeof(float));
+    auto candidate_gradient = array_2d(
+        candidate_jt_error_.ptr(), problems, manifest_.num_dof, sizeof(float));
     auto current_error =
         array_1d(current_error_.ptr(), problems, sizeof(float));
     auto candidate_error =
@@ -1646,9 +1669,13 @@ void IkRuntime::solve_lm(const IkSolveRequest& request, CUstream stream) const {
     float minimum_damping = config_.minimum_damping;
     float maximum_damping = config_.maximum_damping;
     std::vector<void*> update_arguments{
-        const_cast<WarpLaunchBounds1*>(&update_bounds),
+        const_cast<WarpLaunchBounds2*>(&update_bounds),
         &current_joints,
         &candidate_joints,
+        &jacobian,
+        &candidate_jacobian,
+        &gradient,
+        &candidate_gradient,
         &current_error,
         &candidate_error,
         &predicted,
@@ -1660,15 +1687,40 @@ void IkRuntime::solve_lm(const IkSolveRequest& request, CUstream stream) const {
     };
     const int update_block_size = manifest_.update.block_dim;
     update_kernel_.launch(
-        grid_for(static_cast<size_t>(problems), update_block_size),
+        grid_for(joint_values, update_block_size),
         static_cast<unsigned int>(update_block_size),
         static_cast<unsigned int>(manifest_.update.shared_memory), stream,
         update_arguments);
   }
 
-  if (config_.exit_early) {
-    finalize_solution(joint_position_.ptr(), request, problems, stream);
+  if (config_.lm_num_seeds != config_.num_seeds) {
+    select_lm_seeds(request, problems, stream);
   }
+  if (config_.exit_early) {
+    finalize_solution(joint_position_.ptr(), request,
+                       request.batch_size * config_.num_seeds, stream);
+  }
+}
+
+void IkRuntime::select_lm_seeds(const IkSolveRequest& request, int problems,
+                               CUstream stream) const {
+  // Rank pose-only LM candidates before evaluating collision feasibility, as in Python.
+  launch_kinematics(joint_position_.ptr(), problems, stream);
+  launch_error(joint_position_.ptr(), current_error_.ptr(),
+               current_position_error_.ptr(), current_orientation_error_.ptr(),
+               request, problems, false, scaled_jacobian_.ptr(), jt_error_.ptr(), stream);
+  auto selected = request;
+  selected.num_solutions = config_.num_seeds;
+  selected.solution = reinterpret_cast<float*>(candidate_position_.ptr());
+  selected.success = reinterpret_cast<uint8_t*>(converged_.ptr());
+  selected.position_error = reinterpret_cast<float*>(candidate_position_error_.ptr());
+  selected.orientation_error = reinterpret_cast<float*>(candidate_orientation_error_.ptr());
+  selected.collision_cost = reinterpret_cast<float*>(candidate_error_.ptr());
+  selected.goalset_index = nullptr;
+  rank_solutions(joint_position_.ptr(), selected, problems, stream, true);
+  CRR_CU_CHECK(cuMemcpyDtoDAsync(joint_position_.ptr(), candidate_position_.ptr(),
+      static_cast<size_t>(request.batch_size) * config_.num_seeds * manifest_.num_dof * sizeof(float),
+      stream));
 }
 
 void IkRuntime::solve_lbfgs(const IkSolveRequest& request,
@@ -1677,8 +1729,8 @@ void IkRuntime::solve_lbfgs(const IkSolveRequest& request,
   evaluate_lbfgs(joint_position_.ptr(), problems, request, stream);
   prepare_lbfgs(problems, stream);
   const int candidates = problems * manifest_.num_line_search;
+  prepare_search_actions(problems, stream);
   for (int iteration = 0; iteration < config_.lbfgs_iterations; ++iteration) {
-    prepare_search_actions(problems, stream);
     evaluate_lbfgs(search_actions_.ptr(), candidates, request, stream);
     line_search(problems, stream);
     lbfgs_step(problems, stream);
@@ -1705,7 +1757,7 @@ void IkRuntime::finalize_solution(CUdeviceptr final_joint_position,
     model_->rollout_->launch_inverse_dynamics(
         final_joint_position, zero_derivatives_.ptr(), zero_derivatives_.ptr(),
         zero_effort_.ptr(), rnea_forward_cache_.ptr(), problems,
-        streams->driver_stream(RolloutStream::DYNAMICS));
+        streams->driver_stream(RolloutStream::DYNAMICS), false);
     streams->record(RolloutEvent::DYNAMICS_READY, dynamics);
   }
 
@@ -1718,7 +1770,8 @@ void IkRuntime::finalize_solution(CUdeviceptr final_joint_position,
   }
   launch_error(final_joint_position, current_error_.ptr(),
                current_position_error_.ptr(), current_orientation_error_.ptr(), request,
-               problems, false, streams->driver_stream(RolloutStream::POSE));
+               problems, false, scaled_jacobian_.ptr(), jt_error_.ptr(),
+               streams->driver_stream(RolloutStream::POSE));
   streams->record(RolloutEvent::POSE_DONE, pose);
   launch_collision(problems, false,
                    streams->driver_stream(RolloutStream::WORLD));
@@ -1737,6 +1790,12 @@ void IkRuntime::finalize_solution(CUdeviceptr final_joint_position,
     streams->wait(primary, RolloutEvent::DYNAMICS_READY);
   }
 
+  rank_solutions(final_joint_position, request, problems, stream);
+}
+
+void IkRuntime::rank_solutions(CUdeviceptr final_joint_position,
+                               const IkSolveRequest& request, int problems,
+                               CUstream stream, bool lm_seeds) const {
   const int output_count = request.batch_size * request.num_solutions;
   int num_solutions = request.num_solutions;
   const auto finalize_bounds = warp_tiled_bounds_2d(output_count, manifest_.finalize.block_dim);
@@ -1756,9 +1815,11 @@ void IkRuntime::finalize_solution(CUdeviceptr final_joint_position,
       array_1d(current_position_error_.ptr(), problems, sizeof(float));
   auto orientation_errors =
       array_1d(current_orientation_error_.ptr(), problems, sizeof(float));
-  auto collision_costs = array_1d(collision_distance_.ptr(), problems, sizeof(float));
+  auto collision_costs = array_1d(lm_seeds ? zero_effort_.ptr() : collision_distance_.ptr(),
+                                  problems, sizeof(float));
   auto self_collision_costs =
-      array_1d(self_collision_distance_.ptr(), problems, sizeof(float));
+      array_1d(lm_seeds ? zero_effort_.ptr() : self_collision_distance_.ptr(),
+                problems, sizeof(float));
   auto effort =
       array_1d(zero_effort_.ptr(), problems * manifest_.num_dof, sizeof(float));
   const auto effort_bounds_pointer =
@@ -1796,7 +1857,8 @@ void IkRuntime::finalize_solution(CUdeviceptr final_joint_position,
       start_cspace_dof_weight_.ptr(), manifest_.num_dof, sizeof(float));
   uint8_t use_current_position =
       request.current_positions == nullptr ? 0U : 1U;
-  int num_seeds = config_.num_seeds;
+  int num_seeds = problems / request.batch_size;
+  uint8_t lm_ranking = lm_seeds ? 1U : 0U;
   float position_tolerance = config_.position_tolerance;
   float orientation_tolerance = config_.orientation_tolerance;
   float position_rank_weight = config_.position_rank_weight;
@@ -1829,6 +1891,7 @@ void IkRuntime::finalize_solution(CUdeviceptr final_joint_position,
       &orientation_rank_weight,
       &cspace_rank_weight,
       &effort_active,
+      &lm_ranking,
   };
   rank_kernel_.launch(grid_for(static_cast<size_t>(problems), manifest_.rank.block_dim),
                       static_cast<unsigned int>(manifest_.rank.block_dim),
