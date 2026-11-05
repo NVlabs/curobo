@@ -123,8 +123,12 @@ int main(int argc, char** argv) {
     }
     const bool layered_grasp = argc == 3;
     curobo::robot::MotionPlanningConfig config;
-    if (config.trajectory_optimization.max_iterations != 50 ||
+    if (config.trajectory_optimization.max_iterations != 100 ||
         config.trajectory_optimization.initial_check_interval != 50 ||
+        config.trajectory_optimization.collision_activation_distance != 0.0025F ||
+        config.inverse_kinematics.optimizer_collision_activation_distance != -1.0F ||
+        curobo::robot::MotionPlanningRequest{}.outer_iterations != 2 ||
+        curobo::robot::PoseMotionPlanningRequest{}.outer_iterations != 2 ||
         config.trajectory_optimization.refinement_iterations != 25 ||
         config.trajectory_optimization.finetune_attempts != 1 ||
         !config.trajectory_optimization.enable_timeopt ||
@@ -133,7 +137,7 @@ int main(int argc, char** argv) {
         config.trajectory_optimization.initial_dt_scale != 1.25F ||
         config.trajectory_optimization.finetune_dt_scale != 0.6F) {
       throw std::runtime_error(
-          "motion-planner defaults must use 50 initial iterations and 25 refinement "
+          "motion-planner defaults must use up to two 50-step initial passes and 25 refinement "
           "with timeopt");
     }
     if (config.inverse_kinematics.cspace_rank_weight != 5.0F) {

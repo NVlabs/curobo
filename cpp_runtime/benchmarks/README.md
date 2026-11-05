@@ -47,7 +47,7 @@ successful result as `[4, steps, dof]` in position/velocity/acceleration/jerk or
 Motion planning runs the unloaded and 3 kg Franka cases, with the
 canonical per-dataset finger locks, 0.2 rad joint-bound expansion, OBB conversion,
 and negative-`collision_buffer_ik` exclusions. Native defaults use 32 IK seeds,
-four TrajOpt seeds, `outer_iterations=1` (one 50-step initial solve/check pass),
+four TrajOpt seeds, `outer_iterations=2` (up to two 50-step initial solve/check passes),
 25 refinement iterations, 20 planning attempts, and time optimization. Both direct and
 RRT planning are warmed on the first problem before measurement. The benchmark then repeats
 public `plan_pose()` calls for at least five seconds to warm sustained GPU performance; the

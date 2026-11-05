@@ -47,7 +47,7 @@ struct InverseKinematicsConfig {
   float minimum_damping{1.0E-5F};
   float maximum_damping{1.0E10F};
   float minimum_trust_ratio{1.0E-5F};
-  /** L-BFGS collision activation distance; negative uses the exported value. */
+  /** L-BFGS collision activation distance; -1 uses the exported value. */
   float optimizer_collision_activation_distance{-1.0F};
   /** Collision activation distance used to validate returned solutions. */
   float collision_activation_distance{0.0F};

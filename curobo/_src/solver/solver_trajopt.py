@@ -1302,7 +1302,7 @@ class TrajOptSolver:
             goal_state: Optional explicit goal joint state with position tensor of
                 shape ``[batch, dof]``. Used to seed the goal end of the
                 trajectory.
-            initial_iters: Override the configured initial iteration cap (default 50).
+            initial_iters: Override the configured initial iteration cap (default 100).
                 Success is checked every 50 iterations by default, with native
                 and dense validation. Finetune iteration counts are separate.
             time_optimal_iters: Override for the number of optimizer iterations on
@@ -1529,7 +1529,7 @@ class TrajOptSolver:
             initial_dt_scale: Optional multiplicative factor applied to the
                 seed-derived dt before the initial optimization pass (default 1.25). ``None``
                 preserves the legacy behavior of using *finetune_dt_scale*.
-            initial_iters: Override the configured initial iteration cap (default 50).
+            initial_iters: Override the configured initial iteration cap (default 100).
                 Success is checked every 50 iterations by default, with native
                 and dense validation. Finetune iteration counts are separate.
             time_optimal_iters: Override for the number of optimizer iterations on

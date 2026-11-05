@@ -82,6 +82,7 @@ class TestIKSolverCfgCreate:
             device_cfg=cuda_device_cfg,
         )
         assert isinstance(config, IKSolverCfg)
+        assert config.optimizer_collision_activation_distance == 0.0025
         assert all(not getattr(opt, "line_search_backtracking", False)
                    for opt in config.optimizer_configs)
 

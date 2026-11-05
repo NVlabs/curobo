@@ -31,9 +31,10 @@ from curobo._src.types.tool_pose import GoalToolPose
 
 
 def test_default_refinement_budget() -> None:
-    """Default to 50 initial iterations and one 25-iteration graph-sized refinement."""
+    """Default to two 50-step initial passes and one 25-step refinement."""
     from curobo._src.motion.motion_planner_batch import BatchMotionPlanner
     from curobo._src.solver.solver_trajopt import TrajOptSolver
+    from curobo._src.solver.solver_ik_cfg import IKSolverCfg
     from curobo._src.util.config_io import join_path, load_yaml
     from curobo.content import get_task_configs_path
 
@@ -62,7 +63,13 @@ def test_default_refinement_budget() -> None:
     for method in (TrajOptSolver.solve_pose, TrajOptSolver.solve_cspace):
         assert signature(method).parameters["initial_dt_scale"].default == 1.25
     for method in (MotionPlanner.plan_pose, BatchMotionPlanner.plan_pose):
-        assert signature(method).parameters["outer_iterations"].default == 1
+        assert signature(method).parameters["outer_iterations"].default == 2
+    assert signature(MotionPlannerCfg.create).parameters[
+        "optimizer_collision_activation_distance"
+    ].default == 0.0025
+    assert signature(IKSolverCfg.create).parameters[
+        "optimizer_collision_activation_distance"
+    ].default == 0.0025
     for method in (MotionPlanner.plan_pose_waypoints, BatchMotionPlanner.plan_pose_waypoints):
         assert signature(method).parameters["outer_iterations"].default == 4
 

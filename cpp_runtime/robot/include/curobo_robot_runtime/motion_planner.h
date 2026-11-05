@@ -104,7 +104,7 @@ struct MotionPlanningRequest {
   float final_position_tolerance{-1.0F};
   float final_orientation_tolerance{-1.0F};
   /** Maximum initial solve/check passes per TrajOpt solve (50 iterations per pass by default). */
-  int outer_iterations{1};
+  int outer_iterations{2};
 };
 
 /**
@@ -155,7 +155,7 @@ struct PoseMotionPlanningRequest {
   const float* current_acceleration{nullptr};
   /** Maximum initial solve/check passes per TrajOpt solve (50 iterations per pass by default).
    * Refinement has its own iteration budget. */
-  int outer_iterations{1};
+  int outer_iterations{2};
 };
 
 /** Rest-to-rest Cartesian planning with 1..256 targets excluding the current FK pose.
@@ -340,6 +340,8 @@ class MotionPlanner final {
 
   /** Install the same attachment in the composed IK, RRT, and TrajOpt stages. */
   void attach_object(const SphereAttachment& attachment);
+  /** Enable or disable a link's spheres in self and world collision checks. */
+  void set_link_collision_enabled(const std::string& link_name, bool enabled);
   /** Shared by ordinary/grasp IK, RRT and TrajOpt; does not affect
    * self-collision. */
   void set_link_collision_mask(const std::string& link_name, uint32_t layers);

@@ -154,7 +154,7 @@ def test_outer_iterations_bound_waypoints_and_restore_pose_defaults(batched: boo
         ordinary = planner.plan_pose(terminal, start, max_attempts=1, finetune_attempts=0)
         assert ordinary is not None and ordinary.success.all()
         assert ordinary.debug_info["initial_iterations"] == 50
-        assert planner.trajopt_solver.config.initial_max_iters == 50
+        assert planner.trajopt_solver.config.initial_max_iters == 100
     finally:
         planner.destroy()
 

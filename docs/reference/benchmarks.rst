@@ -41,8 +41,8 @@ and up to 20 planning attempts.
 
 The recorded unloaded case disables planning effort checks; the 3 kg case enables
 them. Both retain dynamics in time optimization. The current runner enables
-planning effort checks for both payloads, so its default unloaded timings use a
-different policy.
+planning effort checks for both payloads and allows two 50-step initial solve/check
+passes, stopping early on success.
 
 Inverse kinematics
 ~~~~~~~~~~~~~~~~~~

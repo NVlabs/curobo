@@ -221,7 +221,7 @@ void test_planning(const char *artifact, int num_knots) {
   Buffer<uint8_t> status(2);
   Buffer<int32_t> indices(3);
   PoseMotionPlanningRequest pose;
-  require(pose.outer_iterations == 1, "normal planning must default to one solve/check pass");
+  require(pose.outer_iterations == 2, "normal planning must default to two solve/check passes");
   auto *out = outputs.get();
   pose.optimized_knots = out;
   out += num_knots * 7;

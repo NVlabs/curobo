@@ -67,6 +67,10 @@ void MotionPlanner::attach_object(const SphereAttachment& attachment) {
   runtime_->attach_object(attachment);
 }
 
+void MotionPlanner::set_link_collision_enabled(const std::string& link_name, bool enabled) {
+  runtime_->set_link_collision_enabled(link_name, enabled);
+}
+
 void MotionPlanner::set_link_collision_mask(const std::string& link_name, uint32_t layers) {
   runtime_->set_link_collision_mask(link_name, layers);
 }

@@ -27,7 +27,7 @@ struct TrajectoryOptimizationConfig {
   int device_ordinal{0};
   int num_seeds{4};
   /** Maximum iterations in the initial solve, before optional refinement. */
-  int max_iterations{50};
+  int max_iterations{100};
   /** Iterations in each refinement pass after the initial solve. */
   int refinement_iterations{25};
   int finetune_attempts{1};

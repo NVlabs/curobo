@@ -226,6 +226,10 @@ void MotionPlannerRuntime::attach_object(
   inverse_kinematics_->attach_object(attachment);
 }
 
+void MotionPlannerRuntime::set_link_collision_enabled(const std::string& link_name, bool enabled) {
+  inverse_kinematics_->set_link_collision_enabled(link_name, enabled);
+}
+
 void MotionPlannerRuntime::set_link_collision_mask(const std::string& link_name, uint32_t layers) {
   inverse_kinematics_->set_link_collision_mask(link_name, layers);
 }

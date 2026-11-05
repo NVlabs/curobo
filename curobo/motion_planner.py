@@ -15,7 +15,7 @@ Example:
             ik_cspace_rank_weight=5.0,
         )
         planner = MotionPlanner(config)
-        result = planner.plan_pose(goal_tool_poses, current_state, outer_iterations=1)
+        result = planner.plan_pose(goal_tool_poses, current_state, outer_iterations=2)
 
 
     Follow up to 256 ordered Cartesian targets with a stationary start. Configure
@@ -34,7 +34,7 @@ Example:
 
 
 ``outer_iterations`` is the maximum number of initial solve/check passes per trajectory
-optimization. Normal pose planning defaults to one pass; waypoint planning defaults to four.
+optimization. Normal pose planning defaults to two passes; waypoint planning defaults to four.
 Each pass runs 50 optimizer steps by default and checks feasibility. Successful solves stop
 continuation early; subsequent passes preserve the iterate and optimizer history.
 The count applies separately to each direct or RRT-seeded solve, not to the whole planning call.
