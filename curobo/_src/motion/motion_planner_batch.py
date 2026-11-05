@@ -311,7 +311,7 @@ class BatchMotionPlanner:
         success_ratio: float = 1.0,
         enable_graph_attempt: int = 0,
         finetune_attempts: int = 1,
-        outer_iterations: int = 1,
+        outer_iterations: int = 2,
         time_optimal_iters: Optional[int] = 25,
         finetune_iters: Optional[int] = 25,
         finetune_dt_scale: float = 0.6,
@@ -337,7 +337,7 @@ class BatchMotionPlanner:
             finetune_attempts: Number of additional time-optimal refinement
                 passes after the initial solve.
             outer_iterations: Maximum initial solve/check passes per optimization.
-                Each pass uses 50 optimizer iterations by default; stop early on success.
+                Defaults to two passes of 50 optimizer iterations; stop early on success.
             time_optimal_iters: Optional optimizer iteration override for the
                 first refinement pass.
             finetune_iters: Optional optimizer iteration override for later

@@ -37,6 +37,7 @@ class MotionPlannerRuntime final {
   int attachment_sphere_capacity(const std::string& link_name) const;
   void attach_object(const SphereAttachment& attachment);
   void set_link_collision_mask(const std::string& link_name, uint32_t layers);
+  void set_link_collision_enabled(const std::string& link_name, bool enabled);
   void set_collision_mask(uint32_t layers);
   void detach_object(const std::string& link_name);
   void update_link_inertial(const LinkInertialUpdate& update);

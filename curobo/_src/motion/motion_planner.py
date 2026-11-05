@@ -917,7 +917,7 @@ class MotionPlanner:
         enable_graph_attempt: int = 1,
         tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
         finetune_attempts: int = 1,
-        outer_iterations: int = 1,
+        outer_iterations: int = 2,
     ) -> Optional[TrajOptSolverResult]:
         """Plan a trajectory to reach target tool poses.
 
@@ -926,7 +926,7 @@ class MotionPlanner:
         graph seeding. ``finetune_attempts`` controls the number of additional
         time-optimal TrajOpt passes after the initial solve.
         ``outer_iterations`` caps initial solve/check passes per optimization, including
-        RRT-seeded retries. The default is one pass of 50 optimizer iterations.
+        RRT-seeded retries. The default is two passes of 50 optimizer iterations.
         Additional passes stop on success; refinement keeps its separate 25-iteration budget.
         """
         if current_state.ndim > 2:

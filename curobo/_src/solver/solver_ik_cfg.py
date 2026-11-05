@@ -54,7 +54,7 @@ class IKSolverCfg:
     orientation_tolerance: float = 0.05
     #: Distance threshold at which the collision cost activates during
     #: optimization. Smaller values allow closer approaches before penalty.
-    optimizer_collision_activation_distance: float = 0.01
+    optimizer_collision_activation_distance: float = 0.0025
     #: Weight scale factor applied to the tool-pose cost at non-terminal
     #: time steps. 0.0 means only the final time step incurs pose cost.
     non_terminal_tool_pose_weight_factor: float = 0.0
@@ -157,7 +157,7 @@ class IKSolverCfg:
         orientation_tolerance: float = 0.05,
         use_cuda_graph: bool = True,
         random_seed: int = 123,
-        optimizer_collision_activation_distance: float = 0.01,
+        optimizer_collision_activation_distance: float = 0.0025,
         store_debug: bool = False,
         override_optimizer_num_iters: Dict[str, Optional[int]] = {
             "particle": None,

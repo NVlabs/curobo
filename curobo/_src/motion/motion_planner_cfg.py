@@ -138,7 +138,7 @@ class MotionPlannerCfg:
         orientation_tolerance: float = 0.05,
         use_cuda_graph: bool = True,
         random_seed: int = 123,
-        optimizer_collision_activation_distance: float = 0.01,
+        optimizer_collision_activation_distance: float = 0.0025,
         store_debug: bool = False,
         transition_model_config_instance_type: Type[
             RobotStateTransitionCfg
@@ -269,7 +269,7 @@ class MotionPlannerCfg:
                 PRMGraphPlannerCfg.
             optimizer_collision_activation_distance: Collision-cost activation
                 distance forwarded to IK and TrajOpt optimizer rollouts. The
-                default is 0.01 m (10 mm). Increasing this distance makes the
+                default is 0.0025 m (2.5 mm). Increasing this distance makes the
                 optimizer react to obstacles earlier and keep more clearance,
                 but can make narrow passages harder or infeasible. Decreasing
                 it allows closer motion near obstacles, but can reduce

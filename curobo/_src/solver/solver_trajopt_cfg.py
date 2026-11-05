@@ -58,7 +58,7 @@ class TrajOptSolverCfg:
     orientation_tolerance: float = 0.05
     #: Distance threshold at which the collision cost activates during
     #: optimization.
-    optimizer_collision_activation_distance: float = 0.01
+    optimizer_collision_activation_distance: float = 0.0025
     #: Weight scale factor applied to the tool-pose cost at non-terminal
     #: time steps. 0.0 means only the final time step incurs pose cost.
     non_terminal_tool_pose_weight_factor: float = 0.0
@@ -85,7 +85,7 @@ class TrajOptSolverCfg:
     #: Optimize timing for every candidate before final validation and selection by duration.
     enable_timeopt: bool = True
     #: Maximum initial optimization iterations before returning or refining a candidate.
-    initial_max_iters: int = 50
+    initial_max_iters: int = 100
     #: Initial iterations between native and dense success checks.
     initial_check_interval: int = 50
 
@@ -164,7 +164,7 @@ class TrajOptSolverCfg:
         orientation_tolerance: float = 0.05,
         use_cuda_graph: bool = True,
         random_seed: int = 123,
-        optimizer_collision_activation_distance: float = 0.01,
+        optimizer_collision_activation_distance: float = 0.0025,
         store_debug: bool = False,
         minimum_trajectory_dt: float = 0.002,
         maximum_trajectory_dt: float = 0.2,
@@ -238,7 +238,7 @@ class TrajOptSolverCfg:
                 requires cubic B-splines.
             initial_max_iters: Initial iteration budget; explicit solve-time
                 ``initial_iters`` overrides it. Must be a multiple of the final
-                optimizer's CUDA graph block size. Defaults to 50, or the explicit
+                optimizer's CUDA graph block size. Defaults to 100, or the explicit
                 final-optimizer iteration override when supplied. Does not change finetuning.
             initial_check_interval: Iterations between initial success checks.
                 Use a multiple of the final optimizer's CUDA graph block size.
@@ -322,7 +322,7 @@ class TrajOptSolverCfg:
                 core_cfg.optimizer_configs[-1].solver_name
             )
             if initial_max_iters is None:
-                initial_max_iters = 50
+                initial_max_iters = 100
 
         if interpolation_buffer_size is None:
             model = core_cfg.metrics_rollout_config.transition_model_cfg

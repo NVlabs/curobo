@@ -127,7 +127,10 @@ def test_initial_checkpoints_stop_after_dense_success(
                 finetune_attempts=0,
                 **kwargs,
             )
-        expected_checks = 1 if success_check == -1 else success_check or 4
+        max_checks = config.initial_max_iters // config.initial_check_interval
+        expected_checks = (
+            1 if success_check == -1 else min(success_check or max_checks, max_checks)
+        )
         assert len(dense_checks) == expected_checks
         assert result.debug_info["initial_iterations"] == 50 * expected_checks
         assert len(reinitializations) == 1
@@ -285,15 +288,18 @@ def test_failed_finetune_keeps_initial_without_continuing(
         solver.destroy()
 
 
-def test_initial_iteration_override_caps_continuation(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("cap,interval", [(None, 50), (100, 25)])
+def test_initial_iteration_override_caps_continuation(
+    monkeypatch: pytest.MonkeyPatch, cap: int | None, interval: int
+) -> None:
     """An explicit initial budget overrides the default cap and permits a final partial block."""
     solver = TrajOptSolver(
         TrajOptSolverCfg.create(
             robot="franka.yml",
             num_seeds=1,
             use_cuda_graph=True,
-            initial_max_iters=100,
-            initial_check_interval=25,
+            initial_max_iters=cap,
+            initial_check_interval=interval,
         )
     )
     try:

@@ -37,7 +37,7 @@ def test_initial_iteration_budgets_must_be_positive(cap: int, interval: int) -> 
 
 
 @pytest.mark.parametrize(
-    "cap,override,expected", [(None, 100, 100), (150, 100, 150), (None, None, 50)]
+    "cap,override,expected", [(None, 50, 50), (150, 100, 150), (None, None, 100)]
 )
 def test_explicit_optimizer_override_preserves_initial_iteration_cap(
     cap: int | None,
@@ -51,6 +51,8 @@ def test_explicit_optimizer_override_preserves_initial_iteration_cap(
         initial_max_iters=cap,
     )
     assert config.initial_max_iters == expected
+    assert config.initial_check_interval == 50
+    assert config.optimizer_collision_activation_distance == 0.0025
 
 
 @pytest.fixture(scope="module")

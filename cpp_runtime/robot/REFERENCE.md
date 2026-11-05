@@ -387,7 +387,8 @@ time-scaling kernel to compute the uniform timestep required by velocity,
 acceleration, and jerk limits. Each refinement starts from the best retained
 knots at `required_dt * finetune_dt_scale`; a faster result replaces the prior
 one only when it remains feasible. `trajectory_dt` reports the selected result.
-Initial optimization defaults to a maximum of 50 iterations.
+Initial optimization defaults to a maximum of 100 iterations, checking success after 50 steps
+before continuing the same optimizer state for another 50 steps when needed.
 `max_iterations` sets the cap; `initial_check_interval` sets the checkpoint spacing
 (also 50 by default). A larger cap enables continuation of the same iterate and
 L-BFGS history when a native and dense feasibility check fails.
@@ -673,7 +674,7 @@ pose_request.used_rrt = used_rrt;
 pose_request.rrt_iterations = rrt_iterations;
 pose_request.selected_seed = selected_seed;           // Optional scalar
 pose_request.planning_attempts = planning_attempts;   // Optional scalar
-pose_request.outer_iterations = 1;                   // Default: one solve/check pass
+pose_request.outer_iterations = 2;                   // Default: up to two solve/check passes
 planner.plan_pose(pose_request);
 ```
 
@@ -682,7 +683,7 @@ direct seeds, and retries up to `max_attempts`. Starting at
 `enable_graph_attempt`, it runs paired RRT over the valid IK solutions, fits
 the successful paths, and sends them through TrajOpt. Defaults match the
 single-goal Python policy: up to 20 attempts, graph planning from attempt one,
-one initial solve/check pass of 50 optimizer iterations,
+up to two initial solve/check passes of 50 optimizer iterations each,
 one 25-iteration time-optimal refinement, and
 `finetune_dt_scale = 0.6`. It supports one pose
 per tool frame; goalsets are intentionally not part of this deployment API.
@@ -706,7 +707,7 @@ planner.plan_pose_waypoints(waypoints);
 
 Waypoint planning defaults to four initial solve/check passes (up to 200 optimizer iterations),
 independent of `waypoints.motion.outer_iterations`. This budget applies only to the current
-call; later ordinary pose calls retain their one-pass default.
+call; later ordinary pose calls retain their two-pass default.
 The current state must be stationary. The planner prepends its FK pose,
 linearly interpolates position and SLERPs orientation onto the native reference grid, and
 holds the boundary spans. The cubic spline retains its initialization-time control count
@@ -763,8 +764,9 @@ default goalset stage uses the IK solver's current-state ranking; set
 Insertion and lift solve endpoint IK from the reached start of each phase. The
 configuration found during goalset selection is not imposed on insertion: the
 approach may have reached another IK branch for the selected Cartesian grasp.
-Both Python and C++ use the waypoint planner
-with one endpoint per phase and one 50-step initial solve pass; set
+Both Python and C++ use the waypoint planner with one endpoint per phase. Python explicitly
+uses one 50-step initial solve/check pass; C++ inherits the pose request's two-pass default
+(up to 100 iterations, checking success after 50). Set
 `use_double_pass_trajopt_for_constrained_phases` for one timestep-refinement
 pass. These phases require trajectory optimization to be enabled. Insertion and
 lift do not use line costs or RRT fallback. Ordinary pose
