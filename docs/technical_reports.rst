@@ -7,6 +7,7 @@ cuRoboV2-Fast: Fast Torque-Limited Collision-Free Motion Planning
 -----------------------------------------------------------------
 *Balakumar Sundaralingam, Adithyavairavan Murali, Stan Birchfield*
 
+[`Arxiv <https://arxiv.org/abs/2611.06913>`__]
 [`Project page <https://research.nvidia.com/labs/lpr/curobov2-fast/>`__]
 
 **Abstract**
@@ -21,6 +22,8 @@ efficiently on the GPU. With a 3 kg payload, cuRoboV2-Fast achieves 4.4 ms mean 
 RTX 5090, 14.7× faster than cuRoboV2. Our method on Jetson AGX Orin plans faster than
 cuRoboV1 + TOPPRA on RTX 5090. A stereo-camera-based deployment on YAM achieves 5.93 s mean
 completed pick-and-drop cycles, 34.6% shorter than cuRoboV2.
+
+.. include:: snippets/citation_v2_fast.rst
 
 
 cuRoboV2: Dynamics-Aware Motion Generation with Depth-Fused Distance Fields for High-DoF Robots

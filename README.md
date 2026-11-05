@@ -4,7 +4,7 @@
 
 *CUDA Accelerated Robot Library*
 
-**[Documentation](https://nvlabs.github.io/curobo) | [Paper](https://arxiv.org/abs/2603.05493)**
+**[Documentation](https://nvlabs.github.io/curobo) | [Paper](https://arxiv.org/abs/2611.06913)**
 
 > [!NOTE]
 > cuRoboV2 is a significant rewrite and the public API has changed from cuRobo v1.
@@ -47,7 +47,10 @@ If you found this work useful, please cite cuRoboV2-Fast,
       title={cuRoboV2-Fast: Fast Torque-Limited Collision-Free Motion Planning},
       author={Balakumar Sundaralingam and Adithyavairavan Murali and Stan Birchfield},
       year={2026},
-      url={https://research.nvidia.com/labs/lpr/curobov2-fast/}
+      eprint={2611.06913},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2611.06913}
 }
 ```
 
