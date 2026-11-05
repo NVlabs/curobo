@@ -15,6 +15,7 @@ from curobo._src.types.device_cfg import DeviceCfg
 
 # CuRobo
 from curobo._src.types.pose import Pose
+from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import (
@@ -39,6 +40,7 @@ class GoalRegistry:
     goal_js: Optional[JointState] = None
     seed_goal_js: Optional[JointState] = None
     link_goal_poses: Optional[GoalToolPose] = None
+    tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None
     current_js: Optional[JointState] = None
 
     #: Time elapsed since the current robot state was observed. Shape: ``(n_problems,)``.
@@ -48,6 +50,7 @@ class GoalRegistry:
     current_state_dt: Optional[torch.Tensor] = None
 
     idxs_link_pose: Optional[torch.Tensor] = None  # shape: [batch]
+    idxs_tool_relative_transform_target: Optional[torch.Tensor] = None
     idxs_goal_js: Optional[torch.Tensor] = None
     idxs_current_js: Optional[torch.Tensor] = None  # shape: [batch]
     idxs_seed_goal_js: Optional[torch.Tensor] = None
@@ -61,7 +64,6 @@ class GoalRegistry:
         self._update_batch_size()
         if self.link_goal_poses is not None:
             # Simplified validation - GoalToolPose ensures consistency
-            self.batch_size = self.link_goal_poses.batch_size
             self.num_goalset = self.link_goal_poses.num_goalset
 
             if self.idxs_link_pose is None:
@@ -72,6 +74,46 @@ class GoalRegistry:
                     device=self.link_goal_poses.position.device,
                     dtype=torch.int32,
                 ).unsqueeze(-1)
+
+        if self.tool_relative_transform_target is not None:
+            target = self.tool_relative_transform_target
+            route_rows = self.batch_size * self.num_seeds
+            if self.idxs_tool_relative_transform_target is None:
+                if target.num_target_groups == 1:
+                    self.idxs_tool_relative_transform_target = torch.zeros(
+                        (route_rows, 1),
+                        device=target.device,
+                        dtype=torch.int32,
+                    )
+                elif target.num_target_groups == self.batch_size:
+                    self.idxs_tool_relative_transform_target = tensor_repeat_seeds(
+                        torch.arange(
+                            self.batch_size,
+                            device=target.device,
+                            dtype=torch.int32,
+                        ).unsqueeze(-1),
+                        self.num_seeds,
+                    )
+                else:
+                    log_and_raise(
+                        "idxs_tool_relative_transform_target is required when the number "
+                        "of target groups differs from the goal batch size"
+                    )
+            indices = self.idxs_tool_relative_transform_target
+            if indices.shape != (route_rows, 1):
+                log_and_raise(
+                    "idxs_tool_relative_transform_target must have shape "
+                    "(batch_size * num_seeds, 1), "
+                    f"got {tuple(indices.shape)}"
+                )
+            if indices.device != target.device or indices.dtype != torch.int32:
+                log_and_raise(
+                    "idxs_tool_relative_transform_target must be int32 on the target device"
+                )
+            if bool(torch.any(indices < 0)) or bool(
+                torch.any(indices >= target.num_target_groups)
+            ):
+                log_and_raise("idxs_tool_relative_transform_target contains an invalid group")
 
         if self.current_js is not None:
             if self.idxs_current_js is None:
@@ -103,10 +145,14 @@ class GoalRegistry:
                 )
 
     def _update_batch_size(self):
+        if self.batch_size >= 0:
+            return
         if self.link_goal_poses is not None:
             self.batch_size = self.link_goal_poses.batch_size
         elif self.goal_js is not None:
             self.batch_size = self.goal_js.position.shape[0]
+        elif self.tool_relative_transform_target is not None:
+            self.batch_size = self.tool_relative_transform_target.num_target_groups
 
     @property
     def link_goal_pose_dict(self) -> Optional[Dict[str, Pose]]:
@@ -128,10 +174,11 @@ class GoalRegistry:
             GoalRegistry: A new GoalRegistry object with the seeds repeated across batch and seeds.
         """
         # across seeds, the data is the same, so could we just expand batch_idx
-        goal_js = current_js = links_goal_pose = None
+        goal_js = current_js = links_goal_pose = relative_transform_target = None
         seed_goal_js = None
 
         idxs_enable = idxs_link_pose = idxs_env = idxs_current_js = None
+        idxs_relative_transform_target = None
         idxs_goal_js = None
         idxs_seed_goal_js = None
         seed_enable_implicit_goal_js = None
@@ -140,6 +187,10 @@ class GoalRegistry:
         if self.link_goal_poses is not None:
             links_goal_pose = self.link_goal_poses
             batch_size = self.link_goal_poses.batch_size
+        if self.tool_relative_transform_target is not None:
+            relative_transform_target = self.tool_relative_transform_target
+            if batch_size is None:
+                batch_size = self.batch_size
         if self.goal_js is not None:
             goal_js = self.goal_js.clone()
             if batch_size is None:
@@ -155,6 +206,10 @@ class GoalRegistry:
         # repeat seeds for indexing:
         if self.idxs_link_pose is not None:
             idxs_link_pose = tensor_repeat_seeds(self.idxs_link_pose, num_seeds)
+        if self.idxs_tool_relative_transform_target is not None:
+            idxs_relative_transform_target = tensor_repeat_seeds(
+                self.idxs_tool_relative_transform_target, num_seeds
+            )
         if self.idxs_goal_js is not None:
             idxs_goal_js = tensor_repeat_seeds(self.idxs_goal_js, num_seeds)
         if self.idxs_enable is not None:
@@ -201,6 +256,8 @@ class GoalRegistry:
             idxs_goal_js=idxs_goal_js,
             idxs_seed_goal_js=idxs_seed_goal_js,
             link_goal_poses=links_goal_pose,
+            tool_relative_transform_target=relative_transform_target,
+            idxs_tool_relative_transform_target=idxs_relative_transform_target,
             seed_enable_implicit_goal_js=seed_enable_implicit_goal_js,
             num_seeds=num_seeds,
             batch_size=batch_size,
@@ -221,6 +278,16 @@ class GoalRegistry:
             link_goal_poses=(
                 self.link_goal_poses.clone() if self.link_goal_poses is not None else None
             ),
+            tool_relative_transform_target=(
+                self.tool_relative_transform_target.clone()
+                if self.tool_relative_transform_target is not None
+                else None
+            ),
+            idxs_tool_relative_transform_target=(
+                self.idxs_tool_relative_transform_target
+                if self.idxs_tool_relative_transform_target is not None
+                else None
+            ),
             num_goalset=self.num_goalset,
             idxs_seed_goal_js=(
                 self.idxs_seed_goal_js if self.idxs_seed_goal_js is not None else None
@@ -240,11 +307,13 @@ class GoalRegistry:
         # This can be modified to just multiply self.batch and update self.batch by the shape of
         # self.batch
         # NOTE: seed variables are not implemented
-        goal_state = current_state = links_goal_pose = None
+        goal_state = current_state = links_goal_pose = relative_transform_target = None
         batch_enable_idx = batch_pose_idx = env_idx = batch_current_state_idx = None
-        batch_goal_state_idx = None
+        batch_goal_state_idx = batch_relative_transform_target_idx = None
         if self.link_goal_poses is not None:
             links_goal_pose = self.link_goal_poses
+        if self.tool_relative_transform_target is not None:
+            relative_transform_target = self.tool_relative_transform_target
         if self.goal_js is not None:
             goal_state = self.goal_js  # .apply_kernel(kernel_mat)
         if self.current_js is not None:
@@ -264,6 +333,11 @@ class GoalRegistry:
             batch_pose_idx = (kernel_mat @ self.idxs_link_pose.to(dtype=torch.float32)).to(
                 dtype=torch.int32
             )
+        if self.idxs_tool_relative_transform_target is not None:
+            batch_relative_transform_target_idx = (
+                kernel_mat
+                @ self.idxs_tool_relative_transform_target.to(dtype=torch.float32)
+            ).to(dtype=torch.int32)
         if self.idxs_env is not None:
             env_idx = (kernel_mat @ self.idxs_env.to(dtype=torch.float32)).to(
                 dtype=torch.int32
@@ -272,6 +346,8 @@ class GoalRegistry:
         return GoalRegistry(
             goal_js=goal_state,
             link_goal_poses=links_goal_pose,
+            tool_relative_transform_target=relative_transform_target,
+            idxs_tool_relative_transform_target=batch_relative_transform_target_idx,
             current_js=current_state,
             current_state_dt=self.current_state_dt,
             idxs_link_pose=batch_pose_idx,
@@ -279,6 +355,7 @@ class GoalRegistry:
             idxs_env=env_idx,
             idxs_current_js=batch_current_state_idx,
             idxs_goal_js=batch_goal_state_idx,
+            batch_size=kernel_mat.shape[0],
         )
 
     @profiler.record_function("GoalRegistry/copy_")
@@ -324,6 +401,25 @@ class GoalRegistry:
             else:
                 self.link_goal_poses.copy_(goal.link_goal_poses)
 
+        target_presence_changed = (
+            self.tool_relative_transform_target is None
+        ) != (goal.tool_relative_transform_target is None)
+        if target_presence_changed and not allow_clone:
+            log_and_raise(
+                "Cannot change tool_relative_transform_target presence when allow_clone=False; "
+                "reset the rollout goal buffers first"
+            )
+        if goal.tool_relative_transform_target is None:
+            if allow_clone:
+                self.tool_relative_transform_target = None
+                self.idxs_tool_relative_transform_target = None
+        else:
+            self.tool_relative_transform_target = copy_or_clone(
+                goal.tool_relative_transform_target,
+                self.tool_relative_transform_target,
+                allow_clone=allow_clone,
+            )
+
         self._update_batch_size()
 
         if (
@@ -355,6 +451,11 @@ class GoalRegistry:
             self.idxs_goal_js = copy_or_clone(
                 goal.idxs_goal_js, self.idxs_goal_js, allow_clone=allow_clone
             )
+            self.idxs_tool_relative_transform_target = copy_or_clone(
+                goal.idxs_tool_relative_transform_target,
+                self.idxs_tool_relative_transform_target,
+                allow_clone=allow_clone,
+            )
 
     def get_batch_goal_state(self):
         return self.goal_js[self.idxs_link_pose[:, 0]]
@@ -367,9 +468,17 @@ class GoalRegistry:
         device_cfg: DeviceCfg,
     ):
         new_goal = GoalRegistry.create_idx(
-            batch_size, multi_env, num_seeds, device_cfg
+            batch_size,
+            multi_env,
+            num_seeds,
+            device_cfg,
+            tool_relative_transform_target=self.tool_relative_transform_target,
         )
         new_goal.copy_(self, update_idx_buffers=False)
+        if self.idxs_tool_relative_transform_target is not None:
+            new_goal.idxs_tool_relative_transform_target = tensor_repeat_seeds(
+                self.idxs_tool_relative_transform_target, num_seeds
+            )
         return new_goal
 
     @classmethod
@@ -381,6 +490,7 @@ class GoalRegistry:
         device_cfg: DeviceCfg,
         seed_goal_state: Optional[JointState] = None,
         repeat_seed_idx_buffers: bool = False,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
     ):
         batch_pose_idx = torch.arange(
             0, pose_batch_size, 1, device=device_cfg.device, dtype=torch.int32
@@ -398,6 +508,8 @@ class GoalRegistry:
             idxs_current_js=batch_currernt_state_idx,
             idxs_goal_js=batch_goal_state_idx,
             seed_goal_js=seed_goal_state,
+            tool_relative_transform_target=tool_relative_transform_target,
+            batch_size=pose_batch_size,
         )
         g_seeds = g.repeat_seeds(num_seeds, repeat_seed_idx_buffers)
         return g_seeds
@@ -407,5 +519,7 @@ class GoalRegistry:
             return self.idxs_link_pose.shape[0]
         elif self.idxs_goal_js is not None:
             return self.idxs_goal_js.shape[0]
+        elif self.idxs_tool_relative_transform_target is not None:
+            return self.idxs_tool_relative_transform_target.shape[0]
         else:
             return None

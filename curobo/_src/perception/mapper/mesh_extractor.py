@@ -12,11 +12,12 @@ single Python mesh extraction API for block-sparse TSDF storage.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import warp as wp
 
+from curobo._src.perception.mapper.kernel.warp_types import PreparedSemanticFilterWarp
 from curobo._src.perception.mapper.marching_cubes.kernel.wp_mc_common import (
     MCLookupTables,
 )
@@ -39,6 +40,7 @@ def extract_mesh_block_sparse(
     surface_only: bool = False,
     refine_iterations: int = 0,
     minimum_tsdf_weight: float = 0.1,
+    semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Extract a triangle-soup mesh from a block-sparse TSDF.
 
@@ -52,6 +54,7 @@ def extract_mesh_block_sparse(
         refine_iterations: Number of Newton-Raphson iterations for vertex
             refinement. ``0`` keeps linear edge interpolation.
         minimum_tsdf_weight: Minimum weight to consider a voxel observed.
+        semantic_filter: Optional prepared feature-node filter.
 
     Returns:
         Tuple of ``(vertices, normals, colors)``.
@@ -72,14 +75,19 @@ def extract_mesh_block_sparse(
     active_block_idx = torch.empty(num_alloc, dtype=torch.int32, device=device)
     wp_device, stream = get_warp_device_stream(active_count)
 
+    append_active_inputs = [
+        warp_data,
+        wp.from_torch(active_count, dtype=wp.int32),
+        wp.from_torch(active_block_idx, dtype=wp.int32),
+    ]
+    append_active_kernel = kernels.append_active_blocks_kernel
+    if semantic_filter is not None:
+        append_active_kernel = kernels.append_active_blocks_semantic_kernel
+        append_active_inputs.insert(1, semantic_filter)
     wp.launch(
-        kernels.append_active_blocks_kernel,
+        append_active_kernel,
         dim=num_alloc,
-        inputs=[
-            warp_data,
-            wp.from_torch(active_count, dtype=wp.int32),
-            wp.from_torch(active_block_idx, dtype=wp.int32),
-        ],
+        inputs=append_active_inputs,
         device=wp_device,
         stream=stream,
         adjoint=False,
@@ -92,18 +100,23 @@ def extract_mesh_block_sparse(
     active_block_idx = active_block_idx[:n_active]
     surface_count = torch.zeros(1, dtype=torch.int32, device=device)
 
+    count_surface_inputs = [
+        warp_data,
+        wp.from_torch(active_block_idx, dtype=wp.int32),
+        n_active,
+        level,
+        surface_band,
+        minimum_tsdf_weight,
+        wp.from_torch(surface_count, dtype=wp.int32),
+    ]
+    count_surface_kernel = kernels.count_surface_cubes_from_blocks_kernel
+    if semantic_filter is not None:
+        count_surface_kernel = kernels.count_surface_cubes_from_blocks_semantic_kernel
+        count_surface_inputs.insert(1, semantic_filter)
     wp.launch(
-        kernels.count_surface_cubes_from_blocks_kernel,
+        count_surface_kernel,
         dim=(n_active, block_voxels),
-        inputs=[
-            warp_data,
-            wp.from_torch(active_block_idx, dtype=wp.int32),
-            n_active,
-            level,
-            surface_band,
-            minimum_tsdf_weight,
-            wp.from_torch(surface_count, dtype=wp.int32),
-        ],
+        inputs=count_surface_inputs,
         device=wp_device,
         stream=stream,
         adjoint=False,
@@ -118,20 +131,25 @@ def extract_mesh_block_sparse(
 
     surface_count.zero_()
 
+    append_surface_inputs = [
+        warp_data,
+        wp.from_torch(active_block_idx, dtype=wp.int32),
+        n_active,
+        level,
+        surface_band,
+        minimum_tsdf_weight,
+        wp.from_torch(surface_count, dtype=wp.int32),
+        wp.from_torch(surface_block_idx, dtype=wp.int32),
+        wp.from_torch(surface_cube_idx, dtype=wp.int32),
+    ]
+    append_surface_kernel = kernels.append_surface_cubes_from_blocks_kernel
+    if semantic_filter is not None:
+        append_surface_kernel = kernels.append_surface_cubes_from_blocks_semantic_kernel
+        append_surface_inputs.insert(1, semantic_filter)
     wp.launch(
-        kernels.append_surface_cubes_from_blocks_kernel,
+        append_surface_kernel,
         dim=(n_active, block_voxels),
-        inputs=[
-            warp_data,
-            wp.from_torch(active_block_idx, dtype=wp.int32),
-            n_active,
-            level,
-            surface_band,
-            minimum_tsdf_weight,
-            wp.from_torch(surface_count, dtype=wp.int32),
-            wp.from_torch(surface_block_idx, dtype=wp.int32),
-            wp.from_torch(surface_cube_idx, dtype=wp.int32),
-        ],
+        inputs=append_surface_inputs,
         device=wp_device,
         stream=stream,
     )

@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import warp as wp
 
-from curobo._src.perception.mapper.kernel.warp_types import BlockSparseTSDFWarp
+from curobo._src.perception.mapper.kernel.warp_types import (
+    BlockSparseTSDFWarp,
+    PreparedSemanticFilterWarp,
+)
 from curobo._src.perception.mapper.marching_cubes.kernel.wp_mc_common import (
     get_edge_vertex,
 )
@@ -38,6 +41,7 @@ def make_mesh_kernels(
     compute_gradient_nearest,
     block_grid_to_key_coords,
     block_key_to_voxel_base,
+    semantic_local_keep,
 ) -> dict[str, object]:
     """Build block-sparse marching-cubes kernels."""
     BS = wp.constant(block_size)
@@ -253,6 +257,27 @@ def make_mesh_kernels(
         active_block_idx[out_idx] = block_idx
 
     @warp_kernel(
+        f"append_active_blocks_semantic_kernel_bs{block_size}",
+        enable_backward=False,
+    )
+    def append_active_blocks_semantic_kernel(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        active_count: wp.array(dtype=wp.int32),
+        active_block_idx: wp.array(dtype=wp.int32),
+    ):
+        """Compact active blocks that contain retained semantic nodes."""
+        block_idx = wp.tid()
+        if block_idx >= tsdf.num_allocated[0]:
+            return
+        if tsdf.block_to_hash_slot[block_idx] < wp.int32(0):
+            return
+        if semantic_filter.block_has_keep[block_idx] == wp.uint8(0):
+            return
+        out_idx = wp.atomic_add(active_count, 0, wp.int32(1))
+        active_block_idx[out_idx] = block_idx
+
+    @warp_kernel(
         f"count_surface_cubes_from_blocks_kernel_bs{block_size}", enable_backward=False
     )
     def count_surface_cubes_from_blocks_kernel(
@@ -284,6 +309,60 @@ def make_mesh_kernels(
         by = tsdf.block_coords[block_idx * 3 + 1]
         bz = tsdf.block_coords[block_idx * 3 + 2]
 
+        if is_surface_cube_combined(
+            cx,
+            cy,
+            cz,
+            bx,
+            by,
+            bz,
+            block_idx,
+            tsdf,
+            level,
+            surface_band,
+            minimum_tsdf_weight,
+        ):
+            wp.atomic_add(surface_count, 0, wp.int32(1))
+
+    @warp_kernel(
+        f"count_surface_cubes_from_blocks_semantic_kernel_bs{block_size}",
+        enable_backward=False,
+    )
+    def count_surface_cubes_from_blocks_semantic_kernel(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        active_block_idx: wp.array(dtype=wp.int32),
+        n_active_blocks: wp.int32,
+        level: float,
+        surface_band: float,
+        minimum_tsdf_weight: float,
+        surface_count: wp.array(dtype=wp.int32),
+    ):
+        """Count only surface cubes whose centers are semantically retained."""
+        active_idx, cube_idx = wp.tid()
+        if active_idx >= n_active_blocks:
+            return
+        block_idx = active_block_idx[active_idx]
+        if block_idx < wp.int32(0) or block_idx >= tsdf.num_allocated[0]:
+            return
+        if tsdf.block_to_hash_slot[block_idx] < wp.int32(0):
+            return
+
+        cx = cube_idx % BS
+        cy = (cube_idx // BS) % BS
+        cz = cube_idx // (BS * BS)
+        if not semantic_local_keep(
+            semantic_filter,
+            block_idx,
+            wp.float32(cx) + wp.float32(0.5),
+            wp.float32(cy) + wp.float32(0.5),
+            wp.float32(cz) + wp.float32(0.5),
+        ):
+            return
+
+        bx = tsdf.block_coords[block_idx * wp.int32(3)]
+        by = tsdf.block_coords[block_idx * wp.int32(3) + wp.int32(1)]
+        bz = tsdf.block_coords[block_idx * wp.int32(3) + wp.int32(2)]
         if is_surface_cube_combined(
             cx,
             cy,
@@ -333,6 +412,64 @@ def make_mesh_kernels(
         by = tsdf.block_coords[block_idx * 3 + 1]
         bz = tsdf.block_coords[block_idx * 3 + 2]
 
+        if is_surface_cube_combined(
+            cx,
+            cy,
+            cz,
+            bx,
+            by,
+            bz,
+            block_idx,
+            tsdf,
+            level,
+            surface_band,
+            minimum_tsdf_weight,
+        ):
+            out_idx = wp.atomic_add(surface_count, 0, wp.int32(1))
+            surface_block_idx[out_idx] = block_idx
+            surface_cube_idx[out_idx] = cube_idx
+
+    @warp_kernel(
+        f"append_surface_cubes_from_blocks_semantic_kernel_bs{block_size}",
+        enable_backward=False,
+    )
+    def append_surface_cubes_from_blocks_semantic_kernel(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        active_block_idx: wp.array(dtype=wp.int32),
+        n_active_blocks: wp.int32,
+        level: float,
+        surface_band: float,
+        minimum_tsdf_weight: float,
+        surface_count: wp.array(dtype=wp.int32),
+        surface_block_idx: wp.array(dtype=wp.int32),
+        surface_cube_idx: wp.array(dtype=wp.int32),
+    ):
+        """Append only surface cubes whose centers are semantically retained."""
+        active_idx, cube_idx = wp.tid()
+        if active_idx >= n_active_blocks:
+            return
+        block_idx = active_block_idx[active_idx]
+        if block_idx < wp.int32(0) or block_idx >= tsdf.num_allocated[0]:
+            return
+        if tsdf.block_to_hash_slot[block_idx] < wp.int32(0):
+            return
+
+        cx = cube_idx % BS
+        cy = (cube_idx // BS) % BS
+        cz = cube_idx // (BS * BS)
+        if not semantic_local_keep(
+            semantic_filter,
+            block_idx,
+            wp.float32(cx) + wp.float32(0.5),
+            wp.float32(cy) + wp.float32(0.5),
+            wp.float32(cz) + wp.float32(0.5),
+        ):
+            return
+
+        bx = tsdf.block_coords[block_idx * wp.int32(3)]
+        by = tsdf.block_coords[block_idx * wp.int32(3) + wp.int32(1)]
+        bz = tsdf.block_coords[block_idx * wp.int32(3) + wp.int32(2)]
         if is_surface_cube_combined(
             cx,
             cy,
@@ -954,8 +1091,15 @@ def make_mesh_kernels(
     # Expose kernels on the instance.
     return {
         "append_active_blocks_kernel": append_active_blocks_kernel,
+        "append_active_blocks_semantic_kernel": append_active_blocks_semantic_kernel,
         "count_surface_cubes_from_blocks_kernel": count_surface_cubes_from_blocks_kernel,
+        "count_surface_cubes_from_blocks_semantic_kernel": (
+            count_surface_cubes_from_blocks_semantic_kernel
+        ),
         "append_surface_cubes_from_blocks_kernel": append_surface_cubes_from_blocks_kernel,
+        "append_surface_cubes_from_blocks_semantic_kernel": (
+            append_surface_cubes_from_blocks_semantic_kernel
+        ),
         "count_total_triangles_kernel": count_total_triangles_kernel,
         "generate_mesh_kernel": generate_mesh_kernel,
         "project_mesh_uvs_kernel": project_mesh_uvs_kernel,

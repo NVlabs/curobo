@@ -17,7 +17,11 @@
 namespace curobo {
 namespace kinematics {
 
-    template<int N_LINKS=-1, bool COMPUTE_COM=false>
+    template<
+      int N_LINKS,
+      bool COMPUTE_COM,
+      int NumJoints,
+      int NumToolFrames>
     __global__ void kinematics_forward_kernel(
       float *link_pos,
       float *link_quat,
@@ -40,13 +44,16 @@ namespace kinematics {
       (void)horizon;
       extern __shared__ __align__(16) float shared_mem[];
 
+      constexpr int active_num_links = N_LINKS;
+      constexpr int active_num_joints = NumJoints;
+      constexpr int active_num_tool_frames = NumToolFrames;
       const int num_batches_per_block = blockDim.x / 32;
       const int start_batch_index = blockIdx.x * num_batches_per_block;
 
       float *cumul_mat = shared_mem;
-      float *local_mat = &shared_mem[num_batches_per_block * nlinks * 12];
+      float *local_mat = &shared_mem[num_batches_per_block * active_num_links * 12];
 
-      compute_local_link_transforms<N_LINKS>(
+      compute_local_link_transforms<N_LINKS, NumJoints>(
         local_mat,
         q,
         fixedTransform,
@@ -55,8 +62,8 @@ namespace kinematics {
         jointOffset,
         start_batch_index,
         batchSize,
-        nlinks,
-        njoints,
+        active_num_links,
+        active_num_joints,
         num_batches_per_block
       );
 
@@ -70,18 +77,23 @@ namespace kinematics {
       const int phase2_local_batch = threadIdx.x >> 4;
       const int phase2_batch = start_batch_index + phase2_local_batch;
       const int phase2_lane_idx = threadIdx.x & 15;
-      const int phase2_matAddrBase = phase2_local_batch * nlinks * 12;
+      const int phase2_matAddrBase = phase2_local_batch * active_num_links * 12;
       const unsigned int phase2_mask =
         (threadIdx.x & 16) == 0 ? 0x0000ffffu : 0xffff0000u;
 
       load_base_transform_halfwarp(
-        cumul_mat, fixedTransform, nlinks, phase2_matAddrBase, phase2_lane_idx, phase2_mask);
+        cumul_mat,
+        fixedTransform,
+        active_num_links,
+        phase2_matAddrBase,
+        phase2_lane_idx,
+        phase2_mask);
 
       compute_cumulative_transforms_halfwarp<N_LINKS>(
         cumul_mat,
         local_mat,
         linkMap,
-        nlinks,
+        active_num_links,
         phase2_matAddrBase,
         phase2_matAddrBase,
         phase2_lane_idx,
@@ -94,40 +106,44 @@ namespace kinematics {
         global_cumul_mat,
         cumul_mat,
         start_batch_index,
-        nlinks,
+        active_num_links,
         actual_batches_per_block,
         active_phase2_threads
       );
 
       if constexpr (COMPUTE_COM) {
-        write_center_of_mass_tile<16>(
+        write_center_of_mass_tile<16, N_LINKS>(
           batch_center_of_mass,
           cumul_mat,
           link_masses_com,
           phase2_batch,
-          nlinks,
+          active_num_links,
           phase2_lane_idx,
           phase2_mask,
           phase2_matAddrBase);
       }
 
-      write_link_poses(
+      write_link_poses<NumToolFrames>(
         link_pos,
         link_quat,
         cumul_mat,
         toolFrameMap,
         phase2_batch,
-        n_tool_frames,
+        active_num_tool_frames,
         phase2_lane_idx,
         16,
         phase2_matAddrBase);
     }
 
     template<
-      int N_LINKS=-1,
-      int OUTPUT_THREADS_PER_BATCH=32,
-      bool WRITE_GLOBAL_CUMUL=true,
-      bool COMPUTE_COM=false>
+      int N_LINKS,
+      int OUTPUT_THREADS_PER_BATCH,
+      bool WRITE_GLOBAL_CUMUL,
+      bool COMPUTE_COM,
+      int NumJoints,
+      int NumSpheres,
+      int NumToolFrames,
+      int NumEnvs>
     __global__ void kinematics_forward_spheres_kernel(
       float *link_pos,
       float *link_quat,
@@ -155,18 +171,23 @@ namespace kinematics {
     ) {
       extern __shared__ __align__(16) float shared_mem[];
 
+      constexpr int active_num_links = N_LINKS;
+      constexpr int active_num_joints = NumJoints;
+      constexpr int active_num_spheres = NumSpheres;
+      constexpr int active_num_tool_frames = NumToolFrames;
+      constexpr int active_num_envs = NumEnvs;
       const int num_batches_per_block = blockDim.x / OUTPUT_THREADS_PER_BATCH;
       const int start_batch_index = blockIdx.x * num_batches_per_block;
       const int local_batch = threadIdx.x / OUTPUT_THREADS_PER_BATCH;
       const int batch = start_batch_index + local_batch;
       const bool active_tile = batch < batchSize;
       const int lane_idx = threadIdx.x - local_batch * OUTPUT_THREADS_PER_BATCH;
-      const int matAddrBase = local_batch * nlinks * 12;
+      const int matAddrBase = local_batch * active_num_links * 12;
 
       float *cumul_mat = shared_mem;
-      float *local_mat = &shared_mem[num_batches_per_block * nlinks * 12];
+      float *local_mat = &shared_mem[num_batches_per_block * active_num_links * 12];
 
-      compute_local_link_transforms<N_LINKS>(
+      compute_local_link_transforms<N_LINKS, NumJoints>(
         local_mat,
         q,
         fixedTransform,
@@ -175,8 +196,8 @@ namespace kinematics {
         jointOffset,
         start_batch_index,
         batchSize,
-        nlinks,
-        njoints,
+        active_num_links,
+        active_num_joints,
         num_batches_per_block
       );
 
@@ -185,19 +206,24 @@ namespace kinematics {
       const int phase2_local_batch = threadIdx.x >> 4;
       const bool active_phase2_tile = phase2_local_batch < actual_batches_per_block;
       const int phase2_lane_idx = threadIdx.x & 15;
-      const int phase2_matAddrBase = phase2_local_batch * nlinks * 12;
+      const int phase2_matAddrBase = phase2_local_batch * active_num_links * 12;
       const unsigned int phase2_mask =
         (threadIdx.x & 16) == 0 ? 0x0000ffffu : 0xffff0000u;
 
       if (active_phase2_tile) {
         load_base_transform_halfwarp(
-          cumul_mat, fixedTransform, nlinks, phase2_matAddrBase, phase2_lane_idx, phase2_mask);
+          cumul_mat,
+          fixedTransform,
+          active_num_links,
+          phase2_matAddrBase,
+          phase2_lane_idx,
+          phase2_mask);
 
         compute_cumulative_transforms_halfwarp<N_LINKS>(
           cumul_mat,
           local_mat,
           linkMap,
-          nlinks,
+          active_num_links,
           phase2_matAddrBase,
           phase2_matAddrBase,
           phase2_lane_idx,
@@ -213,7 +239,7 @@ namespace kinematics {
           cumul_mat,
           start_batch_index,
           threadIdx.x,
-          nlinks,
+          active_num_links,
           batchSize,
           num_batches_per_block,
           OUTPUT_THREADS_PER_BATCH
@@ -221,39 +247,39 @@ namespace kinematics {
       }
 
       if (active_tile) {
-        transform_robot_spheres(
+        transform_robot_spheres<NumSpheres, NumEnvs>(
           b_robot_spheres,
           cumul_mat,
           robot_spheres,
           linkSphereMap,
           env_query_idx,
           batch,
-          nspheres,
-          num_envs,
+          active_num_spheres,
+          active_num_envs,
           horizon,
           lane_idx,
           OUTPUT_THREADS_PER_BATCH,
           matAddrBase);
 
         if constexpr (COMPUTE_COM) {
-          write_center_of_mass_tile<32>(
+          write_center_of_mass_tile<32, N_LINKS>(
             batch_center_of_mass,
             cumul_mat,
             link_masses_com,
             batch,
-            nlinks,
+            active_num_links,
             lane_idx,
             0xffffffffu,
             matAddrBase);
         }
 
-        write_link_poses(
+        write_link_poses<NumToolFrames>(
           link_pos,
           link_quat,
           cumul_mat,
           toolFrameMap,
           batch,
-          n_tool_frames,
+          active_num_tool_frames,
           lane_idx,
           OUTPUT_THREADS_PER_BATCH,
           matAddrBase);
@@ -261,10 +287,14 @@ namespace kinematics {
     }
 
     template<
-      int N_LINKS=-1,
-      int OUTPUT_THREADS_PER_BATCH=32,
-      bool WRITE_GLOBAL_CUMUL=true,
-      bool COMPUTE_COM=false>
+      int N_LINKS,
+      int OUTPUT_THREADS_PER_BATCH,
+      bool WRITE_GLOBAL_CUMUL,
+      bool COMPUTE_COM,
+      int NumJoints,
+      int NumSpheres,
+      int NumToolFrames,
+      int NumEnvs>
     __global__ void kinematics_forward_spheres_jacobian_kernel(
       float *link_pos,
       float *link_quat,
@@ -281,11 +311,8 @@ namespace kinematics {
       const int16_t *linkMap,
       const int16_t *toolFrameMap,
       const int16_t *linkSphereMap,
-      const int16_t *linkChainData,
-      const int16_t *linkChainOffsets,
-      const int16_t *jointLinksData,
-      const int16_t *jointLinksOffsets,
-      const bool *joint_affects_endeffector,
+      const int16_t *toolJointLinksData,
+      const int16_t *toolJointLinksOffsets,
       const float *jointOffset,
       const int32_t *env_query_idx,
       const int batchSize,
@@ -298,18 +325,23 @@ namespace kinematics {
     ) {
       extern __shared__ __align__(16) float shared_mem[];
 
+      constexpr int active_num_links = N_LINKS;
+      constexpr int active_num_joints = NumJoints;
+      constexpr int active_num_spheres = NumSpheres;
+      constexpr int active_num_tool_frames = NumToolFrames;
+      constexpr int active_num_envs = NumEnvs;
       const int num_batches_per_block = blockDim.x / OUTPUT_THREADS_PER_BATCH;
       const int start_batch_index = blockIdx.x * num_batches_per_block;
       const int local_batch = threadIdx.x / OUTPUT_THREADS_PER_BATCH;
       const int batch = start_batch_index + local_batch;
       const bool active_tile = batch < batchSize;
       const int lane_idx = threadIdx.x - local_batch * OUTPUT_THREADS_PER_BATCH;
-      const int matAddrBase = local_batch * nlinks * 12;
+      const int matAddrBase = local_batch * active_num_links * 12;
 
       float *cumul_mat = shared_mem;
-      float *local_mat = &shared_mem[num_batches_per_block * nlinks * 12];
+      float *local_mat = &shared_mem[num_batches_per_block * active_num_links * 12];
 
-      compute_local_link_transforms<N_LINKS>(
+      compute_local_link_transforms<N_LINKS, NumJoints>(
         local_mat,
         q,
         fixedTransform,
@@ -318,8 +350,8 @@ namespace kinematics {
         jointOffset,
         start_batch_index,
         batchSize,
-        nlinks,
-        njoints,
+        active_num_links,
+        active_num_joints,
         num_batches_per_block
       );
 
@@ -328,19 +360,24 @@ namespace kinematics {
       const int phase2_local_batch = threadIdx.x >> 4;
       const bool active_phase2_tile = phase2_local_batch < actual_batches_per_block;
       const int phase2_lane_idx = threadIdx.x & 15;
-      const int phase2_matAddrBase = phase2_local_batch * nlinks * 12;
+      const int phase2_matAddrBase = phase2_local_batch * active_num_links * 12;
       const unsigned int phase2_mask =
         (threadIdx.x & 16) == 0 ? 0x0000ffffu : 0xffff0000u;
 
       if (active_phase2_tile) {
         load_base_transform_halfwarp(
-          cumul_mat, fixedTransform, nlinks, phase2_matAddrBase, phase2_lane_idx, phase2_mask);
+          cumul_mat,
+          fixedTransform,
+          active_num_links,
+          phase2_matAddrBase,
+          phase2_lane_idx,
+          phase2_mask);
 
         compute_cumulative_transforms_halfwarp<N_LINKS>(
           cumul_mat,
           local_mat,
           linkMap,
-          nlinks,
+          active_num_links,
           phase2_matAddrBase,
           phase2_matAddrBase,
           phase2_lane_idx,
@@ -356,7 +393,7 @@ namespace kinematics {
           cumul_mat,
           start_batch_index,
           threadIdx.x,
-          nlinks,
+          active_num_links,
           batchSize,
           num_batches_per_block,
           OUTPUT_THREADS_PER_BATCH
@@ -364,71 +401,55 @@ namespace kinematics {
       }
 
       if (active_tile) {
-        transform_robot_spheres(
+        transform_robot_spheres<NumSpheres, NumEnvs>(
           b_robot_spheres,
           cumul_mat,
           robot_spheres,
           linkSphereMap,
           env_query_idx,
           batch,
-          nspheres,
-          num_envs,
+          active_num_spheres,
+          active_num_envs,
           horizon,
           lane_idx,
           OUTPUT_THREADS_PER_BATCH,
           matAddrBase);
 
         if constexpr (COMPUTE_COM) {
-          write_center_of_mass_tile<32>(
+          write_center_of_mass_tile<32, N_LINKS>(
             batch_center_of_mass,
             cumul_mat,
             link_masses_com,
             batch,
-            nlinks,
+            active_num_links,
             lane_idx,
             0xffffffffu,
             matAddrBase);
         }
 
-        write_link_poses(
+        write_link_poses<NumToolFrames>(
           link_pos,
           link_quat,
           cumul_mat,
           toolFrameMap,
           batch,
-          n_tool_frames,
+          active_num_tool_frames,
           lane_idx,
           OUTPUT_THREADS_PER_BATCH,
           matAddrBase);
 
-        for (int16_t i = 0; i < n_tool_frames; i++) {
-          const int16_t tool_frame_idx = toolFrameMap[i];
-          float *link_jacobian =
-            &jacobian[batch * n_tool_frames * 6 * njoints + i * 6 * njoints];
-
-          write_kinematic_jacobian(
-            link_jacobian,
-            cumul_mat,
-            jointMapType,
-            jointMap,
-            linkMap,
-            linkChainData,
-            linkChainOffsets,
-            jointLinksData,
-            jointLinksOffsets,
-            joint_affects_endeffector,
-            toolFrameMap,
-            jointOffset,
-            tool_frame_idx,
-            i,
-            batch,
-            njoints,
-            nlinks,
-            n_tool_frames,
-            matAddrBase,
-            lane_idx,
-            OUTPUT_THREADS_PER_BATCH);
-        }
+        float *batch_jacobian =
+          &jacobian[batch * active_num_tool_frames * 6 * active_num_joints];
+        write_kinematic_jacobians<NumJoints, NumToolFrames, OUTPUT_THREADS_PER_BATCH>(
+          batch_jacobian,
+          cumul_mat,
+          jointMapType,
+          toolJointLinksData,
+          toolJointLinksOffsets,
+          toolFrameMap,
+          jointOffset,
+          matAddrBase,
+          lane_idx);
       }
     }
 

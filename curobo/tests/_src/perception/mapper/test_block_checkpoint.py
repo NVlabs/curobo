@@ -15,25 +15,24 @@ from curobo._src.perception.mapper.checkpoint_blocks import (
     prepare_blocks_for_import,
     rebuild_import_hash_state,
     save_block_checkpoint,
-    validate_import_block_coords_for_grid,
-    validate_import_block_coords_unique,
     validate_block_metadata,
     validate_block_payload,
+    validate_import_block_coords_for_grid,
+    validate_import_block_coords_unique,
 )
 from curobo._src.perception.mapper.constants import (
     PY_HASH_EMPTY,
     PY_HASH_TOMBSTONE,
     PY_VALUE_MASK,
 )
+from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
+    make_block_sparse_kernels,
+)
 from curobo._src.perception.mapper.storage import (
     BlockSparseTSDF,
     BlockSparseTSDFCfg,
 )
-from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
-    make_block_sparse_kernels,
-)
 from curobo._src.util.warp import init_warp
-
 
 cuda_lookup_kernels = make_block_sparse_kernels(block_size=2)
 cuda_hash_lookup = cuda_lookup_kernels.hash_lookup
@@ -64,6 +63,7 @@ def make_metadata(
     feature_dim: int = 0,
     color_grid_size: int = 1,
     feature_block_grid_size: int = 1,
+    instance_grid_size: int = 0,
 ):
     return {
         "voxel_size": 0.01,
@@ -76,6 +76,7 @@ def make_metadata(
         "feature_dim": feature_dim,
         "color_grid_size": color_grid_size,
         "feature_block_grid_size": feature_block_grid_size,
+        "instance_grid_size": instance_grid_size,
     }
 
 
@@ -86,10 +87,12 @@ def make_dynamic_blocks(
     feature_dim: int = 0,
     color_grid_size: int = 1,
     feature_block_grid_size: int = 1,
+    instance_grid_size: int = 0,
 ):
     block_voxels = block_size**3
     color_grid_voxels = color_grid_size**3
     feature_grid_voxels = feature_block_grid_size**3
+    instance_grid_voxels = max(1, instance_grid_size**3)
     coords = torch.arange(n_blocks * 3, dtype=torch.int32).reshape(n_blocks, 3)
     block_data = torch.zeros((n_blocks, block_voxels, 2), dtype=torch.float16)
     block_data[..., 0] = 0.5
@@ -110,6 +113,10 @@ def make_dynamic_blocks(
         blocks["block_feature_weight"] = torch.ones(
             (n_blocks, feature_grid_voxels),
             dtype=torch.float16,
+        )
+    if instance_grid_size > 0:
+        blocks["block_instance_state"] = torch.zeros(
+            (n_blocks, instance_grid_voxels), dtype=torch.int16
         )
     return blocks
 
@@ -160,6 +167,17 @@ def test_validate_block_payload_uses_independent_feature_grid_size():
     assert blocks["block_grid_rgb"].shape == (2, 64, 4)
     assert blocks["block_features"].shape == (2, 8, 3)
     assert blocks["block_feature_weight"].shape == (2, 8)
+
+
+def test_validate_block_payload_preserves_instance_state():
+    metadata = make_metadata(block_size=4, instance_grid_size=2)
+    blocks = make_dynamic_blocks(block_size=4, instance_grid_size=2)
+    blocks["block_instance_state"][0, 3] = (20 << 8) | 7
+
+    validate_block_payload(blocks, metadata)
+
+    assert blocks["block_instance_state"].shape == (2, 8)
+    assert int(blocks["block_instance_state"][0, 3].item()) == (20 << 8) | 7
 
 
 def test_validate_block_metadata_rejects_extra_fields():
@@ -269,6 +287,7 @@ def make_storage(
     device: str = "cpu",
     feature_dim: int = 0,
     feature_block_grid_size: int = 1,
+    instance_grid_size: int = 0,
     enable_static: bool = False,
 ) -> BlockSparseTSDF:
     cfg = BlockSparseTSDFCfg(
@@ -282,6 +301,7 @@ def make_storage(
         block_size=2,
         feature_dim=feature_dim,
         feature_block_grid_size=feature_block_grid_size,
+        instance_grid_size=instance_grid_size,
         feature_grid_height=1 if feature_dim > 0 else None,
         feature_grid_width=1 if feature_dim > 0 else None,
         enable_static=enable_static,
@@ -377,6 +397,7 @@ def test_cuda_checkpoint_roundtrip_preserves_block_data(tmp_path):
         device="cuda:0",
         feature_dim=3,
         feature_block_grid_size=2,
+        instance_grid_size=2,
         enable_static=True,
     )
     source.data.num_allocated.fill_(3)
@@ -394,9 +415,11 @@ def test_cuda_checkpoint_roundtrip_preserves_block_data(tmp_path):
     )
 
     active_pool_idx = torch.tensor([0, 2], dtype=torch.long, device="cuda:0")
-    expected_coords = source.data.block_coords.view(source.config.max_blocks, 3)[
-        active_pool_idx
-    ].detach().clone()
+    expected_coords = (
+        source.data.block_coords.view(source.config.max_blocks, 3)[active_pool_idx]
+        .detach()
+        .clone()
+    )
 
     source.data.block_data.zero_()
     source.data.block_data[0, 0, :] = torch.tensor(
@@ -446,6 +469,9 @@ def test_cuda_checkpoint_roundtrip_preserves_block_data(tmp_path):
     source.data.block_feature_weight[2, 0] = 3.0
     expected_features = source.data.block_features[active_pool_idx].detach().clone()
     expected_feature_weight = source.data.block_feature_weight[active_pool_idx].detach().clone()
+    source.data.block_instance_state[0, 0] = (20 << 8) | 3
+    source.data.block_instance_state[2, 5] = (40 << 8) | 7
+    expected_instance_state = source.data.block_instance_state[active_pool_idx].detach().clone()
 
     source.data.static_block_data[0, 0] = -0.01
     source.data.static_block_data[0, 2] = 0.02
@@ -466,6 +492,7 @@ def test_cuda_checkpoint_roundtrip_preserves_block_data(tmp_path):
         device="cuda:0",
         feature_dim=3,
         feature_block_grid_size=2,
+        instance_grid_size=2,
         enable_static=True,
     )
     target.import_blocks(checkpoint["blocks"])
@@ -483,23 +510,29 @@ def test_cuda_checkpoint_roundtrip_preserves_block_data(tmp_path):
         target.data.block_feature_weight[:2].detach().cpu(),
         expected_feature_weight.cpu(),
     )
+    assert torch.equal(
+        target.data.block_instance_state[:2].detach().cpu(),
+        expected_instance_state.cpu(),
+    )
     assert torch.equal(target.data.static_block_data[:2].detach().cpu(), expected_static.cpu())
     assert target.data.block_sums[:2].detach().cpu().tolist() == pytest.approx([5.0, 9.0])
     assert target.data.static_block_sums[:2].detach().cpu().tolist() == [2, 1]
 
-    rgb_avg = target.data.block_grid_rgb[:2, 0, :3].float() / target.data.block_grid_rgb[
-        :2,
-        0,
-        3:4,
-    ].float()
+    rgb_avg = (
+        target.data.block_grid_rgb[:2, 0, :3].float()
+        / target.data.block_grid_rgb[
+            :2,
+            0,
+            3:4,
+        ].float()
+    )
     torch.testing.assert_close(
         rgb_avg.detach().cpu(),
         torch.tensor([[0.5, 1.0, 1.5], [1.0, 2.0, 3.0]]),
     )
-    feature_avg = (
-        target.data.block_features[:2, 0].float()
-        / target.data.block_feature_weight[:2, 0].float().unsqueeze(-1)
-    )
+    feature_avg = target.data.block_features[:2, 0].float() / target.data.block_feature_weight[
+        :2, 0
+    ].float().unsqueeze(-1)
     torch.testing.assert_close(
         feature_avg.detach().cpu(),
         torch.tensor([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]),

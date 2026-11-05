@@ -18,6 +18,8 @@ from curobo._src.cost.cost_cspace_type import CSpaceCostType
 from curobo._src.cost.cost_scene_collision_cfg import SceneCollisionCostCfg
 from curobo._src.cost.cost_self_collision_cfg import SelfCollisionCostCfg
 from curobo._src.cost.cost_tool_pose_cfg import ToolPoseCostCfg
+from curobo._src.cost.cost_tool_relative_transform_cfg import ToolRelativeTransformCostCfg
+from curobo._src.cost.cost_tool_velocity_limit_cfg import ToolVelocityLimitCostCfg
 from curobo._src.rollout.cost_manager.cost_manager_robot import RobotCostManager
 from curobo._src.rollout.cost_manager.cost_manager_robot_cfg import RobotCostManagerCfg
 
@@ -36,6 +38,8 @@ class TestRobotCostManagerCfgInitialization:
         assert cfg.start_cspace_dist_cfg is None
         assert cfg.target_cspace_dist_cfg is None
         assert cfg.tool_pose_cfg is None
+        assert cfg.tool_relative_transform_cfg is None
+        assert cfg.tool_velocity_limit_cfg is None
 
     def test_initialization_with_start_cspace_dist_cfg(self, cuda_device_cfg):
         start_cspace_dist_cfg = CSpaceDistCostCfg(weight=1.0, device_cfg=cuda_device_cfg)
@@ -76,6 +80,8 @@ class TestRobotCostManagerCfgDataclass:
         assert "start_cspace_dist_cfg" in field_names
         assert "target_cspace_dist_cfg" in field_names
         assert "tool_pose_cfg" in field_names
+        assert "tool_relative_transform_cfg" in field_names
+        assert "tool_velocity_limit_cfg" in field_names
 
     def test_no_inheritance(self):
         """RobotCostManagerCfg should not inherit from any cost manager config."""
@@ -117,6 +123,27 @@ class TestRobotCostManagerCfgCreate:
 
         assert cfg.tool_pose_cfg is not None
         assert isinstance(cfg.tool_pose_cfg, ToolPoseCostCfg)
+
+    def test_create_with_tool_relative_transform_cfg(self, cuda_device_cfg):
+        data_dict = {
+            "tool_relative_transform_cfg": {
+                "weight": [1.0, 1.0],
+                "reference_tool_frame": "reference",
+            }
+        }
+
+        cfg = RobotCostManagerCfg.create(data_dict, device_cfg=cuda_device_cfg)
+
+        assert isinstance(cfg.tool_relative_transform_cfg, ToolRelativeTransformCostCfg)
+        assert cfg.tool_relative_transform_cfg.tool_frames is None
+
+    def test_create_with_tool_velocity_limit_cfg(self, cuda_device_cfg):
+        data_dict = {"tool_velocity_limit_cfg": {"weight": [1.0, 1.0]}}
+
+        cfg = RobotCostManagerCfg.create(data_dict, device_cfg=cuda_device_cfg)
+
+        assert isinstance(cfg.tool_velocity_limit_cfg, ToolVelocityLimitCostCfg)
+        assert cfg.requires_tool_jacobians
 
     def test_create_with_cspace_cfg(self, cuda_device_cfg):
         data_dict = {

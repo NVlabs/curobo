@@ -1,0 +1,40 @@
+{
+  "SPDX-FileCopyrightText": "Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
+  "SPDX-License-Identifier": "Apache-2.0",
+  "voxel_size": 0.02,
+  "origin": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "grid_shape": [
+    64,
+    64,
+    64
+  ],
+  "esdf_voxel_size": 0.02,
+  "esdf_grid_shape": [
+    32,
+    32,
+    32
+  ],
+  "truncation_distance": 0.08,
+  "max_blocks": 512,
+  "hash_capacity": 1024,
+  "depth_minimum_distance": 0.1,
+  "depth_maximum_distance": 2.0,
+  "minimum_tsdf_weight": 1.0,
+  "num_cameras": 1,
+  "image_height": 32,
+  "image_width": 40,
+  "block_size": 8,
+  "color_grid_size": 8,
+  "feature_dim": 8,
+  "feature_block_grid_size": 8,
+  "feature_grid_height": 8,
+  "feature_grid_width": 10,
+  "instance_grid_size": 8,
+  "max_visible_blocks_per_integration": 128,
+  "max_support_pixels_per_block_camera": 2048,
+  "accumulator_w_max": 64.0
+}

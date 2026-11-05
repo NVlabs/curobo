@@ -145,7 +145,9 @@ class KinematicsLoaderCfg:
 
     #: When False, skip loading collision spheres even if they are specified
     #: in the robot config. This saves memory and FK compute when neither
-    #: self-collision nor environment collision checking is needed.
+    #: self-collision nor environment collision checking is needed. Cspace
+    #: joints omitted from the retained tree are reconstructed at their
+    #: configured default positions unless they are explicitly locked.
     load_collision_spheres: bool = True
 
     #: Number of environment configurations for link_spheres. When > 1, link_spheres

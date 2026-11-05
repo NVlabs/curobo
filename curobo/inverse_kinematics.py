@@ -5,16 +5,17 @@
 This module provides collision-aware inverse kinematics solving with optimization.
 
 Example:
-    ```python
-    from curobo import InverseKinematics, InverseKinematicsCfg
+    .. code-block:: python
 
-    config = InverseKinematicsCfg.create(
-        robot="franka.yml",
-        num_seeds=12,
-    )
-    ik = InverseKinematics(config)
-    result = ik.solve_pose(goal_tool_poses=target_poses)
-    ```
+        from curobo import InverseKinematics, InverseKinematicsCfg
+
+        config = InverseKinematicsCfg.create(
+            robot="franka.yml",
+            num_seeds=12,
+        )
+        ik = InverseKinematics(config)
+        result = ik.solve_pose(goal_tool_poses=target_poses)
+
 """
 
 from curobo._src.solver.solver_ik import IKSolver as InverseKinematics

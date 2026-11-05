@@ -93,6 +93,7 @@ class Kinematics:
                 horizon,
                 self.config.kinematics_config,
                 self.device_cfg,
+                compute_jacobian=self.compute_jacobian,
             )
             self._buffers["idxs_env"] = torch.zeros(
                 (batch,), dtype=torch.int32, device=self.device_cfg.device
@@ -144,7 +145,6 @@ class Kinematics:
                 self._buffers["batch_cumul_mat"],
                 self.config.kinematics_config,
                 self._buffers["grad_out_q"],
-                self._buffers["grad_out_q_jacobian"],
                 self._buffers["grad_in_link_pos"],
                 self._buffers["grad_in_link_quat"],
                 self._buffers["grad_in_robot_spheres"],
@@ -164,7 +164,7 @@ class Kinematics:
         return KinematicsState(
             robot_spheres=robot_spheres,
             tool_poses=link_poses,
-            tool_jacobians=link_jacobian,
+            tool_jacobians=link_jacobian if self.compute_jacobian else None,
             robot_com=robot_com,
             robot_collision_geometry=self.config.kinematics_config.get_robot_collision_geometry(),
         )

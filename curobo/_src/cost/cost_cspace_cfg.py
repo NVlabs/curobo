@@ -59,6 +59,13 @@ class CSpaceCostCfg(BaseCostCfg):
     retime_regularization_weights: bool = False
     """If true, the smooth weights are retimed to be used for the bounds smooth cost."""
 
+    compute_effort: bool = True
+    """Compute joint-effort bounds and regularization terms.
+
+    This defaults to true for direct cost use and is resolved from the transition model when the
+    cost is attached to a rollout.
+    """
+
     activation_distance: Union[torch.Tensor, float] = 0.0
     """Activation distance is the distance at which the cost is activated.
 
@@ -218,6 +225,7 @@ class CSpaceCostCfg(BaseCostCfg):
 
     def initialize_from_transition_model(self, transition_model: RobotStateTransition):
         self.update_dof(transition_model.action_dim)
+        self.compute_effort = transition_model.compute_inverse_dynamics
 
         self.set_bounds(
             transition_model.get_state_bounds(),

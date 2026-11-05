@@ -53,6 +53,11 @@ class CameraObservation:
     #: outside this range can overflow the per-thread footprint sum
     #: within a single frame before the cap engages.
     feature_grid: Optional[torch.Tensor] = None
+    #: Optional compact categorical instance slots. Shape
+    #: ``(num_cameras, image_height, image_width)`` uint8. Slot 0 is
+    #: background; slots 1..255 are stable only for the lifetime of the
+    #: caller-owned instance registry.
+    instance_image: Optional[torch.Tensor] = None
 
     def filter_depth(self, distance: float = 0.01):
         if self.depth_image is None:
@@ -83,6 +88,8 @@ class CameraObservation:
             self.timestamp.copy_(new_data.timestamp)
         if self.feature_grid is not None and new_data.feature_grid is not None:
             self.feature_grid.copy_(new_data.feature_grid)
+        if self.instance_image is not None and new_data.instance_image is not None:
+            self.instance_image.copy_(new_data.instance_image)
         self.depth_to_meter = new_data.depth_to_meter
         self.resolution = new_data.resolution
 
@@ -104,8 +111,9 @@ class CameraObservation:
             projection_rays=(
                 self.projection_rays.clone() if self.projection_rays is not None else None
             ),
-            feature_grid=(
-                self.feature_grid.clone() if self.feature_grid is not None else None
+            feature_grid=(self.feature_grid.clone() if self.feature_grid is not None else None),
+            instance_image=(
+                self.instance_image.clone() if self.instance_image is not None else None
             ),
             name=self.name,
             depth_to_meter=self.depth_to_meter,
@@ -123,16 +131,23 @@ class CameraObservation:
             else None
         )
         self.projection_matrix = (
-            self.projection_matrix.to(device=device) if self.projection_matrix is not None else None
+            self.projection_matrix.to(device=device)
+            if self.projection_matrix is not None
+            else None
         )
         self.projection_rays = (
             self.projection_rays.to(device=device) if self.projection_rays is not None else None
         )
-        self.intrinsics = self.intrinsics.to(device=device) if self.intrinsics is not None else None
+        self.intrinsics = (
+            self.intrinsics.to(device=device) if self.intrinsics is not None else None
+        )
         self.timestamp = self.timestamp.to(device=device) if self.timestamp is not None else None
         self.pose = self.pose.to(device=device) if self.pose is not None else None
         self.feature_grid = (
             self.feature_grid.to(device=device) if self.feature_grid is not None else None
+        )
+        self.instance_image = (
+            self.instance_image.to(device=device) if self.instance_image is not None else None
         )
 
         return self
@@ -178,7 +193,11 @@ class CameraObservation:
 
         if output_image is None:
             # Extract shape from pointcloud: [b, h, w, 3] -> [b, h, w]
-            batch_size, height, width = pointcloud.shape[0], pointcloud.shape[1], pointcloud.shape[2]
+            batch_size, height, width = (
+                pointcloud.shape[0],
+                pointcloud.shape[1],
+                pointcloud.shape[2],
+            )
             output_image = torch.zeros(
                 (batch_size, height, width),
                 dtype=pointcloud.dtype,
@@ -202,7 +221,10 @@ class CameraObservation:
         if len(intrinsics.shape) == 2:
             intrinsics = intrinsics.unsqueeze(0)
         project_rays = get_projection_rays(
-            self.depth_image.shape[-2], self.depth_image.shape[-1], intrinsics, depth_to_meter=self.depth_to_meter
+            self.depth_image.shape[-2],
+            self.depth_image.shape[-1],
+            intrinsics,
+            depth_to_meter=self.depth_to_meter,
         )
 
         if self.projection_rays is None:
@@ -250,6 +272,11 @@ class CameraObservation:
             if self.timestamp is not None
             else None
         )
+        instance_image = (
+            torch.stack((self.instance_image, new_observation.instance_image), dim=dim)
+            if self.instance_image is not None
+            else None
+        )
         return CameraObservation(
             name=self.name,
             rgb_image=rgb_image,
@@ -261,7 +288,9 @@ class CameraObservation:
             pose=pose,
             intrinsics=intrinsics,
             timestamp=timestamp,
+            instance_image=instance_image,
         )
+
     def save_to_file(self, file_path: str):
         data = {
             "rgb_image": self.rgb_image,

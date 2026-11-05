@@ -6,9 +6,9 @@ Re-exports compile-time and runtime flags from :mod:`curobo._src.runtime` (for e
 graph usage, debug switches, cache directory, and torch compile options) so callers can use
 ``import curobo.runtime`` or ``from curobo import runtime`` without depending on private paths.
 """
+
 from curobo._src.runtime import (
     cache_dir,
-    cuda_core_backend,
     cuda_event_timers,
     cuda_graph_reset,
     cuda_graphs,
@@ -19,8 +19,8 @@ from curobo._src.runtime import (
     debug_nan,
     debug_timers,
     debug_trajopt,
-    kernel_backend,
     profiler,
+    skip_checks,
     torch_compile,
     torch_compile_slow,
     torch_jit,
@@ -28,7 +28,6 @@ from curobo._src.runtime import (
 
 __all__ = [
     "cache_dir",
-    "cuda_core_backend",
     "cuda_event_timers",
     "cuda_graph_reset",
     "cuda_graphs",
@@ -39,8 +38,8 @@ __all__ = [
     "debug_nan",
     "debug_timers",
     "debug_trajopt",
-    "kernel_backend",
     "profiler",
+    "skip_checks",
     "torch_compile",
     "torch_compile_slow",
     "torch_jit",

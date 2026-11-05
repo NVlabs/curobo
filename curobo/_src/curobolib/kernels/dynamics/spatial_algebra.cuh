@@ -274,6 +274,126 @@ __device__ __forceinline__ void spatial_inertia_times_vec(
     result[2] = Iw2 + m * cxh2;
 }
 
+/**
+ * @brief Expand packed physical properties into a row-major 6x6 spatial inertia.
+ *
+ * @param mc [4 floats]: center of mass followed by mass.
+ * @param inertia [8 floats]: packed symmetric rotational inertia at the center of mass.
+ * @param matrix Output row-major spatial inertia with 36 floats.
+ */
+__device__ __forceinline__ void spatial_inertia_to_matrix(
+    const float *mc,
+    const float *inertia,
+    float *matrix
+) {
+    const float4 mc_vec = *reinterpret_cast<const float4*>(mc);
+    const float4 inertia_0 = *reinterpret_cast<const float4*>(&inertia[0]);
+    const float4 inertia_1 = *reinterpret_cast<const float4*>(&inertia[4]);
+    const float cx = mc_vec.x;
+    const float cy = mc_vec.y;
+    const float cz = mc_vec.z;
+    const float mass = mc_vec.w;
+    const float ixx = inertia_0.x;
+    const float iyy = inertia_0.y;
+    const float izz = inertia_0.z;
+    const float ixy = inertia_0.w;
+    const float ixz = inertia_1.x;
+    const float iyz = inertia_1.y;
+
+    matrix[0] = ixx + mass * (cy * cy + cz * cz);
+    matrix[1] = ixy - mass * cx * cy;
+    matrix[2] = ixz - mass * cx * cz;
+    matrix[3] = 0.0f;
+    matrix[4] = -mass * cz;
+    matrix[5] = mass * cy;
+
+    matrix[6] = matrix[1];
+    matrix[7] = iyy + mass * (cx * cx + cz * cz);
+    matrix[8] = iyz - mass * cy * cz;
+    matrix[9] = mass * cz;
+    matrix[10] = 0.0f;
+    matrix[11] = -mass * cx;
+
+    matrix[12] = matrix[2];
+    matrix[13] = matrix[8];
+    matrix[14] = izz + mass * (cx * cx + cy * cy);
+    matrix[15] = -mass * cy;
+    matrix[16] = mass * cx;
+    matrix[17] = 0.0f;
+
+    matrix[18] = matrix[3];
+    matrix[19] = matrix[9];
+    matrix[20] = matrix[15];
+    matrix[21] = mass;
+    matrix[22] = 0.0f;
+    matrix[23] = 0.0f;
+
+    matrix[24] = matrix[4];
+    matrix[25] = matrix[10];
+    matrix[26] = matrix[16];
+    matrix[27] = 0.0f;
+    matrix[28] = mass;
+    matrix[29] = 0.0f;
+
+    matrix[30] = matrix[5];
+    matrix[31] = matrix[11];
+    matrix[32] = matrix[17];
+    matrix[33] = 0.0f;
+    matrix[34] = 0.0f;
+    matrix[35] = mass;
+}
+
+/** @brief Multiply a row-major 6x6 spatial matrix by a six-vector. */
+__device__ __forceinline__ void spatial_matrix_times_vec(
+    const float *matrix,
+    const float *vector,
+    float *result
+) {
+    #pragma unroll
+    for (int row = 0; row < 6; row++) {
+        float value = 0.0f;
+        #pragma unroll
+        for (int column = 0; column < 6; column++) {
+            value += matrix[row * 6 + column] * vector[column];
+        }
+        result[row] = value;
+    }
+}
+
+/**
+ * @brief Accumulate a child spatial inertia into its parent.
+ *
+ * Computes ``parent += X^T * child * X`` using the structured motion and force
+ * transforms already shared with RNEA.
+ */
+template<bool ATOMIC_ADD = false>
+__device__ __forceinline__ void spatial_transform_inertia_add(
+    const float *R,
+    const float *p,
+    const float *child,
+    float *parent
+) {
+    #pragma unroll
+    for (int column = 0; column < 6; column++) {
+        float basis[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        basis[column] = 1.0f;
+        float child_motion[6];
+        spatial_Xv(R, p, basis, child_motion);
+        float child_force[6];
+        spatial_matrix_times_vec(child, child_motion, child_force);
+        float parent_force[6];
+        spatial_XTf(R, p, child_force, parent_force);
+        #pragma unroll
+        for (int row = 0; row < 6; row++) {
+            if constexpr (ATOMIC_ADD) {
+                atomicAdd(&parent[row * 6 + column], parent_force[row]);
+            } else {
+                parent[row * 6 + column] += parent_force[row];
+            }
+        }
+    }
+}
+
 // ========================================================================
 // Additional operations for RNEA backward (VJP)
 // ========================================================================

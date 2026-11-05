@@ -9,7 +9,8 @@ builds the full config from YAML paths or dictionaries.
 from __future__ import annotations
 
 # Standard Library
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type, Union
 
 # CuRobo
@@ -24,6 +25,7 @@ from curobo._src.transition.robot_state_transition_cfg import (
 )
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
+from curobo._src.util.logging import log_and_raise
 
 
 @dataclass
@@ -90,9 +92,19 @@ class IKSolverCfg:
     #: Acceleration regularization weight for the seed LM solver.
     seed_acceleration_weight: float = 0.0
     #: Number of seeds used by the seed Levenberg-Marquardt solver.
-    seed_solver_num_seeds: int = 32
+    seed_solver_num_seeds: int = 64
     #: Whether to enable self-collision checking during optimization.
     self_collision_check: bool = True
+    #: Position-error contribution to final IK seed ranking. The factory
+    #: defaults to the reciprocal of :attr:`position_tolerance`.
+    position_rank_weight: float = 200.0
+    #: Orientation-error contribution to final IK seed ranking. The factory
+    #: defaults to the reciprocal of :attr:`orientation_tolerance`.
+    orientation_rank_weight: float = 20.0
+    #: Start-configuration-distance contribution to final IK seed ranking.
+    #: The underlying convergence metric already applies its configured cost
+    #: weight, so the default preserves it without additional scaling.
+    cspace_rank_weight: float = 1.0
 
     # Convenience accessors into core_cfg (for code that reads self.config.X)
     @property
@@ -169,6 +181,9 @@ class IKSolverCfg:
         max_batch_size: int = 1,
         multi_env: bool = False,
         max_goalset: int = 1,
+        position_rank_weight: Optional[float] = None,
+        orientation_rank_weight: Optional[float] = None,
+        cspace_rank_weight: float = 1.0,
     ) -> IKSolverCfg:
         """Create IKSolverCfg from flexible inputs.
 
@@ -210,7 +225,8 @@ class IKSolverCfg:
                 disables velocity clamping (standard global IK).
             load_collision_spheres: When False, skip loading collision spheres
                 from the robot config. Saves memory and compute when collision
-                checking is not needed.
+                checking is not needed. Cspace joints omitted from the retained
+                tree are reconstructed at their configured default positions.
             velocity_regularization_weight: Optional weight for velocity
                 regularization in the rollout; None uses the config default.
             acceleration_regularization_weight: Optional weight for acceleration
@@ -225,11 +241,34 @@ class IKSolverCfg:
             max_batch_size: Maximum number of problems solved in parallel.
             multi_env: When True, each batched problem uses its own collision environment.
             max_goalset: Maximum goalset size per problem.
+            position_rank_weight: Weight applied to position error during final
+                seed ranking. None normalizes by ``position_tolerance``.
+            orientation_rank_weight: Weight applied to orientation error during
+                final seed ranking. None normalizes by ``orientation_tolerance``.
+            cspace_rank_weight: Weight applied to the configured start-cspace
+                convergence metric during final seed ranking.
 
         Returns:
             Configured IKSolverCfg instance.
         """
         num_envs = max_batch_size if multi_env else 1
+
+        if position_rank_weight is None:
+            if position_tolerance <= 0.0:
+                log_and_raise("position_tolerance must be positive for normalized IK ranking")
+            position_rank_weight = 1.0 / position_tolerance
+        if orientation_rank_weight is None:
+            if orientation_tolerance <= 0.0:
+                log_and_raise("orientation_tolerance must be positive for normalized IK ranking")
+            orientation_rank_weight = 1.0 / orientation_tolerance
+        rank_weights = {
+            "position_rank_weight": position_rank_weight,
+            "orientation_rank_weight": orientation_rank_weight,
+            "cspace_rank_weight": cspace_rank_weight,
+        }
+        for name, value in rank_weights.items():
+            if not math.isfinite(value) or value < 0.0:
+                log_and_raise(f"{name} must be finite and non-negative, received {value}")
 
         # 1. Resolve YAML paths to dicts/configs
         robot_config, optimizer_dicts, metrics_rollout_dict, transition_model_dict, scene_model_dict = (
@@ -284,6 +323,9 @@ class IKSolverCfg:
             num_seeds=num_seeds,
             position_tolerance=position_tolerance,
             orientation_tolerance=orientation_tolerance,
+            position_rank_weight=position_rank_weight,
+            orientation_rank_weight=orientation_rank_weight,
+            cspace_rank_weight=cspace_rank_weight,
             optimizer_collision_activation_distance=optimizer_collision_activation_distance,
             success_requires_convergence=success_requires_convergence,
             override_iters_for_multi_link_ik=override_iters_for_multi_link_ik,

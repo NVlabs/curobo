@@ -63,7 +63,6 @@ Documentation
 
 - :doc:`getting-started/index`: Step-by-step tutorials covering installation, robot setup, kinematics, IK, MPC, motion planning, and volumetric mapping.
 - :doc:`guides/index`: Writing custom optimization problems, cost terms, and optimizers.
-- :doc:`concepts/index`: How cuRobo's rollouts, optimization solvers, and geometric planner work.
 - :doc:`reference/index`: API, style guide, runtime configuration, benchmarks, sphere fitting, and self-collision.
 
 Research
@@ -79,6 +78,5 @@ Read the cuRobo technical reports for algorithm details and benchmarks.
 
    getting-started/index
    guides/index
-   concepts/index
    reference/index
    technical_reports

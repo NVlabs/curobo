@@ -39,23 +39,23 @@ class ContentPath:
     world_asset_root_path: str = get_assets_path()
 
     #: Absolute path to the robot configuration file. If this is provided, the
-    #: :var:`robot_config_root_path`` will be ignored.
+    #: :attr:`robot_config_root_path` will be ignored.
     robot_config_absolute_path: Optional[str] = None
 
-    #: Absolute path to the robot XRDF file. If this is provided, the :var:`robot_xrdf_root_path`
+    #: Absolute path to the robot XRDF file. If this is provided, the :attr:`robot_xrdf_root_path`
     #: will be ignored.
     robot_xrdf_absolute_path: Optional[str] = None
 
-    #: Absolute path to the robot URDF file. If this is provided, the :var:`robot_urdf_root_path`
+    #: Absolute path to the robot URDF file. If this is provided, the :attr:`robot_urdf_root_path`
     #: will be ignored.
     robot_urdf_absolute_path: Optional[str] = None
 
-    #: Absolute path to the robot assets. If this is provided, the :var:`robot_asset_root_path`
+    #: Absolute path to the robot assets. If this is provided, the :attr:`robot_asset_root_path`
     #: will be ignored.
     robot_asset_absolute_path: Optional[str] = None
 
     #: Absolute path to the world description file. If this is provided, the
-    #: :var:`scene_config_root_path` will be ignored.
+    #: :attr:`scene_config_root_path` will be ignored.
     scene_config_absolute_path: Optional[str] = None
 
     #: Relative path to the robot configuration file. If this is provided, the

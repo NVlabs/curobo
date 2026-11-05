@@ -83,21 +83,26 @@ namespace common {
         return rotated_vector;
     }
 
-    __host__ __device__ __forceinline__ void quaternion_gradient_to_angular_velocity(
+    __host__ __device__ __forceinline__ void quaternion_cotangent_to_angular_cotangent(
         float4 quat, // xyzw format
-        float *quat_grad, // wxyz format
-        float3 &omega // xyz
+        float *quat_cotangent, // wxyz format
+        float3 &angular_cotangent // world xyz
       )
     {
-      const float dqw = quat_grad[0];
-      const float dqx = quat_grad[1];
-      const float dqy = quat_grad[2];
-      const float dqz = quat_grad[3];
+      const float dqw = quat_cotangent[0];
+      const float dqx = quat_cotangent[1];
+      const float dqy = quat_cotangent[2];
+      const float dqz = quat_cotangent[3];
 
-      // Compute the angular velocity gradient using the Jacobian transpose
-      omega.x = 0.5 * (-quat.x * dqw + quat.w * dqx + quat.z * dqy - quat.y * dqz);
-      omega.y = 0.5 * (-quat.y * dqw - quat.z * dqx + quat.w * dqy + quat.x * dqz);
-      omega.z = 0.5 * (-quat.z * dqw + quat.y * dqx - quat.x * dqy + quat.w * dqz);
+      // Convert the quaternion cotangent to a world-frame angular cotangent.
+      // FK joint axes are expressed in the world frame, so this must use the
+      // left perturbation q(delta) = [1, delta / 2] * q.
+      angular_cotangent.x =
+          0.5 * (-quat.x * dqw + quat.w * dqx - quat.z * dqy + quat.y * dqz);
+      angular_cotangent.y =
+          0.5 * (-quat.y * dqw + quat.z * dqx + quat.w * dqy - quat.x * dqz);
+      angular_cotangent.z =
+          0.5 * (-quat.z * dqw - quat.y * dqx + quat.x * dqy + quat.w * dqz);
 
     }
 

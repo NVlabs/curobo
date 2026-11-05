@@ -17,16 +17,14 @@ rollout:
       - 0.0   # acceleration regularization
 
     tool_pose_cfg:
-      _project_distance_to_goal: false
       weight:
         - 10000.0
         - 500.0
-
-      _terminal_pose_convergence_tolerance:
-        - 1.0e-8 #1.0e-8 #1.0e-8
-        - 1.0e-8 #1.0e-8 #1.0e-6
+      default_tool_pose_criteria:
+        terminal_tolerance:
+          - 1.0e-8
+          - 1.0e-8
       use_grad_input: false
-      use_lie_group: false
 
 
   constraint_cfg:
@@ -49,22 +47,20 @@ optimizer:
   epsilon: 0.01
   fixed_iters: True
   minum_iters: 10
-  history: 7
-  inner_iters: 20
+  history: 8
+  inner_iters: 80
   line_search_scale:
-  - 0.0
   - 0.1
   - 0.5
   - 1.0
   line_search_type: approx_wolfe
-  num_iters: 100
+  num_iters: 80
   num_problems: 1
   stable_mode: true
   step_scale: 0.98
   store_debug: false
   sync_cuda_time: true
-  use_cuda_kernel_step_direction: true
   use_cuda_kernel_line_search: true
   use_cuda_kernel_shared_buffers: true
   return_best_action: true
-  initial_step_scale: 0.001
+  initial_step_scale: 0.00025

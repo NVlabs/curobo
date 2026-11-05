@@ -18,6 +18,7 @@ Public API Quick Start:
     from curobo.model_predictive_control import ModelPredictiveControl, ModelPredictiveControlCfg
     from curobo.kinematics import Kinematics, KinematicsCfg
     from curobo.scene import Scene, Cuboid, Sphere, Mesh
+    from curobo.servo import JointTargetServo
     from curobo.types import JointState
 
     # Forward kinematics
@@ -49,6 +50,7 @@ Public API Modules:
 - :mod:`curobo.kinematics` - Forward kinematics
 - :mod:`curobo.inverse_kinematics` - Inverse kinematics solver
 - :mod:`curobo.trajectory_optimizer` - Trajectory optimization
+- :mod:`curobo.trajectory_timeopt` - GPU trajectory timeopt with joint and torque limits
 - :mod:`curobo.motion_planner` - Motion planning
 - :mod:`curobo.model_predictive_control` - Model predictive control
 - :mod:`curobo.motion_retargeter` - Motion retargeting using inverse kinematics and model predictive control
@@ -56,6 +58,7 @@ Public API Modules:
 - :mod:`curobo.collision_checking` - Robot collision checking (for custom pipelines)
 - :mod:`curobo.perception` - Perception utilities (robot segmentation)
 - :mod:`curobo.robot_builder` - Build robot configs from URDF
+- :mod:`curobo.servo` - Joint-space command smoothing
 - :mod:`curobo.viewer` - Visualization (Rerun, Viser)
 - :mod:`curobo.types` - Common data types (JointState, Pose, etc.)
 

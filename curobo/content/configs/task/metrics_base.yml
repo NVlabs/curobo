@@ -23,7 +23,6 @@ rollout:
   convergence_cfg:
     tool_pose_cfg:
       weight: [1.0,1.0]
-      use_lie_group: False
     target_cspace_dist_cfg:
       weight: 0.0
     start_cspace_dist_cfg:

@@ -63,6 +63,7 @@ from curobo._src.perception.mapper.constants import (
     _validate_feature_channels_per_thread,
     _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
+    _validate_instance_grid_size,
     _validate_lidar_config,
     validate_grid_shape_for_hash_layout,
 )
@@ -75,13 +76,16 @@ from curobo._src.perception.mapper.esdf.kernel.wp_esdf_seed import (
     seed_esdf_sites_from_block_sparse_warp,
     seed_esdf_sites_gather_warp,
 )
-from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
-    make_block_sparse_kernels,
-)
+from curobo._src.perception.mapper.extractor_points import OccupiedPoints
+from curobo._src.perception.mapper.filter_semantic import SemanticFilter
 from curobo._src.perception.mapper.integrator_tsdf import (
     BlockSparseTSDFIntegrator,
     BlockSparseTSDFIntegratorCfg,
 )
+from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
+    make_block_sparse_kernels,
+)
+from curobo._src.perception.mapper.kernel.warp_types import PreparedSemanticFilterWarp
 from curobo._src.perception.mapper.storage import (
     BlockSparseTSDF,
     MatchedVoxels,
@@ -185,6 +189,9 @@ class BlockSparseESDFIntegratorCfg:
     #: Number of feature control points per block edge. Independent from the
     #: incoming camera and LiDAR feature image dimensions.
     feature_block_grid_size: int = 1
+    #: Number of categorical instance cells per block edge. ``0`` disables
+    #: packed instance ownership storage.
+    instance_grid_size: int = 0
     #: Compile-time feature-grid height. Required when ``feature_dim > 0``;
     #: must be ``None`` when features are disabled.
     feature_grid_height: Optional[int] = None
@@ -283,8 +290,7 @@ class BlockSparseESDFIntegratorCfg:
                 )
         elif self.max_visible_blocks_per_lidar_integration is not None:
             log_and_raise(
-                "max_visible_blocks_per_lidar_integration requires "
-                "lidar_num_sensors > 0."
+                "max_visible_blocks_per_lidar_integration requires lidar_num_sensors > 0."
             )
         _validate_feature_channels_per_thread(self.feature_channels_per_thread)
         _validate_feature_grid_shape(
@@ -294,8 +300,7 @@ class BlockSparseESDFIntegratorCfg:
         )
         if self.max_feature_tile_channels <= 0:
             log_and_raise(
-                "max_feature_tile_channels must be positive: "
-                f"{self.max_feature_tile_channels}"
+                f"max_feature_tile_channels must be positive: {self.max_feature_tile_channels}"
             )
         if self.max_support_pixels_per_block_camera <= 0:
             log_and_raise(
@@ -314,9 +319,7 @@ class BlockSparseESDFIntegratorCfg:
             )
         if self.num_cameras <= 0:
             log_and_raise(f"num_cameras must be positive, got num_cameras={self.num_cameras}.")
-        if (
-            self.texture_camera_image_height is None
-        ) != (self.texture_camera_image_width is None):
+        if (self.texture_camera_image_height is None) != (self.texture_camera_image_width is None):
             log_and_raise(
                 "texture_camera_image_height and texture_camera_image_width must be "
                 "specified together."
@@ -331,10 +334,7 @@ class BlockSparseESDFIntegratorCfg:
                 "texture_num_cameras must be positive, got "
                 f"texture_num_cameras={self.texture_num_cameras}."
             )
-        if (
-            self.texture_camera_image_height <= 0
-            or self.texture_camera_image_width <= 0
-        ):
+        if self.texture_camera_image_height <= 0 or self.texture_camera_image_width <= 0:
             log_and_raise(
                 "texture_camera_image_height and texture_camera_image_width must be "
                 "positive, got "
@@ -345,6 +345,7 @@ class BlockSparseESDFIntegratorCfg:
             self.feature_block_grid_size,
             self.block_size,
         )
+        _validate_instance_grid_size(self.instance_grid_size, self.block_size)
         _validate_feature_integration_kernel(self.feature_integration_kernel)
         if not isinstance(self.profile_integration_kernel_timings, bool):
             log_and_raise(
@@ -443,6 +444,7 @@ class BlockSparseESDFIntegrator:
             block_size=config.block_size,
             feature_dim=config.feature_dim,
             feature_block_grid_size=config.feature_block_grid_size,
+            instance_grid_size=config.instance_grid_size,
             feature_grid_height=config.feature_grid_height,
             feature_grid_width=config.feature_grid_width,
             max_visible_blocks_per_integration=config.max_visible_blocks_per_integration,
@@ -507,6 +509,7 @@ class BlockSparseESDFIntegrator:
         # similarly launch-dim-variable, so ESDF graph capture is gated
         # on ``seeding_method != "scatter"``.
         self._compute_esdf_graph: Optional[GraphExecutor] = None
+        self._compute_esdf_semantic_graphs: dict[str, GraphExecutor] = {}
 
         if self.use_cuda_graph and config.seeding_method != "scatter":
             self._compute_esdf_graph = GraphExecutor(
@@ -543,6 +546,13 @@ class BlockSparseESDFIntegrator:
     def tsdf(self) -> BlockSparseTSDF:
         """Access the BlockSparseTSDF component."""
         return self._tsdf_integrator.tsdf
+
+    def _prepare_semantic_filter(
+        self,
+        semantic_filter: SemanticFilter,
+    ) -> PreparedSemanticFilterWarp:
+        """Delegate semantic-mask preparation to the owning TSDF integrator."""
+        return self._tsdf_integrator._prepare_semantic_filter(semantic_filter)
 
     @property
     def esdf_grid_shape(self) -> Tuple[int, int, int]:
@@ -647,10 +657,15 @@ class BlockSparseESDFIntegrator:
             self._dist_field.zero_()
         return n_clear
 
+    def clear_instance_slot(self, instance_slot: int) -> None:
+        """Clear one retired compact instance slot from TSDF-owned storage."""
+        self._tsdf_integrator.clear_instance_slot(instance_slot)
+
     def compute_esdf(
         self,
         esdf_origin: Optional[torch.Tensor] = None,
         esdf_voxel_size: Optional[torch.Tensor] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Compute ESDF from current block-sparse TSDF.
 
@@ -660,6 +675,7 @@ class BlockSparseESDFIntegrator:
         Args:
             esdf_origin: Override ESDF origin [m] (for sliding window).
             esdf_voxel_size: Override ESDF voxel size [m].
+            semantic_filter: Optional fused-feature filter applied before seeding.
 
         Returns:
             Signed distance field (esdf_grid_shape) [m].
@@ -671,15 +687,41 @@ class BlockSparseESDFIntegrator:
         # Track last-used origin so get_voxel_grid() returns the correct pose
         self._last_esdf_origin.copy_(origin)
 
-        # Full ESDF pipeline (seed + PBA + distance) in single graph
-        if self._compute_esdf_graph is not None:
+        prepared_semantic_filter = (
+            self._prepare_semantic_filter(semantic_filter) if semantic_filter is not None else None
+        )
+
+        # Full ESDF pipeline (seed + PBA + distance) in a single graph.
+        if prepared_semantic_filter is None and self._compute_esdf_graph is not None:
             return self._compute_esdf_graph(origin, self._esdf_voxel_size)
-        return self._compute_esdf_impl(origin, self._esdf_voxel_size)
+        if (
+            prepared_semantic_filter is not None
+            and self.use_cuda_graph
+            and self.config.seeding_method != "scatter"
+        ):
+            assert semantic_filter is not None
+            graph = self._compute_esdf_semantic_graphs.get(semantic_filter.mode)
+            if graph is None:
+                graph = GraphExecutor(
+                    capture_fn=self._compute_esdf_impl,
+                    device=self.device,
+                    use_cuda_graph=True,
+                    clone_outputs=False,
+                    semantic_filter=prepared_semantic_filter,
+                )
+                self._compute_esdf_semantic_graphs[semantic_filter.mode] = graph
+            return graph(origin, self._esdf_voxel_size)
+        return self._compute_esdf_impl(
+            origin,
+            self._esdf_voxel_size,
+            semantic_filter=prepared_semantic_filter,
+        )
 
     def _seed_esdf_impl(
         self,
         esdf_origin: torch.Tensor,
         esdf_voxel_size: torch.Tensor,
+        semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
     ) -> None:
         """Seed ESDF sites from block-sparse TSDF.
 
@@ -715,6 +757,7 @@ class BlockSparseESDFIntegrator:
                 esdf_voxel_size,
                 self._esdf_grid_shape,
                 minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+                semantic_filter=semantic_filter,
             )
         else:
             # Clear once with a dedicated tensor fill; gather kernel writes only hits.
@@ -725,12 +768,14 @@ class BlockSparseESDFIntegrator:
                 esdf_voxel_size,
                 self._esdf_grid_shape,
                 minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+                semantic_filter=semantic_filter,
             )
 
     def _propagate_and_distance_impl(
         self,
         esdf_origin: torch.Tensor,
         esdf_voxel_size: torch.Tensor,
+        semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
     ) -> torch.Tensor:
         """PBA propagation + signed distance computation.
 
@@ -748,6 +793,7 @@ class BlockSparseESDFIntegrator:
             esdf_origin,
             adjacent_skip_steps=self.config.adjacent_skip_steps,
             minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+            semantic_filter=semantic_filter,
         )
 
         return self._dist_field
@@ -756,13 +802,22 @@ class BlockSparseESDFIntegrator:
         self,
         esdf_origin: torch.Tensor,
         esdf_voxel_size: torch.Tensor,
+        semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
     ) -> torch.Tensor:
         """Full ESDF computation (seed + propagate + distance).
 
         All steps use fixed launch dimensions. Safe for CUDA graph capture.
         """
-        self._seed_esdf_impl(esdf_origin, esdf_voxel_size)
-        return self._propagate_and_distance_impl(esdf_origin, esdf_voxel_size)
+        self._seed_esdf_impl(
+            esdf_origin,
+            esdf_voxel_size,
+            semantic_filter=semantic_filter,
+        )
+        return self._propagate_and_distance_impl(
+            esdf_origin,
+            esdf_voxel_size,
+            semantic_filter=semantic_filter,
+        )
 
     # =========================================================================
     # Mesh and Voxel Extraction
@@ -772,6 +827,7 @@ class BlockSparseESDFIntegrator:
         refine_iterations: int = 0,
         surface_only: bool = True,
         level: float = 0.0,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Mesh:
         """Extract a triangle-soup mesh using GPU marching cubes.
 
@@ -779,6 +835,7 @@ class BlockSparseESDFIntegrator:
             refine_iterations: Newton-Raphson iterations for vertex refinement.
             surface_only: Only extract mesh near surface (|sdf| < truncation).
             level: Isosurface level (typically 0.0).
+            semantic_filter: Optional fused-feature filter applied before mesh generation.
 
         Returns:
             Mesh object with vertices, faces, and colors.
@@ -787,6 +844,7 @@ class BlockSparseESDFIntegrator:
             level=level,
             refine_iterations=refine_iterations,
             surface_only=surface_only,
+            semantic_filter=semantic_filter,
         )
 
         return mesh
@@ -800,6 +858,7 @@ class BlockSparseESDFIntegrator:
         camera_min_distance: Optional[float] = None,
         camera_max_distance: Optional[float] = None,
         texture_depth_tolerance_m: Optional[float] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Mesh:
         """Extract a TSDF mesh with visibility-tested RGB texture."""
         return self._tsdf_integrator.extract_textured_mesh(
@@ -810,6 +869,25 @@ class BlockSparseESDFIntegrator:
             camera_min_distance=camera_min_distance,
             camera_max_distance=camera_max_distance,
             texture_depth_tolerance_m=texture_depth_tolerance_m,
+            semantic_filter=semantic_filter,
+        )
+
+    def extract_occupied_points(
+        self,
+        sample_budget: int = 2000,
+        *,
+        instance_slot: Optional[int] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
+        voxel_selection: Optional[torch.Tensor] = None,
+        seed: int = 0,
+    ) -> OccupiedPoints:
+        """Return observed surface samples without modifying TSDF or planning ESDF."""
+        return self._tsdf_integrator.extract_occupied_points(
+            sample_budget,
+            instance_slot=instance_slot,
+            semantic_filter=semantic_filter,
+            voxel_selection=voxel_selection,
+            seed=seed,
         )
 
     def extract_occupied_voxels(
@@ -823,6 +901,7 @@ class BlockSparseESDFIntegrator:
         camera_min_distance: Optional[float] = None,
         camera_max_distance: Optional[float] = None,
         texture_depth_tolerance_m: Optional[float] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> OccupiedVoxels:
         """Extract occupied voxel centers and per-voxel block indices.
 
@@ -830,6 +909,14 @@ class BlockSparseESDFIntegrator:
             surface_only: If True, only extract surface voxels.
             sdf_threshold: Surface threshold. Defaults to the TSDF
                 integrator's voxel size.
+            subvoxel_factor: Number of point samples per extracted voxel axis.
+            max_points: Optional cap applied after subvoxel expansion.
+            texture_observations: Optional RGB or RGB-D observations used to
+                color retained samples.
+            camera_min_distance: Minimum camera-frame z for texture projection.
+            camera_max_distance: Maximum camera-frame z for texture projection.
+            texture_depth_tolerance_m: Absolute visibility-depth tolerance.
+            semantic_filter: Optional fused-feature filter applied before extraction.
 
         Returns:
             :class:`OccupiedVoxels`; see
@@ -844,6 +931,7 @@ class BlockSparseESDFIntegrator:
             camera_min_distance=camera_min_distance,
             camera_max_distance=camera_max_distance,
             texture_depth_tolerance_m=texture_depth_tolerance_m,
+            semantic_filter=semantic_filter,
         )
 
     def extract_matching_feature_voxels(

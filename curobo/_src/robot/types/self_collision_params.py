@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+"""Self-collision sphere-pair topology and kernel launch configuration."""
+
 from __future__ import annotations
 
 import math
@@ -9,8 +11,11 @@ from typing import Dict, List, Optional
 import torch
 import torch.autograd.profiler as profiler
 
+import curobo._src.runtime as curobo_runtime
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise, log_debug
+
+_LARGE_COLLISION_PAIR_THRESHOLD = 1000
 
 
 @dataclass
@@ -28,35 +33,135 @@ class SelfCollisionKinematicsCfg:
     #: row having [sphere_idx_1, sphere_idx_2].
     collision_pairs: Optional[torch.Tensor] = None
 
-    _num_checks_per_thread_large_collision_pairs: int = 256
-    _max_threads_per_block_large_collision_pairs: int = 512
+    #: Sphere indices grouped by compact collision-link index for AABB generation.
+    _link_sphere_indices: Optional[torch.Tensor] = None
 
-    _max_threads_per_block_small_collision_pairs: int = 64
-    _num_checks_per_thread_small_collision_pairs: int = 32
+    #: CSR offsets into ``_link_sphere_indices``. Shape is [num_collision_links + 1].
+    _link_sphere_offsets: Optional[torch.Tensor] = None
+
+    #: Compact collision-link pairs. Shape is [num_link_pairs, 2].
+    _link_pairs: Optional[torch.Tensor] = None
+
+    #: CSR offsets into ``_grouped_collision_pairs``. Shape is [num_link_pairs + 1].
+    _link_pair_offsets: Optional[torch.Tensor] = None
+
+    #: Collision pairs grouped by compact link pair. Shape matches ``collision_pairs``.
+    _grouped_collision_pairs: Optional[torch.Tensor] = None
+
+    #: Enable the world-space link AABB broadphase for large pair topologies.
+    _use_link_aabb: bool = True
+
+    #: Exact collision launch policy. Use enough warps to keep each thread at or
+    #: below the target pair count when possible, without exceeding one 256-thread
+    #: block. The link-AABB path uses the same value as its block-size ceiling.
+    _max_threads_per_block: int = 256
+    _target_collision_pairs_per_thread: int = 3
 
     @property
-    def num_checks_per_thread(self):
-        num_collision_pairs = self.collision_pairs.shape[0]
-        if num_collision_pairs > 1000:
-            return self._num_checks_per_thread_large_collision_pairs
-        else:
-            return self._num_checks_per_thread_small_collision_pairs
-
-    @property
-    def max_threads_per_block(self):
-        num_collision_pairs = self.collision_pairs.shape[0]
-        if num_collision_pairs > 1000:
-            return self._max_threads_per_block_large_collision_pairs
-        else:
-            return self._max_threads_per_block_small_collision_pairs
-
-    @property
-    def num_blocks_per_batch(self):
-        num_collision_pairs = self.collision_pairs.shape[0]
-        num_blocks = math.ceil(
-            num_collision_pairs / (self.num_checks_per_thread * self.max_threads_per_block)
+    def is_large_collision_topology(self) -> bool:
+        """Return whether the configured exact pair list uses the large launch policy."""
+        return (
+            self.collision_pairs is not None
+            and self.collision_pairs.shape[0] > _LARGE_COLLISION_PAIR_THRESHOLD
         )
-        return num_blocks
+
+    @property
+    def max_threads_per_block(self) -> int:
+        """Return the exact-pair kernel block width for the active launch policy."""
+        if self.collision_pairs is None or self.collision_pairs.shape[0] == 0:
+            return 32
+        target_pairs_per_thread = self._target_collision_pairs_per_thread
+        if self.collision_pairs.is_cuda:
+            device_properties = torch.cuda.get_device_properties(self.collision_pairs.device)
+            if curobo_runtime.use_small_gpu_launch_policy(
+                device_properties.multi_processor_count
+            ):
+                # Small GPUs have enough rollout blocks to fill the device. Fewer
+                # threads avoid oversubscribing each exact-pair state block.
+                target_pairs_per_thread = max(target_pairs_per_thread, 12)
+        required_threads = math.ceil(
+            self.collision_pairs.shape[0] / target_pairs_per_thread
+        )
+        warp_rounded_threads = math.ceil(required_threads / 32) * 32
+        return min(self._max_threads_per_block, max(32, warp_rounded_threads))
+
+    @property
+    def use_link_aabb(self) -> bool:
+        """Return whether the large-topology AABB path is configured and enabled."""
+        return (
+            self._use_link_aabb
+            and self.is_large_collision_topology
+            and all(
+                tensor is not None
+                for tensor in (
+                    self._link_sphere_indices,
+                    self._link_sphere_offsets,
+                    self._link_pairs,
+                    self._link_pair_offsets,
+                    self._grouped_collision_pairs,
+                )
+            )
+        )
+
+    @property
+    def num_collision_links(self) -> int:
+        """Return the number of compact collision links used by the broadphase."""
+        if self._link_sphere_offsets is None:
+            return 0
+        return self._link_sphere_offsets.shape[0] - 1
+
+    @property
+    def num_link_pairs(self) -> int:
+        """Return the number of configured collision-link pairs."""
+        if self._link_pairs is None:
+            return 0
+        return self._link_pairs.shape[0]
+
+    def configure_link_aabb(self, link_sphere_idx_map: torch.Tensor) -> None:
+        """Build static CSR groupings for world-space link AABBs and exact sphere pairs.
+
+        Args:
+            link_sphere_idx_map: Link index for each collision sphere. Shape is [num_spheres].
+        """
+        if self.collision_pairs is None:
+            log_and_raise("collision_pairs must be initialized before configuring link AABBs")
+        if link_sphere_idx_map.shape != (self.num_spheres,):
+            log_and_raise(
+                f"link_sphere_idx_map shape {link_sphere_idx_map.shape} should be "
+                f"({self.num_spheres},)"
+            )
+
+        device = self.collision_pairs.device
+        sphere_links_cpu = link_sphere_idx_map.detach().to(device="cpu", dtype=torch.int64)
+        collision_pairs_cpu = self.collision_pairs.detach().to(device="cpu", dtype=torch.int64)
+        unique_links = torch.unique(sphere_links_cpu, sorted=True)
+        compact_sphere_links = torch.empty_like(sphere_links_cpu)
+        for compact_idx, link_idx in enumerate(unique_links.tolist()):
+            compact_sphere_links[sphere_links_cpu == link_idx] = compact_idx
+
+        sphere_order = torch.argsort(compact_sphere_links, stable=True)
+        sphere_counts = torch.bincount(compact_sphere_links, minlength=unique_links.shape[0])
+        sphere_offsets = torch.zeros(unique_links.shape[0] + 1, dtype=torch.int32)
+        sphere_offsets[1:] = torch.cumsum(sphere_counts, dim=0).to(dtype=torch.int32)
+
+        pair_links = compact_sphere_links[collision_pairs_cpu]
+        pair_links = torch.sort(pair_links, dim=1).values
+        num_links = unique_links.shape[0]
+        link_pair_codes = pair_links[:, 0] * num_links + pair_links[:, 1]
+        pair_order = torch.argsort(link_pair_codes, stable=True)
+        sorted_codes = link_pair_codes[pair_order]
+        unique_codes, pair_counts = torch.unique_consecutive(sorted_codes, return_counts=True)
+        link_pairs = torch.stack((unique_codes // num_links, unique_codes % num_links), dim=1)
+        pair_offsets = torch.zeros(unique_codes.shape[0] + 1, dtype=torch.int32)
+        pair_offsets[1:] = torch.cumsum(pair_counts, dim=0).to(dtype=torch.int32)
+
+        self._link_sphere_indices = sphere_order.to(device=device, dtype=torch.int16).contiguous()
+        self._link_sphere_offsets = sphere_offsets.to(device=device).contiguous()
+        self._link_pairs = link_pairs.to(device=device, dtype=torch.int16).contiguous()
+        self._link_pair_offsets = pair_offsets.to(device=device).contiguous()
+        self._grouped_collision_pairs = (
+            collision_pairs_cpu[pair_order].to(device=device, dtype=torch.int16).contiguous()
+        )
 
     @profiler.record_function("SelfCollisionKinematicsCfg.create_from_sphere_pair_distances")
     @staticmethod
@@ -67,8 +172,8 @@ class SelfCollisionKinematicsCfg:
         """Create a SelfCollisionKinematicsCfg from sphere pair distances and padding.
 
         Args:
-            sphere_pair_distances: Tensor of shape [num_spheres, num_spheres] with pairwise distances
-                between spheres.
+            sphere_pair_distances: Tensor of shape [num_spheres, num_spheres] with
+                pairwise distances between spheres.
             sphere_padding: Tensor of shape [num_spheres] with padding for each sphere.
         """
         if sphere_padding.ndim != 1:
@@ -76,7 +181,8 @@ class SelfCollisionKinematicsCfg:
         num_spheres = sphere_padding.shape[0]
         if sphere_pair_distances.shape != (num_spheres, num_spheres):
             log_and_raise(
-                f"sphere_pair_distances shape {sphere_pair_distances.shape} should be {num_spheres, num_spheres}"
+                f"sphere_pair_distances shape {sphere_pair_distances.shape} should be "
+                f"{num_spheres, num_spheres}"
             )
 
         device = sphere_pair_distances.device
@@ -149,11 +255,14 @@ class SelfCollisionKinematicsCfg:
         # check if all tensor data is on the same device:
         if all_link_spheres.device.type != device_cfg.device.type:
             log_and_raise(
-                f"all_link_spheres is on device: {all_link_spheres.device} as device_cfg is on device: {device_cfg.device}"
+                f"all_link_spheres is on device: {all_link_spheres.device} as device_cfg "
+                f"is on device: {device_cfg.device}"
             )
         if link_index_to_sphere_index.device.type != device_cfg.device.type:
             log_and_raise(
-                f"link_index_to_sphere_index is on device: {link_index_to_sphere_index.device} as device_cfg is on device: {device_cfg.device}"
+                "link_index_to_sphere_index is on device: "
+                f"{link_index_to_sphere_index.device} as device_cfg is on device: "
+                f"{device_cfg.device}"
             )
 
         num_spheres = all_link_spheres.shape[0]
@@ -233,4 +342,6 @@ class SelfCollisionKinematicsCfg:
         config = SelfCollisionKinematicsCfg.create_from_sphere_pair_distances(
             sphere_pair_distances, self_collision_sphere_padding
         )
+        if config.is_large_collision_topology:
+            config.configure_link_aabb(link_index_to_sphere_index)
         return config

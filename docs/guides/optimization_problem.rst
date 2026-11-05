@@ -13,8 +13,8 @@ rollout class for evaluations.
 
 Required Reading
 -----------------
-- :ref:`rollout_class_note`
-- :ref:`optimization_solver_note`
+- :py:class:`~curobo._src.rollout.rollout_protocol.Rollout`
+- :mod:`curobo.optim`
 
 
 
@@ -56,8 +56,7 @@ starting points (seeds) and leverage GPU compute to find the best solution.
 
 
 We will next implement a custom rollout class that can then be plugged into cuRobo's
-optimization pipeline. If you are unfamiliar with cuRobo's Rollout class, see
-:ref:`rollout_class_note` before continuing.
+optimization pipeline.
 
 
 
@@ -68,7 +67,7 @@ In this section, we'll implement a custom rollout class for the Rosenbrock funct
 rollouts are defined **structurally** through the
 :py:class:`~curobo._src.rollout.rollout_protocol.Rollout` :class:`~typing.Protocol` -- a rollout
 is any class that exposes the right set of properties and methods. There is no base class to
-inherit from. See :ref:`rollout_class_note` for the full Protocol.
+inherit from. See :py:class:`~curobo._src.rollout.rollout_protocol.Rollout` for the full Protocol.
 
 The implementation has three parts:
 
@@ -276,12 +275,12 @@ needed to record and replay the metrics hooks through a
 Using the Rosenbrock Rollout in an Optimization Pipeline
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Now that we have a rollout, we can hand it to any of cuRobo's optimization solvers. Read
-:ref:`optimization_solver_note` for an overview of the available solvers.
+Now that we have a rollout, we can hand it to any of cuRobo's optimization solvers.
+The available solvers are listed in :mod:`curobo.optim`.
 
 The end-to-end runnable script lives at
-`curobo/examples/guides/custom_optimization.py <https://github.com/cuRobo/cuRobo/blob/main/curobo/examples/guides/custom_optimization.py>`_;
-this section walks through its key pieces.
+:mod:`curobo.examples.guides.custom_optimization`. It runs L-BFGS; this section also shows
+how to use the other optimizers.
 
 **Rollout list idiom.** Every optimizer accepts a ``rollout_list: List[Rollout]`` whose length
 matches the optimizer's ``num_rollout_instances`` field, so that a single optimizer can drive
@@ -422,7 +421,7 @@ the seed action.
 ``optimizer.get_recorded_trace()["debug"]`` returns a list of per-iteration action tensors,
 which you can plot over the Rosenbrock contour. See
 ``visualize_batch_rosenbrock`` in
-`custom_optimization.py <https://github.com/cuRobo/cuRobo/blob/main/curobo/examples/guides/custom_optimization.py>`_
+:mod:`curobo.examples.guides.custom_optimization`
 for a complete matplotlib-based visualization.
 
 .. _tut_rosen_rollout_optimization_cuda_graphs:

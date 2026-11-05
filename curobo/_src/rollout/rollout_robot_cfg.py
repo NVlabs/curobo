@@ -83,6 +83,34 @@ class RobotRolloutCfg:
                         f" {self.cost_manager_config_instance_type} must match type of"
                         f" {field_name} {type(cfg)}"
                     )
+        self.resolve_requirements()
+
+    def resolve_requirements(self) -> None:
+        """Resolve state data required by the currently attached cost managers.
+
+        Manager configs can be attached after this dataclass is constructed, so
+        :class:`RobotRollout` calls this method again immediately before it
+        creates transition models.
+        """
+        requires_tool_jacobians = any(
+            getattr(manager_cfg, "requires_tool_jacobians", False)
+            for manager_cfg in self.get_cost_manager_configs()
+        )
+        if self.transition_model_cfg is None:
+            return
+        if requires_tool_jacobians and self.transition_model_cfg.teleport_mode:
+            log_and_raise(
+                "ToolVelocityLimitCost requires physical trajectory velocities and cannot "
+                "be used with a teleport transition"
+            )
+        self.transition_model_cfg.compute_jacobian = (
+            getattr(
+                self.transition_model_cfg,
+                "_compute_jacobian_requested",
+                self.transition_model_cfg.compute_jacobian,
+            )
+            or requires_tool_jacobians
+        )
 
     @classmethod
     def create_with_component_types(
