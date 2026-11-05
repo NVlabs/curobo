@@ -221,6 +221,43 @@ def test_orientation_only_lm_converges(
     assert torch.max(result.rotation_error) < 1.0e-3
 
 
+@pytest.mark.parametrize("weight", [0.0, 1.0, 2.5])
+@pytest.mark.parametrize("velocity_clamping", [False, True])
+def test_joint_limit_cost_matches_derivatives(
+    seed_ik_solver: SeedIKSolver,
+    monkeypatch: pytest.MonkeyPatch,
+    weight: float,
+    velocity_clamping: bool,
+) -> None:
+    """The limit objective, gradient, and Gauss-Newton curvature use one residual."""
+    calculator = seed_ik_solver.error_calculator
+    monkeypatch.setattr(calculator.config, "joint_limit_weight", weight)
+    monkeypatch.setattr(calculator, "action_min", torch.full_like(calculator.action_min, -1.0))
+    monkeypatch.setattr(calculator, "action_max", torch.full_like(calculator.action_max, 1.0))
+    velocity = torch.full_like(calculator.action_min, 0.5)
+    monkeypatch.setattr(calculator, "velocity_limits", torch.stack((-velocity, velocity)))
+    batch = 5
+    current = torch.zeros((batch, seed_ik_solver.dof), **seed_ik_solver.device_cfg.as_torch_dict())
+    dt = torch.tensor([0.2, 0.2, 0.4, 0.4, 0.8], **seed_ik_solver.device_cfg.as_torch_dict())
+    lower = calculator.action_min.expand_as(current)
+    upper = calculator.action_max.expand_as(current)
+    if velocity_clamping:
+        lower = torch.maximum(lower, current - velocity * dt[:, None])
+        upper = torch.minimum(upper, current + velocity * dt[:, None])
+    position = torch.stack((lower[0] - 0.25, lower[1], current[2], upper[3], upper[4] + 0.5))
+    position.requires_grad_(True)
+    gradient, jacobian, cost = calculator._compute_joint_limit_errors(
+        position, batch, current, dt, velocity_clamping
+    )
+    actual_gradient = torch.autograd.grad(cost.sum(), position, create_graph=True)[0]
+    torch.testing.assert_close(actual_gradient, gradient)
+    curvature = torch.autograd.grad(actual_gradient.sum(), position)[0]
+    gn_diagonal = torch.diagonal(jacobian.transpose(-2, -1) @ jacobian, dim1=-2, dim2=-1)
+    # The second derivative at an exact hinge boundary is not uniquely defined.
+    torch.testing.assert_close(curvature[[0, 2, 4]], gn_diagonal[[0, 2, 4]])
+    assert torch.all(cost[1:4] == 0)
+
+
 class TestSeedIKSolverProperties:
     """Test SeedIKSolver properties."""
 

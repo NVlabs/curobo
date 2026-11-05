@@ -1,5 +1,8 @@
 # cuRobo Mapper C++ Runtime
 
+For shared prerequisites, Release build commands, and deployment, start with the
+[C++ runtime guide](../README.md). Commands in this page run from the repository root.
+
 Source-only C++ runtime for cuRobo's block-sparse mapper. The runtime loads
 Warp and cuda.core AOT CUBINs exported from shared cuRobo kernels and launches
 them from C++.
@@ -15,11 +18,12 @@ runtime does not carry private copies of either implementation.
 - `tools/`: AOT artifact export tools.
 - `configs/`: example export configs.
 
-The checked-in configs are intentionally minimal:
-
-- `small_mapper.json`: quick smoke/export config.
-- `small_mapper_features.json`: quick fused-feature and semantic-filter smoke config.
-- `720p_4m_8mm_color_grid.json`: realistic 720p RGB-D mapper config with color grid enabled.
+[`configs/small_mapper.json`](configs/small_mapper.json) is a compact export/smoke configuration
+with RGB-D, feature, and instance storage. Its 32 × 40 images and eight-channel feature grid
+are for integration checks; use the qualified sensor and encoder dimensions for deployment.
+It uses dense block RGB and features (`color_grid_size == feature_block_grid_size == block_size`)
+to support instance geometry removal with semantic class masks. Removal requires dense RGB;
+a nonzero class mask also requires dense features with at most 64 channels.
 
 Generated artifacts, caches, benchmarks, and local smoke experiments are not
 part of this source boundary.
@@ -49,11 +53,55 @@ PY
 
 cmake -S cpp_runtime/mapper \
   -B cpp_runtime/build/mapper \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" \
   -DWARP_NATIVE_INCLUDE_DIR="${WARP_NATIVE_INCLUDE_DIR}"
 cmake --build cpp_runtime/build/mapper -j
 ```
 
 If `nvcc` is not on `PATH`, CMake uses `/usr/local/cuda/bin/nvcc` when present.
+Set `CUDA_ARCH` as shown in the shared setup guide, matching the exported GPU architecture.
+
+## Use from C++
+
+Link `curobo_mapper_runtime` and include `curobo_mapper_runtime/api.h`.
+The following function integrates a sequence of caller-prepared frames using one map.
+Each frame contains device addresses with the shapes described below; inputs must remain
+valid until their stream completes. Order dependent updates on the same CUDA stream.
+
+```cpp
+#include <curobo_mapper_runtime/api.h>
+#include <cuda_runtime_api.h>
+
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+void integrate_frames(const std::string& artifact_directory,
+                      const std::vector<CuroboMapperFrame>& frames) {
+  CuroboMapperRuntime* raw = nullptr;
+  if (curobo_mapper_create(artifact_directory.c_str(), 0, &raw) != 0) {
+    throw std::runtime_error(curobo_mapper_last_error());
+  }
+  auto mapper = std::unique_ptr<CuroboMapperRuntime, decltype(&curobo_mapper_destroy)>(
+      raw, &curobo_mapper_destroy);
+  for (const auto& frame : frames) {
+    if (curobo_mapper_integrate(mapper.get(), &frame) != 0) {
+      throw std::runtime_error(curobo_mapper_last_error());
+    }
+  }
+  const auto status = cudaDeviceSynchronize();
+  if (status != cudaSuccess) {
+    throw std::runtime_error(cudaGetErrorString(status));
+  }
+}
+```
+
+For live operation, retain the handle for the application lifetime and submit new frames
+to it. Warm integration and any ESDF/render/extraction paths used by the application before
+measurement or external CUDA graph capture. Check return codes; `curobo_mapper_last_error()`
+provides the failure message. The map, scratch storage, and borrowed views belong to the runtime;
+frame and extraction output buffers belong to the caller.
 
 ## Runtime Scope
 
@@ -142,8 +190,8 @@ texture cameras and uses that depth for the visibility test.
 ## Notes
 
 The C++ runtime reads `mapper_aot_manifest.json` from the artifact directory at
-runtime. The `warp-lang` version used to run the C++ executable must match the
-version used to generate the artifact manifest.
+runtime. Use native headers from the same Warp version used to generate the
+artifact manifest. The deployed mapper does not require the Python Warp package.
 
 The exporter uses the in-tree cuRobo package by default. Set `CUROBO_SOURCE_DIR` only when
 intentionally exporting from another checkout.
@@ -151,6 +199,7 @@ intentionally exporting from another checkout.
 Run the opt-in native feature/semantic smoke test against an exported artifact:
 
 ```bash
-CUROBO_MAPPER_TEST_ARTIFACT_DIR=/path/to/artifacts \
+CUROBO_MAPPER_TEST_ARTIFACT_DIR=cpp_runtime/mapper/artifacts/small_mapper \
+  CUROBO_MAPPER_TEST_LIBRARY=cpp_runtime/build/mapper/libcurobo_mapper_runtime.so \
   pytest -q cpp_runtime/mapper/tests/test_mapper_runtime.py
 ```

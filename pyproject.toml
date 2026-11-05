@@ -91,7 +91,6 @@ doc = [
     "furo",
     "myst-parser",
     "sphinx-copybutton",
-    "sphinx-autodoc-typehints",
     "sphinx_reredirects",
 ]
 

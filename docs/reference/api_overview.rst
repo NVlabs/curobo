@@ -6,6 +6,11 @@ Python API
 .. automodule:: curobo
    :no-index:
 
+.. toctree::
+   :hidden:
+
+   ../api/modules
+
 Motion planning iteration budgets
 ---------------------------------
 

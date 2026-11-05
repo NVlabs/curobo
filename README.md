@@ -24,6 +24,9 @@ Key capabilities:
 
 ## C++ Runtime
 
+Start with [AGENTS.md](AGENTS.md) for the Python-first integration workflow: validate the
+robot and motion quality, allocate collision caches, warm up once, and reuse solvers.
+
 The [`cpp_runtime/`](cpp_runtime/README.md) directory contains backend-neutral
 C++ APIs for robot kinematics, goalset inverse kinematics, paired-candidate
 time-optimal B-spline seed fitting, joint-space trajectory optimization with
@@ -37,16 +40,14 @@ are not committed.
 
 ## Citation
 
-If you found this work useful, please cite cuRoboV2,
+If you found this work useful, please cite cuRoboV2-Fast,
 
 ```
-@misc{curobo_v2,
-      title={cuRoboV2: Dynamics-Aware Motion Generation with Depth-Fused Distance Fields for High-DoF Robots},
+@misc{curobo_v2_fast,
+      title={cuRoboV2-Fast: Fast Torque-Limited Collision-Free Motion Planning},
       author={Balakumar Sundaralingam and Adithyavairavan Murali and Stan Birchfield},
       year={2026},
-      eprint={2603.05493},
-      archivePrefix={arXiv},
-      primaryClass={cs.RO}
+      url={https://research.nvidia.com/labs/lpr/curobov2-fast/}
 }
 ```
 

@@ -1,7 +1,7 @@
 # C++ runtime benchmarks
 
 For preparing inputs and kernels on a development GPU and running only C++ on another
-device, see [Export the C++ runtime for another GPU](../../docs/guides/export_cpp_runtime.md).
+device, see [Export the C++ runtime for another GPU](../../docs/guides/export_cpp_runtime.rst).
 `--prepare-only --target-device DEVICE.json` skips the host build and prepares target kernels.
 
 Run the motion-planning and inverse-kinematics workloads reported in

@@ -8,8 +8,13 @@ Each example supports a ``--test`` flag that runs with assertions.
 This file invokes them via subprocess so each gets a clean process.
 """
 
+import os
+import re
+import signal
 import subprocess
 import sys
+import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -129,7 +134,13 @@ def test_waypoint_example_warms_both_modes_before_first_plan(
         assert demo.trajectory is None and not demo.planned_lines
         assert not demo.play.value and demo.play.disabled
         assert demo.motion_time.value == demo.planning_time.value == "--"
-        assert demo.path_scale.value == 1.0
+        assert demo.path_scale.value == 1.25
+        assert demo._waypoint_frame.visible and not demo.waypoint_group.visible
+        np.testing.assert_allclose(
+            demo.waypoint_group.position,
+            demo.start_position.mean(axis=0) + (0.10, 0.0, -0.08),
+            atol=1e-6,
+        )
         demo.path_scale.value = 0.3
         demo._synchronize()
         demo.waypoint_group.position = np.asarray(demo.waypoint_group.position) + (0.02, 0, 0)
@@ -196,6 +207,8 @@ def test_waypoint_example_warms_both_modes_before_first_plan(
         demo._last_preview = 0
         demo.step()
         assert demo.waypoint_group.visible
+        assert demo._waypoint_frame.visible
+        np.testing.assert_allclose(demo._waypoint_frame.position, demo.waypoint_group.position)
         assert all(not h.visible for row in demo.handles for h in row)
         assert demo.trajectory is None and not demo.planned_lines
         assert demo.motion_time.value == demo.planning_time.value == "--"
@@ -216,7 +229,8 @@ def test_waypoint_example_warms_both_modes_before_first_plan(
         demo.step()
         np.testing.assert_allclose(
             demo.waypoint_group.position,
-            demo.start_position.mean(axis=0),
+            demo.start_position.mean(axis=0) + (0.10, 0.0, -0.08),
+            atol=1e-6,
         )
         demo.count.value = 1
         demo._synchronize()
@@ -386,6 +400,88 @@ def test_combine_grasp_phases_uses_each_dt() -> None:
     )
     assert boundaries == [0, 3, 6]
     assert labels == ["Approach", "Grasp", "Lift"]
+
+
+def test_custom_optimization_example(tmp_path: Path) -> None:
+    """The optimization guide completes and saves its optimization path plot."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "from curobo import runtime\n"
+            "from curobo.examples.guides.custom_optimization import main\n"
+            "runtime.cache_dir = sys.argv[1]\n"
+            "main()\n",
+            str(tmp_path),
+        ],
+        env={**os.environ, "MPLBACKEND": "Agg"},
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    plot = tmp_path / "examples" / "custom_optimization" / "rosenbrock_optimization.png"
+    assert plot.is_file() and plot.stat().st_size > 0
+
+
+def test_sphere_fit_example_honors_sphere_count(tmp_path: Path) -> None:
+    """The reference viewer fits the requested count instead of estimating a new one."""
+    log = tmp_path / "sphere_fit.log"
+    with log.open("w") as output:
+        process = subprocess.Popen(
+            [
+                sys.executable, "-u", "-m", "curobo.examples.reference.sphere_fit_comparison",
+                "--robot", "franka.yml", "--links", "panda_link0", "--methods", "surface",
+                "--num-spheres", "4", "--port", "0",
+            ],
+            stdout=output,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                text = log.read_text()
+                if "Visualisation ready" in text or process.poll() is not None:
+                    break
+                time.sleep(0.1)
+            text = log.read_text()
+            assert "Visualisation ready" in text, text[-2000:]
+            result = re.search(r"surface\s+(\d+) spheres", text)
+            assert result is not None, text[-2000:]
+            # Even surface sampling may return fewer spheres than requested.
+            assert 0 < int(result.group(1)) <= 4, text[-2000:]
+        finally:
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+
+def test_retargeting_criteria_normalize_tracking_weights() -> None:
+    """Relative tracking weights stay bounded and independent of SOMA's absolute scale."""
+    from curobo.examples.getting_started.humanoid_retargeting import _build_tool_pose_criteria
+
+    ik_map = {
+        "hip": {"t_body": "pelvis", "t_weight": 30.0, "r_weight": 2.0},
+        "hand": {"t_body": "left_wrist_yaw_link", "t_weight": 15.0, "r_weight": 1.0},
+    }
+    criteria = _build_tool_pose_criteria(ik_map)
+    scaled = _build_tool_pose_criteria({
+        joint: {**values, "t_weight": values["t_weight"] * 10, "r_weight": values["r_weight"] * 10}
+        for joint, values in ik_map.items()
+    })
+    assert criteria["pelvis"].terminal_position_axis_scale.max() == 1.0
+    for name, value in criteria.items():
+        torch.testing.assert_close(
+            value.terminal_position_axis_scale, scaled[name].terminal_position_axis_scale
+        )
+        torch.testing.assert_close(
+            value.terminal_rotation_axis_scale, scaled[name].terminal_rotation_axis_scale
+        )
 
 
 @pytest.mark.parametrize("example", EXAMPLES, ids=[e.rsplit(".", 1)[-1] for e in EXAMPLES])

@@ -6,50 +6,52 @@ This module provides sensor processing utilities for robot perception tasks,
 including robot segmentation and volumetric mapping from depth images.
 
 Example (robot segmentation):
-    ```python
-    from curobo.perception import RobotSegmenter
-    from curobo.kinematics import KinematicsCfg
-    from curobo.types import CameraObservation, JointState
+    .. code-block:: python
 
-    # Create segmenter
-    segmenter = RobotSegmenter.from_robot_file(
-        robot_file="franka.yml",
-        distance_threshold=0.05,
-    )
+        from curobo.perception import RobotSegmenter
+        from curobo.types import CameraObservation, JointState
 
-    # Segment robot from depth image
-    camera_obs = CameraObservation(
-        depth_image=depth_tensor,
-        intrinsics=camera_intrinsics,
-        pose=camera_pose,
-    )
-    joint_state = JointState(position=current_joint_angles)
+        # Create segmenter
+        segmenter = RobotSegmenter.from_robot_file(
+            robot_file="franka.yml",
+            distance_threshold=0.05,
+        )
 
-    mask, filtered_depth = segmenter.get_robot_mask(camera_obs, joint_state)
-    # mask: binary mask of robot pixels
-    # filtered_depth: depth image with robot removed
-    ```
+        # Segment robot from depth image
+        camera_obs = CameraObservation(
+            depth_image=depth_tensor,
+            intrinsics=camera_intrinsics,
+            pose=camera_pose,
+        )
+        joint_state = JointState(position=current_joint_angles)
+
+        mask, filtered_depth = segmenter.get_robot_mask(camera_obs, joint_state)
+        # mask: binary mask of robot pixels
+        # filtered_depth: depth image with robot removed
+
 
 Example (volumetric mapping):
-    ```python
-    from curobo.perception import FilterDepth, Mapper, MapperCfg
+    .. code-block:: python
 
-    mapper = Mapper(MapperCfg(voxel_size=0.02, ...))
-    depth_filter = FilterDepth(image_shape=depth.shape[-2:])
-    filtered, valid = depth_filter(depth.unsqueeze(0))
-    mapper.integrate(camera_obs)
-    ```
+        from curobo.perception import FilterDepth, Mapper, MapperCfg
+
+        mapper = Mapper(MapperCfg(extent_meters_xyz=(2.0, 2.0, 2.0), voxel_size=0.02))
+        depth_filter = FilterDepth(image_shape=depth.shape[-2:])
+        filtered, valid = depth_filter(depth.unsqueeze(0))
+        camera_obs.depth_image = filtered[0]
+        mapper.integrate(camera_obs)
+
 
 Example (robot pose estimation):
-    ```python
-    from curobo.perception import (
-        DetectorCfg, PoseDetector, RobotMesh, SDFDetectorCfg, SDFPoseDetector,
-    )
+    .. code-block:: python
 
-    mesh = RobotMesh.from_kinematics(kinematics, joint_state)
-    detector = PoseDetector(DetectorCfg(...), mesh)
-    pose = detector.detect(pointcloud)
-    ```
+        from curobo.perception import DetectorCfg, PoseDetector, RobotMesh
+
+        mesh = RobotMesh.from_kinematics(kinematics)
+        detector = PoseDetector(mesh, DetectorCfg())
+        result = detector.detect_from_points(pointcloud, config=joint_state.position)
+        pose = result.pose
+
 """
 
 from curobo._src.perception.filter_depth import FilterDepth

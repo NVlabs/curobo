@@ -165,6 +165,7 @@ struct IkManifest {
   IkKernelManifest initialize;
   IkKernelManifest error;
   IkKernelManifest update;
+  IkKernelManifest update_error;
   IkKernelManifest rank;
   IkKernelManifest finalize;
   IkKernelManifest levenberg_marquardt;

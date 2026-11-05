@@ -517,8 +517,6 @@ class LiveEsdfMpc:
             optimization_dt=0.03,
             interpolation_steps=4,
             optimizer_collision_activation_distance=0.01,
-            #warm_start_optimization_num_iters=80,
-            #cold_start_optimization_num_iters=120,
         )
         self.mpc = ModelPredictiveControl(config)
         self.servo = JointTargetServo(

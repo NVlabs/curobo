@@ -520,6 +520,7 @@ void IkRuntime::load_kernels() {
   load_kernel(artifact_directory_, manifest_.initialize, &initialize_kernel_);
   load_kernel(artifact_directory_, manifest_.error, &error_kernel_);
   load_kernel(artifact_directory_, manifest_.update, &update_kernel_);
+  load_kernel(artifact_directory_, manifest_.update_error, &update_error_kernel_);
   load_kernel(artifact_directory_, manifest_.finalize, &finalize_kernel_);
   load_kernel(artifact_directory_, manifest_.rank, &rank_kernel_);
   load_kernel(artifact_directory_, manifest_.levenberg_marquardt, &lm_kernel_);
@@ -1608,16 +1609,6 @@ void IkRuntime::solve_lm(const IkSolveRequest& request, CUstream stream) const {
                request, problems, true, scaled_jacobian_.ptr(), jt_error_.ptr(),
                stream);
   for (int iteration = 0; iteration < config_.lm_iterations; ++iteration) {
-    if (iteration > 0) {
-      // Python carries the candidate objective even after a rejected step.
-      // Derivatives, however, remain paired with the accepted joint state.
-      CRR_CUDA_CHECK(cudaMemcpyAsync(
-          reinterpret_cast<void*>(static_cast<uintptr_t>(current_error_.ptr())),
-          reinterpret_cast<const void*>(
-              static_cast<uintptr_t>(candidate_error_.ptr())),
-          static_cast<size_t>(problems) * sizeof(float),
-          cudaMemcpyDeviceToDevice, reinterpret_cast<cudaStream_t>(stream)));
-    }
     const int lm_block_size = manifest_.levenberg_marquardt.block_dim;
     const auto lm_bounds = warp_tiled_bounds_1d(problems, lm_block_size);
     auto jacobian = array_3d(scaled_jacobian_.ptr(), problems,
@@ -1691,6 +1682,18 @@ void IkRuntime::solve_lm(const IkSolveRequest& request, CUstream stream) const {
         static_cast<unsigned int>(update_block_size),
         static_cast<unsigned int>(manifest_.update.shared_memory), stream,
         update_arguments);
+
+    const auto error_bounds = warp_bounds_1d(problems);
+    std::vector<void*> error_arguments{
+        const_cast<WarpLaunchBounds1*>(&error_bounds), &current_error,
+        &candidate_error, &predicted, &minimum_trust_ratio,
+    };
+    const int error_block_size = manifest_.update_error.block_dim;
+    update_error_kernel_.launch(
+        grid_for(problems, error_block_size),
+        static_cast<unsigned int>(error_block_size),
+        static_cast<unsigned int>(manifest_.update_error.shared_memory), stream,
+        error_arguments);
   }
 
   if (config_.lm_num_seeds != config_.num_seeds) {

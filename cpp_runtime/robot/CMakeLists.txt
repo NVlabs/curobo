@@ -25,6 +25,17 @@ find_package(CUDAToolkit 12.3 REQUIRED)
 set(WARP_NATIVE_INCLUDE_DIR "" CACHE PATH
     "Path to Warp's native headers; enables mesh acceleration support")
 
+add_library(curobo_calibration_runtime SHARED
+  src/pose_calibration.cpp src/pose_calibration_cuda.cu)
+target_include_directories(curobo_calibration_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(curobo_calibration_runtime PUBLIC CUDA::cudart PRIVATE CUDA::cuda_driver)
+if(WARP_NATIVE_INCLUDE_DIR)
+  target_sources(curobo_calibration_runtime PRIVATE src/warp_mesh_backend.cpp)
+  target_include_directories(curobo_calibration_runtime SYSTEM PRIVATE ${WARP_NATIVE_INCLUDE_DIR})
+  target_compile_definitions(curobo_calibration_runtime PRIVATE CUROBO_ROBOT_HAS_WARP_MESH=1)
+  target_link_libraries(curobo_calibration_runtime PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
 add_library(curobo_robot_runtime SHARED
   src/attachment_runtime.cpp
   src/c_api.cpp
@@ -91,6 +102,11 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(curobo_pose_calibration_test tests/pose_calibration_test.cpp)
+  target_link_libraries(curobo_pose_calibration_test PRIVATE curobo_calibration_runtime)
+  set(CUROBO_CALIBRATION_TEST_KERNELS "" CACHE PATH "Target-exported calibration kernels for GPU tests")
+  add_test(NAME curobo_pose_calibration_test COMMAND curobo_pose_calibration_test "${CUROBO_CALIBRATION_TEST_KERNELS}")
+  set_tests_properties(curobo_pose_calibration_test PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
   add_executable(curobo_robot_waypoints_test tests/waypoints_test.cpp)
   target_include_directories(curobo_robot_waypoints_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(curobo_robot_waypoints_test PRIVATE curobo_robot_runtime)

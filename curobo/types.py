@@ -6,28 +6,29 @@ This module provides common data types used throughout CuRobo for representing
 robot states, poses, camera observations, and tensor device configurations.
 
 Example:
-    ```python
-    from curobo.types import JointState, Pose, CameraObservation, LidarObservation, DeviceCfg
+    .. code-block:: python
 
-    # Create joint state
-    joint_state = JointState.from_position([0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.0])
+        from curobo.types import JointState, Pose, CameraObservation, LidarObservation, DeviceCfg
+        import torch
 
-    # Create pose
-    pose = Pose(
-        position=[0.5, 0.0, 0.5],
-        quaternion=[1, 0, 0, 0]  # w, x, y, z
-    )
+        # Create joint state
+        joint_state = JointState.from_position(
+            torch.tensor([[0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.0]], device="cuda:0")
+        )
 
-    # Create camera observation
-    camera_obs = CameraObservation(
-        depth_image=depth_tensor,
-        intrinsics=camera_intrinsics,
-        pose=camera_pose,
-    )
+        # Create pose
+        pose = Pose.from_list([0.5, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0])  # xyz, wxyz
 
-    # Specify tensor device and dtype
-    device_cfg = DeviceCfg(device="cuda:0", dtype=torch.float32)
-    ```
+        # Create camera observation
+        camera_obs = CameraObservation(
+            depth_image=depth_tensor,
+            intrinsics=camera_intrinsics,
+            pose=camera_pose,
+        )
+
+        # Specify tensor device and dtype
+        device_cfg = DeviceCfg(device=torch.device("cuda:0"), dtype=torch.float32)
+
 """
 
 # CuRobo

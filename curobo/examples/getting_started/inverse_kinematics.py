@@ -370,7 +370,6 @@ def interactive_ik_example(robot_file="franka.yml", port=8080):
     ik_solver = InverseKinematics(config)
     ik_solver.config.use_lm_seed = False
     ik_solver.config.exit_early = False
-    #ik_solver.config.use_lm_seed = False
 
     goal_state = ik_solver.default_joint_state.clone()
     kin_state = ik_solver.compute_kinematics(goal_state).clone()
@@ -533,7 +532,6 @@ def differential_ik_example(robot_file="franka.yml", port=8080):
     print("Uses LM solver with velocity/acceleration regularization.")
     print("Press Ctrl+C to exit.\n")
 
-    previous_target_poses = None
     current_state = current_state.clone()
 
     while True:
@@ -550,17 +548,6 @@ def differential_ik_example(robot_file="franka.yml", port=8080):
         old_obstacle_poses = {k: v.clone() for k, v in obstacle_poses.items()}
 
         target_poses = viser_viz.get_control_frame_pose()
-        if previous_target_poses is None:
-            previous_target_poses = target_poses
-        else:
-            for frame_name in target_poses.keys():
-                if target_poses[frame_name] != previous_target_poses[frame_name]:
-                    previous_target_poses = {
-                        k: v.clone() for k, v in target_poses.items()
-                    }
-                    pose_changed = True
-                    break
-
         active_js = ik_solver.get_active_js(current_state)
         target_link_poses = {
             k.replace("target_", ""): v for k, v in target_poses.items()
@@ -619,11 +606,9 @@ def reachability_example(robot_file="franka.yml", port=8080):
 
     config = InverseKinematicsCfg.create(
         robot=robot_file,
-        #num_seeds=12,
         self_collision_check=True,
         scene_model="collision_test.yml",
         max_batch_size=total_batch,
-        #seed_solver_num_seeds=12,
     )
     scene_cfg = config.scene_collision_cfg.scene_model
     obstacle_frames = viser_viz.add_scene(scene_cfg, add_control_frames=True)
@@ -636,7 +621,6 @@ def reachability_example(robot_file="franka.yml", port=8080):
     kin_state = ik.compute_kinematics(ik.default_joint_state)
     tool_pose = kin_state.tool_poses[primary_link]
     center = tool_pose.position.squeeze().cpu().numpy()
-    orientation = tool_pose.quaternion.squeeze()
 
     slice_gizmo = server.scene.add_transform_controls(
         "/reachability_gizmo",

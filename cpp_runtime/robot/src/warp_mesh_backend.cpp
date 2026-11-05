@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 #include "warp_mesh_backend.h"
+#include <cuda.h>
 
 #include <dlfcn.h>
 
@@ -37,6 +38,7 @@ class WarpMeshBackend::Impl final {
       is_cuda_enabled_ = load_symbol<decltype(is_cuda_enabled_)>("wp_is_cuda_enabled");
       create_ = load_symbol<decltype(create_)>("wp_mesh_create_device");
       destroy_ = load_symbol<decltype(destroy_)>("wp_mesh_destroy_device");
+      stream_ = load_symbol<decltype(stream_)>("wp_cuda_context_get_stream");
       if (init_(WP_VERSION_STRING) != 0) {
         throw std::runtime_error("failed to initialize Warp: " + error_string());
       }
@@ -79,6 +81,16 @@ class WarpMeshBackend::Impl final {
 
   void destroy_mesh(uint64_t mesh_id) const noexcept { destroy_(mesh_id); }
 
+  void synchronize(void* context) const {
+    const auto status = cuStreamSynchronize(static_cast<CUstream>(stream_(context)));
+    if (status != CUDA_SUCCESS) {
+      const char* message = nullptr;
+      cuGetErrorString(status, &message);
+      throw std::runtime_error(std::string("Warp mesh construction failed: ") +
+                               (message ? message : "unknown CUDA driver error"));
+    }
+  }
+
  private:
   template <typename FunctionType>
   FunctionType load_symbol(const char* name) {
@@ -107,6 +119,7 @@ class WarpMeshBackend::Impl final {
   decltype(&wp_is_cuda_enabled) is_cuda_enabled_{nullptr};
   decltype(&wp_mesh_create_device) create_{nullptr};
   decltype(&wp_mesh_destroy_device) destroy_{nullptr};
+  decltype(&wp_cuda_context_get_stream) stream_{nullptr};
 };
 
 WarpMeshBackend::WarpMeshBackend() : impl_(std::make_unique<Impl>()) {}
@@ -122,5 +135,7 @@ uint64_t WarpMeshBackend::create_mesh(void* cuda_context, void* vertices,
 void WarpMeshBackend::destroy_mesh(uint64_t mesh_id) const noexcept {
   impl_->destroy_mesh(mesh_id);
 }
+
+void WarpMeshBackend::synchronize(void* context) const { impl_->synchronize(context); }
 
 }  // namespace curobo::robot::detail

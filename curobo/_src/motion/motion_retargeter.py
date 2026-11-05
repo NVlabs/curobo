@@ -50,7 +50,7 @@ from curobo._src.solver.solver_mpc_cfg import MPCSolverCfg
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.sequence_tool_pose import SequenceGoalToolPose
 from curobo._src.types.tool_pose import GoalToolPose
-from curobo._src.util.logging import log_and_raise
+from curobo._src.util.logging import log_and_raise, log_warn
 
 
 class MotionRetargeter:
@@ -122,6 +122,9 @@ class MotionRetargeter:
     def solve_frame(self, goal_tool_poses: GoalToolPose) -> RetargetResult:
         """Solve one frame of retargeting.
 
+        IK tracks approximate link targets while requiring constraint feasibility.
+        An infeasible local update holds the previous feasible pose with a warning.
+
         Args:
             goal_tool_poses: Target poses for tracked links. Position shape
                 ``(num_envs, 1, num_links, num_goalset, 3)``, quaternion wxyz shape
@@ -133,7 +136,7 @@ class MotionRetargeter:
 
         Raises:
             ValueError: If ``goal_tool_poses`` batch size does not match
-                ``num_envs`` from the config.
+                ``num_envs`` from the config, or initial IK finds no feasible pose.
         """
         if goal_tool_poses.batch_size != self._num_envs:
             log_and_raise(
@@ -227,6 +230,8 @@ class MotionRetargeter:
             goal_tool_poses=goal_tool_poses,
             return_seeds=1,
         )
+        if not torch.all(result.feasible):
+            log_and_raise("Retargeting initial IK failed to find a feasible configuration")
         active_js = self._global_ik_solver.kinematics.get_active_js(result.js_solution)
         sol = active_js.position.view(self._num_envs, self._action_dim)
         self._prev_solution = sol.clone()
@@ -258,13 +263,38 @@ class MotionRetargeter:
             current_state=current_state,
             return_seeds=1,
         )
+        if not torch.all(result.feasible):
+            candidate = self._local_ik_solver.kinematics.get_active_js(result.js_solution)
+            position = candidate.position.view(self._num_envs, self._action_dim)
+            limits = self._local_ik_solver.kinematics.get_joint_limits()
+            lower, upper = limits.position[0], limits.position[1]
+            dt = self._config.optimization_dt
+            if dt is not None and dt > 0.0:
+                lower = torch.maximum(lower, self._prev_solution + limits.velocity[0] * dt)
+                upper = torch.minimum(upper, self._prev_solution + limits.velocity[1] * dt)
+            bounded = torch.maximum(torch.minimum(position, upper), lower)
+            # Soft IK penalties can leave small bound violations. Validate the
+            # bounded candidate against every constraint, including collisions.
+            result = self._local_ik_solver.solve_pose(
+                goal_tool_poses=goal_tool_poses,
+                seed_config=bounded.view(self._num_envs, 1, self._action_dim),
+                current_state=current_state,
+                return_seeds=1,
+                run_optimizer=False,
+            )
         active_js = self._local_ik_solver.kinematics.get_active_js(result.js_solution)
         sol = active_js.position.view(self._num_envs, self._action_dim)
+        feasible = result.feasible.view(self._num_envs, 1)
+        if not torch.all(feasible):
+            log_warn("Retargeting IK update is infeasible; holding the previous feasible pose")
+        sol = torch.where(feasible, sol, self._prev_solution)
         # velocity is None unless current_state.dt is populated; the guard
         # makes this branch correct without changing today's behavior.
         if active_js.velocity is not None:
-            self._prev_velocity = active_js.velocity.view(
-                self._num_envs, self._action_dim
+            self._prev_velocity = torch.where(
+                feasible,
+                active_js.velocity.view(self._num_envs, self._action_dim),
+                torch.zeros_like(sol),
             )
         self._prev_solution = sol.clone()
 
@@ -347,6 +377,8 @@ class MotionRetargeter:
             optimization_dt=None,
             override_iters_for_multi_link_ik=None,
             override_optimizer_num_iters=override_num_iters,
+            # Human and robot link targets need not admit an exact pose match.
+            success_requires_convergence=False,
             optimizer_configs=cfg.ik_optimizer_configs,
             device_cfg=cfg.device_cfg,
             load_collision_spheres=cfg.load_collision_spheres,
@@ -371,6 +403,7 @@ class MotionRetargeter:
             optimization_dt=cfg.optimization_dt,
             override_iters_for_multi_link_ik=None,
             override_optimizer_num_iters=override_num_iters,
+            success_requires_convergence=False,
             device_cfg=cfg.device_cfg,
             load_collision_spheres=cfg.load_collision_spheres,
             velocity_regularization_weight=cfg.velocity_regularization_weight,

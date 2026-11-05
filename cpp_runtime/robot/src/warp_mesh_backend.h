@@ -19,6 +19,8 @@ class WarpMeshBackend final {
   uint64_t create_mesh(void* cuda_context, void* vertices, int num_vertices,
                        void* indices, int num_triangles) const;
   void destroy_mesh(uint64_t mesh_id) const noexcept;
+  /** Wait for BVH construction on Warp's current stream for this context. */
+  void synchronize(void* cuda_context) const;
 
  private:
   class Impl;

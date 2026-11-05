@@ -578,16 +578,6 @@ def pca_colorize_with_basis(
     return colors.view(H, W, 3).cpu().numpy(), basis
 
 
-def pca_colorize(
-    feats: torch.Tensor,
-    low_pct: float = 0.02,
-    high_pct: float = 0.98,
-) -> np.ndarray:
-    """Project ``(H, W, D)`` features to an ``(H, W, 3)`` uint8 image via PCA."""
-    image, _ = pca_colorize_with_basis(feats, low_pct=low_pct, high_pct=high_pct)
-    return image
-
-
 def upsample_nn(img_uint8: np.ndarray, target_hw: Tuple[int, int]) -> np.ndarray:
     """Nearest-neighbor upsample ``(H, W, 3)`` uint8 to ``target_hw``."""
     t = torch.from_numpy(img_uint8).permute(2, 0, 1).unsqueeze(0).float()

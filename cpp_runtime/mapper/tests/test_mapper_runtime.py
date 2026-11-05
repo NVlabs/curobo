@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -256,6 +257,32 @@ def test_exporter_has_no_runtime_private_warp_kernels() -> None:
     assert not (mapper_root / "src" / "pose_refiner_lm.h").exists()
 
 
+@pytest.mark.parametrize("skip_steps", [None, 0.5])
+def test_exported_config_fills_runtime_defaults(skip_steps: float | None) -> None:
+    """Optional Python settings remain explicit in the native loader's manifest."""
+    pytest.importorskip("cuda.core")
+    from cpp_runtime.mapper.tools.export_mapper_aot import normalized_config
+
+    mapper_root = Path(__file__).resolve().parents[1]
+    config = json.loads((mapper_root / "configs/small_mapper.json").read_text())
+    if skip_steps is not None:
+        config["adjacent_skip_steps"] = skip_steps
+    kernels = SimpleNamespace(
+        num_samples=4,
+        feature_dim=config["feature_dim"],
+        feature_block_grid_size=config["feature_block_grid_size"],
+        feature_grid_voxels=config["feature_block_grid_size"] ** 3,
+        instance_grid_size=config["instance_grid_size"],
+        instance_grid_voxels=config["instance_grid_size"] ** 3,
+        feature_grid_shape=(config["feature_grid_height"], config["feature_grid_width"]),
+        feature_channels_per_thread=4,
+        max_feature_tile_channels=4096,
+    )
+    integrator = SimpleNamespace(_camera_integrator=SimpleNamespace(use_tiled_feature_kernel=False))
+    exported = normalized_config(config, kernels, integrator)
+    assert exported["adjacent_skip_steps"] == (1.0 if skip_steps is None else skip_steps)
+
+
 def test_surface_points_runtime() -> None:
     """Check observed surfaces, filtering, and graph replay for the artifact batch size."""
     artifact = os.environ.get("CUROBO_MAPPER_TEST_ARTIFACT_DIR")
@@ -271,7 +298,9 @@ def test_surface_points_runtime() -> None:
             depth = torch.full((batch, height, width), .4, device="cuda")
             rgb = torch.zeros((batch, height, width, 3), dtype=torch.uint8, device="cuda")
             instances = torch.full((batch, height, width), 3, dtype=torch.uint8, device="cuda")
-            intrinsics = torch.tensor([[[600., 0., width / 2], [0., 600., height / 2],
+            # Keep the synthetic field of view independent of export resolution.
+            focal = float(max(height, width))
+            intrinsics = torch.tensor([[[focal, 0., width / 2], [0., focal, height / 2],
                                         [0., 0., 1.]]], device="cuda").repeat(batch, 1, 1)
             positions = torch.zeros((batch, 3), device="cuda")
             positions[:, :2] = torch.tensor(config["origin"][:2], device="cuda")

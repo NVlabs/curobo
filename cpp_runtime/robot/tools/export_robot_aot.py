@@ -2107,7 +2107,7 @@ def export_robot(args: argparse.Namespace) -> Path:
         if self_collision_kernel is not None:
             ik_kernels["self_collision"] = self_collision_kernel
         ik_manifest = {
-            "schema_version": 18,
+            "schema_version": 20,
             "arch": arch,
             "num_links": params.num_links,
             "num_dof": params.num_dof,

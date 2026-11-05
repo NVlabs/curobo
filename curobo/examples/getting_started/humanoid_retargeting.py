@@ -452,8 +452,8 @@ def _build_tool_pose_criteria(ik_map: dict) -> Dict[str, ToolPoseCriteria]:
     criteria = {}
     for j in ik_map:
         link = ik_map[j]["t_body"]
-        pw = 100.0 * ik_map[j]["t_weight"] / max_weight
-        rw = 10.0 * ik_map[j]["r_weight"] / max_weight
+        pw = ik_map[j]["t_weight"] / max_weight
+        rw = 0.1 * ik_map[j]["r_weight"] / max_weight
         criteria[link] = ToolPoseCriteria.track_pose(
             xyz=[pw, pw, pw], rpy=[rw, rw, rw], non_terminal_scale=0.5,
         )
@@ -1035,6 +1035,7 @@ def retarget_bvh_files(
             num_envs=chunk_size,
             use_mpc=use_mpc,
             steps_per_target=steps_per_target,
+            optimization_dt=1.0 / (sample_rate * (steps_per_target if use_mpc else 1)),
             self_collision_check=self_collision_check,
             velocity_regularization_weight=velocity_regularization_weight,
             acceleration_regularization_weight=acceleration_regularization_weight,

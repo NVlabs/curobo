@@ -3,10 +3,32 @@
 # Changelog
 
 
-## Latest Commit
+## Version 0.9.0
 
 ### New Features
-- Add Cartesian Waypoints as a goal representation for motion planning.
+- Add cuRoboV2-Fast for payload-aware, torque-limited collision-free motion
+  planning with B-spline trajectory optimization, accelerated GPU robot
+  computations, and differentiable inverse dynamics. See the
+  [project page](https://research.nvidia.com/labs/lpr/curobov2-fast/).
+- Add Cartesian waypoint motion planning through
+  `MotionPlanner.plan_pose_waypoints()` and
+  `BatchMotionPlanner.plan_pose_waypoints()`, with ordered tool targets,
+  position-only or full-pose tracking, and separate path and final tolerances.
+  Include an interactive Viser tutorial for editing targets and previewing
+  validated trajectories.
+- Add GPU bidirectional RRT with parallel candidate search, collision-checked
+  shortcutting, and B-spline fitting for trajectory seeds, with optional
+  trajectory-optimization refinement.
+- Add TimeOpt fixed-path time optimization under sampled joint velocity,
+  acceleration, jerk, and torque constraints, using local spline support
+  and banded Newton systems on the GPU.
+- Add a C++ deployment runtime for robot kinematics and Jacobians, IK,
+  motion planning, MPC, collision checking, attachments, payload dynamics,
+  and volumetric mapping. Export precompiled CUDA artifacts for deployment
+  on another GPU, including Jetson platforms.
+- Add robot pose calibration with global ICP initialization and local
+  mesh-distance refinement, including a separate C++ calibration API
+  and an interactive Python reference example.
 - Add deferred fused-feature rendering with `Mapper.render_features()`. Compact int32 block and
   int16 node images support full images, absolute-coordinate patches, batched cameras, optional
   semantic filtering, and fp16/fp32 materialization of contiguous feature-channel slices.
@@ -80,6 +102,17 @@
   reference example with Franka MPC using a RealSense backend.
 
 ### Bug Fixes & Misc.
+- Fix Levenberg–Marquardt IK step acceptance in Python and C++ to reject
+  invalid or worsening steps and preserve the accepted objective after
+  rejected updates. Make joint-limit costs consistent with their residual
+  derivatives.
+- Make IK retargeting accept feasible approximate link targets, reject
+  infeasible initialization, and hold the previous feasible pose when a
+  local update remains infeasible after joint and velocity bound correction.
+- Fix SDF pose refinement so CUDA graph warmup cannot overwrite the initial
+  pose's cost and Jacobian through shared scratch buffers.
+- Synchronize native Warp mesh construction before subsequent GPU queries.
+- Refresh public API documentation, tutorials, and native export examples.
 - Reduce GPU memory consumption for batched motion planning by 3x with
   batch-aware IK and TrajOpt seed defaults and a smaller interpolation buffer.
 - Fix `MotionPlanner` and `BatchMotionPlanner` attachment-manager access so
@@ -132,6 +165,8 @@
   default.
 
 ### Breaking Changes
+- Re-export native IK artifacts to include the updated LM objective-update
+  kernel and manifest entry.
 - `MapperCfg` now requires `image_height` and `image_width` so the
   voxel-project scratch buffer can be allocated during mapper construction.
 - `MapperCfg.block_size`, `BlockSparseTSDFCfg.block_size`,

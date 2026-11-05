@@ -128,21 +128,22 @@ When the tutorial finishes successfully you will see::
     Mapper initialized: 42.0 MB
 
     Integrating 200 frames...
-    Rendering from first camera pose...
-    Saved renders to: ~/.cache/curobo/examples/volumetric_mapping
-
     Computing ESDF...
     Extracting mesh...
     Saved mesh: output_mesh.glb (150,000 vertices)
+    Rendering from first camera pose...
+    Saved renders to: ~/.cache/curobo/examples/volumetric_mapping
 
-The following files are written to ``~/.cache/curobo/examples/volumetric_mapping/``
-(override with ``curobo._src.runtime.cache_dir``):
+Rendered images are written to ``~/.cache/curobo/examples/volumetric_mapping/``
+(override with ``curobo.runtime.cache_dir``):
 
 - ``rendered_depth.png``: depth colormap rendered from the first camera pose
 - ``rendered_normals.png``: surface normal colormap
-- ``rendered_shaded.png``: Phong-shaded surface view
-- ``output_mesh.glb``: textured triangle mesh of the full reconstruction
-- ``tsdf_blocks.pt``: compact mapper block checkpoint when ``--checkpoint`` is set
+- ``rendered_shaded.png``: Lambertian-shaded surface view
+
+The voxel-colored mesh is written to ``--output`` (default ``output_mesh.glb`` in
+the current directory). When ``--checkpoint`` is set, the compact mapper blocks
+are saved to that path.
 """
 
 from __future__ import annotations
@@ -320,28 +321,6 @@ def extract_textured_subvoxel_preview(
     return points, colors
 
 
-def flip_texture_image_for_glb(mesh: Mesh) -> None:
-    """Counter Trimesh's GLB export-time UV V flip without changing mapper UVs."""
-    if mesh.texture_image is None:
-        return
-    if isinstance(mesh.texture_image, torch.Tensor):
-        mesh.texture_image = torch.flip(mesh.texture_image, dims=(0,))
-    else:
-        mesh.texture_image = np.flip(mesh.texture_image, axis=0).copy()
-
-
-def clone_texture_observation(observation: CameraObservation) -> CameraObservation:
-    """Keep only RGB, pose, and intrinsics needed for final texture projection."""
-    return CameraObservation(
-        rgb_image=observation.rgb_image.detach().clone(),
-        pose=Pose(
-            position=observation.pose.position.detach().clone(),
-            quaternion=observation.pose.quaternion.detach().clone(),
-        ),
-        intrinsics=observation.intrinsics.detach().clone(),
-    )
-
-
 class Sun3dDataset(Dataset):
     """Sun3D RGB-D dataset loader."""
 
@@ -405,15 +384,6 @@ def main():
     parser.add_argument("--visualize", action="store_true", help="Enable viser visualization")
     parser.add_argument("--num-cameras", type=int, default=1, help="Number of cameras")
     parser.add_argument(
-        "--texture-max-batches",
-        type=int,
-        default=50,
-        help=(
-            "Maximum number of integrated camera batches retained for final "
-            "textured mesh export. Set 0 to save voxel-colored mesh only."
-        ),
-    )
-    parser.add_argument(
         "--checkpoint",
         type=Path,
         default=None,
@@ -431,8 +401,6 @@ def main():
     args = parser.parse_args()
     if args.checkpoint is not None and args.resume_from is not None:
         raise ValueError("--checkpoint and --resume-from are mutually exclusive")
-    if args.texture_max_batches < 0:
-        raise ValueError("--texture-max-batches must be >= 0")
     checkpoint_path = args.checkpoint.expanduser() if args.checkpoint is not None else None
     resume_path = args.resume_from.expanduser() if args.resume_from is not None else None
 
@@ -526,15 +494,6 @@ def main():
     pbar = tqdm(range(0, max_frames, n_cams))
     dt_s_list = []
     latest_preview_observation: CameraObservation | None = None
-    texture_observations: list[CameraObservation] = []
-    total_batches = (max_frames + n_cams - 1) // n_cams if max_frames > 0 else 0
-    if args.texture_max_batches > 0 and total_batches > 0:
-        texture_batch_stride = max(
-            1,
-            (total_batches + args.texture_max_batches - 1) // args.texture_max_batches,
-        )
-    else:
-        texture_batch_stride = 0
     for batch_start in pbar:
         batch_end = min(batch_start + n_cams, max_frames)
         batch_obs = []
@@ -583,14 +542,6 @@ def main():
         mapper.integrate(batched)
         dt_s = timer.stop()
         latest_preview_observation = batched
-
-        batch_idx = batch_start // n_cams
-        if (
-            texture_batch_stride > 0
-            and batch_idx % texture_batch_stride == 0
-            and len(texture_observations) < args.texture_max_batches
-        ):
-            texture_observations.append(clone_texture_observation(batched))
 
         dt_s_list.append(dt_s)
         postfix = {
@@ -696,28 +647,8 @@ def main():
     # Extract and save mesh
     print("\nExtracting mesh...")
     output_path = Path(args.output)
-    output_suffix = output_path.suffix.lower()
-    use_textured_mesh = False
-    if use_textured_mesh:
-        print(
-            "Using "
-            f"{len(texture_observations)} RGB camera batches for textured mesh export"
-        )
-        mesh = mapper.extract_textured_mesh(
-            texture_observations,
-            surface_only=True,
-            refine_iterations=2,
-        )
-    else:
-        if output_suffix in {".glb", ".obj"} and len(texture_observations) == 0:
-            print("No retained RGB batches available; saving voxel-colored mesh")
-        mesh = mapper.extract_mesh(surface_only=False)
+    mesh = mapper.extract_mesh(surface_only=False)
     if mesh.vertices is not None and len(mesh.vertices) > 0:
-        if output_suffix not in {".glb", ".obj"}:
-            mesh.texture_uvs = None
-            mesh.texture_image = None
-        elif output_suffix == ".glb":
-            flip_texture_image_for_glb(mesh)
         print(f"Saving mesh to {output_path}")
         mesh.save_as_mesh(str(output_path))
         print(f"Saved mesh: {output_path} ({len(mesh.vertices):,} vertices)")

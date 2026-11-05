@@ -237,7 +237,8 @@ def export_warp_kernels(integrator, out_dir: Path, arch: int, arch_name: str) ->
         kernel_names.append(FEATURE_KERNEL_NAMES[uses_tiled_feature_kernel(integrator)])
         kernel_names.extend(FEATURE_OUTPUT_KERNEL_NAMES)
         kernel_names.extend(SEMANTIC_KERNEL_NAMES)
-    for name in kernel_names:
+    for index, name in enumerate(kernel_names, start=1):
+        print(f"Exporting mapper kernel {index}/{len(kernel_names)}: {name}", flush=True)
         kernel = getattr(kernels, name)
         module = kernel.module
         if module.name not in compiled_modules:
@@ -430,6 +431,7 @@ def normalized_config(config: dict[str, Any], kernels, integrator: object) -> di
     cfg["esdf_grid_shape"] = [int(v) for v in config["esdf_grid_shape"]]
     cfg["origin"] = [float(v) for v in config.get("origin", [0.0, 0.0, 0.0])]
     cfg["num_samples"] = int(kernels.num_samples)
+    cfg["adjacent_skip_steps"] = float(config.get("adjacent_skip_steps", 1.0))
     cfg["num_block_key_candidates"] = (
         int(config["num_cameras"])
         * int(config["image_height"])
@@ -493,6 +495,7 @@ def main() -> None:
     arch, arch_name = cuda_arch()
     cfg, integrator = make_integrator(config)
     warp_manifest = export_warp_kernels(integrator, args.out, arch, arch_name)
+    print("Exporting mapper pose-refinement kernels", flush=True)
     pose_refiner_n_samples_per_ray = int(config.get("pose_refiner_n_samples_per_ray", 1))
     warp_manifest.update(
         export_pose_refiner_warp_kernel(
@@ -504,6 +507,7 @@ def main() -> None:
         )
     )
     warp_manifest.update(compile_pose_refiner_lm(args.out, arch_name))
+    print("Compiling mapper ESDF kernels", flush=True)
     pba_manifest = compile_pba(args.out, arch_name)
 
     manifest = {

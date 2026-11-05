@@ -155,6 +155,7 @@ docker/pkgs/*
 *.usda
 *.csv
 *.json
+!cpp_runtime/mapper/configs/small_mapper.json
 *.SLDPRT
 *.xacro
 *.gazebo

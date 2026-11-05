@@ -207,6 +207,7 @@ class IkRuntime final {
   curobo_robot_runtime::KernelModule initialize_kernel_;
   curobo_robot_runtime::KernelModule error_kernel_;
   curobo_robot_runtime::KernelModule update_kernel_;
+  curobo_robot_runtime::KernelModule update_error_kernel_;
   curobo_robot_runtime::KernelModule finalize_kernel_;
   curobo_robot_runtime::KernelModule rank_kernel_;
   curobo_robot_runtime::KernelModule lm_kernel_;

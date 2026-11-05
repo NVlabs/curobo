@@ -15,6 +15,24 @@ from curobo._src.cost.wp_pose_metric import compute_quadratic_pose_metric
 from curobo._src.util.warp import warp_kernel
 
 
+@wp.func
+def _accept_lm_step(
+    current_error: wp.float32,
+    candidate_error: wp.float32,
+    predicted_reduction: wp.float32,
+    rho_min: wp.float32,
+) -> wp.bool:
+    actual_reduction = current_error - candidate_error
+    trust_ratio = actual_reduction / (predicted_reduction + 1.0e-8)
+    return (
+        predicted_reduction > 0.0
+        and wp.isfinite(predicted_reduction)
+        and wp.isfinite(trust_ratio)
+        and actual_reduction >= 0.0
+        and trust_ratio >= rho_min
+    )
+
+
 def create_seed_ik_kernels(
     dof: int,
     num_links: int,
@@ -270,7 +288,7 @@ def create_seed_ik_kernels(
                     if upper_error > 0.0:
                         limit_jacobian += joint_limit_weight
                     jt_error[problem_idx, joint_idx] += limit_jacobian * limit_error
-                    total_cost += limit_error
+                    total_cost += 0.5 * limit_error * limit_error
                 limit_row = pose_residuals + joint_idx
                 for column_idx in range(coord):
                     scaled_jacobian[problem_idx, limit_row, column_idx] = 0.0
@@ -301,9 +319,10 @@ def create_seed_ik_kernels(
         damping_max: wp.float32,
     ):
         problem_idx, joint_idx = wp.tid()
-        denominator = predicted_reduction[problem_idx] + 1.0e-8
-        trust_ratio = (current_error[problem_idx] - candidate_error[problem_idx]) / denominator
-        accepted = trust_ratio >= rho_min and wp.isfinite(candidate_error[problem_idx])
+        accepted = _accept_lm_step(
+            current_error[problem_idx], candidate_error[problem_idx],
+            predicted_reduction[problem_idx], rho_min,
+        )
         if accepted:
             joint_position[problem_idx, joint_idx] = candidate[problem_idx, joint_idx]
             jt_error[problem_idx, joint_idx] = candidate_jt_error[problem_idx, joint_idx]
@@ -321,6 +340,24 @@ def create_seed_ik_kernels(
 
     update = warp_kernel(f"seed_ik_update_{dof}_{num_links}", enable_backward=False)(
         _update_template
+    )
+
+    def _update_error_template(
+        current_error: wp.array(dtype=wp.float32),
+        candidate_error: wp.array(dtype=wp.float32),
+        predicted_reduction: wp.array(dtype=wp.float32),
+        rho_min: wp.float32,
+    ):
+        problem_idx = wp.tid()
+        if _accept_lm_step(
+            current_error[problem_idx], candidate_error[problem_idx],
+            predicted_reduction[problem_idx], rho_min,
+        ):
+            current_error[problem_idx] = candidate_error[problem_idx]
+
+    # Update objectives after every joint lane has read the old objective.
+    update_error = warp_kernel(f"seed_ik_update_error_{dof}_{num_links}", enable_backward=False)(
+        _update_error_template
     )
 
     lbfgs_kernels = create_lbfgs_runtime_kernels(dof, num_line_search, "ik")
@@ -522,6 +559,7 @@ def create_seed_ik_kernels(
         "initialize": initialize,
         "error": error,
         "update": update,
+        "update_error": update_error,
         "rank": rank,
         "finalize": finalize,
         **lbfgs_kernels,

@@ -362,7 +362,7 @@ class SeedIKErrorCalculator:
         dt: Optional[torch.Tensor] = None,
         velocity_clamping_active: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Add joint limit violation errors.
+        """Compute weighted joint-limit residual derivatives and half-squared cost.
 
         When ``velocity_clamping_active`` is True and ``current_position``/``dt``
         are provided, bounds are tightened to
@@ -397,9 +397,9 @@ class SeedIKErrorCalculator:
         # Add joint limit jacobian
         joint_limit_jacobian = torch.diag_embed(joint_limit_jacobian_diag)
 
-        joint_limit_error = torch.sum(joint_limit_errors.view(batch_size, -1), dim=-1)
-
-        # Add to error norm
+        joint_limit_error = 0.5 * torch.sum(
+            joint_limit_errors.view(batch_size, -1).square(), dim=-1
+        )
 
         return jTlimit_error, joint_limit_jacobian, joint_limit_error
 

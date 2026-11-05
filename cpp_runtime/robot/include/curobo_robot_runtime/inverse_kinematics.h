@@ -37,6 +37,7 @@ struct InverseKinematicsConfig {
   float orientation_tolerance{0.05F};
   float position_weight{1.0F};
   float orientation_weight{1.0F};
+  /** Scale of joint-limit residuals; LM adds half their squared norm to its objective. */
   float joint_limit_weight{1.0F};
   float position_rank_weight{200.0F};
   float orientation_rank_weight{20.0F};

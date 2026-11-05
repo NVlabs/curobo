@@ -85,11 +85,14 @@ class Mapper:
         config: MapperCfg with grid and integration parameters.
 
     Example:
-        config = MapperCfg(
-            extent_meters_xyz=(2.0, 2.0, 2.0),
-            voxel_size=0.005,
-        )
-        mapper = Mapper(config)
+
+        .. code-block:: python
+
+            config = MapperCfg(
+                extent_meters_xyz=(2.0, 2.0, 2.0),
+                voxel_size=0.005,
+            )
+            mapper = Mapper(config)
 
         for obs in observations:
             mapper.integrate(obs)

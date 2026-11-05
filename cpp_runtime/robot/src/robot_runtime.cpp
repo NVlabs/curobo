@@ -415,6 +415,10 @@ IkManifest load_ik_manifest(const std::string& artifact_dir) {
 
   IkManifest manifest;
   manifest.schema_version = extract_int(json, "schema_version");
+  if (manifest.schema_version != 20) {
+    throw std::runtime_error("unsupported robot IK artifact schema version: " +
+                             std::to_string(manifest.schema_version));
+  }
   manifest.arch = extract_string(json, "arch");
   manifest.num_links = extract_int(json, "num_links");
   manifest.num_dof = extract_int(json, "num_dof");
@@ -497,6 +501,7 @@ IkManifest load_ik_manifest(const std::string& artifact_dir) {
   manifest.initialize = extract_ik_kernel(kernels, "initialize");
   manifest.error = extract_ik_kernel(kernels, "error");
   manifest.update = extract_ik_kernel(kernels, "update");
+  manifest.update_error = extract_ik_kernel(kernels, "update_error");
   manifest.rank = extract_ik_kernel(kernels, "rank");
   manifest.finalize = extract_ik_kernel(kernels, "finalize");
   manifest.levenberg_marquardt =
@@ -520,10 +525,6 @@ IkManifest load_ik_manifest(const std::string& artifact_dir) {
   manifest.collision_voxel = extract_ik_kernel(kernels, "collision_voxel");
   manifest.self_collision = extract_ik_kernel(kernels, "self_collision");
 
-  if (manifest.schema_version != 18) {
-    throw std::runtime_error("unsupported robot IK artifact schema version: " +
-                             std::to_string(manifest.schema_version));
-  }
   if (manifest.num_links <= 0 || manifest.num_dof <= 0 ||
       manifest.num_tool_frames <= 0 ||
       manifest.num_spheres < 0 || manifest.num_residuals <= 0 ||

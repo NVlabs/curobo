@@ -1,34 +1,113 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Drag Cartesian waypoints in Viser, then click Plan to preview a trajectory.
+"""Edit Cartesian waypoints and preview a collision-checked robot trajectory in Viser.
 
-Run ``python -m curobo.examples.getting_started.cartesian_waypoints`` and open
-``http://localhost:8080``. The numbered handles define an ordered path; the last
-handle is the goal. The example starts with 32 poses and supports up to 256
-with ``--num-knots 64``.
-Use **Spline knots** to choose powers of two from 16 through 1024 (default 32).
-``--num-knots`` accepts any supported count up to 1024 and adds it to the selector.
-Changing it rebuilds and warms the planner while preserving waypoint edits.
-More knots generally increase motion duration and may increase planning time,
-but can reduce waypoint tracking error. Choose the count based on the required
-waypoint tracking tolerance and obstacle density.
-Preset buttons load a line, arc, circle, crane pick/place, front-to-back reach,
-or zigzag. Presets increase the count when needed to show their main features.
-At scale 1, the largest preset bounding-box dimension is 0.25 m. Use ``Path scale``
-to resize the current targets while retaining individual edits and group placement.
-Enable ``Move whole path`` to translate or rotate all targets together; the
-first target defines the planned start. Individual targets remain editable afterward.
+.. raw:: html
 
-Choose ``Position + orientation`` to rotate and reach each waypoint pose, or
-``Position only`` to ignore rotations at every waypoint, including the goal.
-Positions interpolate linearly between waypoints; rotations use SLERP.
-Orange shows the requested polyline; green shows the validated tool trajectory.
-Plan solves IK at the first waypoint, then previews motion through the remaining
-targets. The home configuration is only an IK seed; playback starts at the solved pose.
-Both tracking modes warm up during startup before the Plan button is enabled.
+    <video autoplay loop muted playsinline controls preload="metadata" width="100%">
+      <source src="../videos/get_started_cartesian_waypoints.webm" type="video/webm">
+    </video>
 
-Run with ``--test`` for a one-shot server/planner check without opening a browser.
-Press Ctrl+C to stop the interactive example.
+The video uses the defaults: 32 waypoints, 32 spline knots, and **Path scale** 1.25.
+Path tolerances are 5 cm and 15 degrees; goal tolerances are 0.5 cm and 3 degrees.
+
+By the end of this tutorial you will have:
+
+- Loaded the Franka Panda and a table obstacle into a browser-based viewer
+- Planned motion through an ordered set of Cartesian targets
+- Edited a target and replayed the validated joint trajectory
+
+Step 1: Start the viewer
+------------------------
+
+Run this command in the environment from :ref:`tutorial_installation`:
+
+.. code-block:: bash
+
+   python -m curobo.examples.getting_started.cartesian_waypoints
+
+Open http://localhost:8080. Wait until the status reads **Ready** and the **Plan**
+button is enabled. Startup warms both tracking modes with CUDA graphs enabled.
+The viewer starts with 32 waypoints, 32 spline knots, and **Path scale** 1.25.
+The path starts 10 cm forward (world +X) and 8 cm below the home tool pose.
+
+Step 2: Plan your first path
+----------------------------
+
+1. In **Path presets**, click **Arc**.
+2. Keep **Path scale** at **1.25** for the default path.
+3. Leave **Waypoint tracking** set to **Position + orientation**.
+4. Click **Plan**.
+
+The orange line connects the requested targets. When planning succeeds, a green
+line shows the validated tool trajectory and the robot plays the motion.
+**Motion time** reports the trajectory duration; **Planning time** reports the
+time to solve start IK and plan the path. **Native max error** reports the
+largest tracking error checked by the planner, including the start pose.
+
+The first numbered waypoint defines the start, and the last defines the goal.
+The planner solves IK at the first waypoint before planning through the rest.
+The home configuration is an IK seed; playback begins at the solved start pose.
+
+Step 3: Edit and replan
+-----------------------
+
+Choose **Edit waypoint**, or click an orange marker, to select a target. Drag its
+translation arrows to move it and its rotation rings to change its orientation.
+Click **Plan** again to compute a trajectory through the edited targets.
+
+Edits clear the previous preview. Playback is enabled only after planning and
+validation succeed. In **Playback**, pause **Play** and move **Progress** to
+inspect the motion, then resume **Play**. Use **Speed** to change playback speed.
+
+Step 4: Try the other presets
+-----------------------------
+
+Click **Straight line**, **Circle**, **Crane pick/place**, **Front to back**, or
+**Zigzag**, then click **Plan**. Presets increase the waypoint count when needed
+to retain their defining corners. **Crane pick/place** describes a tool path;
+it does not attach or transport an object.
+
+At **Path scale** 1, the largest preset bounding-box dimension is 0.25 m.
+The default scale of 1.25 makes that dimension 31.25 cm.
+Scaling resizes the targets about the first waypoint, preserving individual
+edits and group placement. Enable **Move whole path** to translate or rotate
+all targets together. Disable it to return to individual target editing.
+**Reset waypoints** restores the selected preset and the group's initial pose.
+
+Step 5: Change tracking and inspect the result
+----------------------------------------------
+
+Set **Waypoint tracking** to **Position only**, then click **Plan**. This mode
+ignores rotations at every target, including the goal. **Position + orientation**
+tracks both translation and rotation. The requested reference uses linear
+position interpolation and quaternion SLERP between waypoint rotations.
+
+Expand **Tolerances** to inspect the path and goal tolerances. Positions are in
+centimeters and orientations are in degrees. The defaults allow 5 cm and
+15 degrees along the path, with 0.5 cm and 3 degrees at the goal. The green curve
+may depart from the orange polyline within those tolerances. A failed plan
+reports whether start IK, path tracking, collisions, or joint limits and dynamics
+prevented a valid result. Shorten or reposition the path before replanning.
+
+Use **Spline knots** to change the number of spline controls. Changing this
+rebuilds and warms the planner while preserving waypoint edits. More knots can
+reduce tracking error, but may increase planning time and motion duration.
+The dropdown offers powers of two from 16 through 1024. A command-line count
+from 12 through 1024 is also added to the selector. To start with 64 knots, run:
+
+.. code-block:: bash
+
+   python -m curobo.examples.getting_started.cartesian_waypoints --num-knots 64
+
+The waypoint-count slider supports up to 256 poses when the spline has enough
+reference intervals. Press Ctrl+C in the terminal to stop the viewer.
+
+For a one-shot server and planner check without a browser, run:
+
+.. code-block:: bash
+
+   python -m curobo.examples.getting_started.cartesian_waypoints --test
 """
 
 from __future__ import annotations
@@ -61,6 +140,8 @@ _PATTERN_MIN_COUNTS = {
     "Zigzag": 5,
 }
 _PRESET_BBOX_SIZE = 0.25
+_DEFAULT_PATH_SCALE = 1.25
+_DEFAULT_PATH_OFFSET = (0.10, 0.0, -0.08)
 _WARMUP_PATH_SCALE = 0.3
 
 
@@ -175,6 +256,9 @@ class WaypointDemo:
         start_pose = self.planner.compute_kinematics(self.start).tool_poses
         self.start_position = start_pose.position[0, 0].cpu().numpy().copy()
         self.start_quaternion = start_pose.quaternion[0, 0].cpu().numpy().copy()
+        self._initial_group_position = self.start_position.mean(axis=0) + np.asarray(
+            _DEFAULT_PATH_OFFSET, dtype=np.float32
+        )
         self.path_start: JointState | None = None
         self._start_position_error = 0.0
         self._start_rotation_error = 0.0
@@ -190,7 +274,7 @@ class WaypointDemo:
             for frame in self.planner.tool_frames
         }
         self.server.initial_camera.position = (1.05, 0.9, 0.9)
-        self.server.initial_camera.look_at = self.start_position.mean(axis=0)
+        self.server.initial_camera.look_at = self._initial_group_position
         self.visualizer.set_joint_state(self.start.squeeze(0))
         self.handles: list[list[viser.TransformControlsHandle]] = []
         self.labels: list[viser.LabelHandle] = []
@@ -203,12 +287,17 @@ class WaypointDemo:
         self._edited = Event()
         self._warming_up = False
         self._pattern = "Arc"
-        self._applied_scale = 1.0
+        self._applied_scale = _DEFAULT_PATH_SCALE
         self._last_tick = time.monotonic()
         self._last_preview = 0.0
-        self.waypoint_group = self.server.scene.add_transform_controls(
+        self._waypoint_frame = self.server.scene.add_frame(
             "/waypoint_group",
-            position=self.start_position.mean(axis=0),
+            position=self._initial_group_position.copy(),
+            show_axes=False,
+        )
+        self.waypoint_group = self.server.scene.add_transform_controls(
+            "/waypoint_group_control",
+            position=self._initial_group_position.copy(),
             scale=0.14,
             visible=False,
             depth_test=False,
@@ -283,7 +372,7 @@ class WaypointDemo:
                 min=0.25,
                 max=2.0,
                 step=0.05,
-                initial_value=1.0,
+                initial_value=_DEFAULT_PATH_SCALE,
                 hint="Resize about the first waypoint, preserving edits and group placement.",
             )
             self.pattern_buttons = []
@@ -433,8 +522,12 @@ class WaypointDemo:
         initial_mode = self.tracking_mode.value
         initial_scale = self.path_scale.value
         initial_selection = self.selected.value
-        initial_position = [[np.asarray(h.position).copy() for h in row] for row in self.handles]
-        initial_quaternion = [[np.asarray(h.wxyz).copy() for h in row] for row in self.handles]
+        initial_position = np.array(
+            [[h.position for h in row] for row in self.handles], dtype=np.float32
+        )
+        initial_quaternion = np.array(
+            [[h.wxyz for h in row] for row in self.handles], dtype=np.float32
+        )
         group_position = np.asarray(self.waypoint_group.position).copy()
         group_quaternion = np.asarray(self.waypoint_group.wxyz).copy()
         initial_exit_early = self.planner.ik_solver.config.exit_early
@@ -460,11 +553,7 @@ class WaypointDemo:
             self.path_scale.value = initial_scale
             self.waypoint_group.position = group_position
             self.waypoint_group.wxyz = group_quaternion
-            self._reset_waypoints()
-            for index, row in enumerate(self.handles):
-                for link, handle in enumerate(row):
-                    handle.position = initial_position[index][link]
-                    handle.wxyz = initial_quaternion[index][link]
+            self._reset_waypoints(positions=initial_position, quaternions=initial_quaternion)
             self.selected.value = initial_selection
             self._invalidate()
             self._edited.clear()
@@ -494,8 +583,13 @@ class WaypointDemo:
         if self.play.value and self.progress.value >= 1.0:
             self.progress.value = 0.0
 
-    def _reset_waypoints(self) -> None:
-        """Regenerate the selected preset in the group's local coordinate frame."""
+    def _reset_waypoints(
+        self,
+        *,
+        positions: np.ndarray | None = None,
+        quaternions: np.ndarray | None = None,
+    ) -> None:
+        """Recreate local handles from the preset or saved poses ``[count,links,3/4]``."""
         for label in self.labels:
             label.remove()
         for marker in self.markers:
@@ -516,11 +610,20 @@ class WaypointDemo:
             row = []
             for link, frame in enumerate(self.planner.tool_frames):
                 name = f"/waypoint_group/waypoints/{index}/{link}"
-                local_position = self.start_position[link] - origin + offset
+                local_position = (
+                    self.start_position[link] - origin + offset
+                    if positions is None
+                    else positions[index, link]
+                )
+                local_quaternion = (
+                    self.start_quaternion[link]
+                    if quaternions is None
+                    else quaternions[index, link]
+                )
                 handle = self.server.scene.add_transform_controls(
                     name,
                     position=local_position,
-                    wxyz=self.start_quaternion[link],
+                    wxyz=local_quaternion,
                     scale=0.07,
                     disable_rotations=not self.track_orientation,
                     visible=index == 0 and not self.move_group.value,
@@ -635,6 +738,8 @@ class WaypointDemo:
             self._edited.set()
             self._last_preview = 0.0
         locked = not self.track_orientation
+        self._waypoint_frame.position = self.waypoint_group.position
+        self._waypoint_frame.wxyz = self.waypoint_group.wxyz
         self.waypoint_group.visible = bool(self.move_group.value)
         self.path_rotation.disabled = self.final_rotation.disabled = locked
         for index, row in enumerate(self.handles):
@@ -818,7 +923,7 @@ class WaypointDemo:
         if command == "plan":
             self.plan()
         elif command == "reset":
-            self.waypoint_group.position = self.start_position.mean(axis=0)
+            self.waypoint_group.position = self._initial_group_position.copy()
             self.waypoint_group.wxyz = (1.0, 0.0, 0.0, 0.0)
             self._reset_waypoints()
             self._edited.clear()
@@ -876,7 +981,7 @@ def main() -> None:
             demo._synchronize()
             assert not demo.plan_button.disabled and demo.status.content.startswith("Ready")
             assert demo.trajectory is None and not demo.planned_lines
-            assert demo.path_scale.value == 1.0
+            assert demo.path_scale.value == _DEFAULT_PATH_SCALE
             demo.path_scale.value = _WARMUP_PATH_SCALE
             demo._synchronize()
             assert all(not h.disable_rotations for row in demo.handles for h in row)
