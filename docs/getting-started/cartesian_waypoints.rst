@@ -6,6 +6,6 @@
 Cartesian Waypoints
 ===================
 
-.. automodule:: curobo.examples.getting_started.cartesian_waypoints
-   :no-members:
-   :no-index:
+.. include:: ../../curobo/examples/getting_started/cartesian_waypoints.py
+   :start-after: """
+   :end-before: """
