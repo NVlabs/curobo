@@ -55,6 +55,8 @@ struct TrajectoryOptimizationConfig {
    * but can reduce waypoint tracking error. Choose the count based on the required
    * waypoint tracking tolerance and obstacle density. */
   int num_knots{16};
+  /** False skips inverse dynamics and effort checks, including time optimization. */
+  bool enable_inverse_dynamics{true};
 };
 
 /** Borrowed executable trajectory for the selected timeopt seed.

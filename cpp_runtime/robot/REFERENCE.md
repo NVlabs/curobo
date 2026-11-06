@@ -295,7 +295,7 @@ previous solver calls before changing policy; these synchronous setters run outs
 
 `MotionPlanner` shares link-local spheres, masks, and attachment state between ordinary IK,
 grasp IK, RRT, and TrajOpt, while keeping solver workspaces separate. Native scenes remain
-single-environment. Re-export artifacts for IK schema 20, TrajOpt schema 23, and RRT schema 8
+single-environment. Re-export artifacts for IK schema 20, TrajOpt schema 23, and RRT schema 9
 before loading them into the updated runtime.
 
 `GraspPlanningRequest::collision_policy` enables the two-field grasp path. The caller owns
@@ -493,9 +493,21 @@ stage.
 
 The planner reuses cuRobo's current packed-tree nearest-neighbor, append, path
 reconstruction, shortcut, fused kinematics, obstacle collision, and exact
-self-collision kernels. Every lane consumes distinct rows from the exported
-scrambled-Halton schedule, which advances across calls until `reset_seed()` is
-called. Complete direct edges, parallel growth edges, and shortcut feasibility
+self-collision kernels. The hybrid sampler uses uniform proposals for the first
+growth step. Later steps guide two thirds of proposals around the four closest
+opposing endpoint pairs from the preceding step, retaining one third for global
+exploration. Gaussian perturbations use `frontier_sample_scale` (default `0.7`)
+in the weighted joint-space metric and clamp to the joint limits. This reuses
+existing endpoints without additional nearest-neighbor queries or edge rollouts.
+
+Every lane consumes distinct rows from the exported scrambled-Halton design.
+Shared Python/native GPU kernels apply a new deterministic random shift, modulo
+one, after every 2,000 uniform proposal rows and generate the frontier proposals.
+The stream advances across iterations and requests without cycling over the same
+finite configurations; `reset_seed()` reproduces its initial sequence. RRT
+artifact schema 9 stores the unit-cube design, sampler seed, and both sampling
+kernels. Older RRT artifacts must be re-exported with the current exporter.
+Complete direct edges, parallel growth edges, and shortcut feasibility
 all use fixed workspace capacities and CUDA Graph replay, with no allocation
 during `plan()`. The bounded outer search observes two connection indices on
 the host each iteration, so `plan()` is synchronous on the request stream and

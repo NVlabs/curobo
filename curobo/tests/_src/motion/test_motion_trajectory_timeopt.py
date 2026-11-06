@@ -640,3 +640,41 @@ def test_torque_margin_preserves_one_sided_bounds(robot: KinematicsCfg, sign: fl
                 torque_upper=torch.tensor([tight[1]], device="cuda"),
             )
         )
+
+
+@pytest.mark.parametrize("graph", [False, True])
+def test_timeopt_without_inverse_dynamics(
+    robot: KinematicsCfg, graph: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Kinematic timeopt ignores unusable inertials/effort and never invokes RNEA."""
+    from curobo._src.robot.dynamics.dynamics import Dynamics
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("Inverse dynamics was invoked in kinematic-only timeopt")
+
+    monkeypatch.setattr(Dynamics, "__init__", forbidden)
+    monkeypatch.setattr(Dynamics, "compute_inverse_dynamics", forbidden)
+    robot.kinematics_config.joint_limits.effort = None
+    config = TrajectoryTimeOptCfg(
+        robot, batch_size=2, num_intervals=128, use_cuda_graph=graph,
+        enable_inverse_dynamics=False,
+        acceleration_limits=torch.tensor([3.0], device="cuda"),
+        jerk_limits=torch.tensor([50.0], device="cuda"),
+    )
+    optimizer = TrajectoryTimeOpt(config)
+    controls, start, goal = inputs(2)
+    # At this angle the fixture's gravity torque exceeds its original effort limit.
+    controls += 1.5
+    start += 1.5
+    goal += 1.5
+    for _ in range(3):
+        result = optimizer.timeopt(controls, start, goal)
+        assert result.success.all()
+        assert result.torque is None
+        assert result.clone().torque is None
+        for name, limit in (("velocity", 2.0), ("acceleration", 3.0), ("jerk", 50.0)):
+            assert getattr(result.joint_state, name).abs().max() <= limit * 0.951
+    # Independent dense samples still obey the retained derivative bounds.
+    samples = optimizer.sample(result.duration[:, None] * torch.linspace(0, 1, 1000, device="cuda"))
+    for name, limit in (("velocity", 2.0), ("acceleration", 3.0), ("jerk", 50.0)):
+        assert getattr(samples, name).abs().max() <= limit * 0.952

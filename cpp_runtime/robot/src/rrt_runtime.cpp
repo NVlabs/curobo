@@ -272,7 +272,6 @@ void RrtRuntime::update_links_inertial(
 
 void RrtRuntime::reset_seed() {
   sample_cursor_ = 0;
-  large_sample_cursor_ = 0;
 }
 
 RrtInfo RrtRuntime::info() const {
@@ -287,6 +286,10 @@ RrtInfo RrtRuntime::info() const {
 }
 
 void RrtRuntime::validate_config() const {
+  if (!std::isfinite(config_.frontier_sample_scale) ||
+      config_.frontier_sample_scale <= 0.0F) {
+    throw std::invalid_argument("RRT frontier sample scale must be finite and positive");
+  }
   if (!std::isfinite(config_.collision_activation_distance) ||
       config_.collision_activation_distance < 0.0F) {
     throw std::invalid_argument("RRT collision activation distance must be finite and nonnegative");
@@ -457,6 +460,8 @@ void RrtRuntime::load_kernels() {
               &reconstruct_path_kernel_);
   load_kernel(artifact_directory_, manifest_.prepare_samples,
               &prepare_samples_kernel_);
+  load_kernel(artifact_directory_, manifest_.frontier_samples,
+              &frontier_samples_kernel_);
   load_kernel(artifact_directory_, manifest_.steer_edges,
               &steer_edges_kernel_);
   load_kernel(artifact_directory_, manifest_.evaluate_edges,
@@ -923,20 +928,27 @@ void RrtRuntime::nearest(CUdeviceptr tree_nodes, CUdeviceptr tree_count,
       arguments);
 }
 
-void RrtRuntime::prepare_samples(CUdeviceptr samples, int plans,
-                                 CUstream stream) const {
-  int candidates = manifest_.samples_per_iteration;
-  const int edges = plans * candidates;
+void RrtRuntime::prepare_samples(int plans, int iteration, CUstream stream) const {
+  const int edges = plans * manifest_.samples_per_iteration;
   const auto bounds = warp_bounds_2d(edges, manifest_.num_dof);
-  auto sample_array = array_2d(samples, edges, manifest_.num_dof,
-                               sizeof(float));
+  auto sample_array = array_2d(samples_.ptr(), manifest_.sample_buffer_size,
+                               manifest_.num_dof, sizeof(float));
+  auto lower = array_1d(position_lower_.ptr(), manifest_.num_dof, sizeof(float));
+  auto upper = array_1d(position_upper_.ptr(), manifest_.num_dof, sizeof(float));
   auto desired_array = array_2d(desired_.ptr(), edges, manifest_.num_dof,
                                 sizeof(float));
+  auto offset = sample_cursor_;
+  int seed = manifest_.sampler_seed;
+  int bounded = 1;
   std::vector<void*> arguments{
       const_cast<WarpLaunchBounds2*>(&bounds),
       &sample_array,
+      &lower,
+      &upper,
       &desired_array,
-      &candidates,
+      &offset,
+      &seed,
+      &bounded,
   };
   prepare_samples_kernel_.launch(
       grid_for(static_cast<size_t>(edges) * manifest_.num_dof,
@@ -944,36 +956,27 @@ void RrtRuntime::prepare_samples(CUdeviceptr samples, int plans,
       static_cast<unsigned int>(manifest_.prepare_samples.block_dim),
       static_cast<unsigned int>(manifest_.prepare_samples.shared_memory),
       stream, arguments);
-}
-
-CUdeviceptr RrtRuntime::next_samples(int plans) const {
-  const size_t rows = checked_product(
-      static_cast<size_t>(plans),
-      static_cast<size_t>(manifest_.samples_per_iteration),
-      "RRT sample request");
-  const size_t dof = static_cast<size_t>(manifest_.num_dof);
-  const size_t row_bytes = checked_product(dof, sizeof(float),
-                                           "RRT sample row");
-  const size_t storage_rows = samples_.bytes() / row_bytes;
-  size_t* cursor = nullptr;
-  size_t cycle = 0;
-  if (rows <= static_cast<size_t>(manifest_.sample_buffer_size / 2)) {
-    cursor = &sample_cursor_;
-    cycle = static_cast<size_t>(manifest_.sample_buffer_size);
-  } else {
-    cursor = &large_sample_cursor_;
-    cycle = storage_rows;
+  if (iteration > 0) {
+    const auto frontier_bounds = warp_bounds_1d(edges);
+    auto active = array_2d(active_endpoints_.ptr(), edges, manifest_.num_dof,
+                          sizeof(float));
+    auto passive = array_2d(passive_endpoints_.ptr(), edges, manifest_.num_dof,
+                           sizeof(float));
+    auto weight = array_1d(distance_weight_.ptr(), manifest_.num_dof, sizeof(float));
+    int guided_count = 2 * manifest_.samples_per_iteration / 3;
+    float scale = config_.frontier_sample_scale;
+    std::vector<void*> frontier_arguments{
+        const_cast<WarpLaunchBounds1*>(&frontier_bounds), &desired_array,
+        &active, &passive, &lower, &upper, &weight, &desired_array,
+        &offset, &seed, &guided_count, &scale,
+    };
+    frontier_samples_kernel_.launch(
+        grid_for(edges, manifest_.frontier_samples.block_dim),
+        static_cast<unsigned int>(manifest_.frontier_samples.block_dim),
+        static_cast<unsigned int>(manifest_.frontier_samples.shared_memory),
+        stream, frontier_arguments);
   }
-  if (rows > cycle) {
-    throw std::invalid_argument("RRT sample request exceeds artifact storage");
-  }
-  if (*cursor + rows > cycle) {
-    *cursor = 0;
-  }
-  const size_t offset = *cursor;
-  *cursor += rows;
-  return samples_.ptr() + checked_product(offset, row_bytes,
-                                          "RRT sample offset");
+  sample_cursor_ += static_cast<uint64_t>(edges);
 }
 
 void RrtRuntime::run_edges(CUdeviceptr starts, CUdeviceptr desired, int edges,
@@ -1750,7 +1753,7 @@ void RrtRuntime::plan(const RrtRequest& request) const {
   }
 
   for (int iteration = 0; iteration < config_.max_iterations; ++iteration) {
-    prepare_samples(next_samples(plans), plans, stream);
+    prepare_samples(plans, iteration, stream);
     const bool start_is_active = iteration % 2 == 0;
     launch_search_graph(start_is_active ? SearchGraphKind::START_GROWTH
                                         : SearchGraphKind::GOAL_GROWTH,

@@ -337,11 +337,11 @@ def test_rrt_growth_reuses_cached_bounded_uniform_samples(
         resources,
         BiRRTConfig(shortcut_path=False, sample_projection=projection),
     )
-    sample_buffer = resources.uniform_sampler.action_sample_generator
+    sample_buffer = resources.sampler.action_sample_generator
 
     assert sample_buffer._bounded_sample_buffer is not None
     planner.reset_seed()
-    samples = planner._sample_batched(batch_size=1)
+    samples = planner._generate_proposal_batch(batch_size=1, iteration=0)
 
     assert samples.data_ptr() == sample_buffer._bounded_sample_buffer.data_ptr()
 
@@ -376,7 +376,7 @@ def _assert_tool_pose_goal_routes(
     env_query_idx: torch.Tensor | None,
 ) -> None:
     resources.reset_seed()
-    configurations = resources.uniform_sampler.generate_feasible_action_samples(32)[[0, -1]]
+    configurations = resources.sampler.generate_feasible_action_samples(32)[[0, -1]]
     joint_state = JointState.from_position(
         configurations,
         joint_names=resources.kinematics.joint_names,
@@ -1095,8 +1095,9 @@ def test_rrt_steering_profile_derives_safe_extension_and_preserves_override():
         ({"shortcut_path_capacity": 2}, "shortcut_path_capacity"),
         ({"shortcut_path_capacity": True}, "shortcut_path_capacity"),
         ({"shortcut_state_capacity": 1}, "shortcut_state_capacity"),
-        ({"goal_bias_count": 25}, "goal_bias_count"),
-        ({"goal_bias_count": 1.0}, "goal_bias_count"),
+        ({"frontier_sample_scale": 0.0}, "frontier_sample_scale"),
+        ({"frontier_sample_scale": float("inf")}, "frontier_sample_scale"),
+        ({"frontier_sample_scale": float("nan")}, "frontier_sample_scale"),
         ({"profile_cuda_event_phase": "invalid"}, "profile_cuda_event_phase"),
         ({"profile_cuda_events": 1}, "profile_cuda_events"),
         ({"measure_shortcut_time": 1}, "measure_shortcut_time"),
@@ -1142,7 +1143,7 @@ def test_rrt_warmup_fills_samples_rejected_by_feasibility() -> None:
             return torch.tensor([[3.0, 4.0], [5.0, 6.0]])
 
     planner = object.__new__(BiRRTPlanner)
-    planner.resources = SimpleNamespace(uniform_sampler=WarmupSampler())
+    planner.resources = SimpleNamespace(sampler=WarmupSampler())
 
     actions = planner._generate_warmup_actions(3)
 
@@ -1150,37 +1151,6 @@ def test_rrt_warmup_fills_samples_rejected_by_feasibility() -> None:
         actions,
         torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
     )
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "match"),
-    (
-        ({"sampling_policy": "invalid"}, "sampling_policy"),
-        ({"informed_sample_count": 0}, "informed_sample_count"),
-        ({"informed_sample_count": True}, "informed_sample_count"),
-        ({"informed_initial_scale": 0.9}, "informed_initial_scale"),
-        ({"informed_growth_factor": float("inf")}, "informed_growth_factor"),
-        ({"informed_growth_interval": 0}, "informed_growth_interval"),
-        ({"informed_min_slack": -0.1}, "informed_min_slack"),
-        (
-            {"informed_initial_scale": 2.0, "informed_max_scale": 1.5},
-            "informed_max_scale",
-        ),
-    ),
-)
-def test_rrt_rejects_invalid_informed_sampling_configuration(kwargs, match):
-    with pytest.raises(ValueError, match=match):
-        BiRRTConfig(**kwargs)
-
-
-def test_rrt_rejects_overlapping_mixed_sample_regions():
-    with pytest.raises(ValueError, match="goal_bias_count.*informed_sample_count"):
-        BiRRTConfig(
-            samples_per_iteration=4,
-            goal_bias_count=2,
-            informed_sample_count=3,
-            sampling_policy="mixed_ellipsoid",
-        )
 
 
 def test_linear_connector_resolution_override_changes_only_line_density(
@@ -1210,103 +1180,6 @@ def test_linear_connector_resolution_override_changes_only_line_density(
     assert rrt_line.shape[1] < default_line.shape[1]
 
 
-def test_mixed_sampler_reset_seed_reproduces_bounded_proposal_transforms(
-    resources: RRTPlannerResources,
-):
-    planner = BiRRTPlanner(
-        resources,
-        BiRRTConfig(
-            sampling_policy="mixed_ellipsoid",
-            goal_bias_count=0,
-            informed_sample_count=8,
-        ),
-    )
-    batch_size = 3
-    lows = resources.action_bound_lows
-    highs = resources.action_bound_highs
-    action_range = highs - lows
-    starts = (
-        lows
-        + torch.tensor([[0.20], [0.35], [0.45]], device=lows.device, dtype=lows.dtype)
-        * action_range
-    )
-    goals = (
-        lows
-        + torch.tensor([[0.80], [0.65], [0.55]], device=lows.device, dtype=lows.dtype)
-        * action_range
-    )
-    primary_buffer = resources.uniform_sampler.action_sample_generator
-    latent_schedule = planner._informed_latent_schedule
-    assert latent_schedule is not None
-
-    planner.reset_seed()
-    primary_initial = primary_buffer._int_gen.get_state().clone()
-    latent_initial = latent_schedule.clone()
-    uniform = [planner._sample_batched(batch_size).clone() for _ in range(2)]
-    primary_after_uniform = primary_buffer._int_gen.get_state().clone()
-
-    planner.reset_seed()
-    mixed = [
-        planner._generate_proposal_batch(batch_size, starts, goals, iteration).clone()
-        for iteration in (0, 4)
-    ]
-    primary_after_mixed = primary_buffer._int_gen.get_state().clone()
-    latent_after_mixed = latent_schedule.clone()
-
-    for uniform_wave, mixed_wave in zip(uniform, mixed):
-        torch.testing.assert_close(
-            mixed_wave[:, planner.config.informed_sample_count :],
-            uniform_wave[:, planner.config.informed_sample_count :],
-            rtol=1.0e-5,
-            atol=5.0e-7,
-        )
-    torch.testing.assert_close(primary_after_mixed, primary_after_uniform, rtol=0.0, atol=0.0)
-    torch.testing.assert_close(latent_schedule, latent_initial)
-
-    planner.reset_seed()
-    torch.testing.assert_close(primary_buffer._int_gen.get_state(), primary_initial)
-    repeated = [
-        planner._generate_proposal_batch(batch_size, starts, goals, iteration).clone()
-        for iteration in (0, 4)
-    ]
-    for actual, expected in zip(repeated, mixed):
-        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
-        assert torch.all(actual >= lows)
-        assert torch.all(actual <= highs)
-    torch.testing.assert_close(latent_schedule, latent_after_mixed)
-    assert set(planner._informed_proposal_executors) == {batch_size}
-    planner.reset_cuda_graph()
-
-
-def test_mixed_sampler_static_schedule_is_lane_and_wave_specific(
-    resources: RRTPlannerResources,
-):
-    config = BiRRTConfig(
-        samples_per_iteration=4,
-        max_iterations=2,
-        failure_extension_iterations=0,
-        sampling_policy="mixed_ellipsoid",
-        informed_sample_count=2,
-        max_batched_lanes=4,
-    )
-    planner = BiRRTPlanner(resources, config)
-    schedule = planner._informed_latent_schedule
-    assert schedule is not None
-    latent_rows = (
-        config.informed_sample_count * (resources.action_dim + 1) + resources.action_dim - 1
-    ) // resources.action_dim
-    assert schedule.shape == (2, 4, latent_rows, resources.action_dim)
-    assert not torch.equal(schedule[0, 0], schedule[0, 1])
-    assert not torch.equal(schedule[0, 0], schedule[1, 0])
-
-    overflow = config.max_batched_lanes + 1
-    start = resources.action_bound_lows.view(1, -1).expand(overflow, -1)
-    goal = resources.action_bound_highs.view(1, -1).expand(overflow, -1)
-    with pytest.raises(ValueError, match="max_batched_lanes"):
-        planner._generate_proposal_batch(overflow, start, goal, 0)
-    planner.reset_cuda_graph()
-
-
 def test_rrt_gpu_linear_interpolation_matches_resource_fallback(resources: RRTPlannerResources):
     planner = BiRRTPlanner(resources)
     path = torch.stack(
@@ -1328,7 +1201,7 @@ def test_rrt_gpu_linear_interpolation_matches_resource_fallback(resources: RRTPl
 
 def test_rrt_direct_and_obstructed_paths(resources: RRTPlannerResources):
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_feasible_action_samples(256)
+    samples = resources.sampler.generate_feasible_action_samples(256)
     starts = samples[:128]
     goals = samples[128:]
     blocked = _direct_blocked(resources, starts, goals)
@@ -1369,8 +1242,8 @@ def test_paired_planner_collects_every_direct_success_for_one_owner(
 ):
     """Return every lane that connects in the first successful vectorized stage."""
     resources.reset_seed()
-    feasible = resources.uniform_sampler.generate_feasible_action_samples(256)
-    ambient = resources.uniform_sampler.generate_action_samples(1024, bounded=True)
+    feasible = resources.sampler.generate_feasible_action_samples(256)
+    ambient = resources.sampler.generate_action_samples(1024, bounded=True)
     invalid_goals = ambient[~resources.check_samples_feasibility(ambient)]
     assert invalid_goals.shape[0] > 0
     start = feasible[0:1]
@@ -1714,7 +1587,7 @@ def test_standard_find_path_forwards_per_query_environments(
     two_environment_resources: RRTPlannerResources,
 ):
     resources = two_environment_resources
-    candidates = resources.uniform_sampler.generate_action_samples(64, bounded=True)
+    candidates = resources.sampler.generate_action_samples(64, bounded=True)
     empty_env = torch.ones(64, device=candidates.device, dtype=torch.int32)
     feasible = resources.check_samples_feasibility(candidates, env_query_idx=empty_env).reshape(-1)
     state = candidates[feasible][0]
@@ -1750,7 +1623,7 @@ def test_growth_step_initialization_restores_trees_borrows_inputs_and_reinitiali
     planner = BiRRTPlanner(resources, config)
     workspace = planner._get_batched_workspace(2)
     growth_step = workspace.growth_steps[0]
-    actions = resources.uniform_sampler.generate_feasible_action_samples(8)
+    actions = resources.sampler.generate_feasible_action_samples(8)
 
     roots = (actions[:2], actions[2:4])
     for tree_index, (tree, tree_roots) in enumerate(
@@ -1852,7 +1725,7 @@ def test_workspace_reuses_fixed_growth_control_and_route_buffers(
 
 def test_batched_planner_solves_paired_obstructed_queries(resources: RRTPlannerResources):
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_feasible_action_samples(256)
+    samples = resources.sampler.generate_feasible_action_samples(256)
     starts = samples[:128]
     goals = samples[128:]
     indices = torch.where(_direct_blocked(resources, starts, goals))[0][:2]
@@ -1886,7 +1759,7 @@ def test_batched_planner_solves_paired_obstructed_queries(resources: RRTPlannerR
 
 def test_batched_planner_profiles_one_captured_phase(resources: RRTPlannerResources):
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_feasible_action_samples(256)
+    samples = resources.sampler.generate_feasible_action_samples(256)
     starts = samples[:128]
     goals = samples[128:]
     blocked_index = torch.where(_direct_blocked(resources, starts, goals))[0][0]
@@ -1921,7 +1794,7 @@ def test_batched_planner_profiles_one_captured_phase(resources: RRTPlannerResour
 def test_batched_planner_measures_only_shortcut_time(resources: RRTPlannerResources):
     """Benchmark timing adds one shortcut interval without full profiling."""
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_feasible_action_samples(256)
+    samples = resources.sampler.generate_feasible_action_samples(256)
     starts = samples[:128]
     goals = samples[128:]
     blocked_index = torch.where(_direct_blocked(resources, starts, goals))[0][0]
@@ -1945,7 +1818,7 @@ def test_batched_planner_measures_only_shortcut_time(resources: RRTPlannerResour
 
 def test_batched_planner_masks_lanes_without_reducing_query_groups(resources: RRTPlannerResources):
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_feasible_action_samples(256)
+    samples = resources.sampler.generate_feasible_action_samples(256)
     start = samples[0:1]
     candidates = samples[1:]
     goals = candidates[~_direct_blocked(resources, start.expand_as(candidates), candidates)][:4]
@@ -2053,8 +1926,8 @@ def test_batched_planner_uses_owners_only_for_completion_scheduling(
     monkeypatch.setattr(planner, "_get_batched_workspace", lambda _batch_size: workspace)
     monkeypatch.setattr(
         planner,
-        "_sample_batched",
-        lambda _batch_size: torch.zeros((bucket, sample_count, dof), device=device, dtype=dtype),
+        "_generate_proposal_batch",
+        lambda _batch_size, _iteration: torch.zeros((bucket, sample_count, dof), device=device, dtype=dtype),
     )
 
     def fake_direct_steer(_starts, desired, **_kwargs):
@@ -2131,7 +2004,6 @@ def test_growth_steps_alternate_start_and_goal_tree_orientations(
             max_iterations=2,
             failure_extension_iterations=2,
             max_nodes_per_tree=128,
-            goal_bias_count=0,
             shortcut_path=False,
         ),
     )
@@ -2196,7 +2068,7 @@ def test_growth_step_uses_direct_executor_when_cuda_graphs_are_disabled(
     """Keep canonical growth-step execution functional when capture is globally disabled."""
     monkeypatch.setattr(curobo_runtime, "cuda_graphs", False)
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_feasible_action_samples(256)
+    samples = resources.sampler.generate_feasible_action_samples(256)
     starts = samples[:128]
     goals = samples[128:]
     blocked_index = torch.where(_direct_blocked(resources, starts, goals))[0][0]

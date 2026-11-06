@@ -140,3 +140,16 @@ Retain the same robot, obstacles, collision margins, seed/iteration budgets, tol
 dynamics settings, and graph policy for Python/native comparisons. Compare warmed instances on
 the same hardware and report success/quality alongside compute time. The
 [benchmark runner](benchmarks/README.md) retains inputs, exclusions, and provenance.
+
+### Planning without inverse dynamics
+
+Set `MotionPlanningConfig::enable_inverse_dynamics = false` before constructing the
+planner to skip torque computation and effort constraints in every stage, including
+time optimization and final trajectory validation. Collision checking and joint
+position, velocity, acceleration, and jerk limits stay enabled; time optimization
+and CUDA graphs remain enabled. The default is `true`, preserving existing settings.
+Standalone `TrajectoryOptimizationConfig` and `TrajectoryTimeOptConfig` expose the
+same option. Timeopt returns a null torque pointer when disabled.
+
+Python provides the matching `MotionPlannerCfg.create(enable_inverse_dynamics=False)`
+option. See [runtime configuration](../docs/reference/runtime_configuration.rst).

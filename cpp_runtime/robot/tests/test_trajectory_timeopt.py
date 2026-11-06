@@ -34,12 +34,14 @@ from curobo._src.state.state_joint import JointState
     ],
 )
 @pytest.mark.parametrize("allow_tf32", [False, True])
+@pytest.mark.parametrize("enable_inverse_dynamics", [True, False])
 def test_native_timeopt_parity(
     tmp_path: Path,
     knots: int,
     reference: bool,
     intervals: int,
     allow_tf32: bool,
+    enable_inverse_dynamics: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Compare eager, default-stream, internal and outer graphs against Python."""
@@ -91,6 +93,7 @@ def test_native_timeopt_parity(
     config = TrajectoryTimeOptCfg(
         robot,
         batch_size=4,
+        enable_inverse_dynamics=enable_inverse_dynamics,
         n_knots=knots,
         num_intervals=intervals,
         velocity_limits=limits[0],
@@ -145,9 +148,17 @@ def test_native_timeopt_parity(
             [getattr(samples, name) for name in ("position", "velocity", "acceleration", "jerk")]
         ),
     )
-    expected = {name: value.cpu().numpy() for name, value in expected.items()}
+    expected = {name: value.cpu().numpy() for name, value in expected.items() if value is not None}
     assert expected["success"][:3].all()
     assert expected["status"][3] == 3
+    if not enable_inverse_dynamics:
+        # No dynamics manifest: native kinematic timeopt must not load or launch RNEA.
+        kinematic_directory = tmp_path / "kinematic_artifact"
+        kinematic_directory.mkdir()
+        for path in directory.iterdir():
+            if path.name != "robot_rollout_manifest.json":
+                (kinematic_directory / path.name).symlink_to(path.resolve())
+        directory = kinematic_directory
     subprocess.run(
         [
             executable,
@@ -157,6 +168,7 @@ def test_native_timeopt_parity(
             str(int(reference)),
             "1000",
             str(intervals),
+            str(int(enable_inverse_dynamics)),
         ],
         check=True,
     )

@@ -14,6 +14,7 @@ cudaError_t launch_timeopt_scale(TrajectoryTimeOptSamples samples,
 
 /** Fixed addresses captured by the timeopt; storage belongs to its runtime. */
 struct TimeOptWorkspace {
+  bool enable_inverse_dynamics{true};
   int batch{0}, dof{0}, knots{0}, points{0}, intervals{0}, tiles{0}, seed_tiles{0};
   int start_offset{0}, iterations{0}, samples{0};
   int *point_first{nullptr}, *meta{nullptr}, *offsets{nullptr};

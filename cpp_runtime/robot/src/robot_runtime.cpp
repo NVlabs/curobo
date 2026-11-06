@@ -1088,6 +1088,10 @@ RrtManifest load_rrt_manifest(const std::string& artifact_dir) {
 
   RrtManifest manifest;
   manifest.schema_version = extract_int(json, "schema_version");
+  if (manifest.schema_version != 9) {
+    throw std::runtime_error(
+        "robot RRT sampling requires schema 9; re-export the robot artifact");
+  }
   manifest.arch = extract_string(json, "arch");
   manifest.num_dof = extract_int(json, "num_dof");
   manifest.num_links = extract_int(json, "num_links");
@@ -1103,6 +1107,7 @@ RrtManifest load_rrt_manifest(const std::string& artifact_dir) {
   manifest.direct_steer_steps = extract_int(json, "direct_steer_steps");
   manifest.max_path_nodes = extract_int(json, "max_path_nodes");
   manifest.sample_buffer_size = extract_int(json, "sample_buffer_size");
+  manifest.sampler_seed = extract_int(json, "sampler_seed");
   manifest.max_batched_lanes = extract_int(json, "max_batched_lanes");
   manifest.shortcut_path_capacity =
       extract_int(json, "shortcut_path_capacity");
@@ -1154,6 +1159,7 @@ RrtManifest load_rrt_manifest(const std::string& artifact_dir) {
   manifest.packed_append = extract_ik_kernel(kernels, "packed_append");
   manifest.reconstruct_path = extract_ik_kernel(kernels, "reconstruct_path");
   manifest.prepare_samples = extract_ik_kernel(kernels, "prepare_samples");
+  manifest.frontier_samples = extract_ik_kernel(kernels, "frontier_samples");
   manifest.steer_edges = extract_ik_kernel(kernels, "steer_edges");
   manifest.evaluate_edges = extract_ik_kernel(kernels, "evaluate_edges");
   manifest.prepare_direct_edges =
@@ -1173,7 +1179,7 @@ RrtManifest load_rrt_manifest(const std::string& artifact_dir) {
   manifest.shortcut_select_path =
       extract_ik_kernel(kernels, "shortcut_select_path");
 
-  if (manifest.schema_version != 8 || manifest.num_dof <= 0 ||
+  if (manifest.num_dof <= 0 ||
       manifest.num_links <= 0 || manifest.num_tool_frames <= 0 ||
       manifest.num_spheres <= 0 || manifest.num_self_collision_pairs < 0 ||
       manifest.samples_per_iteration <= 0 ||
@@ -1194,14 +1200,7 @@ RrtManifest load_rrt_manifest(const std::string& artifact_dir) {
   const auto expected_shortcut_edges =
       static_cast<size_t>(manifest.shortcut_path_capacity - 1) *
       static_cast<size_t>(manifest.shortcut_path_capacity - 2) / 2;
-  const auto sample_storage_size = std::max(
-      static_cast<size_t>(manifest.sample_buffer_size),
-      checked_product(
-          checked_product(static_cast<size_t>(2),
-                          static_cast<size_t>(manifest.max_batched_lanes),
-                          "RRT sample storage lanes"),
-          static_cast<size_t>(manifest.samples_per_iteration),
-          "RRT sample storage"));
+  const auto sample_storage_size = static_cast<size_t>(manifest.sample_buffer_size);
   if (required_nodes > static_cast<size_t>(manifest.max_nodes_per_tree) ||
       expected_shortcut_edges !=
           static_cast<size_t>(manifest.shortcut_edge_capacity) ||
@@ -1214,6 +1213,7 @@ RrtManifest load_rrt_manifest(const std::string& artifact_dir) {
       manifest.max_capsules < 0 || manifest.max_cylinders < 0 ||
       manifest.max_meshes < 0 || manifest.max_voxel_grids < 0 ||
       manifest.prepare_samples.block_dim <= 0 ||
+      manifest.frontier_samples.block_dim <= 0 ||
       manifest.steer_edges.block_dim < manifest.fixed_steer_steps ||
       manifest.steer_edges.block_dim < manifest.num_dof ||
       manifest.evaluate_edges.block_dim < manifest.fixed_steer_steps ||
@@ -1276,6 +1276,7 @@ RrtManifest load_rrt_manifest(const std::string& artifact_dir) {
            &manifest.packed_append,
            &manifest.reconstruct_path,
            &manifest.prepare_samples,
+           &manifest.frontier_samples,
            &manifest.steer_edges,
            &manifest.evaluate_edges,
            &manifest.prepare_direct_edges,

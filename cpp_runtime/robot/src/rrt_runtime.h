@@ -79,8 +79,7 @@ class RrtRuntime final {
   void nearest(CUdeviceptr tree_nodes, CUdeviceptr tree_count,
                CUdeviceptr desired, CUdeviceptr starts, CUdeviceptr parents,
                int plans, int queries_per_plan, CUstream stream) const;
-  void prepare_samples(CUdeviceptr samples, int plans, CUstream stream) const;
-  CUdeviceptr next_samples(int plans) const;
+  void prepare_samples(int plans, int iteration, CUstream stream) const;
   void run_edges(CUdeviceptr starts, CUdeviceptr desired, int edges,
                  int candidates_per_plan, bool use_plan_mask,
                  CUdeviceptr endpoints, CUdeviceptr reached,
@@ -198,8 +197,7 @@ class RrtRuntime final {
   mutable std::vector<SearchGraph> search_graphs_;
   mutable std::vector<FinalizationGraph> finalization_graphs_;
   mutable uint32_t active_scene_collision_mask_{0};
-  mutable size_t sample_cursor_{0};
-  mutable size_t large_sample_cursor_{0};
+  mutable uint64_t sample_cursor_{0};
   cudaStream_t graph_capture_stream_{nullptr};
 
   curobo_robot_runtime::KernelModule kinematics_kernel_;
@@ -213,6 +211,7 @@ class RrtRuntime final {
   curobo_robot_runtime::KernelModule packed_append_kernel_;
   curobo_robot_runtime::KernelModule reconstruct_path_kernel_;
   curobo_robot_runtime::KernelModule prepare_samples_kernel_;
+  curobo_robot_runtime::KernelModule frontier_samples_kernel_;
   curobo_robot_runtime::KernelModule steer_edges_kernel_;
   curobo_robot_runtime::KernelModule evaluate_edges_kernel_;
   curobo_robot_runtime::KernelModule prepare_direct_edges_kernel_;

@@ -218,7 +218,9 @@ class CudaTimeOptSolver:
             start_offset,
         )
 
-    def prepare_coefficients(self, torque: torch.Tensor) -> None:
+    def prepare_coefficients(
+        self, torque: torch.Tensor, enable_inverse_dynamics: bool = True
+    ) -> None:
         """Extract A/B/C and seed bounds from inverse-dynamics states [B,3,G,D]."""
         ev = self.evaluation
         self._launch(
@@ -233,6 +235,7 @@ class CudaTimeOptSolver:
             self.dof,
             self.batch,
             self.seed_tiles,
+            int(enable_inverse_dynamics),
         )
 
     def finish(

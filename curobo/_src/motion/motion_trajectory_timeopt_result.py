@@ -23,8 +23,8 @@ class TrajectoryTimeOptResult:
     time: torch.Tensor
     #: Position/velocity/acceleration/jerk [B,G,D].
     joint_state: JointState
-    #: Rigid-body torque at the output grid [B,G,D].
-    torque: torch.Tensor
+    #: Rigid-body torque [B,G,D], or None when inverse dynamics is disabled.
+    torque: torch.Tensor | None
     #: Sampled velocity/acceleration/jerk/torque feasibility [B].
     success: torch.Tensor
     #: 0 feasible, 1 no uniform feasible initializer, 2 output validation failure, 3 bad input.
@@ -44,5 +44,10 @@ class TrajectoryTimeOptResult:
     def clone(self) -> TrajectoryTimeOptResult:
         """Retain outputs across subsequent calls."""
         return TrajectoryTimeOptResult(
-            **{field.name: getattr(self, field.name).clone() for field in fields(self)}
+            **{
+                field.name: (
+                    None if getattr(self, field.name) is None else getattr(self, field.name).clone()
+                )
+                for field in fields(self)
+            }
         )

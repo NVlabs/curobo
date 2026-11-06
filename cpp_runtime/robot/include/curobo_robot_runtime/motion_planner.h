@@ -36,6 +36,8 @@ struct MotionPlanningConfig {
     config.cspace_rank_weight = 5.0F;
     return config;
   }();
+  /** False skips inverse dynamics and effort checks, including time optimization. */
+  bool enable_inverse_dynamics{true};
 };
 
 /** Fixed artifact dimensions needed to allocate motion-planning outputs. */

@@ -28,7 +28,7 @@ from curobo._src.types.robot import RobotCfg
 from curobo._src.types.spline_layout import SplineLayout
 from curobo._src.util.config_io import join_path, resolve_config
 from curobo._src.util.logging import log_and_raise
-from curobo.content import get_robot_configs_path, get_scene_configs_path
+from curobo.content import get_robot_configs_path, get_scene_configs_path, get_task_configs_path
 
 RRT_GRAPH_PLANNER_ALGORITHMS = ("rrt",)
 GRAPH_PLANNER_ALGORITHMS = ("prm", *RRT_GRAPH_PLANNER_ALGORITHMS)
@@ -162,6 +162,7 @@ class MotionPlannerCfg:
         trajopt_metrics_rollout: Optional[Union[str, Dict[str, Any]]] = None,
         enable_timeopt: bool = True,
         num_knots: Optional[int] = None,
+        enable_inverse_dynamics: bool = True,
     ) -> MotionPlannerCfg:
         """Create a MotionPlannerCfg from robot, task, and scene configs.
 
@@ -175,6 +176,9 @@ class MotionPlannerCfg:
         objects where supported.
 
         Args:
+            enable_inverse_dynamics: Compute and constrain joint torque in IK, path search,
+                TrajOpt, validation, and timeopt. False skips inverse dynamics everywhere
+                while retaining collision and position/velocity/acceleration/jerk checks.
             enable_timeopt: Optimize timing for all optimized or fitted graph seeds before
                 selection. Enabled by default. Combine with enable_trajopt=False and
                 enable_graph_attempt=0 in the planning call for IK + graph search + timeopt.
@@ -367,6 +371,17 @@ class MotionPlannerCfg:
                 cache=collision_cache,
             )
 
+        if not enable_inverse_dynamics:
+            # Resolve copies so caller-owned task dictionaries remain unchanged.
+            def without_dynamics(config: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+                resolved = deepcopy(resolve_config(join_path(get_task_configs_path(), config)))
+                resolved["transition_model_cfg"]["compute_inverse_dynamics"] = False
+                return resolved
+
+            ik_transition_model = without_dynamics(ik_transition_model)
+            trajopt_transition_model = without_dynamics(trajopt_transition_model)
+            graph_planner_transition_model = without_dynamics(graph_planner_transition_model)
+
         resolved_ik_metrics_rollout = deepcopy(
             metrics_rollout if ik_metrics_rollout is None else ik_metrics_rollout
         )
@@ -409,6 +424,7 @@ class MotionPlannerCfg:
             interpolation_dt=interpolation_dt,
             interpolation_buffer_size=interpolation_buffer_size,
             enable_timeopt=enable_timeopt,
+            enable_inverse_dynamics=enable_inverse_dynamics,
             position_tolerance=position_tolerance,
             orientation_tolerance=orientation_tolerance,
             use_cuda_graph=use_cuda_graph,

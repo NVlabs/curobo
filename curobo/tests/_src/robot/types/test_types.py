@@ -784,7 +784,7 @@ class TestJointLimitsMethods:
         jerk = torch.tensor([[-50.0], [50.0]], **(cuda_device_cfg.as_torch_dict()))
         effort = torch.tensor([[100.0], [-100.0]], **(cuda_device_cfg.as_torch_dict()))  # Inverted
 
-        with pytest.raises(ValueError, match="lower effort limits must be less than upper"):
+        with pytest.raises(ValueError, match="lower effort limits must not exceed upper"):
             JointLimits(
                 joint_names=joint_names,
                 position=position,

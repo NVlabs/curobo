@@ -30,6 +30,8 @@ struct RrtConfig {
   bool check_effort_limits{false};
   /** Additional world clearance in meters, applied during geometric search. */
   float collision_activation_distance{0.0F};
+  /** Gaussian spread in the weighted configuration-space metric. */
+  float frontier_sample_scale{0.7F};
 };
 
 /** Fixed artifact dimensions needed to allocate RRT outputs. */

@@ -11,6 +11,7 @@ or dictionaries.
 from __future__ import annotations
 
 # Standard Library
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type, Union
 
@@ -84,6 +85,8 @@ class TrajOptSolverCfg:
 
     #: Optimize timing for every candidate before final validation and selection by duration.
     enable_timeopt: bool = True
+    #: Compute torque and enforce effort limits, including fixed-path timeopt.
+    enable_inverse_dynamics: bool = True
     #: Maximum initial optimization iterations before returning or refining a candidate.
     initial_max_iters: int = 100
     #: Initial iterations between native and dense success checks.
@@ -185,10 +188,13 @@ class TrajOptSolverCfg:
         initial_max_iters: Optional[int] = None,
         initial_check_interval: int = 50,
         num_knots: Optional[int] = None,
+        enable_inverse_dynamics: bool = True,
     ) -> TrajOptSolverCfg:
         """Create TrajOptSolverCfg from flexible inputs.
 
         Args:
+            enable_inverse_dynamics: False disables torque computation and effort limits
+                in optimization, validation, and timeopt; derivative limits remain active.
             num_knots: Fixed B-spline control count in [12, 1024]. None preserves the
                 transition configuration, which defaults to 16. More knots generally
                 increase motion duration and may increase planning time, but can
@@ -282,6 +288,9 @@ class TrajOptSolverCfg:
             num_envs=num_envs,
         )
 
+        if not enable_inverse_dynamics:
+            transition_model_dict = deepcopy(transition_model_dict)
+            transition_model_dict["transition_model_cfg"]["compute_inverse_dynamics"] = False
         transition = transition_model_dict["transition_model_cfg"]
         if num_knots is not None:
             if transition["control_space"] not in {
@@ -350,6 +359,7 @@ class TrajOptSolverCfg:
             interpolation_type=interpolation_type,
             interpolation_buffer_size=interpolation_buffer_size,
             enable_timeopt=enable_timeopt,
+            enable_inverse_dynamics=enable_inverse_dynamics,
             initial_max_iters=initial_max_iters,
             initial_check_interval=initial_check_interval,
         )

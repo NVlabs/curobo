@@ -27,7 +27,6 @@ if str(CUROBO_REPOSITORY_ROOT) not in sys.path:
 from cpp_runtime.robot.tools.export_device import ExportDevice  # noqa: E402
 
 MAX_RRT_PLANS = 128
-RRT_SAMPLE_BUFFER_SIZE = 2000
 
 TENSOR_SPECS = {
     "fixed_transforms": (torch.float32, "float32", "fixed_transforms.f32"),
@@ -1395,7 +1394,7 @@ def build_rrt_config(
     max_iterations: int,
     max_nodes_per_tree: int,
 ) -> tuple[Any, Any]:
-    """Resolve the current uniform bidirectional-RRT deployment profile."""
+    """Resolve the bidirectional-RRT deployment profile."""
     ensure_curobo_on_path()
     from curobo._src.graph_planner.config_graph_planner_resources import (
         GraphPlannerResourcesCfg,
@@ -1408,7 +1407,6 @@ def build_rrt_config(
         max_iterations=max_iterations,
         failure_extension_iterations=0,
         max_nodes_per_tree=max_nodes_per_tree,
-        sampling_policy="uniform",
     )
     return resources, planner
 
@@ -1429,26 +1427,24 @@ def build_rrt_tensors(params: Any, resources: Any, planner: Any) -> dict[str, to
     from curobo._src.graph_planner.rrt.rrt_path_shortcut import (
         _build_shortcut_pair_tables,
     )
+    from curobo._src.graph_planner.rrt.sampler_rrt import RRT_SAMPLE_BUFFER_SIZE
     from curobo._src.util.sampling.sequencer_halton import HaltonSequencer
 
     lower = params.joint_limits.position[0].detach().to(dtype=torch.float32)
     upper = params.joint_limits.position[1].detach().to(dtype=torch.float32)
-    sample_count = max(
-        RRT_SAMPLE_BUFFER_SIZE,
-        2 * MAX_RRT_PLANS * planner.samples_per_iteration,
-    )
     unit_samples = torch.as_tensor(
-        HaltonSequencer(params.num_dof, seed=resources.sampler_seed).random(sample_count),
+        HaltonSequencer(params.num_dof, seed=resources.sampler_seed).random(
+            RRT_SAMPLE_BUFFER_SIZE
+        ),
         device=lower.device,
         dtype=torch.float32,
     )
-    samples = lower.unsqueeze(0) + unit_samples * (upper - lower).unsqueeze(0)
     pairs, lookup = _build_shortcut_pair_tables(planner.shortcut_path_capacity)
     return {
         "rrt_position_lower": lower,
         "rrt_position_upper": upper,
         "rrt_distance_weight": torch.ones_like(lower),
-        "rrt_samples": samples,
+        "rrt_samples": unit_samples,
         "rrt_shortcut_pair_sources": torch.tensor(
             [source for source, _ in pairs], device=lower.device, dtype=torch.int32
         ),
@@ -1518,6 +1514,7 @@ def export_rrt_kernels(
         raise ValueError("native RRT steering supports at most 256 fixed edge steps")
     native_glue_names = (
         "prepare_samples",
+        "frontier_samples",
         "steer_edges",
         "evaluate_edges",
         "prepare_direct_edges",
@@ -2318,7 +2315,7 @@ def export_robot(args: argparse.Namespace) -> Path:
                 if name in ik_kernels:
                     rrt_kernels[name] = ik_kernels[name]
             rrt_manifest = {
-                "schema_version": 8,
+                "schema_version": 9,
                 "arch": arch,
                 "num_dof": params.num_dof,
                 "num_links": params.num_links,
@@ -2335,7 +2332,7 @@ def export_robot(args: argparse.Namespace) -> Path:
                 "fixed_steer_steps": rrt_planner.fixed_steer_steps,
                 "direct_steer_steps": rrt_direct_steer_steps,
                 "max_path_nodes": max_path_nodes,
-                "sample_buffer_size": RRT_SAMPLE_BUFFER_SIZE,
+                "sample_buffer_size": rrt_tensor_values["rrt_samples"].shape[0],
                 "max_batched_lanes": MAX_RRT_PLANS,
                 "shortcut_path_capacity": rrt_planner.shortcut_path_capacity,
                 "shortcut_state_capacity": rrt_shortcut_state_capacity,
