@@ -63,8 +63,10 @@ class TrajectoryTimeOpt:
         self._basis = CubicTimingBasis(config.timing_controls, self.device)
         self._output_grid_cpu = np.linspace(0, 1, config.num_intervals + 1)
         self._grid = self._basis.tensor(self._output_grid_cpu)
-        self._dynamics = Dynamics(
-            DynamicsCfg(model, config.robot.device_cfg, list(config.gravity))
+        self._dynamics = (
+            Dynamics(DynamicsCfg(model, config.robot.device_cfg, list(config.gravity)))
+            if config.enable_inverse_dynamics
+            else None
         )
         limits = model.joint_limits
         chosen = []
@@ -82,17 +84,23 @@ class TrajectoryTimeOpt:
                 explicit.detach()
                 * (config.jerk_limit_scale if name == "jerk" else config.limit_scale)
             )
-        lower, upper = config.torque_lower, config.torque_upper
-        if (lower is None or upper is None) and limits.effort is None:
-            log_and_raise("Explicit effort limits are required")
-        lower = limits.effort[0].contiguous() if lower is None else lower
-        upper = limits.effort[1].contiguous() if upper is None else upper
-        for name, value in (("torque_lower", lower), ("torque_upper", upper)):
-            self._check_tensor(name, value, (self.dof,))
-        if not bool(
-            torch.isfinite(lower).all() and torch.isfinite(upper).all() and (lower <= upper).all()
-        ):
-            log_and_raise("Torque bounds must be finite and ordered")
+        if config.enable_inverse_dynamics:
+            lower, upper = config.torque_lower, config.torque_upper
+            if (lower is None or upper is None) and limits.effort is None:
+                log_and_raise("Explicit effort limits are required")
+            lower = limits.effort[0].contiguous() if lower is None else lower
+            upper = limits.effort[1].contiguous() if upper is None else upper
+            for name, value in (("torque_lower", lower), ("torque_upper", upper)):
+                self._check_tensor(name, value, (self.dof,))
+            if not bool(
+                torch.isfinite(lower).all() and torch.isfinite(upper).all() and (lower <= upper).all()
+            ):
+                log_and_raise("Torque bounds must be finite and ordered")
+        else:
+            # Zero torque coefficients and unit slack remove the effort rows from the
+            # fixed-layout solver without imposing any bound on physical torque.
+            lower = -torch.ones(self.dof, device=self.device)
+            upper = torch.ones_like(lower)
         self._limits = tuple(
             chosen
             + [
@@ -129,7 +137,7 @@ class TrajectoryTimeOpt:
                 jerk=self._joint_output[3],
                 joint_names=list(model.joint_names),
             ),
-            torque=self._torque_output,
+            torque=self._torque_output if config.enable_inverse_dynamics else None,
             success=self._success,
             status=self._status,
             optimization_ok=self._optimization_ok,
@@ -184,7 +192,8 @@ class TrajectoryTimeOpt:
         self._q, self._qd, self._qdd = [self._grid.new_empty(shape) for _ in range(3)]
         self._state = JointState(position=self._q, velocity=self._qd, acceleration=self._qdd)
         self._coefficients = self._grid.new_empty(shape)
-        self._dynamics.setup_batch_size(batch_size=self.batch_size * 3 * len(grid))
+        if self._dynamics is not None:
+            self._dynamics.setup_batch_size(batch_size=self.batch_size * 3 * len(grid))
         self._evaluation = TimeOptProblem(
             self._basis, grid, self._path, self._coefficients, self._limits, config.num_intervals
         )
@@ -195,6 +204,8 @@ class TrajectoryTimeOpt:
 
     def _compute_torque(self, state: JointState) -> torch.Tensor:
         """Reuse the preparation workspace for sequential dense torque validation."""
+        if self._dynamics is None:
+            log_and_raise("Inverse dynamics is disabled for this timeopt instance")
         count = state.position.numel() // self.dof
         if count > self._dynamics._tau_buffer.shape[0]:
             # Captured preparation must be rebound if validation grows the workspace.
@@ -244,8 +255,12 @@ class TrajectoryTimeOpt:
             self._qdd,
             int(not self._reference),
         )
-        torque = self._dynamics.compute_inverse_dynamics(self._state)
-        self._solver.prepare_coefficients(torque)
+        torque = (
+            self._coefficients
+            if self._dynamics is None
+            else self._dynamics.compute_inverse_dynamics(self._state)
+        )
+        self._solver.prepare_coefficients(torque, self.config.enable_inverse_dynamics)
 
     def timeopt(
         self,

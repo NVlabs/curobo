@@ -66,6 +66,7 @@ class TimeOptSolver:
                 n_knots=solver.action_horizon,
                 gravity=gravity,
                 use_cuda_graph=solver.config.use_cuda_graph,
+                enable_inverse_dynamics=solver.config.enable_inverse_dynamics,
             )
         )
         capacity = solver.config.interpolation_buffer_size
@@ -113,13 +114,14 @@ class TimeOptSolver:
                 dim=(-2, -1)
             )
         state = self.rollout.transition_model.compute_augmented_state(sampled)
-        torque = state.joint_torque
-        if torque is None:
-            torque = self.optimizer._compute_torque(sampled)
-        finite &= torch.isfinite(torque).all(dim=(-2, -1))
-        finite &= ((torque >= limits.effort[0] - 1e-4) & (torque <= limits.effort[1] + 1e-4)).all(
-            dim=(-2, -1)
-        )
+        if self.config.enable_inverse_dynamics:
+            torque = state.joint_torque
+            if torque is None:
+                torque = self.optimizer._compute_torque(sampled)
+            finite &= torch.isfinite(torque).all(dim=(-2, -1))
+            finite &= ((torque >= limits.effort[0] - 1e-4) & (torque <= limits.effort[1] + 1e-4)).all(
+                dim=(-2, -1)
+            )
         metrics = self.rollout.compute_metrics_from_state(state)
         feasible = metrics.feasible
         if isinstance(feasible, torch.Tensor):

@@ -49,7 +49,6 @@ from curobo._src.graph_planner.rrt.rrt_projection_sample import (
     RRTSampleProjectionResult,
     RRTSampleProjector,
 )
-from curobo._src.graph_planner.rrt.rrt_sampling import InformedRRTProposalGenerator
 from curobo._src.graph_planner.rrt.rrt_tree_kernel import (
     RRTPathReconstructionBuffers,
     RRTTreeKernelConfig,
@@ -63,7 +62,6 @@ from curobo._src.types.tool_pose import GoalToolPose
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise
-from curobo._src.util.sampling.sample_buffer import SampleBuffer
 from curobo._src.util.warp import get_warp_device_stream
 
 
@@ -79,16 +77,9 @@ class BiRRTConfig:
     max_extension_distance: Optional[float] = None
     cspace_resolution: float = 0.02
     fixed_steer_steps: int = 64
-    goal_bias_count: int = 0
 
-    # Sampling remains request data for the same growth-step engine.
-    sampling_policy: str = "uniform"
-    informed_sample_count: int = 8
-    informed_initial_scale: float = 1.5
-    informed_growth_factor: float = 1.25
-    informed_growth_interval: int = 4
-    informed_max_scale: float = 3.0
-    informed_min_slack: Optional[float] = None
+    # Gaussian spread in the weighted configuration-space metric.
+    frontier_sample_scale: float = 0.7
 
     profile_cuda_events: bool = False
     profile_cuda_event_phase: str = "step_total"
@@ -151,48 +142,8 @@ class BiRRTConfig:
                 f"({required_nodes})"
             )
 
-        valid_sampling_policies = {"uniform", "mixed_ellipsoid"}
-        if self.sampling_policy not in valid_sampling_policies:
-            log_and_raise(f"sampling_policy must be one of {sorted(valid_sampling_policies)}")
-        if (
-            not isinstance(self.informed_sample_count, int)
-            or isinstance(self.informed_sample_count, bool)
-            or self.informed_sample_count < 1
-        ):
-            log_and_raise("informed_sample_count must be a positive integer")
-        if (
-            not isinstance(self.goal_bias_count, int)
-            or isinstance(self.goal_bias_count, bool)
-            or not 0 <= self.goal_bias_count <= self.samples_per_iteration
-        ):
-            log_and_raise("goal_bias_count must be an integer within the proposal batch")
-        if (
-            self.sampling_policy == "mixed_ellipsoid"
-            and self.goal_bias_count + self.informed_sample_count > self.samples_per_iteration
-        ):
-            log_and_raise(
-                "goal_bias_count + informed_sample_count cannot exceed samples_per_iteration"
-            )
-        for field_name, field_value in (
-            ("informed_initial_scale", self.informed_initial_scale),
-            ("informed_growth_factor", self.informed_growth_factor),
-            ("informed_max_scale", self.informed_max_scale),
-        ):
-            if not math.isfinite(field_value) or field_value < 1.0:
-                log_and_raise(f"{field_name} must be finite and at least 1.0")
-        if self.informed_max_scale < self.informed_initial_scale:
-            log_and_raise("informed_max_scale cannot be smaller than informed_initial_scale")
-        if (
-            not isinstance(self.informed_growth_interval, int)
-            or isinstance(self.informed_growth_interval, bool)
-            or self.informed_growth_interval < 1
-        ):
-            log_and_raise("informed_growth_interval must be a positive integer")
-        if self.informed_min_slack is None:
-            self.informed_min_slack = 2.0 * self.max_extension_distance
-        elif not math.isfinite(self.informed_min_slack) or self.informed_min_slack < 0.0:
-            log_and_raise("informed_min_slack must be finite and non-negative")
-
+        if not math.isfinite(self.frontier_sample_scale) or self.frontier_sample_scale <= 0.0:
+            log_and_raise("frontier_sample_scale must be finite and positive")
         if (
             not isinstance(self.shortcut_path_capacity, int)
             or isinstance(self.shortcut_path_capacity, bool)
@@ -313,7 +264,6 @@ class BiRRTPlanner:
         self.config = config or BiRRTConfig()
         if resources.device_cfg.dtype != torch.float32:
             log_and_raise("BiRRT currently requires float32 planner tensors")
-
         self._shortcut_state_capacity = (
             resources.config.feasibility_buffer_size
             if self.config.shortcut_state_capacity is None
@@ -335,66 +285,6 @@ class BiRRTPlanner:
         self._constraint_tool_relative_transform_criteria: Optional[
             Dict[str, ToolRelativeTransformCriteria]
         ] = None
-        self._informed_proposal_generator = None
-        self._informed_scale_schedule = None
-        self._informed_latent_schedule: Optional[torch.Tensor] = None
-        self._informed_proposal_executors: dict[int, GraphExecutor] = {}
-        if self.config.sampling_policy == "mixed_ellipsoid":
-            if self.config.informed_min_slack is None:
-                log_and_raise("informed_min_slack was not resolved by config validation")
-            proposal_generator = InformedRRTProposalGenerator(
-                resources.cspace_distance_weight,
-                resources.action_bound_lows,
-                resources.action_bound_highs,
-                self.config.samples_per_iteration,
-                self.config.informed_sample_count,
-                self.config.goal_bias_count,
-                self.config.informed_min_slack,
-            ).to(resources.device_cfg.device)
-            self._informed_proposal_generator = torch.compile(
-                proposal_generator,
-                fullgraph=True,
-                dynamic=True,
-                options={"triton.cudagraphs": False},
-            )
-            primary_sample_buffer = resources.uniform_sampler.action_sample_generator
-            informed_latent_sample_buffer = SampleBuffer.create_halton_sample_buffer(
-                ndims=resources.action_dim,
-                up_bounds=torch.ones_like(resources.action_bound_highs),
-                low_bounds=torch.zeros_like(resources.action_bound_lows),
-                store_buffer=primary_sample_buffer._store_buffer,
-                seed=resources.config.sampler_seed + 1,
-                device_cfg=resources.device_cfg,
-            )
-            iteration_budget = (
-                self.config.max_iterations + self.config.failure_extension_iterations
-            )
-            latent_values = self.config.informed_sample_count * (resources.action_dim + 1)
-            latent_rows = (latent_values + resources.action_dim - 1) // resources.action_dim
-            latent_sample_count = iteration_budget * self.config.max_batched_lanes * latent_rows
-            self._informed_latent_schedule = informed_latent_sample_buffer.get_samples(
-                latent_sample_count,
-                bounded=False,
-            ).reshape(
-                iteration_budget,
-                self.config.max_batched_lanes,
-                latent_rows,
-                resources.action_dim,
-            )
-            self._informed_scale_schedule = torch.tensor(
-                [
-                    min(
-                        self.config.informed_max_scale,
-                        self.config.informed_initial_scale
-                        * self.config.informed_growth_factor
-                        ** (iteration // self.config.informed_growth_interval),
-                    )
-                    for iteration in range(iteration_budget)
-                ],
-                device=resources.device_cfg.device,
-                dtype=resources.device_cfg.dtype,
-            )
-
         self._tree_kernel_runner = RRTTreeKernelRunner(
             RRTTreeKernelConfig(
                 action_dim=resources.action_dim,
@@ -958,71 +848,20 @@ class BiRRTPlanner:
             float(update["displacement_max"]),
         )
 
-    def _sample_batched(self, batch_size: int) -> torch.Tensor:
-        """Draw one fixed-width proposal batch for every query lane."""
-        return self.resources.uniform_sampler.generate_action_samples(
-            batch_size * self.config.samples_per_iteration,
-            bounded=True,
-        ).reshape(batch_size, self.config.samples_per_iteration, self.resources.action_dim)
-
-    def _sample_mixed_batched(
-        self,
-        batch_size: int,
-        starts: torch.Tensor,
-        goals: torch.Tensor,
-        iteration: int,
-    ) -> torch.Tensor:
-        """Draw uniform fallbacks and filled-ball latents in one fixed RNG call."""
-        if self._informed_proposal_generator is None:
-            log_and_raise("mixed ellipsoid sampler was not initialized")
-        action_dim = self.resources.action_dim
-        informed_count = self.config.informed_sample_count
-        latent_values = informed_count * (action_dim + 1)
-        latent_rows = (latent_values + action_dim - 1) // action_dim
-        rows_per_lane = self.config.samples_per_iteration + latent_rows
-        primary_sample_buffer = self.resources.uniform_sampler.action_sample_generator
-        uniform_raw = primary_sample_buffer.get_samples(
-            batch_size * self.config.samples_per_iteration,
-            bounded=False,
-        ).reshape(batch_size, self.config.samples_per_iteration, action_dim)
-        if self._informed_latent_schedule is None:
-            log_and_raise("mixed ellipsoid latent schedule was not initialized")
-        if batch_size > self._informed_latent_schedule.shape[1]:
-            log_and_raise("mixed ellipsoid batch exceeds max_batched_lanes")
-        latent_raw = self._informed_latent_schedule[iteration, :batch_size]
-        raw = torch.cat((uniform_raw, latent_raw), dim=1).reshape(
-            batch_size, rows_per_lane, action_dim
+    def _generate_proposal_batch(self, batch_size: int, iteration: int) -> torch.Tensor:
+        """Draw the hybrid proposal batch using the preceding growth endpoints."""
+        active = passive = None
+        if iteration > 0:
+            previous = self._workspaces[batch_size].growth_steps[(iteration - 1) % 2]
+            active = previous.active_append.candidates
+            passive = previous.passive_append.candidates
+        return self.resources.sampler.generate_proposals(
+            batch_size,
+            self.config.samples_per_iteration,
+            active,
+            passive,
+            self.config.frontier_sample_scale,
         )
-        if self._informed_scale_schedule is None:
-            log_and_raise("mixed ellipsoid scale schedule was not initialized")
-        executor = self._informed_proposal_executors.get(batch_size)
-        if executor is None:
-            executor = create_graph_executor(
-                capture_fn=self._informed_proposal_generator,
-                device=raw.device,
-                use_cuda_graph=True,
-                clone_outputs=False,
-            )
-            self._informed_proposal_executors[batch_size] = executor
-        samples, _ = executor(
-            raw,
-            starts,
-            goals,
-            self._informed_scale_schedule[iteration],
-        )
-        return samples
-
-    def _generate_proposal_batch(
-        self,
-        batch_size: int,
-        starts: torch.Tensor,
-        goals: torch.Tensor,
-        iteration: int,
-    ) -> torch.Tensor:
-        """Use the unchanged uniform path or the opt-in mixed focal sampler."""
-        if self.config.sampling_policy == "uniform":
-            return self._sample_batched(batch_size)
-        return self._sample_mixed_batched(batch_size, starts, goals, iteration)
 
     def _interpolate_paths(
         self,
@@ -1464,21 +1303,7 @@ class BiRRTPlanner:
                 break
             start_is_active = iteration % 2 == 0
             profile_checkpoint("growth_pre_control")
-            samples = self._generate_proposal_batch(
-                workspace.batch_size,
-                workspace.start_tree.nodes[:, 0],
-                workspace.goal_tree.nodes[:, 0],
-                iteration,
-            )
-            if self.config.goal_bias_count > 0:
-                bias_target = (
-                    workspace.goal_tree.nodes[:, 0]
-                    if start_is_active
-                    else workspace.start_tree.nodes[:, 0]
-                )
-                samples[:, : self.config.goal_bias_count].copy_(
-                    bias_target.view(workspace.batch_size, 1, -1)
-                )
+            samples = self._generate_proposal_batch(workspace.batch_size, iteration)
             profile_checkpoint("growth_sample")
             active = workspace.query_active
             if self.config.sample_projection is not None:
@@ -1936,7 +1761,7 @@ class BiRRTPlanner:
         self._get_batched_workspace(batch_size)
 
     def reset_seed(self) -> None:
-        """Reset the primary sample stream; informed latents are immutable."""
+        """Reset the hybrid sampler to its initial proposal sequence."""
         self.resources.reset_seed()
 
     def _get_projector(
@@ -2147,9 +1972,6 @@ class BiRRTPlanner:
         """Release executor and CUDA graph state owned by this planner and its resources."""
         if self._sample_projector is not None:
             self._sample_projector.reset_cuda_graph()
-        for executor in self._informed_proposal_executors.values():
-            executor.reset()
-        self._informed_proposal_executors.clear()
         for workspace in self._workspaces.values():
             for executor in workspace.preprocessing_executors.values():
                 executor.reset()
@@ -2263,11 +2085,11 @@ class BiRRTPlanner:
 
     def _generate_warmup_actions(self, action_count: int) -> torch.Tensor:
         """Return a fixed-size bounded batch even when rejection leaves too few samples."""
-        actions = self.resources.uniform_sampler.generate_feasible_action_samples(action_count)
+        actions = self.resources.sampler.generate_feasible_action_samples(action_count)
         missing_count = action_count - actions.shape[0]
         if missing_count <= 0:
             return actions[:action_count]
-        fallback = self.resources.uniform_sampler.generate_action_samples(
+        fallback = self.resources.sampler.generate_action_samples(
             missing_count,
             bounded=True,
         )
@@ -2300,17 +2122,6 @@ class BiRRTPlanner:
         while lane_bucket < maximum_lane_count:
             lane_bucket *= 2
             lane_counts.add(lane_bucket)
-
-        if self.config.sampling_policy == "mixed_ellipsoid":
-            for lane_count in sorted(lane_counts):
-                self._sample_mixed_batched(
-                    lane_count,
-                    actions[0:1].expand(lane_count, -1),
-                    actions[1:2].expand(lane_count, -1),
-                    0,
-                )
-            if actions.is_cuda:
-                torch.cuda.synchronize(actions.device)
 
         if (
             self._sample_projector is not None

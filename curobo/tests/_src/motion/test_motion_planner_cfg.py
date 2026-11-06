@@ -400,7 +400,7 @@ class TestMotionPlannerCfgDefaults:
         import inspect
 
         parameter_names = list(inspect.signature(MotionPlannerCfg.create).parameters)
-        assert parameter_names[-10:-4] == [
+        assert parameter_names[-11:-5] == [
             "graph_planner_algorithm",
             "rrt_planner_config",
             "fit_graph_seed_to_bspline",
@@ -408,11 +408,12 @@ class TestMotionPlannerCfgDefaults:
             "run_trajopt_on_graph_seed",
             "enable_trajopt",
         ]
-        assert parameter_names[-4:] == [
+        assert parameter_names[-5:] == [
             "ik_metrics_rollout",
             "trajopt_metrics_rollout",
             "enable_timeopt",
             "num_knots",
+            "enable_inverse_dynamics",
         ]
 
     def test_default_graph_seed_bspline_fit_parameter(self):
@@ -488,3 +489,22 @@ class TestMotionPlannerCfgConfigContents:
     def test_config_without_scene_has_none_scene_collision_cfg(self, motion_planner_config):
         """Test config without scene model has None scene_collision_cfg."""
         assert motion_planner_config.scene_collision_cfg is None
+
+
+def test_inverse_dynamics_opt_out_preserves_task_dictionary(cuda_device_cfg: DeviceCfg) -> None:
+    """Disabling one planner must not change a task reused by a dynamics-enabled planner."""
+    from copy import deepcopy
+
+    from curobo._src.util.config_io import join_path, resolve_config
+    from curobo.content import get_task_configs_path
+
+    transition = resolve_config(join_path(get_task_configs_path(), "trajopt/transition_bspline_trajopt.yml"))
+    transition["transition_model_cfg"]["compute_inverse_dynamics"] = True
+    before = deepcopy(transition)
+    config = TrajOptSolverCfg.create(
+        "franka.yml", transition_model=transition, device_cfg=cuda_device_cfg,
+        enable_inverse_dynamics=False,
+    )
+    assert transition == before
+    assert not config.metrics_rollout_config.transition_model_cfg.compute_inverse_dynamics
+    assert config.enable_timeopt

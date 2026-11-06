@@ -205,7 +205,7 @@ cudaError_t launch_timeopt_solve(const TimeOptWorkspace &w, cudaStream_t stream)
   const dim3 grid(w.tiles, w.batch);
   rt::fused_coefficients_and_seed_bounds<<<dim3(w.seed_tiles, w.batch), 256, 0, stream>>>(
       w.path, w.tau, w.coefficients, w.vlim, w.alim, w.jlim, w.lower, w.upper, w.seed_bounds,
-      w.points, w.dof, w.batch, w.seed_tiles);
+      w.points, w.dof, w.batch, w.seed_tiles, w.enable_inverse_dynamics);
   rt::fused_prepare<<<grid, 256, 0, stream>>>(
       meta, w.offsets, basis, w.path, w.coefficients, w.vlim, w.alim, w.jlim,
       w.lower, w.upper, w.seed_bounds, reinterpret_cast<const float2 *>(w.reference_speed), w.state,

@@ -143,6 +143,12 @@ MotionPlannerRuntime::MotionPlannerRuntime(
       config_(config),
       manifest_(curobo_robot_runtime::load_motion_planning_manifest(
           artifact_directory_)) {
+  if (!config_.enable_inverse_dynamics) {
+    config_.inverse_kinematics.check_effort_limits = false;
+    config_.rrt.check_effort_limits = false;
+    config_.trajectory_optimization.check_effort_limits = false;
+    config_.trajectory_optimization.enable_inverse_dynamics = false;
+  }
   validate_config();
   CRR_CUDA_CHECK(
       cudaSetDevice(config_.trajectory_optimization.device_ordinal));

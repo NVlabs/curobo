@@ -207,3 +207,46 @@ def test_batched_timeopt_selects_per_problem() -> None:
             )
     finally:
         planner.destroy()
+
+
+@pytest.mark.parametrize("algorithm", ["prm", "rrt"])
+@pytest.mark.parametrize("enable_timeopt", [False, True])
+def test_motion_planning_without_inverse_dynamics(
+    algorithm: str, enable_timeopt: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The public switch covers IK, graph search, TrajOpt, dense validation and timeopt."""
+    from curobo._src.robot.dynamics.dynamics import Dynamics
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("Motion planning invoked inverse dynamics while disabled")
+
+    monkeypatch.setattr(Dynamics, "__init__", forbidden)
+    monkeypatch.setattr(Dynamics, "compute_inverse_dynamics", forbidden)
+    config = MotionPlannerCfg.create(
+        "franka.yml", num_ik_seeds=16, num_trajopt_seeds=2,
+        graph_planner_algorithm=algorithm, enable_inverse_dynamics=False,
+        enable_timeopt=enable_timeopt, collision_cache={"cuboid": 1}, use_cuda_graph=True,
+    )
+    assert config.trajopt_solver_config.enable_timeopt is enable_timeopt
+    with MotionPlanner(config) as planner:
+        start = JointState.from_position(
+            planner.default_joint_state.position.view(1, -1).clone(),
+            joint_names=planner.joint_names,
+        )
+        goal = start.clone()
+        goal.position[:, 0] += 0.2
+        goal_pose = planner.compute_kinematics(goal).tool_poses.as_goal()
+        for _ in range(2):
+            result = planner.plan_pose(goal_pose, start, max_attempts=2, enable_graph_attempt=0)
+            assert result is not None and result.success.item()
+        assert planner.last_graph_calls > 0
+        if enable_timeopt:
+            assert planner.trajopt_solver._timeopt.optimizer._dynamics is None
+
+        from curobo.scene import Cuboid, Scene
+
+        planner.update_world(Scene(cuboid=[
+            Cuboid(name="blocked", dims=[10.0, 10.0, 10.0], pose=[0, 0, 0, 1, 0, 0, 0])
+        ]))
+        blocked = planner.plan_pose(goal_pose, start, max_attempts=1)
+        assert blocked is None or not blocked.success.any()

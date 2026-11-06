@@ -893,6 +893,34 @@ def test_rnea_effort_limit_rejection(
     assert result.returncode != 0
 
 
+@pytest.mark.parametrize("seed", (0, 7))
+def test_rrt_export_matches_python_sample_bank(monkeypatch, seed: int) -> None:
+    """Export the same unit-cube stream used by Python's hybrid sampler."""
+    monkeypatch.syspath_prepend(str(ROBOT_ROOT / "tools"))
+    from export_robot_aot import build_rrt_tensors
+
+    from curobo._src.graph_planner.rrt.sampler_rrt import RRTSampler
+    from curobo._src.types.device_cfg import DeviceCfg
+
+    device_cfg = DeviceCfg()
+    lower = torch.tensor([-2.0, -1.0, 0.1], **device_cfg.as_torch_dict())
+    upper = torch.tensor([1.0, 3.0, 2.5], **device_cfg.as_torch_dict())
+    sampler = RRTSampler(
+        lower, upper, 1, seed, device_cfg, torch.isfinite, torch.ones_like(lower)
+    )
+    params = SimpleNamespace(
+        num_dof=3, joint_limits=SimpleNamespace(position=torch.stack((lower, upper)))
+    )
+    tensors = build_rrt_tensors(
+        params, SimpleNamespace(sampler_seed=seed), SimpleNamespace(shortcut_path_capacity=16)
+    )
+    exported = tensors["rrt_samples"]
+    assert exported.shape == sampler.action_sample_generator._sample_buffer.shape
+    torch.testing.assert_close(
+        exported, sampler.generate_action_samples(len(exported), bounded=False), rtol=0, atol=0
+    )
+
+
 def test_exported_rrt_runtime() -> None:
     """Exercise direct and obstacle-avoiding bidirectional RRT in C++."""
     artifact_value = os.environ.get("CUROBO_ROBOT_TEST_ARTIFACT_DIR")
@@ -908,7 +936,7 @@ def test_exported_rrt_runtime() -> None:
         pytest.skip(f"build the native RRT test first: {executable}")
     artifact = Path(artifact_value).resolve()
     manifest = json.loads((artifact / "robot_rrt_manifest.json").read_text())
-    assert manifest["schema_version"] == 8
+    assert manifest["schema_version"] == 9
     assert manifest["direct_steer_steps"] > manifest["fixed_steer_steps"]
     assert manifest["shortcut_path_capacity"] == 16
     for kernel in (
@@ -925,6 +953,8 @@ def test_exported_rrt_runtime() -> None:
     samples = np.fromfile(artifact / sample_tensor["file"], dtype=np.float32).reshape(
         sample_tensor["shape"]
     )
+    assert len(samples) == manifest["sample_buffer_size"]
+    assert np.all((samples >= 0.0) & (samples < 1.0))
     lane_rows = manifest["samples_per_iteration"]
     assert not np.array_equal(samples[:lane_rows], samples[lane_rows : 2 * lane_rows])
     subprocess.run(

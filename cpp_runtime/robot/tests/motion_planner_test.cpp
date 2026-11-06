@@ -132,6 +132,8 @@ int main(int argc, char** argv) {
         config.trajectory_optimization.refinement_iterations != 25 ||
         config.trajectory_optimization.finetune_attempts != 1 ||
         !config.trajectory_optimization.enable_timeopt ||
+        !config.enable_inverse_dynamics ||
+        !config.trajectory_optimization.enable_inverse_dynamics ||
         curobo::robot::PoseMotionPlanningRequest{}.finetune_attempts != 1 ||
         curobo::robot::PoseMotionPlanningRequest{}.max_attempts != 20 ||
         config.trajectory_optimization.initial_dt_scale != 1.25F ||
@@ -247,6 +249,28 @@ int main(int argc, char** argv) {
     for (const float value : timing) {
       if (!std::isfinite(value) || value <= 0.0F) {
         throw std::runtime_error("planner timing controls must be finite and positive");
+      }
+    }
+
+    // A pipeline-wide opt-out overrides all per-stage effort flags, including timeopt.
+    auto kinematic_config = config;
+    kinematic_config.enable_inverse_dynamics = false;
+    curobo::robot::MotionPlanner kinematic_planner(argv[1], kinematic_config);
+    const auto& resolved = kinematic_planner.config();
+    if (resolved.inverse_kinematics.check_effort_limits || resolved.rrt.check_effort_limits ||
+        resolved.trajectory_optimization.check_effort_limits ||
+        resolved.trajectory_optimization.enable_inverse_dynamics) {
+      throw std::runtime_error("inverse dynamics opt-out did not reach every stage");
+    }
+    auto impossible_payload = payload;
+    impossible_payload.mass = 1000000.0F;
+    kinematic_planner.update_links_inertial({impossible_payload});
+    for (int replay = 0; replay < 2; ++replay) {
+      kinematic_planner.plan(request);
+      check_cuda(cudaDeviceSynchronize());
+      success.download(&success_value);
+      if (success_value != 1 || kinematic_planner.timeopt_trajectory().timing_controls == nullptr) {
+        throw std::runtime_error("kinematic-only planning rejected an irrelevant payload torque");
       }
     }
 

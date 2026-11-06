@@ -32,6 +32,8 @@ struct TrajectoryTimeOptConfig {
    * Disable for fitted static RRT paths without reference timing. */
   bool reference_timing{true};
   bool use_cuda_graph{true};
+  /** False skips inverse dynamics and effort checks, including time optimization. */
+  bool enable_inverse_dynamics{true};
 };
 
 /** Contiguous CUDA float32 inputs. Knots: [B,K,D], boundaries: [B,D], dt: [B].
@@ -59,6 +61,7 @@ struct TrajectoryTimeOptResult {
   const float *velocity{nullptr};
   const float *acceleration{nullptr};
   const float *jerk{nullptr};
+  /** Null when inverse dynamics is disabled. */
   const float *torque{nullptr};
   const float *uniform_duration{nullptr};
   const uint8_t *success{nullptr};

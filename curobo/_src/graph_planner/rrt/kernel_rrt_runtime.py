@@ -13,6 +13,90 @@ import warp as wp
 from curobo._src.util.warp import warp_kernel
 
 
+@warp_kernel("rrt_uniform_samples", enable_backward=False)
+def sample_uniform_rrt(
+    samples: wp.array2d(dtype=wp.float32),
+    lower: wp.array(dtype=wp.float32),
+    upper: wp.array(dtype=wp.float32),
+    desired: wp.array2d(dtype=wp.float32),
+    offset: wp.uint64,
+    seed: wp.int32,
+    bounded: wp.int32,
+):
+    """Continue a cached Halton design with independent toroidal shifts per cycle."""
+    row, joint = wp.tid()
+    index = offset + wp.uint64(row)
+    cycle = index / wp.uint64(samples.shape[0])
+    source = wp.int32(index % wp.uint64(samples.shape[0]))
+    value = samples[source, joint]
+    if cycle != wp.uint64(0):
+        cycle_seed = wp.uint32(seed) ^ wp.uint32(cycle) ^ wp.uint32(cycle >> wp.uint64(32))
+        rng = wp.rand_init(wp.int32(cycle_seed), joint)
+        value = value + wp.randf(rng)
+        value = value - wp.floor(value)
+    if bounded != 0:
+        value = lower[joint] + value * (upper[joint] - lower[joint])
+    desired[row, joint] = value
+
+
+@lru_cache(maxsize=None)
+def create_rrt_frontier_kernel(dof: int, candidates: int) -> Any:
+    """Sample around close opposing tree frontiers, retaining uniform exploration."""
+    fixed_dof = wp.constant(dof)
+    fixed_candidates = wp.constant(candidates)
+    neighbor_count = wp.constant(min(4, candidates))
+
+    def _sample_frontier_template(
+        uniform: wp.array2d(dtype=wp.float32),
+        active: wp.array2d(dtype=wp.float32),
+        passive: wp.array2d(dtype=wp.float32),
+        lower: wp.array(dtype=wp.float32),
+        upper: wp.array(dtype=wp.float32),
+        weight: wp.array(dtype=wp.float32),
+        output: wp.array2d(dtype=wp.float32),
+        offset: wp.uint64,
+        seed: wp.int32,
+        guided_count: wp.int32,
+        scale: wp.float32,
+    ):
+        row = wp.tid()
+        slot = row % fixed_candidates
+        if slot >= guided_count:
+            for joint in range(fixed_dof):
+                output[row, joint] = uniform[row, joint]
+        else:
+            base = (row / fixed_candidates) * fixed_candidates
+            distances = wp.vec4(wp.inf, wp.inf, wp.inf, wp.inf)
+            indices = wp.vec4i(0, 0, 0, 0)
+            for candidate in range(fixed_candidates):
+                candidate_index = candidate
+                distance = wp.float32(0.0)
+                for joint in range(fixed_dof):
+                    delta = (active[base + candidate, joint] - passive[base + candidate, joint])
+                    distance += delta * delta * weight[joint] * weight[joint]
+                # Stable insertion keeps ties reproducible across both runtimes.
+                for rank in range(4):
+                    if distance < distances[rank]:
+                        old_distance = distances[rank]
+                        old_index = indices[rank]
+                        distances[rank] = distance
+                        indices[rank] = candidate_index
+                        distance = old_distance
+                        candidate_index = old_index
+            source = base + indices[slot % neighbor_count]
+            index = offset + wp.uint64(row)
+            noise_seed = wp.uint32(seed) ^ wp.uint32(index >> wp.uint64(32))
+            rng = wp.rand_init(wp.int32(noise_seed), wp.int32(wp.uint32(index)))
+            for joint in range(fixed_dof):
+                center = wp.float32(0.5) * (active[source, joint] + passive[source, joint])
+                value = center + scale * wp.randn(rng) / weight[joint]
+                output[row, joint] = wp.clamp(value, lower[joint], upper[joint])
+
+    return warp_kernel(
+        f"rrt_frontier_samples_{dof}_{candidates}", enable_backward=False
+    )(_sample_frontier_template)
+
+
 @lru_cache(maxsize=None)
 def create_rrt_runtime_kernels(
     dof: int,
@@ -92,19 +176,6 @@ def create_rrt_runtime_kernels(
         f"rrt_runtime_reset_workspace_{dof}",
         enable_backward=False,
     )(_reset_workspace_template)
-
-    def _prepare_samples_template(
-        samples: wp.array2d(dtype=wp.float32),
-        desired: wp.array2d(dtype=wp.float32),
-        candidates_per_plan: wp.int32,
-    ):
-        edge_idx, joint_idx = wp.tid()
-        desired[edge_idx, joint_idx] = samples[edge_idx, joint_idx]
-
-    prepare_samples = warp_kernel(
-        f"rrt_runtime_prepare_samples_{dof}_{max_candidates}",
-        enable_backward=False,
-    )(_prepare_samples_template)
 
     def _steer_edges_template(
         starts: wp.array2d(dtype=wp.float32),
@@ -527,7 +598,8 @@ def create_rrt_runtime_kernels(
 
     return {
         "reset_workspace": reset_workspace,
-        "prepare_samples": prepare_samples,
+        "prepare_samples": sample_uniform_rrt,
+        "frontier_samples": create_rrt_frontier_kernel(dof, max_candidates),
         "steer_edges": steer_edges,
         "evaluate_edges": evaluate_edges,
         "prepare_direct_edges": prepare_direct_edges,

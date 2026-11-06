@@ -199,7 +199,7 @@ def test_projection_rejects_invalid_eligible_masks(eligible_mask):
 
 
 def test_projection_rejects_eligible_mask_on_another_device(resources: RRTPlannerResources):
-    samples = resources.uniform_sampler.generate_action_samples(2, bounded=True)
+    samples = resources.sampler.generate_action_samples(2, bounded=True)
     eligible_mask = torch.ones(2, dtype=torch.bool)
 
     with pytest.raises(ValueError, match="eligible_mask"):
@@ -415,7 +415,7 @@ def test_cuda_graph_mode_rejects_cpu_samples_before_feasibility_work():
 
 def test_sample_projection_repairs_a_bounded_number_of_samples(resources: RRTPlannerResources):
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_action_samples(128, bounded=True)
+    samples = resources.sampler.generate_action_samples(128, bounded=True)
     result = RRTSampleProjector(resources).project(samples)
     displacement = torch.linalg.vector_norm(result.samples - samples, dim=-1)
     measured = result.violation_measured
@@ -484,7 +484,7 @@ def test_cuda_graph_warmup_primes_one_borrowed_output_replay(
 
 def test_cuda_graph_sample_projection_matches_eager(resources: RRTPlannerResources):
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_action_samples(64, bounded=True)
+    samples = resources.sampler.generate_action_samples(64, bounded=True)
     env_query_idx = torch.zeros(samples.shape[0], device=samples.device, dtype=torch.int32)
     eager = RRTSampleProjector(resources, RRTSampleProjectionConfig(iterations=5)).project(
         samples,
@@ -512,7 +512,7 @@ def test_projection_remains_a_lazy_optional_planner_call(resources: RRTPlannerRe
     planner = BiRRTPlanner(resources)
     assert planner._sample_projector is None
     resources.reset_seed()
-    samples = resources.uniform_sampler.generate_action_samples(64, bounded=True)
+    samples = resources.sampler.generate_action_samples(64, bounded=True)
 
     result = planner.project_samples(
         samples,

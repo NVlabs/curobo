@@ -34,13 +34,14 @@ static void save(const std::filesystem::path &path, const Value *pointer, size_t
 
 int main(int argc, char **argv) {
   try {
-    if (argc != 7)
-      throw std::invalid_argument("usage: timeopt_test ARTIFACT FIXTURE KNOTS REFERENCE SAMPLES INTERVALS");
+    if (argc != 7 && argc != 8)
+      throw std::invalid_argument("usage: timeopt_test ARTIFACT FIXTURE KNOTS REFERENCE SAMPLES INTERVALS [INVERSE_DYNAMICS]");
     curobo::robot::TrajectoryTimeOptConfig config;
     config.num_knots = std::stoi(argv[3]);
     config.reference_timing = std::stoi(argv[4]) != 0;
     config.sample_count = std::stoi(argv[5]);
     config.num_intervals = std::stoi(argv[6]);
+    config.enable_inverse_dynamics = argc == 7 || std::stoi(argv[7]) != 0;
     const std::filesystem::path root(argv[2]);
     cudaStream_t stream = nullptr;
     CRR_CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
@@ -123,7 +124,11 @@ int main(int argc, char **argv) {
       save(output("success"), result.success, batch);
       save(output("status"), result.status, batch);
       save(output("states"), result.position, 4 * batch * (config.num_intervals + 1) * dof);
-      save(output("torque"), result.torque, batch * (config.num_intervals + 1) * dof);
+      if (config.enable_inverse_dynamics) {
+        save(output("torque"), result.torque, batch * (config.num_intervals + 1) * dof);
+      } else if (result.torque != nullptr) {
+        throw std::runtime_error("disabled inverse dynamics must return null torque");
+      }
       save(output("samples"), samples.position, 4 * batch * config.sample_count * dof);
     }
     CRR_CUDA_CHECK(cudaStreamDestroy(stream));

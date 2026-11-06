@@ -75,7 +75,7 @@ __global__ void fused_coefficients_and_seed_bounds(const float *path, const floa
                                                    const float *alim, const float *jlim,
                                                    const float *lower, const float *upper,
                                                    float *out, int points, int dof, int batch_size,
-                                                   int tiles) {
+                                                   int tiles, int enable_inverse_dynamics) {
   const int item = blockIdx.x * blockDim.x + threadIdx.x, batch = blockIdx.y;
   const int count = points * dof;
   float hi = fused_infinity(), lo = 0.0f, valid = 1.0f;
@@ -85,9 +85,11 @@ __global__ void fused_coefficients_and_seed_bounds(const float *path, const floa
     const float a = fabsf(path[2 * batch_size * count + index]);
     const float j = fabsf(path[3 * batch_size * count + index]);
     const int offset = batch * 3 * count + item;
-    const float g = torque[offset];
-    const float dynamic = torque[offset + 2 * count] - g;
-    coefficients[offset] = torque[offset + count] - g;
+    // Disabled effort rows have zero coefficients and positive constant slack.
+    // Do not read the uninitialized dynamics buffer in kinematic-only mode.
+    const float g = enable_inverse_dynamics ? torque[offset] : 0.0f;
+    const float dynamic = enable_inverse_dynamics ? torque[offset + 2 * count] - g : 0.0f;
+    coefficients[offset] = enable_inverse_dynamics ? torque[offset + count] - g : 0.0f;
     coefficients[offset + count] = dynamic;
     coefficients[offset + 2 * count] = g;
     valid = isfinite(v) && isfinite(a) && isfinite(j) && isfinite(dynamic) && isfinite(g);

@@ -98,8 +98,8 @@ class TrajectoryTimeOptRuntime {
     load("polynomial", &w_.polynomial, 29 * 4 * 32);
     load("nodes", &w_.nodes, 6);
     const auto trajopt = curobo_robot_runtime::load_trajectory_optimization_manifest(directory);
-    const auto rollout = curobo_robot_runtime::load_rollout_manifest(directory);
-    if (trajopt.num_dof != w_.dof || rollout.num_dof != w_.dof) {
+    w_.enable_inverse_dynamics = config.enable_inverse_dynamics;
+    if (trajopt.num_dof != w_.dof) {
       throw std::invalid_argument("timeopt dynamics and limits have mismatched DoF");
     }
     const auto limit = [&](const auto &tensor, float scale, float **destination) {
@@ -116,23 +116,30 @@ class TrajectoryTimeOptRuntime {
     limit(trajopt.velocity_bounds, config.limit_scale, &w_.vlim);
     limit(trajopt.acceleration_bounds, config.limit_scale, &w_.alim);
     limit(trajopt.jerk_bounds, config.jerk_limit_scale, &w_.jlim);
-    const auto effort = read_floats(directory, rollout.effort_bounds, 2 * w_.dof);
-    std::vector<float> lower(w_.dof), upper(w_.dof);
-    for (int j = 0; j < w_.dof; ++j) {
-      lower[j] = std::max(effort[j], effort[j] * config.limit_scale);
-      upper[j] = std::min(effort[w_.dof + j], effort[w_.dof + j] * config.limit_scale);
-      if (!std::isfinite(lower[j]) || !std::isfinite(upper[j]) || lower[j] > upper[j]) {
-        throw std::invalid_argument("timeopt requires finite ordered effort limits");
+    // Zero coefficients plus unit slack make effort rows inactive in the fixed solver layout.
+    std::vector<float> lower(w_.dof, -1.0F), upper(w_.dof, 1.0F);
+    if (config.enable_inverse_dynamics) {
+      const auto rollout = curobo_robot_runtime::load_rollout_manifest(directory);
+      if (rollout.num_dof != w_.dof) {
+        throw std::invalid_argument("timeopt dynamics have mismatched DoF");
       }
+      const auto effort = read_floats(directory, rollout.effort_bounds, 2 * w_.dof);
+      for (int j = 0; j < w_.dof; ++j) {
+        lower[j] = std::max(effort[j], effort[j] * config.limit_scale);
+        upper[j] = std::min(effort[w_.dof + j], effort[w_.dof + j] * config.limit_scale);
+        if (!std::isfinite(lower[j]) || !std::isfinite(upper[j]) || lower[j] > upper[j]) {
+          throw std::invalid_argument("timeopt requires finite ordered effort limits");
+        }
+      }
+      if (shared_rollout == nullptr) {
+        owned_rollout_ = std::make_unique<RolloutRuntime>(
+            directory, config.device_ordinal, robot, RolloutProfile::TRAJOPT);
+        shared_rollout = owned_rollout_.get();
+      }
+      rollout_ = shared_rollout;
     }
     w_.lower = upload(lower);
     w_.upper = upload(upper);
-    if (shared_rollout == nullptr) {
-      owned_rollout_ = std::make_unique<RolloutRuntime>(
-          directory, config.device_ordinal, robot, RolloutProfile::TRAJOPT);
-      shared_rollout = owned_rollout_.get();
-    }
-    rollout_ = shared_rollout;
     allocate_workspace();
     CRR_CUDA_CHECK(cudaStreamCreateWithFlags(&capture_stream_, cudaStreamNonBlocking));
   }
@@ -172,7 +179,7 @@ class TrajectoryTimeOptRuntime {
             w_.output_joints + plane,
             w_.output_joints + 2 * plane,
             w_.output_joints + 3 * plane,
-            w_.output_torque,
+            config_.enable_inverse_dynamics ? w_.output_torque : nullptr,
             w_.output_uniform,
             reinterpret_cast<uint8_t *>(w_.success),
             w_.status};
@@ -193,7 +200,7 @@ class TrajectoryTimeOptRuntime {
 
   void update_links_inertial(const LinkInertialUpdates &updates) {
     CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
-    rollout_->update_links_inertial(updates);
+    if (rollout_ != nullptr) rollout_->update_links_inertial(updates);
     has_result_ = false;
   }
 
@@ -241,7 +248,7 @@ class TrajectoryTimeOptRuntime {
     w_.q = allocate(3 * path);
     w_.qd = allocate(3 * path);
     w_.qdd = allocate(3 * path);
-    w_.tau = allocate(3 * path);
+    if (config_.enable_inverse_dynamics) w_.tau = allocate(3 * path);
     w_.coefficients = allocate(3 * path);
     w_.seed_bounds = allocate(b * w_.seed_tiles * 3);
     w_.output_bounds = allocate(b * w_.seed_tiles * 3);
@@ -271,8 +278,10 @@ class TrajectoryTimeOptRuntime {
     w_.sample_times = allocate(b * w_.samples);
     w_.sample_joints = allocate(4 * boundary * w_.samples);
     w_.sample_progress = allocate(static_cast<size_t>(w_.batch) * w_.samples);
-    dynamics_cache_ =
-        allocate(3 * b * w_.points * rollout_->num_links() * rollout_->cache_floats_per_link());
+    if (rollout_ != nullptr) {
+      dynamics_cache_ =
+          allocate(3 * b * w_.points * rollout_->num_links() * rollout_->cache_floats_per_link());
+    }
   }
 
   void launch(bool sampling, cudaStream_t stream) {
@@ -281,11 +290,13 @@ class TrajectoryTimeOptRuntime {
       return;
     }
     CRR_CUDA_CHECK(launch_timeopt_path(w_, stream));
-    rollout_->launch_inverse_dynamics(
-        reinterpret_cast<CUdeviceptr>(w_.q), reinterpret_cast<CUdeviceptr>(w_.qd),
-        reinterpret_cast<CUdeviceptr>(w_.qdd), reinterpret_cast<CUdeviceptr>(w_.tau),
-        reinterpret_cast<CUdeviceptr>(dynamics_cache_), w_.batch * 3 * w_.points,
-        reinterpret_cast<CUstream>(stream), false);
+    if (config_.enable_inverse_dynamics) {
+      rollout_->launch_inverse_dynamics(
+          reinterpret_cast<CUdeviceptr>(w_.q), reinterpret_cast<CUdeviceptr>(w_.qd),
+          reinterpret_cast<CUdeviceptr>(w_.qdd), reinterpret_cast<CUdeviceptr>(w_.tau),
+          reinterpret_cast<CUdeviceptr>(dynamics_cache_), w_.batch * 3 * w_.points,
+          reinterpret_cast<CUstream>(stream), false);
+    }
     CRR_CUDA_CHECK(launch_timeopt_solve(w_, stream));
     CRR_CUDA_CHECK(cudaMemcpy2DAsync(w_.duration, sizeof(float), w_.output_time + w_.intervals,
                                      (w_.intervals + 1) * sizeof(float), sizeof(float), w_.batch,

@@ -2,6 +2,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Changelog
 
+## Latest Commit
+
+### New Features
+- Improve RRT growth sampling to have signifcantly higher chance of finding a path.
+- Add flag to disable inverse dynamics during motion planning.
 
 ## Version 0.9.0
 

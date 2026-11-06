@@ -241,6 +241,9 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
       robot_(artifact_directory_, config.device_ordinal),
       manifest_(curobo_robot_runtime::load_trajectory_optimization_manifest(
           artifact_directory_)) {
+  if (!config_.enable_inverse_dynamics) {
+    config_.check_effort_limits = false;
+  }
   CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
   const auto rollout_manifest =
       std::filesystem::path(artifact_directory_) / "robot_rollout_manifest.json";
@@ -248,7 +251,8 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
     rollout_ = std::make_unique<RolloutRuntime>(
         artifact_directory_, config_.device_ordinal,
         robot_.manifest(), RolloutProfile::TRAJOPT);
-  } else if (config_.check_effort_limits || config_.enable_timeopt) {
+  } else if (config_.check_effort_limits ||
+             (config_.enable_timeopt && config_.enable_inverse_dynamics)) {
     throw std::runtime_error(
         "TrajOpt effort limits require a robot rollout artifact");
   }
@@ -263,13 +267,18 @@ TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
   if (config_.enable_timeopt) {
     TrajectoryTimeOptConfig timeopt_config;
     timeopt_config.device_ordinal = config_.device_ordinal;
+    timeopt_config.enable_inverse_dynamics = config_.enable_inverse_dynamics;
     timeopt_config.num_seeds = config_.num_seeds;
     timeopt_config.num_knots = manifest_.num_knots;
     timeopt_config.sample_count = manifest_.interpolation_buffer_size;
     if (timeopt_config.sample_count < 2) {
       throw std::invalid_argument("timeopt requires at least two interpolation samples");
     }
-    timeopt_.reset(new TrajectoryTimeOpt(artifact_directory_, timeopt_config, *rollout_));
+    if (rollout_ != nullptr && config_.enable_inverse_dynamics) {
+      timeopt_.reset(new TrajectoryTimeOpt(artifact_directory_, timeopt_config, *rollout_));
+    } else {
+      timeopt_ = std::make_unique<TrajectoryTimeOpt>(artifact_directory_, timeopt_config);
+    }
     const size_t batch = config_.num_seeds, dof = manifest_.num_dof;
     const size_t capacity = manifest_.interpolation_buffer_size;
     timeopt_boundaries_.allocate(4 * batch * dof * sizeof(float));
@@ -770,7 +779,8 @@ void TrajectoryOptimizerRuntime::allocate_workspace() {
         states * static_cast<size_t>(rollout_->num_links()) *
             static_cast<size_t>(rollout_->cache_floats_per_link()));
   }
-  if (config_.check_effort_limits || config_.enable_timeopt) {
+  if (config_.check_effort_limits ||
+      (config_.enable_timeopt && config_.enable_inverse_dynamics)) {
     allocate_float(&validation_joint_effort_, validation_state_dof);
     allocate_float(
         &validation_rnea_forward_cache_,
@@ -2226,7 +2236,8 @@ void TrajectoryOptimizerRuntime::validate_interpolated(
 
 void TrajectoryOptimizerRuntime::validate_states(CUstream stream, bool timeopt,
                                                  bool check_tool_path) const {
-  const bool check_effort = config_.check_effort_limits || timeopt;
+  const bool check_effort = config_.check_effort_limits ||
+                            (timeopt && config_.enable_inverse_dynamics);
   const int validation_horizon = manifest_.interpolation_buffer_size;
   const size_t interpolation_values =
       static_cast<size_t>(config_.num_seeds) * validation_horizon * manifest_.num_dof;

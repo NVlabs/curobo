@@ -14,7 +14,7 @@ import torch
 from curobo._src.geom.collision.collision_scene import SceneCollision
 from curobo._src.graph_planner.config_graph_planner_resources import GraphPlannerResourcesCfg
 from curobo._src.graph_planner.graph.connector_linear import LinearConnector
-from curobo._src.graph_planner.rrt.rrt_sampling import UniformRRTSampler
+from curobo._src.graph_planner.rrt.sampler_rrt import RRTSampler
 from curobo._src.robot.kinematics.kinematics import Kinematics
 from curobo._src.rollout.rollout_robot import RobotRollout
 from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType, linear_smooth
@@ -30,6 +30,7 @@ class RRTPlannerResources:
         config: GraphPlannerResourcesCfg,
         scene_collision_checker: Optional[SceneCollision] = None,
     ) -> None:
+        """Allocate shared collision, interpolation, and hybrid sampling resources."""
         self.config = config
         self.device_cfg = config.device_cfg
         self.scene_collision_checker = scene_collision_checker
@@ -83,13 +84,14 @@ class RRTPlannerResources:
             cspace_distance_weight=self.cspace_distance_weight,
             check_feasibility_fn=self._check_samples_feasibility_ephemeral,
         )
-        self.uniform_sampler = UniformRRTSampler(
+        self.sampler = RRTSampler(
             self.action_bound_lows,
             self.action_bound_highs,
             config.sample_rejection_ratio,
             config.sampler_seed,
             self.device_cfg,
             self.check_samples_feasibility,
+            self.cspace_distance_weight,
         )
 
     def _compute_sample_feasibility(self, action_samples: torch.Tensor) -> torch.Tensor:
@@ -284,7 +286,7 @@ class RRTPlannerResources:
 
     def reset_seed(self) -> None:
         """Reset only RRT-owned sampling state."""
-        self.uniform_sampler.reset_seed()
+        self.sampler.reset_seed()
 
     def reset_cuda_graph(self) -> None:
         """Release feasibility and auxiliary-rollout graph state."""
@@ -304,28 +306,35 @@ class RRTPlannerResources:
             self.auxiliary_rollout.reset_cuda_graph()
 
     def get_all_rollout_instances(self) -> List[RobotRollout]:
+        """Return both rollouts that share this robot and collision model."""
         return [self.feasibility_rollout, self.auxiliary_rollout]
 
     @property
     def action_dim(self) -> int:
+        """Number of active robot joints."""
         return self.auxiliary_rollout.action_dim
 
     @property
     def kinematics(self) -> Kinematics:
+        """Kinematics model used to validate RRT states."""
         return self.auxiliary_rollout.transition_model.robot_model
 
     @property
     def joint_names(self) -> List[str]:
+        """Ordered active joint names."""
         return self.kinematics.joint_names
 
     @property
     def action_bound_lows(self) -> torch.Tensor:
+        """Lower joint-position limits, shaped ``[dof]``."""
         return self.auxiliary_rollout.action_bound_lows
 
     @property
     def action_bound_highs(self) -> torch.Tensor:
+        """Upper joint-position limits, shaped ``[dof]``."""
         return self.auxiliary_rollout.action_bound_highs
 
     @property
     def cspace_distance_weight(self) -> torch.Tensor:
+        """Joint-space metric weights, shaped ``[dof]``."""
         return self._cspace_distance_weight

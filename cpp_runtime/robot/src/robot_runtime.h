@@ -298,6 +298,7 @@ struct RrtManifest {
   int direct_steer_steps{0};
   int max_path_nodes{0};
   int sample_buffer_size{0};
+  int sampler_seed{0};
   int max_batched_lanes{0};
   int shortcut_path_capacity{0};
   int shortcut_state_capacity{0};
@@ -333,6 +334,7 @@ struct RrtManifest {
   IkKernelManifest packed_append;
   IkKernelManifest reconstruct_path;
   IkKernelManifest prepare_samples;
+  IkKernelManifest frontier_samples;
   IkKernelManifest steer_edges;
   IkKernelManifest evaluate_edges;
   IkKernelManifest prepare_direct_edges;

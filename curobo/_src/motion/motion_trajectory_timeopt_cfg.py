@@ -45,3 +45,5 @@ class TrajectoryTimeOptCfg:
     gravity: tuple[float, float, float] = (0.0, 0.0, -9.81)
     #: Capture preparation, optimization, time construction, and grid-state evaluation.
     use_cuda_graph: bool = True
+    #: Compute rigid-body torque and enforce effort bounds; False needs no inertials.
+    enable_inverse_dynamics: bool = True
