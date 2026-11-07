@@ -15,6 +15,7 @@ each problem; PRM graph seeding remains disabled.
 from __future__ import annotations
 
 import math
+import sys
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
@@ -164,6 +165,10 @@ class BatchMotionPlanner:
             graph_seed_fitter.reset_cuda_graph()
 
     def __del__(self):
+        # During interpreter shutdown torch and the CUDA context are already
+        # being torn down, so releasing CUDA graphs here raises and is moot.
+        if sys.is_finalizing():
+            return
         self.destroy()
 
     def __enter__(self):

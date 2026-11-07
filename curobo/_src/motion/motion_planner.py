@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -710,7 +711,7 @@ class MotionPlanner:
         in :meth:`GraphExecutor._initialize_cuda_graph` ensures stale
         ``cuGraphExecDestroy`` calls complete before any new capture begins.
         """
-        if self._destroyed:
+        if getattr(self, "_destroyed", True):
             return
         self._destroyed = True
         grasp_phase_planner = getattr(self, "_grasp_phase_planner", None)
@@ -725,6 +726,10 @@ class MotionPlanner:
             graph_seed_fitter.reset_cuda_graph()
 
     def __del__(self):
+        # During interpreter shutdown torch and the CUDA context are already
+        # being torn down, so releasing CUDA graphs here raises and is moot.
+        if sys.is_finalizing():
+            return
         self.destroy()
 
     def __enter__(self):
