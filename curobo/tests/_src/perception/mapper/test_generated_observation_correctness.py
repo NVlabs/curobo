@@ -638,6 +638,14 @@ def test_tilted_plane_surface_matches_analytic_plane(warp_init, device):
     assert torch.quantile(plane_distance, 0.90) <= 4.0 * VOXEL_SIZE
 
 
+def test_mesh_matches_observed_plane(warp_init, device):
+    mapper = _make_mapper(device)
+    mapper.integrate(_constant_plane_observation(device))
+    vertices = torch.as_tensor(mapper.extract_mesh(surface_only=True).vertices, device=device)
+    z = vertices.view(-1, 3)[:, 2]
+    assert abs(float(z.median()) - PLANE_Z) <= 0.1 * VOXEL_SIZE
+
+
 def test_constant_rgb_accumulates_across_frames(warp_init, device):
     mapper = _make_mapper(device)
     mapper.integrate(_constant_plane_observation(device, rgb_value=(255, 0, 0)))
