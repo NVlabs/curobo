@@ -1734,6 +1734,16 @@ class TestMotionPlannerPlanGraspFullWorkflow:
         assert result.lift_interpolated_last_tstep.shape == (1, 1)
         assert result.grasp_interpolated_last_tstep.item() > 1
         assert result.lift_interpolated_last_tstep.item() > 1
+        for phase in ("approach", "grasp", "lift"):
+            spline = getattr(result, f"get_{phase}_trajectory")()
+            reference = getattr(result, f"get_{phase}_interpolated_plan")().reorder(
+                spline.joint_names
+            )
+            sampled = spline.interpolate(float(reference.dt.reshape(-1)[0]) * 1.00001)
+            torch.testing.assert_close(
+                sampled.position, reference.position.reshape_as(sampled.position),
+                atol=2e-4, rtol=2e-4,
+            )
         approach_end = result.approach_interpolated_trajectory.position[
             0,
             0,

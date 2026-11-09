@@ -36,6 +36,7 @@ from curobo._src.solver.solve_state import SolveState
 from curobo._src.solver.solver_core import SolverCore
 from curobo._src.solver.solver_timeopt import TimeOptSolver, trajectory_validation_masks
 from curobo._src.solver.solver_trajopt_cfg import TrajOptSolverCfg
+from curobo._src.trajectory.trajectory_spline_export import native_spline
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
 from curobo._src.trajectory.trajectory_interpolation import (
@@ -848,6 +849,18 @@ class TrajOptSolver:
             timeopt_success,
             timeopt_duration,
         )
+        # Retain complete controls and timing from the same candidate selection.
+        if native.control_space == ControlSpace.BSPLINE_3:
+            spline = (
+                timeopt.optimizer._spline_trajectory()
+                if self.config.enable_timeopt else native_spline(native)
+            )
+            if return_seeds != num_seeds:
+                offsets = (
+                    torch.arange(batch_size, device=native.position.device)[:, None] * num_seeds
+                )
+                spline = spline._select((offsets + result.seed_rank).reshape(-1))
+            result.spline_trajectory = spline
         result.timeopt_time = timeopt_time
         masks = (
             self._timeopt.validation_masks

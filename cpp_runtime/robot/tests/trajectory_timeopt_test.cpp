@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 #include "curobo_robot_runtime/trajectory_timeopt.h"
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -113,6 +114,32 @@ int main(int argc, char **argv) {
       result = timeopt.timeopt(request);
       samples = timeopt.sample(reinterpret_cast<float *>(times.ptr()));
       CRR_CUDA_CHECK(cudaDeviceSynchronize());
+      // Complete export must reproduce boundary states in both reference modes,
+      // including stationary lanes, without retaining the optimizer workspace.
+      std::vector<uint8_t> successful(batch);
+      std::vector<float> endpoints(static_cast<size_t>(batch) * (config.num_intervals + 1) * dof);
+      CRR_CUDA_CHECK(cudaMemcpy(successful.data(), result.success, batch, cudaMemcpyDeviceToHost));
+      CRR_CUDA_CHECK(cudaMemcpy(endpoints.data(), result.position, endpoints.size() * sizeof(float),
+                                cudaMemcpyDeviceToHost));
+      for (int seed = 0; seed < batch; ++seed) {
+        if (!successful[seed]) continue;
+        const auto complete = timeopt.trajectory(seed);
+        const auto evaluated = complete.interpolate(0.01F);
+        std::vector<float> first(dof), last(dof);
+        CRR_CUDA_CHECK(cudaMemcpy(first.data(), evaluated.position, dof * sizeof(float),
+                                  cudaMemcpyDeviceToHost));
+        CRR_CUDA_CHECK(cudaMemcpy(last.data(),
+                                  evaluated.position + (evaluated.sample_count - 1) * dof,
+                                  dof * sizeof(float), cudaMemcpyDeviceToHost));
+        for (int j = 0; j < dof; ++j) {
+          if (std::abs(first[j] - endpoints[seed * (config.num_intervals + 1) * dof + j]) > 3e-5F ||
+              std::abs(
+                  last[j] -
+                  endpoints[(seed * (config.num_intervals + 1) + config.num_intervals) * dof + j]) >
+                  3e-5F)
+            throw std::runtime_error("complete TimeOpt export changed an endpoint");
+        }
+      }
       const auto prefix = graph ? "graph_" : "eager_";
       const auto output = [&](const char *name) {
         return root / (std::string(prefix) + name + ".bin");

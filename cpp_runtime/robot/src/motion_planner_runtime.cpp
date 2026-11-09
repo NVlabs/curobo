@@ -29,6 +29,27 @@ TrajectoryOptimizationCandidates MotionPlannerRuntime::candidates() const {
   return trajectory_optimizer_->candidates();
 }
 
+SplineTrajectory MotionPlannerRuntime::trajectory() const {
+  if (!trajectory_request_) throw std::invalid_argument("No selected motion result");
+  const auto &selected = *trajectory_request_;
+  TrajectoryOptimizationRequest r;
+  r.optimized_knots = selected.optimized_knots;
+  r.trajectory_position = selected.trajectory_position;
+  r.trajectory_velocity = selected.trajectory_velocity;
+  r.trajectory_acceleration = selected.trajectory_acceleration;
+  r.trajectory_jerk = selected.trajectory_jerk;
+  r.trajectory_dt = selected.trajectory_dt;
+  r.selected_seed = selected.selected_seed;
+  r.success = selected.success;
+  return trajectory_optimizer_->trajectory(r);
+}
+
+std::optional<SplineTrajectory> MotionPlannerRuntime::grasp_trajectory(int phase) const {
+  if (grasp_attempted_.at(phase) && !grasp_splines_.at(phase))
+    throw std::invalid_argument("Requested grasp phase failed");
+  return grasp_splines_.at(phase);
+}
+
 TimeOptTrajectory MotionPlannerRuntime::timeopt_trajectory() const {
   return trajectory_optimizer_->timeopt_trajectory();
 }
@@ -1219,6 +1240,7 @@ bool MotionPlannerRuntime::plan_impl(
     const MotionPlanningRequest& request,
     bool activate_repaired_seeds,
     TrajoptGraphCache* graph_cache) const {
+  trajectory_request_.reset();
   CRR_CUDA_CHECK(
       cudaSetDevice(config_.trajectory_optimization.device_ordinal));
   if (request.start_position == nullptr || request.goal_position == nullptr ||
@@ -1234,6 +1256,10 @@ bool MotionPlannerRuntime::plan_impl(
         "motion-planning input and output CUDA addresses must be non-null");
   }
   auto active_request = request;
+  if (active_request.selected_seed == nullptr) {
+    active_request.selected_seed = reinterpret_cast<int32_t *>(trajopt_selected_seed_.ptr());
+  }
+  trajectory_request_ = active_request;
   if (active_request.stream == nullptr && config_.use_cuda_graph) {
     active_request.stream = internal_stream_;
   }
@@ -1602,6 +1628,7 @@ void MotionPlannerRuntime::plan_pose(const PoseMotionPlanningRequest &request,
 void MotionPlannerRuntime::plan_pose_impl(const PoseMotionPlanningRequest &request,
                                           TrajoptGraphCache *graph_cache,
                                           const WaypointMotionPlanningRequest *waypoints) const {
+  trajectory_request_.reset();
   if (request.goal_positions == nullptr ||
       request.goal_quaternions == nullptr ||
       request.current_position == nullptr || request.optimized_knots == nullptr ||
@@ -1796,6 +1823,9 @@ void MotionPlannerRuntime::plan_pose_impl(const PoseMotionPlanningRequest &reque
 
 GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
     const GraspPlanningRequest& request) const {
+  trajectory_request_.reset();
+  grasp_splines_ = {};
+  grasp_attempted_ = {};
   if (request.plan_approach_to_grasp && !config_.attempt_direct_trajectory_optimization) {
     throw std::invalid_argument("grasp insertion and lift require direct trajectory optimization");
   }
@@ -1985,6 +2015,7 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
       reinterpret_cast<const float*>(grasp_phase_start_velocity_.ptr()),
       reinterpret_cast<const float*>(grasp_phase_start_acceleration_.ptr()),
       phase_workspace, stream);
+  grasp_attempted_[0] = true;
   plan_pose_impl(approach_request, &grasp_approach_trajopt_graphs_);
   copy_grasp_phase_output(request.approach, stream);
   uint8_t phase_success = 0U;
@@ -1995,6 +2026,7 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
   if (phase_success == 0U) {
     return finish(GraspPlanningStatus::APPROACH_FAILED);
   }
+  grasp_splines_[0] = trajectory();
   if (!request.plan_approach_to_grasp) {
     CRR_CUDA_CHECK(cudaMemsetAsync(request.success, 1, sizeof(uint8_t), stream));
     CRR_CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -2026,6 +2058,7 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
           request.phase_execution_speed_scales[1] > 0.0F ? request.phase_execution_speed_scales[1]
               : config_.trajectory_optimization.execution_speed_scale);
     }
+    grasp_attempted_[1] = true;
     const bool grasp_success = plan_linear_phase(
         reinterpret_cast<const float *>(selected_grasp_position_.ptr()),
         reinterpret_cast<const float *>(selected_grasp_quaternion_.ptr()), approach_end,
@@ -2036,6 +2069,7 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
       set_collision_links(unique_links, true);
       return finish(GraspPlanningStatus::GRASP_FAILED);
     }
+    grasp_splines_[1] = trajectory();
     if (!request.plan_grasp_to_lift) {
       set_collision_links(unique_links, true);
       CRR_CUDA_CHECK(cudaMemsetAsync(request.success, 1, sizeof(uint8_t), stream));
@@ -2063,6 +2097,7 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
           request.phase_execution_speed_scales[2] > 0.0F ? request.phase_execution_speed_scales[2]
               : config_.trajectory_optimization.execution_speed_scale);
     }
+    grasp_attempted_[2] = true;
     const bool lift_success = plan_linear_phase(
         reinterpret_cast<const float *>(lift_goal_position_.ptr()),
         reinterpret_cast<const float *>(lift_goal_quaternion_.ptr()), grasp_end, grasp_end_velocity,
@@ -2073,6 +2108,7 @@ GraspPlanningStatus MotionPlannerRuntime::plan_grasp(
     if (!lift_success) {
       return finish(GraspPlanningStatus::LIFT_FAILED);
     }
+    grasp_splines_[2] = trajectory();
   } catch (...) {
     set_collision_links(unique_links, true);
     throw;

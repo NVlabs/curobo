@@ -44,6 +44,8 @@ class TrajectoryOptimizerRuntime final {
   void optimize(const TrajectoryOptimizationRequest& request) const;
   TrajectoryOptimizationCandidates candidates() const;
   TimeOptTrajectory timeopt_trajectory() const;
+  SplineTrajectory trajectory() const;
+  SplineTrajectory trajectory(const TrajectoryOptimizationRequest &request) const;
   void set_execution_speed_scale(float scale);
   const int32_t *validate(const TrajectoryValidationRequest &request,
                           bool timeopt = false) const;
@@ -150,6 +152,8 @@ class TrajectoryOptimizerRuntime final {
   std::shared_ptr<RobotCollisionModel> collision_;
   std::unique_ptr<RolloutRuntime> rollout_;
   std::unique_ptr<TrajectoryTimeOpt> timeopt_;
+  mutable TrajectoryOptimizationRequest last_trajectory_request_{};
+  mutable bool has_trajectory_result_{false};
   mutable curobo_robot_runtime::DeviceBuffer timeopt_boundaries_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_knot_dt_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_times_;

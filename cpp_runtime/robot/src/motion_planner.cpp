@@ -12,6 +12,18 @@ TrajectoryOptimizationCandidates MotionPlanner::candidates() const {
   return runtime_->candidates();
 }
 
+SplineTrajectory MotionPlanner::trajectory() const { return runtime_->trajectory(); }
+
+std::optional<SplineTrajectory> MotionPlanner::get_approach_trajectory() const {
+  return runtime_->grasp_trajectory(0);
+}
+std::optional<SplineTrajectory> MotionPlanner::get_grasp_trajectory() const {
+  return runtime_->grasp_trajectory(1);
+}
+std::optional<SplineTrajectory> MotionPlanner::get_lift_trajectory() const {
+  return runtime_->grasp_trajectory(2);
+}
+
 TimeOptTrajectory MotionPlanner::timeopt_trajectory() const {
   return runtime_->timeopt_trajectory();
 }
