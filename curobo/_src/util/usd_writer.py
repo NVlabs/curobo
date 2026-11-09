@@ -415,7 +415,11 @@ def get_sphere_attrs(prim, cache=None, transform=None) -> Sphere:
     return Sphere(name=str(prim.GetPath()), pose=pose, radius=radius, position=pose[:3])
 
 
-def get_mesh_attrs(prim, cache=None, transform=None) -> Mesh:
+def get_mesh_attrs(
+    prim: Usd.Prim,
+    cache: Optional[UsdGeom.XformCache] = None,
+    transform: Optional[np.ndarray] = None,
+) -> Mesh:
     # read cube information
     # scale = prim.GetAttribute("size").Get()
     points = list(prim.GetAttribute("points").Get())
@@ -425,28 +429,24 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Mesh:
 
     face_count = list(prim.GetAttribute("faceVertexCounts").Get())
     world_transform = cache.GetLocalToWorldTransform(prim)
-    vertices = np.asarray(
-        [world_transform.Transform(Gf.Vec3d(*point)) for point in points], dtype=np.float32
-    )
     mat, _ = get_prim_world_pose(cache, prim)
-    linear_transform = np.asarray(world_transform.ExtractRotationMatrix(), dtype=np.float32)
     # position = list(prim.GetAttribute("xformOp:translate").Get())
     # q = prim.GetAttribute("xformOp:orient").Get()
     # orientation = [q.GetReal()] + list(q.GetImaginary())
 
     if transform is not None:
-        vertices = vertices @ transform[:3, :3].T + transform[:3, 3]
+        # Gf uses row vectors, whereas cuRobo pose matrices use column vectors.
+        world_transform = world_transform * Gf.Matrix4d(transform.T.tolist())
         mat = transform @ mat
-        linear_transform = transform[:3, :3] @ linear_transform
 
-    reflected_transform = np.linalg.det(linear_transform) < 0.0
-    if reflected_transform:
-        mat[:3, :3] = np.eye(3, dtype=mat.dtype)
+    # Preserve the USD rigid pose and bake only the residual transform. Compose
+    # before converting vertices to float32 so common world translations cancel.
+    residual_transform = world_transform * Gf.Matrix4d(mat.T.tolist()).GetInverse()
+    vertices = np.asarray(
+        [residual_transform.Transform(Gf.Vec3d(*point)) for point in points], dtype=np.float32
+    )
 
-    inverse_pose = np.linalg.inv(mat)
-    vertices = vertices @ inverse_pose[:3, :3].T + inverse_pose[:3, 3]
-
-    if reflected_transform:
+    if world_transform.GetDeterminant3() < 0.0:
         flipped_faces = []
         face_start = 0
         for count in face_count:
