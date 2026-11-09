@@ -8,6 +8,11 @@
 - Improve RRT growth sampling to have signifcantly higher chance of finding a path.
 - Add flag to disable inverse dynamics during motion planning.
 
+### Bug Fixes & Misc.
+
+- Fix voxel grid dimension rounding in static and swept collision queries to
+  prevent false collisions and missed obstacles caused by float32 truncation.
+
 ## Version 0.9.0
 
 ### New Features
