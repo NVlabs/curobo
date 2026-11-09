@@ -53,6 +53,7 @@ add_library(curobo_robot_runtime SHARED
   src/rrt.cpp
   src/rrt_runtime.cpp
   src/scene.cpp
+  src/spline_trajectory.cu
   src/grasp_collision_runtime.cpp
   src/scene_runtime.cpp
   src/sphere_fit.cpp
@@ -102,6 +103,10 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(curobo_robot_spline_test tests/spline_trajectory_test.cpp)
+  target_link_libraries(curobo_robot_spline_test PRIVATE curobo_robot_runtime)
+  add_test(NAME curobo_robot_spline_test COMMAND curobo_robot_spline_test)
+  set_tests_properties(curobo_robot_spline_test PROPERTIES SKIP_RETURN_CODE 77)
   add_executable(curobo_pose_calibration_test tests/pose_calibration_test.cpp)
   target_link_libraries(curobo_pose_calibration_test PRIVATE curobo_calibration_runtime)
   set(CUROBO_CALIBRATION_TEST_KERNELS "" CACHE PATH "Target-exported calibration kernels for GPU tests")

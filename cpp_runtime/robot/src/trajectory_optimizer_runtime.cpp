@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 #include "trajectory_optimizer_runtime.h"
+#include "spline_trajectory_internal.h"
 
 #include "attachment_runtime.h"
 #include "cuda_check.h"
@@ -3012,6 +3013,37 @@ void TrajectoryOptimizerRuntime::set_execution_speed_scale(float scale) {
   config_.execution_speed_scale = scale;
 }
 
+SplineTrajectory TrajectoryOptimizerRuntime::trajectory() const {
+  if (!has_trajectory_result_) throw std::invalid_argument("No completed trajectory result");
+  return trajectory(last_trajectory_request_);
+}
+
+SplineTrajectory TrajectoryOptimizerRuntime::trajectory(
+    const TrajectoryOptimizationRequest &r) const {
+  if (manifest_.spline_degree != 3)
+    throw std::invalid_argument("SplineTrajectory requires cubic controls");
+  CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
+  cudaStreamCaptureStatus capture;
+  CRR_CUDA_CHECK(cudaStreamIsCapturing(r.stream, &capture));
+  if (capture != cudaStreamCaptureStatusNone)
+    throw std::invalid_argument("Select a trajectory outside capture");
+  CRR_CUDA_CHECK(cudaDeviceSynchronize());
+  uint8_t success = 0;
+  int32_t seed = -1;
+  CRR_CUDA_CHECK(cudaMemcpyAsync(&success, r.success, 1, cudaMemcpyDeviceToHost, r.stream));
+  const auto *selected =
+      r.selected_seed ? r.selected_seed : reinterpret_cast<const int32_t *>(selected_seed_.ptr());
+  CRR_CUDA_CHECK(cudaMemcpyAsync(&seed, selected, sizeof(seed), cudaMemcpyDeviceToHost, r.stream));
+  CRR_CUDA_CHECK(cudaStreamSynchronize(r.stream));
+  if (!success || seed < 0 || seed >= config_.num_seeds)
+    throw std::invalid_argument("Selected trajectory failed");
+  if (timeopt_) return timeopt_->trajectory(seed, r.stream);
+  return native_spline(r.optimized_knots, r.trajectory_position, r.trajectory_velocity,
+                       r.trajectory_acceleration, r.trajectory_jerk, r.trajectory_dt,
+                       manifest_.num_knots, manifest_.trajectory_steps,
+                       robot_.manifest().joint_names, config_.device_ordinal, r.stream);
+}
+
 TimeOptTrajectory TrajectoryOptimizerRuntime::timeopt_trajectory() const {
   if (!timeopt_) return {};
   const auto* states = reinterpret_cast<const float*>(timeopt_states_.ptr());
@@ -3026,6 +3058,7 @@ TimeOptTrajectory TrajectoryOptimizerRuntime::timeopt_trajectory() const {
 
 void TrajectoryOptimizerRuntime::optimize(
     const TrajectoryOptimizationRequest& request) const {
+  has_trajectory_result_ = false;
   validate_request(request);
   prepare_request(request);
   const int finetune_attempts = resolved_finetune_attempts(request);
@@ -3081,6 +3114,8 @@ void TrajectoryOptimizerRuntime::optimize(
     else if (base_pass_succeeded(request.stream) && !result_succeeded(request))
       fallback(request.stream);
   }
+  last_trajectory_request_ = request;
+  has_trajectory_result_ = true;
 }
 
 }  // namespace curobo::robot::detail

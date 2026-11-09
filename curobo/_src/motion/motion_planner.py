@@ -1462,6 +1462,7 @@ class MotionPlanner:
             ordered_tool_frames=grasp_poses.tool_frames,
             num_goalset=1,
         )
+        result._approach_attempted = True
         approach_result = self.plan_pose(approach_tool_pose, current_state)
         result.approach_result = approach_result
 
@@ -1473,6 +1474,8 @@ class MotionPlanner:
 
         result.approach_success = approach_result.success.clone()
         # Preserve this phase before the shared TrajOpt result buffers are reused.
+        if approach_result.spline_trajectory is not None:
+            result.approach_spline = approach_result.get_trajectory().clone()
         result.approach_trajectory = approach_result.js_solution.clone()
         result.approach_trajectory_dt = result.approach_trajectory.dt
         result.approach_interpolated_trajectory = approach_result.interpolated_trajectory.clone()
@@ -1494,6 +1497,7 @@ class MotionPlanner:
             num_goalset=1,
         )
         self._grasp_phase_planner.activate_collision(disable_collision_links, enable=False)
+        result._grasp_attempted = True
         grasp_result = self._grasp_phase_planner.plan_linear_phase(
             grasp_tool_pose,
             approach_end,
@@ -1509,6 +1513,8 @@ class MotionPlanner:
             return result
 
         # Preserve this phase before lift planning reuses the same solver buffers.
+        if grasp_result.spline_trajectory is not None:
+            result.grasp_spline = grasp_result.get_trajectory().clone()
         result.grasp_trajectory = grasp_result.js_solution.clone()
         result.grasp_trajectory_dt = result.grasp_trajectory.dt
         result.grasp_interpolated_trajectory = grasp_result.interpolated_trajectory.clone()
@@ -1541,6 +1547,7 @@ class MotionPlanner:
             ordered_tool_frames=grasp_poses.tool_frames,
             num_goalset=1,
         )
+        result._lift_attempted = True
         lift_result = self._grasp_phase_planner.plan_linear_phase(
             lift_tool_pose,
             lift_start,
@@ -1555,6 +1562,8 @@ class MotionPlanner:
             result.lift_success[:] = False
             return result
 
+        if lift_result.spline_trajectory is not None:
+            result.lift_spline = lift_result.get_trajectory().clone()
         result.lift_trajectory = lift_result.js_solution
         result.lift_trajectory_dt = lift_result.js_solution.dt
         result.lift_interpolated_trajectory = lift_result.interpolated_trajectory

@@ -79,6 +79,8 @@ TrajectoryOptimizationCandidates TrajectoryOptimizer::candidates() const {
   return runtime_->candidates();
 }
 
+SplineTrajectory TrajectoryOptimizer::trajectory() const { return runtime_->trajectory(); }
+
 TimeOptTrajectory TrajectoryOptimizer::timeopt_trajectory() const {
   return runtime_->timeopt_trajectory();
 }

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,8 @@
 #include "curobo_robot_runtime/inverse_kinematics.h"
 #include "curobo_robot_runtime/rrt.h"
 #include "curobo_robot_runtime/trajectory_optimization.h"
+
+#include "curobo_robot_runtime/spline_trajectory.h"
 
 namespace curobo::robot {
 
@@ -372,6 +375,13 @@ class MotionPlanner final {
 
   /** Borrow executable states and timing controls selected inside the retry loop. */
   TimeOptTrajectory timeopt_trajectory() const;
+  /** Retain the last selected successful path and timing; may synchronize.
+   * Keep the latest request's output buffers alive until this call completes. */
+  SplineTrajectory trajectory() const;
+  /** Retained grasp phases; omitted phases return nullopt, failed phases throw. */
+  std::optional<SplineTrajectory> get_approach_trajectory() const;
+  std::optional<SplineTrajectory> get_grasp_trajectory() const;
+  std::optional<SplineTrajectory> get_lift_trajectory() const;
   void set_execution_speed_scale(float scale);
 
   /** Validate sampled states using this planner's model, scene, and streams. */

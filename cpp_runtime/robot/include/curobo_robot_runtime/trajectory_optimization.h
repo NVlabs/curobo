@@ -14,6 +14,8 @@
 #include "curobo_robot_runtime/inertial.h"
 #include "curobo_robot_runtime/spline_layout.h"
 
+#include "curobo_robot_runtime/spline_trajectory.h"
+
 namespace curobo::robot {
 
 class Scene;
@@ -235,6 +237,9 @@ class TrajectoryOptimizer final {
   TrajectoryOptimizationCandidates candidates() const;
 
   TimeOptTrajectory timeopt_trajectory() const;
+  /** Retain the last selected successful path and timing; may synchronize.
+   * Keep the latest request's output buffers alive until this call completes. */
+  SplineTrajectory trajectory() const;
   /** Synchronously update the scale for future timeopt solves; never call
    * concurrently with a solve. Samples and timing controls remain nominal. */
   void set_execution_speed_scale(float scale);
