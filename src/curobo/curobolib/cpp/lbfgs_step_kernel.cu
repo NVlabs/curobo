@@ -134,12 +134,25 @@ namespace Curobo
     __forceinline__ __device__ void reduce_v1(scalar_t v, int m, psum_t *data,
                                               scalar_t *result)
     {
-      unsigned mask = __ballot_sync(FULL_MASK, threadIdx.x < m);
-      psum_t   val  = warpReduce(v, 32, mask);
+      const int lane = threadIdx.x & 31;
+      const int warp_id = threadIdx.x >> 5;
+      const int warp_base = warp_id * 32;
+      const int remaining = m - warp_base;
+      const int warp_elems = remaining < 32 ? remaining : 32;
+      const unsigned warp_mask = __activemask();
+      psum_t val = v;
 
-      // int leader = __ffs(mask) – 1;    // select a leader lane
-      int leader = 0;
-      if (threadIdx.x % 32 == leader)
+      #pragma unroll
+      for (int offset = 1; offset < 32; offset <<= 1)
+      {
+        const psum_t other = __shfl_down_sync(warp_mask, val, offset);
+        if (lane + offset < warp_elems)
+        {
+          val += other;
+        }
+      }
+
+      if (lane == 0)
       {
         if (m < 32)
         {
@@ -147,50 +160,38 @@ namespace Curobo
         }
         else
         {
-          data[(threadIdx.x + 1) / 32] = val;
+          data[warp_id] = val;
         }
       }
-      /*
-      if (threadIdx.x % 32 == leader)
-      {
-        data[(threadIdx.x + 1) / 32] = val;
-      }
-      */
+
       if (m >= 32)
       {
         __syncthreads();
 
-        int elems      = (m + 31) / 32;
-        unsigned mask2 = __ballot_sync(FULL_MASK, threadIdx.x < elems);
-
-        if (threadIdx.x / 32 == 0) // only the first warp will do this work
+        if (warp_id == 0)
         {
-          psum_t val2  = data[threadIdx.x % 32];
-          int    shift = 1;
+          const int warp_count = (m + 31) / 32;
+          const unsigned first_warp_mask = __activemask();
+          psum_t block_val = lane < warp_count ? data[lane] : psum_t(0);
 
           #pragma unroll
-          for (int i = elems - 1; i > 0; i /= 2)
+          for (int offset = 1; offset < warp_count; offset <<= 1)
           {
-            val2  += __shfl_down_sync(mask2, val2, shift);
-            shift *= 2;
+            const psum_t other =
+              __shfl_down_sync(first_warp_mask, block_val, offset);
+            if (lane + offset < warp_count)
+            {
+              block_val += other;
+            }
           }
 
-          //psum_t val2 = warpReduce(data[threadIdx.x % 32], elems - 1, mask2);
-
-          // // int leader = __ffs(mask2) – 1;    // select a leader lane
-          if (threadIdx.x % 32 == leader)
+          if (lane == 0)
           {
-            result[0] = (scalar_t)val2;
+            result[0] = (scalar_t)block_val;
           }
         }
       }
-      else
-      {
-        if (threadIdx.x == leader)
-        {
-          result[0] = (scalar_t)val;
-        }
-      }
+
       __syncthreads();
     }
     
