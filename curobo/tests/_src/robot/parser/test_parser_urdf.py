@@ -6,6 +6,7 @@
 
 # Standard Library
 from pathlib import Path
+from textwrap import dedent
 
 import numpy as np
 
@@ -151,18 +152,22 @@ class TestUrdfRobotParserJointLimits:
 
     def test_continuous_joint_without_limit_element(self, tmp_path):
         """Test continuous joint without a <limit> element uses default limits."""
-        urdf_content = """<?xml version="1.0"?>
-<robot name="test_robot">
-  <link name="base_link"/>
-  <link name="joint_link"/>
+        urdf_content = dedent(
+            """\
+            <?xml version="1.0"?>
+            <robot name="test_robot">
+              <link name="base_link"/>
+              <link name="joint_link"/>
 
-  <joint name="continuous_joint" type="continuous">
-    <parent link="base_link"/>
-    <child link="joint_link"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <axis xyz="0 0 1"/>
-  </joint>
-</robot>"""
+              <joint name="continuous_joint" type="continuous">
+                <parent link="base_link"/>
+                <child link="joint_link"/>
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+                <axis xyz="0 0 1"/>
+              </joint>
+            </robot>
+            """
+        )
 
         urdf_path = tmp_path / "continuous_joint_no_limit.urdf"
         urdf_path.write_text(urdf_content)
@@ -177,18 +182,22 @@ class TestUrdfRobotParserJointLimits:
 
     def test_revolute_joint_without_limit_element_raises(self, tmp_path):
         """Test revolute joint without a <limit> element raises a clear error."""
-        urdf_content = """<?xml version="1.0"?>
-<robot name="test_robot">
-  <link name="base_link"/>
-  <link name="joint_link"/>
+        urdf_content = dedent(
+            """\
+            <?xml version="1.0"?>
+            <robot name="test_robot">
+              <link name="base_link"/>
+              <link name="joint_link"/>
 
-  <joint name="revolute_joint" type="revolute">
-    <parent link="base_link"/>
-    <child link="joint_link"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <axis xyz="0 0 1"/>
-  </joint>
-</robot>"""
+              <joint name="revolute_joint" type="revolute">
+                <parent link="base_link"/>
+                <child link="joint_link"/>
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+                <axis xyz="0 0 1"/>
+              </joint>
+            </robot>
+            """
+        )
 
         urdf_path = tmp_path / "revolute_joint_no_limit.urdf"
         urdf_path.write_text(urdf_content)
