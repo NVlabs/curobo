@@ -12,10 +12,9 @@
 
 - Fix voxel grid dimension rounding in static and swept collision queries to
   prevent false collisions and missed obstacles caused by float32 truncation.
-- Query shared memory per SM from the CUDA device when sizing RNEA launch
-  configurations, instead of assuming a fixed 100 KB. The assumed value was
-  only correct for compute capability 8.6 and 12.x, so occupancy was
-  underestimated by up to 2.3x on 9.0/10.x/11.0 and 1.6x on 8.0.
+- Use the tensor device's cached shared-memory capacity when sizing RNEA launch
+  configurations instead of assuming a fixed 100 KB per SM. Export C++ runtime
+  launch profiles using the target GPU's per-SM capacity.
 
 ## Version 0.9.0
 

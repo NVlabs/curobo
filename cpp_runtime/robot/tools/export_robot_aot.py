@@ -1205,6 +1205,7 @@ def build_rollout_forward_profiles(
     all_movable: bool,
     direct_joints: bool,
     policy_sm_count: int,
+    sm_shared_mem_capacity: int,
 ) -> dict[str, Any]:
     """Export batch-aware forward profiles using the shared Python launch policy."""
     from curobo._src.curobolib.backends.cuda_core_backend.dynamics_config import (
@@ -1223,7 +1224,8 @@ def build_rollout_forward_profiles(
             max_level_width, num_links, num_levels, limit, policy_sm_count
         )
         config = DynamicsLaunchCfg.calculate_forward_config(
-            limit, num_links, width, policy_sm_count=policy_sm_count
+            limit, num_links, width, policy_sm_count=policy_sm_count,
+            sm_shared_mem_capacity=sm_shared_mem_capacity,
         )
         if profiles and (
             profiles[-1]["threads_per_batch"] == width
@@ -1282,8 +1284,13 @@ def build_rollout_artifact(
         policy_sm_count = curobo_runtime.resolve_kernel_launch_sm_count(
             properties.multi_processor_count
         )
+        sm_shared_mem_capacity = int(
+            getattr(properties, "shared_memory_per_multiprocessor", 0)
+            or DynamicsLaunchCfg.DEFAULT_SM_SHARED_MEM_CAPACITY
+        )
     else:
         policy_sm_count = target.sm_count
+        sm_shared_mem_capacity = target.shared_memory_per_multiprocessor
 
     def bool_literal(value: bool) -> str:
         return str(value).lower()
@@ -1346,12 +1353,14 @@ def build_rollout_artifact(
             model.num_links,
             threads_per_batch,
             policy_sm_count=policy_sm_count,
+            sm_shared_mem_capacity=sm_shared_mem_capacity,
         )
         backward_config = DynamicsLaunchCfg.calculate_backward_config(
             max_states,
             model.num_links,
             threads_per_batch,
             policy_sm_count=policy_sm_count,
+            sm_shared_mem_capacity=sm_shared_mem_capacity,
         )
         profiles[profile_name] = {
             "threads_per_batch": threads_per_batch,
@@ -1382,7 +1391,8 @@ def build_rollout_artifact(
         "level_link_indices": int(model.level_links.numel()),
         "forward_profiles": build_rollout_forward_profiles(
             output_dir, arch, model.num_links, params.num_dof, model.max_level_width,
-            model.num_levels, model.all_movable, model.direct_joints, policy_sm_count
+            model.num_levels, model.all_movable, model.direct_joints, policy_sm_count,
+            sm_shared_mem_capacity,
         ),
     }
     return tensors, profiles, metadata

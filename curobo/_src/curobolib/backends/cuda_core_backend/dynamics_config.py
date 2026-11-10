@@ -13,7 +13,6 @@ from cuda.core import LaunchConfig
 
 # CuRobo
 from curobo._src.curobolib.backends.cuda_core_backend.kernel_config import CudaCoreKernelCfg
-from curobo._src.curobolib.backends.cuda_core_backend.util import get_sm_shared_memory_capacity
 
 
 class DynamicsKernelCfg(CudaCoreKernelCfg):
@@ -73,6 +72,7 @@ class DynamicsLaunchCfg:
     DEFAULT_COOPERATIVE_BACKWARD_BATCHES_PER_BLOCK = None
 
     DEFAULT_MAX_SHARED_MEM = 48 * 1024  # 48 KB
+    DEFAULT_SM_SHARED_MEM_CAPACITY = 100 * 1024  # Fallback for unavailable device properties.
 
     WARP_SIZE = 32
 
@@ -276,6 +276,7 @@ class DynamicsLaunchCfg:
         max_batches_per_block: int = None,
         max_shared_mem: int = None,
         policy_sm_count: int = None,
+        sm_shared_mem_capacity: int = DEFAULT_SM_SHARED_MEM_CAPACITY,
     ) -> LaunchConfig:
         """Calculate launch configuration for RNEA forward kernel.
 
@@ -289,6 +290,7 @@ class DynamicsLaunchCfg:
                 batches-per-block default.
             max_shared_mem: Maximum shared memory per block (default 48 KB).
             policy_sm_count: Effective SM count selected by the runtime policy.
+            sm_shared_mem_capacity: Shared memory per SM in bytes for the tensor device.
 
         Returns:
             LaunchConfig for the kernel.
@@ -335,7 +337,7 @@ class DynamicsLaunchCfg:
             batches_per_block,
             threads_per_batch,
             smem_per_block_fn=lambda b: b * smem_per_batch,
-            sm_shared_mem_capacity=get_sm_shared_memory_capacity(),
+            sm_shared_mem_capacity=sm_shared_mem_capacity,
         )
 
         threads_per_block = batches_per_block * threads_per_batch
@@ -356,6 +358,7 @@ class DynamicsLaunchCfg:
         max_batches_per_block: int = None,
         max_shared_mem: int = None,
         policy_sm_count: int = None,
+        sm_shared_mem_capacity: int = DEFAULT_SM_SHARED_MEM_CAPACITY,
     ) -> LaunchConfig:
         """Calculate launch configuration for RNEA backward (VJP) kernel.
 
@@ -372,6 +375,7 @@ class DynamicsLaunchCfg:
                 batches-per-block default.
             max_shared_mem: Maximum shared memory per block (default 48 KB).
             policy_sm_count: Effective SM count selected by the runtime policy.
+            sm_shared_mem_capacity: Shared memory per SM in bytes for the tensor device.
 
         Returns:
             LaunchConfig for the backward kernel.
@@ -423,7 +427,7 @@ class DynamicsLaunchCfg:
             batches_per_block,
             threads_per_batch,
             smem_per_block_fn=lambda b: smem_block_shared + b * smem_per_batch,
-            sm_shared_mem_capacity=get_sm_shared_memory_capacity(),
+            sm_shared_mem_capacity=sm_shared_mem_capacity,
         )
 
         threads_per_block = batches_per_block * threads_per_batch

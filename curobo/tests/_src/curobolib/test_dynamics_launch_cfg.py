@@ -4,12 +4,16 @@
 
 """Unit tests for RNEA launch configuration and shared-memory-per-SM discovery."""
 
+# Standard Library
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 # Third Party
 import pytest
 import torch
 
 # CuRobo
-from curobo._src.curobolib.backends.cuda_core_backend import dynamics_config, util
+from curobo._src.curobolib.backends.cuda_core_backend import dynamics
 from curobo._src.curobolib.backends.cuda_core_backend.dynamics_config import DynamicsLaunchCfg
 
 #: Shared memory per SM for architectures cuRobo runs on: 100 KB (compute
@@ -21,47 +25,67 @@ SM_CAPACITIES = [100 * 1024, 164 * 1024, 228 * 1024]
 ROBOT_CASES = [(9, 512, 1), (9, 512, 4), (21, 512, 4), (31, 512, 1), (31, 512, 4), (60, 64, 8)]
 
 
-@pytest.fixture
-def sm_capacity(monkeypatch):
-    """Override the shared-memory-per-SM that the launch heuristic sees."""
+class TestTensorDeviceCapacity:
+    """Pass the tensor device's cached properties into both RNEA launch paths."""
 
-    def _set(capacity: int):
-        monkeypatch.setattr(dynamics_config, "get_sm_shared_memory_capacity", lambda *_: capacity)
+    @pytest.mark.parametrize("direction,tensor_count", [("forward", 16), ("backward", 18)])
+    @pytest.mark.parametrize("capacity", [None, 0, 228 * 1024])
+    def test_uses_tensor_properties(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        direction: str,
+        tensor_count: int,
+        capacity: int | None,
+    ) -> None:
+        """Use the tensor device's capacity, falling back when the property is unavailable."""
+        properties = SimpleNamespace(multi_processor_count=80)
+        if capacity is not None:
+            properties.shared_memory_per_multiprocessor = capacity
+        get_properties = Mock(return_value=properties)
+        current_device = Mock(return_value=0)
+        monkeypatch.setattr(torch.cuda, "get_device_properties", get_properties)
+        monkeypatch.setattr(torch.cuda, "current_device", current_device)
+        monkeypatch.setattr(torch.cuda, "current_stream", Mock())
+        monkeypatch.setattr(dynamics, "get_runtime", Mock())
+        kernel_launch = Mock()
+        monkeypatch.setattr(dynamics, "launch_kernel", kernel_launch)
+        calculate_name = f"calculate_{direction}_config"
+        calculate = Mock(wraps=getattr(DynamicsLaunchCfg, calculate_name))
+        monkeypatch.setattr(DynamicsLaunchCfg, calculate_name, calculate)
 
-    return _set
+        tensor = Mock(device=torch.device("cuda:1"))
+        tensor.data_ptr.return_value = 0
+        launch = getattr(dynamics, f"launch_rnea_{direction}")
+        # Each required tensor argument can use the same placeholder; no CUDA kernel runs.
+        launch(
+            *[tensor] * tensor_count,
+            batch_size=512,
+            num_links=7,
+            num_dof=6,
+            n_levels=7,
+        )
+        get_properties.assert_called_once_with(tensor.device)
+        current_device.assert_not_called()
+        expected = capacity or DynamicsLaunchCfg.DEFAULT_SM_SHARED_MEM_CAPACITY
+        assert calculate.call_args.kwargs["sm_shared_mem_capacity"] == expected
+        kernel_launch.assert_called_once()
 
-
-class TestSharedMemoryCapacityQuery:
-    """Shared memory per SM is read from the device, with a safe fallback."""
-
-    def test_falls_back_without_cuda(self, monkeypatch):
-        """Hosts without a CUDA device keep the historical assumption."""
-        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-        assert util.get_sm_shared_memory_capacity() == util.FALLBACK_SM_SHARED_MEM_CAPACITY
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
-    def test_queries_real_device(self):
-        """The queried value is a plausible shared-memory-per-SM figure."""
-        capacity = util.get_sm_shared_memory_capacity()
-        assert 48 * 1024 <= capacity <= 256 * 1024
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
-    def test_agrees_with_torch_device_properties(self):
-        """The CUDA attribute matches what torch reports for the same device."""
-        props = torch.cuda.get_device_properties(torch.cuda.current_device())
-        expected = getattr(props, "shared_memory_per_multiprocessor", None)
-        if expected is None:
-            pytest.skip("torch build does not expose shared_memory_per_multiprocessor")
-        assert util.get_sm_shared_memory_capacity() == expected
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
-    def test_query_is_cached(self):
-        """Repeated lookups do not re-enter the driver on the launch hot path."""
-        device_id = torch.cuda.current_device()
-        util._query_sm_shared_memory_capacity(device_id)
-        hits_before = util._query_sm_shared_memory_capacity.cache_info().hits
-        util._query_sm_shared_memory_capacity(device_id)
-        assert util._query_sm_shared_memory_capacity.cache_info().hits == hits_before + 1
+    @pytest.mark.parametrize("direction", ["forward", "backward"])
+    def test_configuration_without_cuda_queries(
+        self, monkeypatch: pytest.MonkeyPatch, direction: str
+    ) -> None:
+        """Standalone launch sizing keeps a fallback without requiring a CUDA device."""
+        monkeypatch.setattr(
+            torch.cuda, "get_device_properties", Mock(side_effect=AssertionError("unexpected query"))
+        )
+        calculate = getattr(DynamicsLaunchCfg, f"calculate_{direction}_config")
+        default = calculate(512, 7, 32)
+        explicit = calculate(
+            512, 7, 32, sm_shared_mem_capacity=DynamicsLaunchCfg.DEFAULT_SM_SHARED_MEM_CAPACITY
+        )
+        assert default.grid == explicit.grid
+        assert default.block == explicit.block
+        assert default.shmem_size == explicit.shmem_size
 
 
 class TestLaunchConfigValidity:
@@ -71,11 +95,12 @@ class TestLaunchConfigValidity:
     @pytest.mark.parametrize("num_links,batch_size,threads_per_batch", ROBOT_CASES)
     @pytest.mark.parametrize("direction", ["forward", "backward"])
     def test_config_within_limits(
-        self, sm_capacity, capacity, num_links, batch_size, threads_per_batch, direction
-    ):
-        sm_capacity(capacity)
+        self, capacity: int, num_links: int, batch_size: int, threads_per_batch: int, direction: str
+    ) -> None:
         calculate = getattr(DynamicsLaunchCfg, f"calculate_{direction}_config")
-        config = calculate(batch_size, num_links, threads_per_batch)
+        config = calculate(
+            batch_size, num_links, threads_per_batch, sm_shared_mem_capacity=capacity
+        )
 
         threads_per_block = config.block[0]
         batches_per_block = threads_per_block // threads_per_batch
@@ -89,7 +114,7 @@ class TestLaunchConfigValidity:
 class TestWarpAlignBatches:
     """The occupancy heuristic responds to the SM shared-memory budget."""
 
-    def test_capacity_changes_the_choice(self):
+    def test_capacity_changes_the_choice(self) -> None:
         """A wider budget truncates less, which can change the winning block."""
         kwargs = {
             "batches_per_block": 2,
@@ -102,7 +127,7 @@ class TestWarpAlignBatches:
         assert wide == 2
 
     @pytest.mark.parametrize("capacity", SM_CAPACITIES)
-    def test_never_exceeds_requested_batches(self, capacity):
+    def test_never_exceeds_requested_batches(self, capacity: int) -> None:
         """The heuristic only ever narrows the caller's batch count."""
         for batches in range(1, 65):
             aligned = DynamicsLaunchCfg._warp_align_batches(
@@ -126,13 +151,15 @@ class TestCapacityAffectsRealRobots:
         ],
     )
     def test_block_shape_differs_between_architectures(
-        self, sm_capacity, batch_size, num_links, threads_per_batch, direction
-    ):
+        self, batch_size: int, num_links: int, threads_per_batch: int, direction: str
+    ) -> None:
         calculate = getattr(DynamicsLaunchCfg, f"calculate_{direction}_config")
 
-        sm_capacity(100 * 1024)
-        narrow = calculate(batch_size, num_links, threads_per_batch)
-        sm_capacity(228 * 1024)
-        wide = calculate(batch_size, num_links, threads_per_batch)
+        narrow = calculate(
+            batch_size, num_links, threads_per_batch, sm_shared_mem_capacity=100 * 1024
+        )
+        wide = calculate(
+            batch_size, num_links, threads_per_batch, sm_shared_mem_capacity=228 * 1024
+        )
 
         assert narrow.block[0] != wide.block[0]

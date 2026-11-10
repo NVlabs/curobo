@@ -16,7 +16,7 @@ from cpp_runtime.robot.tools.export_device import ExportDevice
 
 def test_device_description_round_trip(tmp_path: Path) -> None:
     """A saved target retains the limits used for kernel specialization."""
-    device = ExportDevice("NVIDIA Thor", "sm_110", 20, 101376)
+    device = ExportDevice("NVIDIA Thor", "sm_110", 20, 101376, 228 * 1024)
     path = tmp_path / "thor.json"
     path.write_text(json.dumps(device.to_dict()))
     assert ExportDevice.from_file(path) == device
@@ -30,6 +30,8 @@ def test_device_description_round_trip(tmp_path: Path) -> None:
         ("sm_count", 0),
         ("sm_count", True),
         ("max_shared_memory_per_block", -1),
+        ("shared_memory_per_multiprocessor", 0),
+        ("shared_memory_per_multiprocessor", True),
         ("name", ""),
     ],
 )
@@ -41,6 +43,26 @@ def test_invalid_device_description(field: str, value: object, tmp_path: Path) -
     path.write_text(json.dumps(description))
     with pytest.raises(ValueError):
         ExportDevice.from_file(path)
+
+
+def test_older_device_description_retains_shared_memory_fallback(tmp_path: Path) -> None:
+    """Existing target descriptions remain readable with their historical SM budget."""
+    description = ExportDevice("target", "sm_110", 20, 101376).to_dict()
+    del description["shared_memory_per_multiprocessor"]
+    path = tmp_path / "older.json"
+    path.write_text(json.dumps(description))
+    assert ExportDevice.from_file(path).shared_memory_per_multiprocessor == 100 * 1024
+
+
+def test_current_device_records_sm_shared_memory() -> None:
+    """The standalone driver probe records the same capacity as PyTorch."""
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required")
+    ordinal = torch.cuda.current_device()
+    expected = torch.cuda.get_device_properties(ordinal).shared_memory_per_multiprocessor
+    assert ExportDevice.current(ordinal).shared_memory_per_multiprocessor == expected
 
 
 def test_cross_compile_does_not_load_foreign_cubin(
@@ -121,3 +143,57 @@ def test_lbfgs_uses_target_shared_memory(
         ExportDevice("target", "sm_110", 20, shared_limit),
     )
     assert f"<float, false, 10, {str(uses_shared).lower()}," in symbols[0]
+
+
+@pytest.mark.parametrize("target_capacity", [None, 100 * 1024, 228 * 1024])
+def test_rnea_export_uses_device_capacity(
+    target_capacity: int | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use the model device for native export and the target description for cross-export."""
+    import torch
+
+    from cpp_runtime.robot.tools import export_robot_aot as exporter
+    from curobo._src.curobolib.backends.cuda_core_backend.dynamics_config import DynamicsLaunchCfg
+    from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
+    from curobo._src.types.device_cfg import DeviceCfg
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required for robot preparation")
+    config = KinematicsCfg.from_robot_yaml_file(
+        "franka.yml", device_cfg=DeviceCfg()
+    )
+    properties = Mock(return_value=SimpleNamespace(
+        multi_processor_count=170, shared_memory_per_multiprocessor=164 * 1024
+    ))
+    target = None
+    if target_capacity is not None:
+        properties.side_effect = AssertionError("cross-export must not query host properties")
+        target = ExportDevice("target", "sm_110", 170, 101376, target_capacity)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", properties)
+
+    def compile_kernels(*args: object) -> tuple[str, dict[str, str]]:
+        """Skip compilation while retaining the complete profile-generation path."""
+        return "test.cubin", {name: name for name in args[-1]}
+
+    monkeypatch.setattr(exporter, "_compile_cuda_specializations", compile_kernels)
+    forward = Mock(wraps=DynamicsLaunchCfg.calculate_forward_config)
+    backward = Mock(wraps=DynamicsLaunchCfg.calculate_backward_config)
+    monkeypatch.setattr(DynamicsLaunchCfg, "calculate_forward_config", forward)
+    monkeypatch.setattr(DynamicsLaunchCfg, "calculate_backward_config", backward)
+    _, profiles, metadata = exporter.build_rollout_artifact(
+        tmp_path, "sm_110" if target else "sm_120", config.kinematics_config,
+        {"ik": 512, "trajopt": 8192}, target,
+    )
+    assert set(profiles) == {"ik", "trajopt"}
+    assert metadata["forward_profiles"]["count"] > 0
+    expected = target_capacity if target_capacity is not None else 164 * 1024
+    for calculate in (forward, backward):
+        assert calculate.call_count >= 2
+        assert all(
+            call.kwargs["sm_shared_mem_capacity"] == expected
+            for call in calculate.call_args_list
+        )
+    if target is None:
+        properties.assert_called_once_with(config.kinematics_config.fixed_transforms.device)
+    else:
+        properties.assert_not_called()
