@@ -132,6 +132,7 @@ class SeedIKSolver:
             up_bounds=self.action_max,
             low_bounds=self.action_min,
             seed=self.config.sampler_seed,
+            cache_bounded_samples=True,
         )
 
         # create parallel cuda streams:
@@ -555,14 +556,14 @@ class SeedIKSolver:
                 solutions - start_joint_position, dim=-1
             )  # shape: (batch_size, num_seeds)
             costs += self.config.start_cspace_dist_weight * start_cspace_dist_cost
-        costs[~successes] += 1e10  # Penalize failed solutions
+        costs = torch.where(successes, costs, costs + 1e10)
 
         # Select top solutions
         _, top_indices = stable_topk(costs, k=return_seeds, largest=False)
         top_indices = top_indices.view(batch_size, return_seeds)
 
         # Convert to flat indices for advanced indexing
-        top_indices = self._batch_indices.unsqueeze(-1) + top_indices.unsqueeze(0)
+        top_indices.add_(self._batch_indices.unsqueeze(-1))
         top_indices = top_indices.view(-1)
         # Extract top results using the same pattern for all tensors
 
@@ -582,6 +583,7 @@ class SeedIKSolver:
         seed_config: Optional[torch.Tensor] = None,
         return_seeds: int = 1,
         batch_size: int = 1,
+        rank_solutions: bool = True,
     ) -> IKSolverResult:
         total_timer = CudaEventTimer().start()
 
@@ -598,10 +600,6 @@ class SeedIKSolver:
         # _setup_batch_size is a no-op if size hasn't changed.
         self._setup_batch_size(batch_size, self.config.num_seeds)
 
-        # Update velocity/accel state buffers in-place (addresses stay stable for CUDA graphs).
-        self._velocity_dt.fill_(1.0)
-        self._velocity_current_position.zero_()
-        self._velocity_current_velocity.zero_()
         self._velocity_clamping_active = False
         if current_state is not None and current_state.dt is not None:
             self._velocity_clamping_active = True
@@ -613,12 +611,20 @@ class SeedIKSolver:
             )
             dt_per_batch = current_state.dt.reshape(batch_size, -1)[:, 0]
             self._velocity_dt.copy_(dt_per_batch.repeat_interleave(num_seeds))
-            if current_state.velocity is not None:
+            if self.config.acceleration_weight > 0 and current_state.velocity is not None:
                 self._velocity_current_velocity.copy_(
                     tensor_repeat_seeds(
                         current_state.velocity.view(batch_size, 1, self.dof), num_seeds
                     ).view(batch_size * num_seeds, self.dof)
                 )
+            elif self.config.acceleration_weight > 0:
+                self._velocity_current_velocity.zero_()
+        elif self.config.velocity_weight > 0 or self.config.acceleration_weight > 0:
+            # Preserve the neutral fallback state used when regularization is
+            # configured without a current-state timestep.
+            self._velocity_dt.fill_(1.0)
+            self._velocity_current_position.zero_()
+            self._velocity_current_velocity.zero_()
 
         # Generate seed configurations
         seeds = self._generate_seed_configs(
@@ -631,12 +637,11 @@ class SeedIKSolver:
         n_mini_batches = batch_size // batches_per_mini_batch
         solve_timer = CudaEventTimer().start()
 
-        # Store full-batch velocity state for mini-batch slicing
-        full_velocity_current_position = self._velocity_current_position.clone()
-        full_velocity_current_velocity = self._velocity_current_velocity.clone()
-        full_velocity_dt = self._velocity_dt.clone()
-
         if n_mini_batches > 0:
+            # Store full-batch velocity state only when mini-batch slicing needs it.
+            full_velocity_current_position = self._velocity_current_position.clone()
+            full_velocity_current_velocity = self._velocity_current_velocity.clone()
+            full_velocity_dt = self._velocity_dt.clone()
             solution_list = []
             success_list = []
             position_error_list = []
@@ -706,17 +711,24 @@ class SeedIKSolver:
             self._batch_indices = (
                 torch.arange(batch_size, device=self.device_cfg.device) * self.config.num_seeds
             )
-        # Select top solutions
-        top_successes, top_solutions, top_pos_errors, top_ori_errors = self._select_top_solutions(
-            solutions,
-            successes,
-            position_errors,
-            orientation_errors,
-            current_state.position if current_state is not None else None,
-            batch_size,
-            self.config.num_seeds,
-            return_seeds,
-        )
+        if rank_solutions:
+            top_successes, top_solutions, top_pos_errors, top_ori_errors = (
+                self._select_top_solutions(
+                    solutions,
+                    successes,
+                    position_errors,
+                    orientation_errors,
+                    current_state.position if current_state is not None else None,
+                    batch_size,
+                    self.config.num_seeds,
+                    return_seeds,
+                )
+            )
+        else:
+            top_successes = successes
+            top_solutions = solutions
+            top_pos_errors = position_errors
+            top_ori_errors = orientation_errors
 
         # Create joint state solution
         js_solution = JointState.from_position(top_solutions, joint_names=self.joint_names)
@@ -734,6 +746,39 @@ class SeedIKSolver:
         )
 
         return result
+
+    @profiler.record_function("seed_ik_solver/solve_seed_configs")
+    def solve_seed_configs(
+        self,
+        goal_tool_poses: GoalToolPose,
+        num_seed_configs: int,
+        current_state: Optional[JointState] = None,
+        seed_config: Optional[torch.Tensor] = None,
+    ) -> IKSolverResult:
+        """Optimize seed configurations for downstream IK refinement.
+
+        Ranking is skipped when downstream refinement consumes every seed.
+        The solution tensor has shape ``[batch, num_seed_configs, dof]``.
+
+        Args:
+            goal_tool_poses: Target poses for the controlled links.
+            num_seed_configs: Number of configurations requested by downstream IK.
+            current_state: Optional current joint state for velocity-aware IK.
+            seed_config: Optional initial configurations with shape
+                ``[batch, provided_seeds, dof]``.
+
+        Returns:
+            Optimized seed configurations and their LM metrics.
+        """
+        batch_size = goal_tool_poses.batch_size
+        return self._solve_impl(
+            goal_tool_poses=goal_tool_poses,
+            current_state=current_state,
+            seed_config=seed_config,
+            return_seeds=num_seed_configs,
+            batch_size=batch_size,
+            rank_solutions=num_seed_configs < self.config.num_seeds,
+        )
 
     @profiler.record_function("seed_ik_solver/solve_single")
     def solve_single(

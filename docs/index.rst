@@ -14,9 +14,10 @@ manipulators to high-DoF humanoids.
 
    <figure>
    <video autoplay loop muted playsinline controls preload="auto" width="100%">
-     <source src="videos/dual_rgbd_feature_mapping.webm" type="video/webm">
+     <source src="videos/curobov2-fast-real-world-30s.webm" type="video/webm">
    </video>
-   <figcaption>GPU-native perception from dual RGBD streams, integrating C-RADIO features into TSDF blocks in 2ms.</figcaption>
+   <figcaption>cuRobo performs collision-free pick-and-drop motions on YAM
+   using stereo-camera perception.</figcaption>
    </figure>
 
 
@@ -63,7 +64,6 @@ Documentation
 
 - :doc:`getting-started/index`: Step-by-step tutorials covering installation, robot setup, kinematics, IK, MPC, motion planning, and volumetric mapping.
 - :doc:`guides/index`: Writing custom optimization problems, cost terms, and optimizers.
-- :doc:`concepts/index`: How cuRobo's rollouts, optimization solvers, and geometric planner work.
 - :doc:`reference/index`: API, style guide, runtime configuration, benchmarks, sphere fitting, and self-collision.
 
 Research
@@ -79,6 +79,5 @@ Read the cuRobo technical reports for algorithm details and benchmarks.
 
    getting-started/index
    guides/index
-   concepts/index
    reference/index
    technical_reports

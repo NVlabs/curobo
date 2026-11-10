@@ -192,7 +192,7 @@ class TestSampleBuffer:
         assert samples.shape == (100, ndims)
 
     def test_buffered_sampling_consistency(self, random_sequencer, device_cfg, ndims):
-        """Test that buffered sampling is consistent across calls."""
+        """Consume successive contiguous ranges from a fixed sample buffer."""
         buffer = SampleBuffer(
             sequencer=random_sequencer,
             ndims=ndims,
@@ -207,9 +207,73 @@ class TestSampleBuffer:
         samples1 = buffer.get_samples(50, bounded=False)
         samples2 = buffer.get_samples(50, bounded=False)
 
-        # Samples should be different (random sampling from buffer)
+        # Samples should be successive ranges from the fixed buffer.
         assert not torch.allclose(samples1, samples2)
         assert samples1.shape == samples2.shape == (50, ndims)
+        torch.testing.assert_close(samples1, buffer._sample_buffer[:50])
+        torch.testing.assert_close(samples2, buffer._sample_buffer[50:100])
+
+    def test_buffered_sampling_wraps_to_contiguous_start(
+        self, halton_sequencer, device_cfg, ndims
+    ):
+        """Restart at zero when the next contiguous range crosses the buffer end."""
+        buffer = SampleBuffer(
+            sequencer=halton_sequencer,
+            ndims=ndims,
+            device_cfg=device_cfg,
+            store_buffer=10,
+        )
+
+        first = buffer.get_samples(4)
+        second = buffer.get_samples(4)
+        wrapped = buffer.get_samples(4)
+
+        torch.testing.assert_close(first, buffer._sample_buffer[:4])
+        torch.testing.assert_close(second, buffer._sample_buffer[4:8])
+        torch.testing.assert_close(wrapped, buffer._sample_buffer[:4])
+
+    def test_buffered_sampling_reset_restores_cursor(
+        self, halton_sequencer, device_cfg, ndims
+    ):
+        """Reset deterministic contiguous sampling to the first buffer row."""
+        buffer = SampleBuffer(
+            sequencer=halton_sequencer,
+            ndims=ndims,
+            device_cfg=device_cfg,
+            store_buffer=20,
+        )
+
+        initial = buffer.get_samples(5)
+        buffer.get_samples(5)
+        buffer.reset()
+        reset = buffer.get_samples(5)
+
+        torch.testing.assert_close(reset, initial)
+
+    def test_cached_bounded_buffer_matches_bounded_samples(
+        self,
+        halton_sequencer: HaltonSequencer,
+        device_cfg: DeviceCfg,
+        ndims: int,
+    ) -> None:
+        """Cache fixed bounded samples without changing sampled values."""
+        buffer = SampleBuffer(
+            sequencer=halton_sequencer,
+            ndims=ndims,
+            device_cfg=device_cfg,
+            up_bounds=[2.0],
+            low_bounds=[-1.0],
+            store_buffer=500,
+            cache_bounded_samples=True,
+        )
+
+        buffer.reset()
+        unbounded_samples = buffer.get_samples(100, bounded=False)
+        buffer.reset()
+        bounded_samples = buffer.get_samples(100, bounded=True)
+
+        torch.testing.assert_close(bounded_samples, unbounded_samples * 3.0 - 1.0)
+        assert bounded_samples.is_contiguous()
 
     def test_reset_functionality(self, halton_sequencer, device_cfg, ndims):
         """Test reset functionality."""
@@ -386,7 +450,7 @@ class TestSampleBuffer:
         assert not torch.allclose(halton_samples, random_samples)
 
     def test_buffer_index_reuse(self, random_sequencer, device_cfg, ndims):
-        """Test that index buffer is reused for efficiency."""
+        """Reuse the random-index buffer for requests larger than half the cache."""
         buffer = SampleBuffer(
             sequencer=random_sequencer,
             ndims=ndims,
@@ -395,12 +459,28 @@ class TestSampleBuffer:
         )
 
         # Generate samples twice with same size
-        buffer.get_samples(10, bounded=False)
-        buffer.get_samples(10, bounded=False)
+        buffer.get_samples(60, bounded=False)
+        buffer.get_samples(60, bounded=False)
 
         # Index buffer should be created and reused
         assert buffer._index_buffer is not None
-        assert buffer._index_buffer.shape == (10,)
+        assert buffer._index_buffer.shape == (60,)
+
+    def test_half_buffer_request_stays_sequential(
+        self, random_sequencer, device_cfg, ndims
+    ):
+        """Use a contiguous view when requesting exactly half the cache."""
+        buffer = SampleBuffer(
+            sequencer=random_sequencer,
+            ndims=ndims,
+            device_cfg=device_cfg,
+            store_buffer=100,
+        )
+
+        samples = buffer.get_samples(50)
+
+        assert buffer._index_buffer is None
+        torch.testing.assert_close(samples, buffer._sample_buffer[:50])
 
     def test_zero_samples(self, halton_sequencer, device_cfg, ndims):
         """Test requesting zero samples."""

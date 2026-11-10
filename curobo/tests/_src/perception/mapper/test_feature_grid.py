@@ -49,6 +49,8 @@ def test_block_data_view_samples_independent_feature_grid():
         features=features,
         feature_weight=torch.ones((1, 8), dtype=torch.float16),
         feature_dim=1,
+        instance_state=torch.zeros((1, 1), dtype=torch.int16),
+        instance_grid_size=0,
     )
     centers = torch.tensor(
         [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],

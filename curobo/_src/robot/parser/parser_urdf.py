@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Tuple, Union
 
 # Third Party
 import numpy as np
-import torch
 import yourdfpy
 from lxml import etree
 
@@ -21,7 +20,6 @@ from curobo._src.geom.types import Mesh as CuroboMesh
 from curobo._src.robot.parser.parser_base import RobotParser
 from curobo._src.robot.types.joint_types import JointType
 from curobo._src.robot.types.link_params import LinkParams
-from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
 from curobo._src.util.logging import log_and_raise, log_warn
 from curobo._src.util_file import join_path
@@ -156,21 +154,13 @@ class UrdfRobotParser(RobotParser):
             com_pose_matrix = link_data.inertial.origin
             if com_pose_matrix is None:
                 com_pose_matrix = np.eye(4)
-            # com pose is rigidly attached to link, so any rotation that com has can be
-            # applied to the position to get an absolute position (with identity rotation).
-            com_rotation_as_pose = Pose.from_matrix(
-                torch.as_tensor(com_pose_matrix, device="cuda", dtype=torch.float32)
-            )
-
-            com_position_as_pose = Pose.from_numpy(
-                com_pose_matrix[:3, 3],
-                np.ravel([1, 0, 0, 0]),
-                device_cfg=DeviceCfg(device="cuda", dtype=torch.float32),
-            )
-            com = com_rotation_as_pose.multiply(com_position_as_pose).position.view(3).cpu().numpy()
-
-            inertia_matrix = link_data.inertial.inertia
-            inertia_array = np.array(
+            # URDF origin already locates the COM in the link frame. Inertia is
+            # about that COM, expressed in the rotated inertial frame; only
+            # rotate the tensor here (no parallel-axis shift).
+            com = np.array(com_pose_matrix[:3, 3], copy=True)
+            rotation = com_pose_matrix[:3, :3]
+            inertia_matrix = rotation @ link_data.inertial.inertia @ rotation.T
+            inertia = np.array(
                 [
                     inertia_matrix[0, 0],
                     inertia_matrix[1, 1],
@@ -181,8 +171,8 @@ class UrdfRobotParser(RobotParser):
                 ]
             )
             # if all are zero:
-            if np.all(inertia_array == 0.0):
-                inertia_array = np.array([1e-4, 1e-4, 1e-4, 0.0, 0.0, 0.0]) * mass
+            if np.all(inertia == 0.0):
+                inertia = np.array([1e-4, 1e-4, 1e-4, 0.0, 0.0, 0.0]) * mass
             if com.shape != (3,):
                 log_and_raise(f"com read from urdf shape does not match: {com.shape} != (3,)")
             if inertia.shape != (6,):

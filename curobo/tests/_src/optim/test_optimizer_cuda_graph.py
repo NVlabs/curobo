@@ -17,7 +17,12 @@ from curobo._src.optim.gradient.gradient_descent import GradientDescentOpt, Grad
 from curobo._src.optim.gradient.lbfgs import LBFGSOptCfg
 from curobo._src.optim.optim_factory import create_optimization_config, create_optimizer
 from curobo._src.optim.particle.mppi import MPPI, MPPICfg
-from curobo._src.rollout.metrics import CostCollection, CostsAndConstraints, RolloutMetrics, RolloutResult
+from curobo._src.rollout.metrics import (
+    CostCollection,
+    CostsAndConstraints,
+    RolloutMetrics,
+    RolloutResult,
+)
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.sampling.sample_buffer import SampleBuffer
 
@@ -109,7 +114,12 @@ class MockRollout:
     def compute_metrics_from_state(self, state, **kwargs):
         cc = self._compute_costs_and_constraints_impl(state, **kwargs)
         convergence = cc.get_sum_cost(sum_horizon=False)
-        return RolloutMetrics(costs_and_constraints=cc, feasible=cc.get_feasible(), state=state, convergence=convergence)
+        return RolloutMetrics(
+            costs_and_constraints=cc,
+            feasible=cc.get_feasible(),
+            state=state,
+            convergence=convergence,
+        )
 
     def compute_metrics_from_action(self, act_seq, **kwargs):
         batch_size = act_seq.shape[0]
@@ -274,8 +284,11 @@ class TestOptimizerCudaGraph:
 
         # Run optimization to record graphs
         initial_action = torch.randn(
-            4, rollout_fn.action_horizon, rollout_fn.action_dim,
-            device=device_cfg.device, dtype=device_cfg.dtype
+            4,
+            rollout_fn.action_horizon,
+            rollout_fn.action_dim,
+            device=device_cfg.device,
+            dtype=device_cfg.dtype,
         )
         optimizer.optimize(initial_action)
 
@@ -293,10 +306,16 @@ class TestOptimizerCudaGraph:
         optimizer = create_optimizer(config, [rollout_fn], use_cuda_graph=True)
         optimizer.update_num_problems(4)
 
-        initial_action = torch.randn(
-            4, rollout_fn.action_horizon, rollout_fn.action_dim,
-            device=device_cfg.device, dtype=device_cfg.dtype
-        ) * 5.0
+        initial_action = (
+            torch.randn(
+                4,
+                rollout_fn.action_horizon,
+                rollout_fn.action_dim,
+                device=device_cfg.device,
+                dtype=device_cfg.dtype,
+            )
+            * 5.0
+        )
 
         result = optimizer.optimize(initial_action)
 
@@ -318,10 +337,16 @@ class TestOptimizerCudaGraph:
         optimizer = create_optimizer(config, [rollout_fn], use_cuda_graph=True)
         optimizer.update_num_problems(4)
 
-        initial_action = torch.randn(
-            4, rollout_fn.action_horizon, rollout_fn.action_dim,
-            device=device_cfg.device, dtype=device_cfg.dtype
-        ) * 5.0
+        initial_action = (
+            torch.randn(
+                4,
+                rollout_fn.action_horizon,
+                rollout_fn.action_dim,
+                device=device_cfg.device,
+                dtype=device_cfg.dtype,
+            )
+            * 5.0
+        )
 
         result = optimizer.optimize(initial_action)
 
@@ -335,7 +360,6 @@ class TestOptimizerCudaGraph:
             num_iters=10,
             history=5,
             solver_type="lbfgs",
-            use_cuda_kernel_step_direction=False,
             device_cfg=device_cfg,
         )
 
@@ -346,10 +370,16 @@ class TestOptimizerCudaGraph:
         assert "_opt_iters" in optimizer._executors
         assert "_prepare_initial_iteration_state" in optimizer._executors
 
-        initial_action = torch.randn(
-            4, rollout_fn.action_horizon, rollout_fn.action_dim,
-            device=device_cfg.device, dtype=device_cfg.dtype
-        ) * 5.0
+        initial_action = (
+            torch.randn(
+                4,
+                rollout_fn.action_horizon,
+                rollout_fn.action_dim,
+                device=device_cfg.device,
+                dtype=device_cfg.dtype,
+            )
+            * 5.0
+        )
 
         result = optimizer.optimize(initial_action)
 
@@ -359,6 +389,216 @@ class TestOptimizerCudaGraph:
 
         assert final_cost < initial_cost
 
+    @pytest.mark.parametrize(
+        ("history", "num_dof", "action_horizon", "expect_compact"),
+        [
+            (7, 7, 1, False),
+            (16, 33, 8, False),
+            (16, 64, 8, False),
+            (28, 7, 16, False),
+            (30, 7, 16, True),
+            (128, 6, 8, False),
+        ],
+    )
+    @pytest.mark.parametrize("use_geometric_scaling", [True, False])
+    def test_lbfgs_auto_dispatch_with_cuda_graph(
+        self,
+        device_cfg,
+        history: int,
+        num_dof: int,
+        action_horizon: int,
+        expect_compact: bool,
+        use_geometric_scaling: bool,
+    ):
+        """Capture and replay auto-selected L-BFGS in both scaling modes."""
+        if torch.cuda.get_device_capability(device_cfg.device)[0] < 8:
+            pytest.skip("Compact L-BFGS requires TF32 tensor cores")
+
+        rollout = MockRollout(
+            num_dof=num_dof,
+            action_horizon=action_horizon,
+            batch_size=4,
+            device=str(device_cfg.device),
+        )
+        config = LBFGSOptCfg(
+            num_problems=4,
+            num_iters=10,
+            history=history,
+            step_scale=0.98,
+            solver_type="lbfgs",
+            device_cfg=device_cfg,
+            use_geometric_scaling=use_geometric_scaling,
+        )
+        optimizer = create_optimizer(config, [rollout, rollout], use_cuda_graph=True)
+        assert (optimizer._compact_shared_matrix_count is not None) is expect_compact
+
+        initial_action = 0.5 * torch.randn(
+            4,
+            rollout.action_horizon,
+            rollout.action_dim,
+            device=device_cfg.device,
+            dtype=device_cfg.dtype,
+        )
+        result = optimizer.optimize(initial_action)
+        assert torch.all(torch.isfinite(result))
+        assert cost_fn(result).mean() < cost_fn(initial_action).mean()
+
+    def test_lbfgs_reinitialize_reuses_initial_state_graph(self, device_cfg):
+        """Match eager reinitialization while reusing the initial-state CUDA graph."""
+        graph_rollout = MockRollout(device=str(device_cfg.device))
+        eager_rollout = MockRollout(device=str(device_cfg.device))
+        graph_config = LBFGSOptCfg(
+            num_problems=4,
+            num_iters=25,
+            history=5,
+            solver_type="lbfgs",
+            device_cfg=device_cfg,
+        )
+        eager_config = LBFGSOptCfg(
+            num_problems=4,
+            num_iters=25,
+            history=5,
+            solver_type="lbfgs",
+            device_cfg=device_cfg,
+        )
+        graph_optimizer = create_optimizer(
+            graph_config, [graph_rollout, graph_rollout], use_cuda_graph=True
+        )
+        eager_optimizer = create_optimizer(
+            eager_config, [eager_rollout, eager_rollout], use_cuda_graph=False
+        )
+        executor = graph_optimizer._executors["_prepare_initial_iteration_state"]
+
+        torch.manual_seed(11)
+        actions = [
+            torch.randn(
+                4,
+                graph_rollout.action_horizon,
+                graph_rollout.action_dim,
+                device=device_cfg.device,
+                dtype=device_cfg.dtype,
+            )
+            for _ in range(2)
+        ]
+        state_fields = (
+            "action",
+            "cost",
+            "gradient",
+            "exploration_action",
+            "exploration_gradient",
+            "exploration_cost",
+            "step_direction",
+            "best_action",
+            "best_cost",
+            "best_iteration",
+            "current_iteration",
+            "converged",
+        )
+
+        for action in actions:
+            graph_optimizer.reinitialize(action)
+            eager_optimizer.reinitialize(action)
+
+            assert executor.is_initialized
+            graph_state = graph_optimizer._core._iteration_state
+            eager_state = eager_optimizer._core._iteration_state
+            for field_name in state_fields:
+                torch.testing.assert_close(
+                    getattr(graph_state, field_name),
+                    getattr(eager_state, field_name),
+                )
+            torch.testing.assert_close(graph_optimizer._qn.x_0, eager_optimizer._qn.x_0)
+            torch.testing.assert_close(graph_optimizer._qn.grad_0, eager_optimizer._qn.grad_0)
+
+    def test_lbfgs_single_iteration_graph_replay_matches_eager(self, device_cfg):
+        """Carry the updated L-BFGS direction across one-iteration graph replays."""
+        graph_rollout = MockRollout(
+            num_dof=7,
+            action_horizon=16,
+            batch_size=4,
+            device=str(device_cfg.device),
+        )
+        eager_rollout = MockRollout(
+            num_dof=7,
+            action_horizon=16,
+            batch_size=4,
+            device=str(device_cfg.device),
+        )
+        config_kwargs = dict(
+            num_problems=4,
+            num_iters=12,
+            inner_iters=1,
+            history=8,
+            solver_type="lbfgs",
+            device_cfg=device_cfg,
+            line_search_scale=[0.1, 0.5, 1.0],
+            use_cuda_kernel_line_search=True,
+            initial_step_scale=0.001,
+        )
+        graph_optimizer = create_optimizer(
+            LBFGSOptCfg(**config_kwargs),
+            [graph_rollout, graph_rollout],
+            use_cuda_graph=True,
+        )
+        eager_optimizer = create_optimizer(
+            LBFGSOptCfg(**config_kwargs),
+            [eager_rollout, eager_rollout],
+            use_cuda_graph=False,
+        )
+
+        generator = torch.Generator(device=device_cfg.device).manual_seed(17)
+        warmup_action = 0.2 * torch.randn(
+            4,
+            graph_rollout.action_horizon,
+            graph_rollout.action_dim,
+            generator=generator,
+            device=device_cfg.device,
+            dtype=device_cfg.dtype,
+        )
+        action = 0.2 * torch.randn(
+            4,
+            graph_rollout.action_horizon,
+            graph_rollout.action_dim,
+            generator=generator,
+            device=device_cfg.device,
+            dtype=device_cfg.dtype,
+        )
+
+        graph_optimizer.reinitialize(warmup_action)
+        graph_optimizer.optimize(warmup_action)
+        graph_optimizer.reinitialize(action)
+        eager_optimizer.reinitialize(action)
+
+        graph_result = graph_optimizer.optimize(action)
+        eager_result = eager_optimizer.optimize(action)
+
+        torch.testing.assert_close(graph_result, eager_result, rtol=1.0e-5, atol=1.0e-6)
+
+    def test_lbfgs_masked_reinitialize_remains_eager(self, device_cfg):
+        """Keep selective reinitialization out of the unmasked CUDA graph."""
+        rollout = MockRollout(device=str(device_cfg.device))
+        config = LBFGSOptCfg(
+            num_problems=4,
+            num_iters=25,
+            history=5,
+            solver_type="lbfgs",
+            device_cfg=device_cfg,
+        )
+        optimizer = create_optimizer(config, [rollout, rollout], use_cuda_graph=True)
+        executor = optimizer._executors["_prepare_initial_iteration_state"]
+        action = torch.randn(
+            4,
+            rollout.action_horizon,
+            rollout.action_dim,
+            device=device_cfg.device,
+            dtype=device_cfg.dtype,
+        )
+        mask = torch.tensor([True, False, True, False], device=device_cfg.device)
+
+        optimizer.reinitialize(action, mask=mask)
+
+        assert not executor.is_initialized
+
 
 class TestFactoryWithCudaGraph:
     """Test optimizer factory with use_cuda_graph=True."""
@@ -366,7 +606,7 @@ class TestFactoryWithCudaGraph:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     @pytest.mark.parametrize(
         "solver_type",
-        ["lbfgs", "gradient_descent", "conjugate_gradient", "lsr1", "mppi", "es"],
+        ["lbfgs", "gradient_descent", "conjugate_gradient", "mppi", "es"],
     )
     def test_factory_creates_cuda_graph_optimizer(self, device_cfg, rollout_fn, solver_type):
         """Test that factory correctly creates CUDA graph wrapped optimizers."""
@@ -376,9 +616,8 @@ class TestFactoryWithCudaGraph:
         }
 
         # Add solver-specific parameters
-        if solver_type in ["lbfgs", "lsr1"]:
+        if solver_type == "lbfgs":
             config_dict["history"] = 5
-            config_dict["use_cuda_kernel_step_direction"] = False
             rollout_list = [rollout_fn, rollout_fn]
         elif solver_type == "conjugate_gradient":
             config_dict["cg_method"] = "FR"
@@ -401,7 +640,7 @@ class TestFactoryWithCudaGraph:
         assert "_opt_iters" in optimizer._executors
 
         # Line-search gradient optimizers graph both _opt_iters and _prepare_initial_iteration_state
-        if solver_type in ["lbfgs", "conjugate_gradient", "lsr1"]:
+        if solver_type in ["lbfgs", "conjugate_gradient"]:
             assert "_prepare_initial_iteration_state" in optimizer._executors
 
         # Simple gradient descent and particle optimizers only graph _opt_iters

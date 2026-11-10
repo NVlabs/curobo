@@ -1,0 +1,41 @@
+# Local Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Build outputs
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Generated runtime artifacts
+mapper/artifacts/
+robot/artifacts/
+*.cubin
+*.fatbin
+*.jsonl
+*.prof
+
+# Local dependency/cache mirrors
+third_party/
+wheelhouse/
+*.egg-info/
+dist/
+
+# Local logs and scratch files
+*.log
+*.tmp
+*.bak
+core

@@ -147,3 +147,15 @@ class TestJointLimitsValidateShapeMethod:
         # If we get here, test passed
         assert True
 
+
+
+@pytest.mark.parametrize("effort", [0.0, 2.0])
+def test_equal_effort_bounds(effort: float) -> None:
+    """A zero-width torque interval is valid; it must not invalidate kinematic models."""
+    limits = torch.tensor([[-1.0], [1.0]], device="cuda", dtype=torch.float32)
+    actual = JointLimits(
+        joint_names=["joint"], position=limits, velocity=limits,
+        acceleration=limits, jerk=limits,
+        effort=torch.full_like(limits, effort),
+    )
+    torch.testing.assert_close(actual.effort, torch.full_like(limits, effort))

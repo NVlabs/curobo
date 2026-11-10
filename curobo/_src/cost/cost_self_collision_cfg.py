@@ -21,5 +21,11 @@ class SelfCollisionCostCfg(BaseCostCfg):
     self_collision_kin_config: Optional[SelfCollisionKinematicsCfg] = None
     store_pair_distance: bool = False
 
+    #: Sum positive configured pair costs instead of selecting the maximum pair cost.
+    sum_collisions: bool = False
+
+    #: Sum the largest positive contact selected independently for each sphere.
+    per_sphere_max_collisions: bool = False
+
     def __post_init__(self):
         return super().__post_init__()

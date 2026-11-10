@@ -15,27 +15,22 @@ from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
 from curobo._src.robot.kinematics.kinematics import Kinematics, KinematicsCfg
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
-from curobo._src.util.config_io import join_path, load_yaml
-from curobo.content import get_robot_configs_path
 
-
-DEFAULT_ROBOTS = ["franka.yml", "dual_ur10e.yml", "unitree_g1.yml"]
-DEFAULT_BATCH_SIZES = [1, 64, 256, 1024]
+DEFAULT_ROBOTS = [
+    "franka.yml",
+    "dual_ur10e.yml",
+    "unitree_g1_29dof_retarget.yml",
+]
+DEFAULT_BATCH_SIZES = [2**exponent for exponent in range(14)]
 
 
 def _load_kinematics(robot_file_name: str, device_cfg: DeviceCfg) -> Kinematics:
-    robot_file = load_yaml(join_path(get_robot_configs_path(), robot_file_name))
-    if "robot_cfg" in robot_file:
-        robot_file = robot_file["robot_cfg"]
-    robot_file["kinematics"]["collision_link_names"] = None
-    robot_file["kinematics"]["lock_joints"] = {}
-    return Kinematics(KinematicsCfg.from_data_dict(robot_file, device_cfg=device_cfg))
+    config = KinematicsCfg.from_robot_yaml_file(robot_file_name, device_cfg=device_cfg)
+    return Kinematics(config)
 
 
 def _build_dynamics(kin: Kinematics, device_cfg: DeviceCfg) -> Dynamics:
-    return Dynamics(
-        DynamicsCfg(kinematics_config=kin.kinematics_config, device_cfg=device_cfg)
-    )
+    return Dynamics(DynamicsCfg(kinematics_config=kin.kinematics_config, device_cfg=device_cfg))
 
 
 def _make_inverse_dynamics_inputs(
@@ -94,9 +89,7 @@ def _kernel_rows(prof, profile_iters: int) -> list[dict]:
             continue
         if "kernel" not in event.key.lower():
             continue
-        self_cuda_us = _event_time_us(
-            event, ("self_device_time_total", "self_cuda_time_total")
-        )
+        self_cuda_us = _event_time_us(event, ("self_device_time_total", "self_cuda_time_total"))
         if self_cuda_us <= 0.0:
             continue
         cuda_total_us = _event_time_us(event, ("device_time_total", "cuda_time_total"))
@@ -142,6 +135,12 @@ def _profile_run(
     return _kernel_rows(prof, profile_iters)
 
 
+def _warmup_profiler(device: torch.device) -> None:
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]):
+        _ = torch.zeros((1,), device=device)
+    torch.cuda.synchronize(device)
+
+
 def _sum_kernel_time(rows: list[dict], profile_iters: int, kernel_name: str = "") -> float:
     total_us = 0.0
     for row in rows:
@@ -184,14 +183,8 @@ def _profile_one(
 
     forward_us = _sum_kernel_time(forward_rows, profile_iters)
     forward_backward_us = _sum_kernel_time(forward_backward_rows, profile_iters)
-    rnea_forward_us = sum(
-        row["self_cuda_total_us"]
-        for row in forward_rows
-        if "rnea_forward" in row["kernel"].lower()
-    ) / profile_iters
-    rnea_backward_us = _sum_kernel_time(
-        forward_backward_rows, profile_iters, "rnea_backward"
-    )
+    rnea_forward_us = _sum_kernel_time(forward_rows, profile_iters, "rnea_forward")
+    rnea_backward_us = _sum_kernel_time(forward_backward_rows, profile_iters, "rnea_backward")
 
     return {
         "robot": robot,
@@ -203,7 +196,8 @@ def _profile_one(
     }
 
 
-def main():
+def main() -> None:
+    """Run inverse-dynamics kernel benchmarks from command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--robots", nargs="+", default=DEFAULT_ROBOTS)
     parser.add_argument("--batch-sizes", type=int, nargs="+", default=DEFAULT_BATCH_SIZES)
@@ -222,7 +216,7 @@ def main():
     torch.manual_seed(2)
     device_cfg = DeviceCfg(device=device)
 
-    _ = torch.zeros((1,), device=device)
+    _warmup_profiler(device)
     summary = []
     for robot in args.robots:
         for batch_size in args.batch_sizes:

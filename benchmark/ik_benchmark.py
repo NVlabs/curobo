@@ -1,68 +1,35 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-#
-# Standard Library
+"""Benchmark batched IK accuracy and solve time across supported robots."""
+
 import argparse
+from pathlib import Path
+from typing import Optional
 
-import curobo.runtime as runtime
-
-runtime.enable_torch_compile = False
-runtime.enable_torch_jit = False
-
-# Third Party
 import numpy as np
 import torch
-from torch.profiler import ProfilerActivity, profile
 
-# CuRobo
+import curobo.runtime as runtime
 from curobo._src.solver.solver_ik import IKSolver
 from curobo._src.solver.solver_ik_cfg import IKSolverCfg
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
-
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.logging import setup_curobo_logger
-
-# Enable CUDA event timing for accurate benchmark measurements
-runtime.enable_cuda_event_timer = True
-from curobo._src.util_file import (
-    join_path,
-    write_yaml,
-)
-from curobo.content import (
-    get_robot_configs_path,
-)
-
-# set seeds
-torch.manual_seed(2)
-np.random.seed(2)
-
-torch._dynamo.config.compiled_autograd = True
+from curobo._src.util_file import join_path, write_yaml
 
 
-torch._dynamo.config.cache_size_limit = 64
-
-
-torch.backends.cudnn.benchmark = True
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
-from curobo._src.util.config_io import join_path, resolve_config
-
-
-def run_full_config_collision_free_ik(
-    robot_file,
-    world_file,
-    batch_size,
-    use_cuda_graph=False,
-    collision_free=True,
-    num_seeds=12,
-):
-    if not collision_free:
-        robot_file = resolve_config(join_path(get_robot_configs_path(), robot_file))
-        if "kinematics" not in robot_file:
-            robot_file = robot_file["robot_cfg"]
-        robot_file["kinematics"]["collision_link_names"] = None
-        robot_file["kinematics"]["lock_joints"] = None
+def create_ik_config(
+    robot_file: str,
+    world_file: Optional[str] = "collision_table.yml",
+    batch_size: int = 100,
+    use_cuda_graph: bool = True,
+    collision_free: bool = True,
+    num_seeds: Optional[int] = None,
+) -> IKSolverCfg:
+    """Build the shared Python and native benchmark IK configuration."""
+    if num_seeds is None:
+        num_seeds = 2 if not collision_free else (8 if Path(robot_file).stem == "franka" else 16)
     device_cfg = DeviceCfg()
     position_threshold = 0.005
 
@@ -81,24 +48,48 @@ def run_full_config_collision_free_ik(
         optimizer_collision_activation_distance=0.0025,
         self_collision_check=collision_free,
         device_cfg=device_cfg,
-        override_iters_for_multi_link_ik=240 if robot_file in ["unitree_g1.yml"] else None,
-        seed_solver_num_seeds=128 if robot_file in ["unitree_g1.yml"] else max(32, num_seeds*2),
+        override_iters_for_multi_link_ik=(160 if robot_file in ["unitree_g1_29dof.yml"] else None),
+        seed_solver_num_seeds=(
+            32 if robot_file in ["unitree_g1_29dof.yml"] else max(32, num_seeds * 2)
+        ),
         max_batch_size=batch_size,
+        load_collision_spheres=collision_free,
     )
+    config.use_lm_seed = True
 
+    return config
+
+
+def sample_ik_configs(sampler: IKSolver, num_samples: int) -> torch.Tensor:
+    """Collect exactly [num_samples, dof] valid configurations across bounded draws."""
+    accepted = []
+    count = 0
+    for ratio in range(10, 101, 10):
+        samples = sampler.sample_configs(num_samples, rejection_ratio=ratio)
+        chunk = samples[: num_samples - count]
+        if len(chunk):
+            accepted.append(chunk)
+            count += len(chunk)
+        if count == num_samples:
+            return torch.cat(accepted, dim=0)
+    raise RuntimeError(f"could not sample {num_samples} valid configurations; collected {count}")
+
+
+def run_full_config_collision_free_ik(
+    robot_file: str,
+    world_file: Optional[str],
+    batch_size: int,
+    use_cuda_graph: bool = False,
+    collision_free: bool = True,
+    num_seeds: Optional[int] = None,
+) -> tuple[float, float, float, float]:
+    """Run five timed IK batches for one robot and optimizer pipeline."""
+    config = create_ik_config(
+        robot_file, world_file, batch_size, use_cuda_graph, collision_free, num_seeds
+    )
     ik_solver = IKSolver(config)
 
-    rej_ratio = 10
-    q_sample_list = []
-    for _ in range(5):
-        q_sample = ik_solver.sample_configs(batch_size, rejection_ratio=rej_ratio)
-        while q_sample.shape[0] == 0 or q_sample.shape[0] < batch_size:
-            q_sample = ik_solver.sample_configs(batch_size, rejection_ratio=rej_ratio)
-            rej_ratio = int(1.2 * rej_ratio)
-            if rej_ratio > 100:
-                print("Rejection ratio too high")
-                exit()
-        q_sample_list.append(q_sample)
+    q_sample_list = [sample_ik_configs(ik_solver, batch_size) for _ in range(5)]
 
     time_list = []
     success_list = []
@@ -124,15 +115,6 @@ def run_full_config_collision_free_ik(
         kin_state = ik_solver.compute_kinematics(JointState.from_position(q_sample))
         goal_tool_poses = kin_state.tool_poses.as_goal()
         seed_config = None
-        if False and i > 1:
-            print("profiling")
-            with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
-                result = ik_solver.solve_pose(
-                    goal_tool_poses=goal_tool_poses,
-                    seed_config=seed_config,
-                )
-            prof.export_chrome_trace(join_path("benchmark/log/trace", "ik_stream")[1:] + ".json")
-            exit()
         timer = CudaEventTimer().start()
 
         result = ik_solver.solve_pose(
@@ -141,9 +123,9 @@ def run_full_config_collision_free_ik(
         )
         total_time = timer.stop()
         success = 100.0 * torch.count_nonzero(result.success).item() / len(q_sample)
+        time_list.append(total_time)
+        success_list.append(success)
         if success > 0.0:
-            time_list.append(total_time)
-            success_list.append(success)
             p_err_list.append(
                 np.percentile(
                     result.position_error[result.success.view(-1)].cpu().numpy(), 90
@@ -154,18 +136,31 @@ def run_full_config_collision_free_ik(
                     result.rotation_error[result.success.view(-1)].cpu().numpy(), 90
                 ).item()
             )
-    if len(time_list) == 0:
-        return (0, 0, 100, 100)
     return (
         np.mean(time_list).item(),
         np.mean(success_list).item(),
-        np.mean(p_err_list).item(),
-        np.mean(q_err_list).item() * 180.0 / np.pi,
+        np.mean(p_err_list).item() if p_err_list else float("nan"),
+        np.mean(q_err_list).item() * 180.0 / np.pi if q_err_list else float("nan"),
     )
 
 
-def run_benchmark(world_file=None):
+def run_benchmark(world_file: Optional[str] = None) -> None:
+    """Run the standard LM-seeded L-BFGS IK benchmark."""
     setup_curobo_logger("error")
+    runtime.enable_cuda_event_timer = True
+
+    # set seeds
+    torch.manual_seed(2)
+    np.random.seed(2)
+
+    torch._dynamo.config.compiled_autograd = True
+
+    torch._dynamo.config.cache_size_limit = 64
+
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--save_path",
@@ -179,11 +174,15 @@ def run_benchmark(world_file=None):
         default="curobo_ik",
         help="File name prefix to use to save benchmark results",
     )
+    parser.add_argument("--robot", choices=["unitree_g1_29dof", "dual_ur10e", "franka"])
+    parser.add_argument(
+        "--num-seeds",
+        type=int,
+        help="Override the number of L-BFGS seeds in both modes",
+    )
 
     args = parser.parse_args()
     b_list = [100]
-    num_seeds = 2
-    collision_free_num_seeds = 8
     if world_file is None:
         world_file = "collision_table.yml"
 
@@ -200,17 +199,19 @@ def run_benchmark(world_file=None):
         "Orientation-Error-C-Free-IK(deg)": [],
     }
 
-    robot_list = ["unitree_g1.yml", "dual_ur10e.yml", "franka.yml"]
+    robot_list = ["unitree_g1_29dof.yml", "dual_ur10e.yml", "franka.yml"]
+    if args.robot is not None:
+        robot_list = [args.robot + ".yml"]
+
     for robot_file in robot_list:
         print("running for robot: ", robot_file)
-        if robot_file == "unitree_g1.yml":
+        if robot_file == "unitree_g1_29dof.yml":
             world = "collision_table.yml"
         else:
             world = world_file
 
         for b_size in b_list:
             print(robot_file, b_size)
-
 
             torch.cuda.empty_cache()
             dt_cu_ik, succ, p_err, q_err = run_full_config_collision_free_ik(
@@ -219,21 +220,17 @@ def run_benchmark(world_file=None):
                 batch_size=b_size,
                 use_cuda_graph=True,
                 collision_free=False,
-                num_seeds=num_seeds,
+                num_seeds=args.num_seeds,
             )
 
             torch.cuda.empty_cache()
-            cfree_num_seeds = collision_free_num_seeds
-            if robot_file in ["unitree_g1.yml", "dual_ur10e.yml"]:
-                cfree_num_seeds = max(16, collision_free_num_seeds)
-
             dt_cu_ik_cfree, success, p_err_c, q_err_c = run_full_config_collision_free_ik(
                 robot_file,
                 world,
                 batch_size=b_size,
                 use_cuda_graph=True,
                 collision_free=True,
-                num_seeds=cfree_num_seeds,
+                num_seeds=args.num_seeds,
             )
             data["Success-C-Free-IK"].append(success)
 
@@ -252,6 +249,7 @@ def run_benchmark(world_file=None):
             torch.cuda.empty_cache()
 
     if args.save_path is not None:
+        Path(args.save_path).mkdir(parents=True, exist_ok=True)
         file_path = join_path(args.save_path, args.file_name)
     else:
         file_path = args.file_name

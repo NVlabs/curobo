@@ -427,27 +427,16 @@ class KinematicsReducer:
             new_joint_links_offsets, dtype=torch.int16, device=device
         )
 
-        # 9. Rebuild joint_affects_endeffector matrix
-        new_joint_affects_ee = torch.zeros(
-            (len(needed_joints) * len(desired_link_names)), dtype=torch.bool, device=device
-        )
-
-        for new_joint_idx, old_joint_idx in enumerate(needed_joints):
-            for new_ee_idx, old_stored_idx in enumerate(keep_stored_indices):
-                old_flat_idx = old_joint_idx * len(config.tool_frames) + old_stored_idx
-                new_flat_idx = new_joint_idx * len(desired_link_names) + new_ee_idx
-                new_joint_affects_ee[new_flat_idx] = config.joint_affects_endeffector[old_flat_idx]
-
-        # 10. Extract other needed data
+        # 9. Extract other needed data
         new_joint_names = [config.joint_names[i] for i in needed_joints]
 
-        # 11. Build reduced joint limits and cspace
+        # 10. Build reduced joint limits and cspace
         new_joint_limits = KinematicsReducer._create_joint_limits_subset(
             config.joint_limits, new_joint_names
         )
         new_cspace = KinematicsReducer._create_cspace_subset(config.cspace, new_joint_names)
 
-        # 12. Handle lock_jointstate - add all removed joints to lock state
+        # 11. Handle lock_jointstate - add all removed joints to lock state
         new_lock_jointstate = None
 
         # Find joints that were removed during DOF reduction
@@ -503,7 +492,7 @@ class KinematicsReducer:
                 joint_names=final_lock_joint_names,
             )
 
-        # 13. Update link_name_to_idx_map
+        # 12. Update link_name_to_idx_map
         new_link_name_to_idx_map = None
         if config.link_name_to_idx_map is not None:
             new_link_name_to_idx_map = {}
@@ -511,7 +500,7 @@ class KinematicsReducer:
                 if old_idx in old_to_new_link:
                     new_link_name_to_idx_map[link_name] = old_to_new_link[old_idx]
 
-        # 14. Handle mimic joints
+        # 13. Handle mimic joints
         new_mimic_joints = None
         if config.mimic_joints is not None:
             new_mimic_joints = {}
@@ -519,7 +508,7 @@ class KinematicsReducer:
                 if joint_name in new_joint_names:
                     new_mimic_joints[joint_name] = mimic_data
 
-        # 15. Handle link_masses_com and link_inertias
+        # 14. Handle link_masses_com and link_inertias
         new_link_masses_com = None
         if config.link_masses_com is not None:
             new_link_masses_com = config.link_masses_com[needed_link_indices]
@@ -540,7 +529,6 @@ class KinematicsReducer:
             link_chain_offsets=new_link_chain_offsets,
             joint_links_data=new_joint_links_data_tensor,
             joint_links_offsets=new_joint_links_offsets_tensor,
-            joint_affects_endeffector=new_joint_affects_ee,
             tool_frames=desired_link_names,
             joint_limits=new_joint_limits,
             non_fixed_joint_names=new_joint_names,

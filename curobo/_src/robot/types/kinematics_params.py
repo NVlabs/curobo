@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import torch
 
+from curobo._src.geom.data.data_collision_layers import layer_bits_to_int32
 from curobo._src.robot.types.collision_geometry import RobotCollisionGeometry
 from curobo._src.robot.types.cspace_params import CSpaceParams
 from curobo._src.robot.types.joint_limits import JointLimits
@@ -17,6 +18,9 @@ from curobo._src.robot.types.joint_types import JointType
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
+
+if TYPE_CHECKING:
+    from curobo._src.robot.dynamics.dynamics import _DynamicsModelTensors
 
 
 @dataclass
@@ -68,13 +72,6 @@ class KinematicsParams:
     #: links connected to joint j
     joint_links_offsets: torch.Tensor
 
-    #: Precomputed boolean matrix indicating which joints affect which end-effectors.
-    #: Shape is [n_joints * n_tool_frames] stored as flattened row-major matrix.
-    #: joint_affects_endeffector[joint_idx * n_tool_frames + ee_idx] = True if
-    #: joint_idx affects end-effector ee_idx. This eliminates nested loop searches
-    #: in both forward and backward jacobian kernels for significant performance gains.
-    joint_affects_endeffector: torch.Tensor
-
     #: Name of tool frames (end-effector links) to compute pose during kinematics [n_tool_frames].
     tool_frames: List[str]
 
@@ -86,6 +83,19 @@ class KinematicsParams:
 
     #: Number of joints that are active. Each joint is only actuated along 1 dimension.
     num_dof: int
+
+    #: Bit-packed descendant-link mask for every physical joint link. Shape is
+    #: [num_links, ceil(num_links / 32)], stored as int32 and read as uint32 in CUDA.
+    #: Computed from link_chain_data in __post_init__.
+    joint_link_influence_words: Optional[torch.Tensor] = None
+
+    #: Packed physical joint-link contributors for every (tool frame, output joint) pair.
+    #: Computed from the chain and mimic-joint maps in __post_init__.
+    tool_joint_links_data: Optional[torch.Tensor] = None
+
+    #: CSR offsets into tool_joint_links_data. Shape is
+    #: [num_pose_links * num_dof + 1]. Computed in __post_init__.
+    tool_joint_links_offsets: Optional[torch.Tensor] = None
 
     #: Name of links which have a mesh. Currently only used for debugging and rendering.
     mesh_link_names: Optional[List[str]] = None
@@ -104,6 +114,9 @@ class KinematicsParams:
     #: n_configs=1 by default (single robot configuration). When n_configs > 1, each config
     #: represents a different attached-object state, indexed by idxs_env at runtime.
     link_spheres: Optional[torch.Tensor] = None
+
+    #: Unsigned world-collision masks [num_envs, num_spheres], selected exactly like link_spheres.
+    sphere_collision_mask: Optional[torch.Tensor] = None
 
     #: Mapping of link index to sphere index. Shape is [num_spheres]. Gives the link index for each
     #: sphere.
@@ -155,6 +168,11 @@ class KinematicsParams:
     #: threads-per-batch for tree-parallel CUDA kernels.
     max_level_width: int = 0
 
+    # Derived model tensors are shared; each Dynamics instance owns its workspace.
+    _dynamics_model: Optional[_DynamicsModelTensors] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
     def __post_init__(self):
         """Post initialization checks and data transfer to device tensors."""
         if self.cspace is None and self.joint_limits is not None and self.joint_names is not None:
@@ -163,6 +181,13 @@ class KinematicsParams:
             self.joint_limits = self.cspace.scale_joint_limits(self.joint_limits)
         if self.link_spheres is not None and self.reference_link_spheres is None:
             self.reference_link_spheres = self.link_spheres.clone()
+        if self.link_spheres is not None:
+            if self.sphere_collision_mask is None:
+                self.sphere_collision_mask = torch.ones(
+                    self.link_spheres.shape[:2], dtype=torch.uint32,
+                    device=self.link_spheres.device,
+                )
+            self._validate_sphere_collision_mask()
         if self.fixed_transforms is not None:
             if self.fixed_transforms.shape[0] < 1:
                 log_and_raise(
@@ -177,6 +202,23 @@ class KinematicsParams:
                 log_and_raise(
                     f"link_masses_com shape does not match: {self.link_masses_com.shape} != (num_links, 4)"
                 )
+
+        if (
+            self.joint_link_influence_words is None
+            or self.tool_joint_links_data is None
+            or self.tool_joint_links_offsets is None
+        ):
+            self._compute_topology_caches()
+        if (
+            self.tool_joint_links_data is not None
+            and self.tool_joint_links_offsets is not None
+            and int(self.tool_joint_links_offsets[-1].item())
+            != self.tool_joint_links_data.numel()
+        ):
+            log_and_raise(
+                "tool_joint_links_offsets[-1] must equal "
+                "tool_joint_links_data.numel()"
+            )
 
         # check if tensors are on the same device as device_cfg.
         device = self.device_cfg.device
@@ -200,8 +242,12 @@ class KinematicsParams:
             log_and_raise(f"joint_links_data is on device: {self.joint_links_data.device} but device_cfg is on device: {device}")
         if self.joint_links_offsets is not None and not self.device_cfg.is_same_torch_device(self.joint_links_offsets.device):
             log_and_raise(f"joint_links_offsets is on device: {self.joint_links_offsets.device} but device_cfg is on device: {device}")
-        if self.joint_affects_endeffector is not None and not self.device_cfg.is_same_torch_device(self.joint_affects_endeffector.device):
-            log_and_raise(f"joint_affects_endeffector is on device: {self.joint_affects_endeffector.device} but device_cfg is on device: {device}")
+        if self.joint_link_influence_words is not None and not self.device_cfg.is_same_torch_device(self.joint_link_influence_words.device):
+            log_and_raise(f"joint_link_influence_words is on device: {self.joint_link_influence_words.device} but device_cfg is on device: {device}")
+        if self.tool_joint_links_data is not None and not self.device_cfg.is_same_torch_device(self.tool_joint_links_data.device):
+            log_and_raise(f"tool_joint_links_data is on device: {self.tool_joint_links_data.device} but device_cfg is on device: {device}")
+        if self.tool_joint_links_offsets is not None and not self.device_cfg.is_same_torch_device(self.tool_joint_links_offsets.device):
+            log_and_raise(f"tool_joint_links_offsets is on device: {self.tool_joint_links_offsets.device} but device_cfg is on device: {device}")
 
         self.validate_shapes()
 
@@ -210,11 +256,7 @@ class KinematicsParams:
             self._compute_link_level_order()
 
     def validate_shapes(self):
-        """Validate cross-field shape consistency of CSR arrays and precomputed tensors.
-
-        Checks that link_chain_offsets, joint_links_offsets, and joint_affects_endeffector
-        have sizes consistent with num_links, num_dof, and n_tool_frames.
-        """
+        """Validate cross-field shape consistency of CSR and topology tensors."""
         if self.fixed_transforms is None:
             return
         num_links = self.fixed_transforms.shape[0]
@@ -237,15 +279,104 @@ class KinematicsParams:
                 f"joint_links_offsets.size(0) = {self.joint_links_offsets.size(0)}, "
                 f"expected num_dof + 1 = {n_active_joints + 1}"
             )
+        expected_influence_words = (num_links + 31) // 32
         if (
-            self.joint_affects_endeffector is not None
-            and self.joint_affects_endeffector.numel() != n_active_joints * n_tool_frames
+            self.joint_link_influence_words is not None
+            and tuple(self.joint_link_influence_words.shape)
+            != (num_links, expected_influence_words)
         ):
             log_and_raise(
-                f"joint_affects_endeffector.numel() = {self.joint_affects_endeffector.numel()}, "
-                f"expected num_dof * n_tool_frames = {n_active_joints} * {n_tool_frames} = "
-                f"{n_active_joints * n_tool_frames}"
+                f"joint_link_influence_words.shape = "
+                f"{tuple(self.joint_link_influence_words.shape)}, expected "
+                f"({num_links}, {expected_influence_words})"
             )
+        expected_tool_offsets = n_active_joints * n_tool_frames + 1
+        if (
+            self.tool_joint_links_offsets is not None
+            and self.tool_joint_links_offsets.numel() != expected_tool_offsets
+        ):
+            log_and_raise(
+                f"tool_joint_links_offsets.numel() = "
+                f"{self.tool_joint_links_offsets.numel()}, expected "
+                f"num_dof * n_tool_frames + 1 = {expected_tool_offsets}"
+            )
+
+    def _compute_topology_caches(self):
+        """Build immutable bitset and tool-joint CSR maps from robot topology."""
+        required = (
+            self.fixed_transforms,
+            self.link_chain_data,
+            self.link_chain_offsets,
+            self.joint_links_data,
+            self.joint_links_offsets,
+            self.tool_frame_map,
+        )
+        if any(value is None for value in required):
+            return
+
+        device = self.fixed_transforms.device
+        num_links = self.fixed_transforms.shape[0]
+        chain_lengths = (
+            self.link_chain_offsets[1:] - self.link_chain_offsets[:-1]
+        ).to(dtype=torch.long)
+        destination_links = torch.repeat_interleave(
+            torch.arange(num_links, device=device, dtype=torch.long),
+            chain_lengths,
+        )
+        source_joint_links = self.link_chain_data.to(dtype=torch.long)
+        joint_link_affects_link = torch.zeros(
+            (num_links, num_links), device=device, dtype=torch.bool
+        )
+        joint_link_affects_link[source_joint_links, destination_links] = True
+
+        influence_word_count = (num_links + 31) // 32
+        influence_words = torch.zeros(
+            (num_links, influence_word_count), device=device, dtype=torch.int32
+        )
+        for word_index in range(influence_word_count):
+            link_start = word_index * 32
+            link_end = min(link_start + 32, num_links)
+            bit_values = torch.bitwise_left_shift(
+                torch.ones(link_end - link_start, device=device, dtype=torch.int64),
+                torch.arange(link_end - link_start, device=device, dtype=torch.int64),
+            )
+            influence_words[:, word_index] = torch.sum(
+                joint_link_affects_link[:, link_start:link_end].to(dtype=torch.int64)
+                * bit_values,
+                dim=1,
+            ).to(dtype=torch.int32)
+        self.joint_link_influence_words = influence_words
+
+        joint_link_counts = (
+            self.joint_links_offsets[1:] - self.joint_links_offsets[:-1]
+        ).to(dtype=torch.long)
+        output_joint_indices = torch.repeat_interleave(
+            torch.arange(self.num_dof, device=device, dtype=torch.long),
+            joint_link_counts,
+        )
+        joint_link_mask = torch.zeros(
+            (self.num_dof, num_links), device=device, dtype=torch.bool
+        )
+        joint_link_mask[
+            output_joint_indices, self.joint_links_data.to(dtype=torch.long)
+        ] = True
+        tool_link_mask = joint_link_affects_link[
+            :, self.tool_frame_map.to(dtype=torch.long)
+        ].T
+        tool_joint_link_mask = tool_link_mask[:, None, :] & joint_link_mask[None, :, :]
+        tool_joint_link_indices = torch.nonzero(tool_joint_link_mask, as_tuple=False)
+        self.tool_joint_links_data = tool_joint_link_indices[:, 2].to(dtype=torch.int16)
+        tool_joint_link_counts = torch.sum(
+            tool_joint_link_mask, dim=-1, dtype=torch.int16
+        ).reshape(-1)
+        self.tool_joint_links_offsets = torch.zeros(
+            (len(self.tool_frames) * self.num_dof + 1,),
+            device=device,
+            dtype=torch.int16,
+        )
+        self.tool_joint_links_offsets[1:] = torch.cumsum(
+            tool_joint_link_counts, dim=0, dtype=torch.int16
+        )
 
     def _compute_link_level_order(self):
         """Compute BFS level-order grouping of links from link_map.
@@ -301,11 +432,13 @@ class KinematicsParams:
             link_chain_offsets=self.link_chain_offsets.clone(),
             joint_links_data=self.joint_links_data.clone(),
             joint_links_offsets=self.joint_links_offsets.clone(),
-            joint_affects_endeffector=self.joint_affects_endeffector.clone(),
             tool_frames=self.tool_frames.copy(),
             joint_limits=self.joint_limits.clone(),
             non_fixed_joint_names=self.non_fixed_joint_names.copy(),
             num_dof=self.num_dof,
+            joint_link_influence_words=self.joint_link_influence_words.clone(),
+            tool_joint_links_data=self.tool_joint_links_data.clone(),
+            tool_joint_links_offsets=self.tool_joint_links_offsets.clone(),
             mesh_link_names=self.mesh_link_names.copy(),
             joint_names=self.joint_names.copy(),
             lock_jointstate=(
@@ -313,6 +446,10 @@ class KinematicsParams:
             ),
             mimic_joints=self.mimic_joints.copy() if self.mimic_joints is not None else None,
             link_spheres=self.link_spheres.clone() if self.link_spheres is not None else None,
+            sphere_collision_mask=(
+                self.sphere_collision_mask.clone()
+                if self.sphere_collision_mask is not None else None
+            ),
             link_sphere_idx_map=(
                 self.link_sphere_idx_map.clone() if self.link_sphere_idx_map is not None else None
             ),
@@ -368,10 +505,14 @@ class KinematicsParams:
         if self.joint_links_offsets is not None and not self.joint_links_offsets.is_contiguous():
             self.joint_links_offsets = self.joint_links_offsets.contiguous()
         if (
-            self.joint_affects_endeffector is not None
-            and not self.joint_affects_endeffector.is_contiguous()
+            self.joint_link_influence_words is not None
+            and not self.joint_link_influence_words.is_contiguous()
         ):
-            self.joint_affects_endeffector = self.joint_affects_endeffector.contiguous()
+            self.joint_link_influence_words = self.joint_link_influence_words.contiguous()
+        if self.tool_joint_links_data is not None and not self.tool_joint_links_data.is_contiguous():
+            self.tool_joint_links_data = self.tool_joint_links_data.contiguous()
+        if self.tool_joint_links_offsets is not None and not self.tool_joint_links_offsets.is_contiguous():
+            self.tool_joint_links_offsets = self.tool_joint_links_offsets.contiguous()
         if self.joint_offset_map is not None and not self.joint_offset_map.is_contiguous():
             self.joint_offset_map = self.joint_offset_map.contiguous()
         if self.link_sphere_idx_map is not None and not self.link_sphere_idx_map.is_contiguous():
@@ -414,12 +555,19 @@ class KinematicsParams:
         self.link_chain_offsets.copy_(new_config.link_chain_offsets)
         self.joint_links_data.copy_(new_config.joint_links_data)
         self.joint_links_offsets.copy_(new_config.joint_links_offsets)
-        self.joint_affects_endeffector.copy_(new_config.joint_affects_endeffector)
+        self.joint_link_influence_words.copy_(new_config.joint_link_influence_words)
+        self.tool_joint_links_data.copy_(new_config.tool_joint_links_data)
+        self.tool_joint_links_offsets.copy_(new_config.tool_joint_links_offsets)
 
         self.joint_limits.copy_(new_config.joint_limits)
         self.joint_offset_map.copy_(new_config.joint_offset_map)
         if new_config.link_spheres is not None and self.link_spheres is not None:
+            self._validate_sphere_collision_mask()
+            new_config._validate_sphere_collision_mask()
+            if self.sphere_collision_mask.shape != new_config.sphere_collision_mask.shape:
+                log_and_raise("cannot change collision mask layout during copy_")
             self.link_spheres.copy_(new_config.link_spheres)
+            self.sphere_collision_mask.copy_(new_config.sphere_collision_mask)
         if new_config.link_sphere_idx_map is not None and self.link_sphere_idx_map is not None:
             self.link_sphere_idx_map.copy_(new_config.link_sphere_idx_map)
         if new_config.link_name_to_idx_map is not None and self.link_name_to_idx_map is not None:
@@ -452,6 +600,8 @@ class KinematicsParams:
         if new_config.link_level_offsets is not None and self.link_level_offsets is not None:
             self.link_level_offsets.copy_(new_config.link_level_offsets)
         self.max_level_width = new_config.max_level_width
+        if self._dynamics_model is not None:
+            self._dynamics_model.refresh(self)
         self.validate_shapes()
         return self
 
@@ -670,11 +820,44 @@ class KinematicsParams:
         # Internal storage is padded to 8 floats; return only the 6 meaningful elements
         return self.link_inertias[self.link_name_to_idx_map[link_name], :6]
 
+    def _validate_sphere_collision_mask(self) -> None:
+        """Validate metadata without reading device values or replacing shared storage."""
+        masks = self.sphere_collision_mask
+        if (
+            masks is None
+            or masks.shape != self.link_spheres.shape[:2]
+            or masks.dtype != torch.uint32
+            or masks.device != self.link_spheres.device
+            or not masks.is_contiguous()
+        ):
+            log_and_raise("sphere_collision_mask must be contiguous uint32 [num_envs,num_spheres]")
+
+    def set_link_collision_mask(
+        self, link_name: str, layers: int, config_idx: Optional[int] = None
+    ) -> None:
+        """Set one link's layer masks; None updates every environment in place."""
+        self._validate_sphere_collision_mask()
+        bits = layer_bits_to_int32(layers)
+        if config_idx is not None and not 0 <= config_idx < self.num_envs:
+            log_and_raise("sphere environment index is out of range")
+        link_idx = self.link_name_to_idx_map[link_name]
+        selected = self.link_sphere_idx_map == link_idx
+        # Torch does not implement uint32 indexed assignment. This view aliases
+        # the same allocation and preserves all unsigned bits, including bit 31.
+        masks = self.sphere_collision_mask.view(torch.int32)
+        if config_idx is None:
+            masks.masked_fill_(selected.unsqueeze(0), bits)
+        else:
+            masks[config_idx].masked_fill_(selected, bits)
+
     def get_robot_collision_geometry(self) -> RobotCollisionGeometry:
         """Get robot collision geometry"""
+        if self.link_spheres is not None:
+            self._validate_sphere_collision_mask()
         robot_collision_geometry = RobotCollisionGeometry(
             link_sphere_idx_map=self.link_sphere_idx_map,
             num_links=self.num_links,
+            sphere_collision_mask=self.sphere_collision_mask,
         )
         return robot_collision_geometry
 
@@ -949,4 +1132,3 @@ class KinematicsParams:
             urdf.write_xml_file(output_path)
 
         return urdf
-

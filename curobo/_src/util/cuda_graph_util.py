@@ -1,13 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+"""Execute fixed-shape callables directly or through reusable CUDA graphs."""
+
+# Standard Library
+import gc
 from typing import Callable, Optional, Tuple, Union
 
+# Third Party
 import torch
 
+# CuRobo
 import curobo._src.runtime as curobo_runtime
-from curobo import runtime as curobo_runtime
-from curobo._src.util.logging import log_info, log_warn
-import gc
+from curobo._src.util.logging import log_and_raise, log_info, log_warn
 
 
 class GraphExecutor:
@@ -16,7 +20,9 @@ class GraphExecutor:
     Graph is recorded lazily on first call, allowing executor to be created
     early (e.g., in __init__) before inputs are available.
 
-    Fully encapsulated: manages all internal state, copying, and execution.
+    By default the executor clones inputs into private fixed-address storage.
+    Callers may instead borrow their input buffers when they control the buffer
+    lifetime and want to avoid that initialization copy.
     """
 
     def __init__(
@@ -25,6 +31,7 @@ class GraphExecutor:
         device: torch.device,
         use_cuda_graph: Optional[bool] = None,
         clone_outputs: bool = True,
+        clone_inputs: bool = True,
         **capture_fn_kwargs,
     ):
         """Initialize executor (graph recorded lazily on first call).
@@ -34,9 +41,15 @@ class GraphExecutor:
             device: Device to run on.
             use_cuda_graph: Whether to use CUDA graphs. If None, reads from
                            curobo_runtime.cuda_graphs. Defaults to None.
-            clone_outputs: If True, always return cloned outputs. Defaults to False.
+            clone_outputs: If True, always return cloned outputs. Defaults to True.
+            clone_inputs: If True, clone initialization inputs into private fixed-address
+                buffers. If False, retain the caller's buffers as the fixed inputs. Later
+                calls with different buffers copy their values into those borrowed buffers.
+                Borrowed tensor storage must not be resized while the executor is initialized.
             **capture_fn_kwargs: Additional kwargs for capture_fn during graph recording.
         """
+        if not isinstance(clone_inputs, bool):
+            log_and_raise("clone_inputs must be a boolean")
         self._capture_fn = capture_fn
         self._device = device
         # Use config value if not explicitly specified
@@ -45,8 +58,11 @@ class GraphExecutor:
         if not curobo_runtime.cuda_graphs:
             use_cuda_graph = False
             log_warn("CUDA Graph is disabled by config")
+        if torch.device(self._device).type != "cuda" or not torch.cuda.is_available():
+            use_cuda_graph = False
         self._use_cuda_graph = use_cuda_graph
         self._clone_outputs = clone_outputs
+        self._clone_inputs = clone_inputs
         self._capture_fn_kwargs = capture_fn_kwargs
 
         # Lazily initialized on first call
@@ -80,12 +96,12 @@ class GraphExecutor:
         # Lazy initialization on first call
         if self._graph_input is None:
             if self._use_cuda_graph:
-                log_info(
-                    f"Recording CUDA Graph for {self._capture_fn.__name__ if hasattr(self._capture_fn, '__name__') else 'function'}"
-                )
+                capture_name = getattr(self._capture_fn, "__name__", "function")
+                log_info(f"Recording CUDA Graph for {capture_name}")
             self._initialize(inputs)
 
-        # Copy inputs to internal tensors (only if different memory location)
+        # Copy values into the fixed inputs only when the caller supplied different storage.
+        # With borrowed inputs this intentionally updates the original borrowed buffers.
         for i, inp in enumerate(inputs):
             if hasattr(self._graph_input[i], "copy_"):
                 if hasattr(self._graph_input[i], "data_ptr") and callable(
@@ -96,20 +112,45 @@ class GraphExecutor:
                 else:
                     self._graph_input[i].copy_(inp)
 
-        # Execute
+        return self.replay(clone_outputs=clone_outputs)
+
+    def replay(
+        self, clone_outputs: Optional[bool] = None
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
+        """Execute using the executor's fixed-address input buffers.
+
+        This is the zero-input-copy counterpart to :meth:`__call__`. Callers
+        that repeatedly operate on slices of a fixed-size CUDA graph can copy
+        directly into :attr:`static_inputs` and then replay. In direct mode,
+        this executes the capture function normally using those same inputs.
+
+        The output storage of a CUDA graph is reused by the next replay. Set
+        ``clone_outputs=True`` when an output must remain valid across a
+        subsequent replay.
+
+        Args:
+            clone_outputs: If True, return cloned outputs. If False, return
+                executor-owned outputs. If None, use the constructor setting.
+
+        Returns:
+            A single output directly, or a tuple for multiple outputs.
+
+        Raises:
+            ValueError: If the executor has not yet been initialized.
+        """
+        if self._graph_input is None:
+            log_and_raise("GraphExecutor must be initialized before replay")
+
         if self._use_cuda_graph:
             self._graph.replay()
             output = self._graph_output
         else:
             output = self._execute_direct()
 
-        # Return outputs (clone if requested)
         should_clone = clone_outputs if clone_outputs is not None else self._clone_outputs
         if should_clone:
-            outputs = tuple(t.clone() if hasattr(t, "clone") else t for t in output)
-            return outputs[0] if len(outputs) == 1 else outputs
-        else:
-            return output[0] if len(output) == 1 else output
+            output = tuple(t.clone() if hasattr(t, "clone") else t for t in output)
+        return output[0] if len(output) == 1 else output
 
     def warmup(self, *sample_inputs):
         """Explicitly record graph with sample inputs (optional).
@@ -122,15 +163,15 @@ class GraphExecutor:
         If already initialized, this is a no-op.
 
         Args:
-            *sample_inputs: Sample input tensors for graph recording.
+            *sample_inputs: Sample input tensors for graph recording. When ``clone_inputs`` is
+                False, these become the executor's borrowed fixed-address buffers.
 
         Returns:
             Self for chaining.
         """
         if self._graph_input is None:
-            log_info(
-                f"Warming up GraphExecutor for {self._capture_fn.__name__ if hasattr(self._capture_fn, '__name__') else 'function'}"
-            )
+            capture_name = getattr(self._capture_fn, "__name__", "function")
+            log_info(f"Warming up GraphExecutor for {capture_name}")
             self._initialize(sample_inputs)
         return self
 
@@ -141,6 +182,12 @@ class GraphExecutor:
         else:
             self._initialize_direct(inputs)
 
+    def _prepare_inputs(self, inputs: Tuple[torch.Tensor, ...]) -> Tuple[torch.Tensor, ...]:
+        """Return private clones or retain caller-owned fixed-address inputs."""
+        if not self._clone_inputs:
+            return tuple(inputs)
+        return tuple(t.clone() if hasattr(t, "clone") else t for t in inputs)
+
     def _initialize_cuda_graph(self, inputs: Tuple[torch.Tensor, ...]):
         """Record CUDA graph."""
         # Flush any pending graph destructions (e.g. from GC of previous
@@ -150,8 +197,7 @@ class GraphExecutor:
         gc.collect()
         torch.cuda.synchronize(self._device)
 
-        # Clone inputs for graph capture
-        self._graph_input = tuple(t.clone() if hasattr(t, "clone") else t for t in inputs)
+        self._graph_input = self._prepare_inputs(inputs)
 
         mem_pool = (
             torch.cuda.graph_pool_handle() if hasattr(torch.cuda, "graph_pool_handle") else None
@@ -162,7 +208,7 @@ class GraphExecutor:
         # Warmup runs
         with torch.cuda.stream(stream):
             for _ in range(3):
-                graph_output = self._capture_fn(*self._graph_input, **self._capture_fn_kwargs)
+                self._capture_fn(*self._graph_input, **self._capture_fn_kwargs)
 
         torch.cuda.current_stream(self._device).wait_stream(stream)
 
@@ -181,7 +227,7 @@ class GraphExecutor:
 
     def _initialize_direct(self, inputs: Tuple[torch.Tensor, ...]):
         """Initialize for direct (non-graph) execution."""
-        self._graph_input = tuple(t.clone() if hasattr(t, "clone") else t for t in inputs)
+        self._graph_input = self._prepare_inputs(inputs)
 
         output = self._capture_fn(*self._graph_input, **self._capture_fn_kwargs)
         if not isinstance(output, tuple):
@@ -220,12 +266,30 @@ class GraphExecutor:
         """Check if executor has been initialized."""
         return self._graph_input is not None
 
+    @property
+    def static_inputs(self) -> Tuple[torch.Tensor, ...]:
+        """Return the executor's fixed-address input buffers.
+
+        CUDA graph callers may update these tensors in place and invoke
+        :meth:`replay` to avoid a full input copy. The tuple itself is
+        immutable, but the tensors are intentionally writable. Their shapes,
+        devices, dtypes, and storage addresses must not be changed. When
+        ``clone_inputs=False``, these are the original caller-owned buffers.
+
+        Raises:
+            ValueError: If the executor has not yet been initialized.
+        """
+        if self._graph_input is None:
+            log_and_raise("GraphExecutor must be initialized before accessing static inputs")
+        return self._graph_input
+
 
 def create_graph_executor(
     capture_fn: Callable,
     device: torch.device,
     use_cuda_graph: Optional[bool] = None,
     clone_outputs: bool = False,
+    clone_inputs: bool = True,
     **capture_fn_kwargs,
 ) -> GraphExecutor:
     """Create a GraphExecutor for a function.
@@ -239,6 +303,8 @@ def create_graph_executor(
                        curobo_runtime.cuda_graphs. Defaults to None.
         clone_outputs: If True, always return cloned outputs (safer but slower).
                       Defaults to False.
+        clone_inputs: If True, clone initialization inputs into private fixed-address
+            buffers. If False, borrow the caller's buffers. Defaults to True.
         **capture_fn_kwargs: Additional kwargs for capture_fn during graph recording.
 
     Returns:
@@ -249,5 +315,6 @@ def create_graph_executor(
         device=device,
         use_cuda_graph=use_cuda_graph,
         clone_outputs=clone_outputs,
+        clone_inputs=clone_inputs,
         **capture_fn_kwargs,
     )

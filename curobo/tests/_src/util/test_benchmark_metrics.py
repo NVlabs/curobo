@@ -9,6 +9,19 @@ import numpy as np
 import pytest
 
 
+def test_statistic_reports_p95_and_maximum():
+    """Keep additive tail statistics defined for normal and empty samples."""
+    # CuRobo
+    from curobo._src.util.benchmark_metrics import Statistic
+
+    statistic = Statistic.from_list([1.0, 3.0])
+    assert statistic.percent_95 == pytest.approx(2.9)
+    assert statistic.max == pytest.approx(3.0)
+
+    assert Statistic.from_list([]).percent_95 == 0.0
+    assert Statistic.from_list([np.inf]).percent_95 == 0.0
+
+
 class TestBenchmarkMetrics:
     def test_curobo_metrics_creation(self):
         """Test CuroboMetrics dataclass creation."""
@@ -47,6 +60,9 @@ class TestBenchmarkMetrics:
             assert metrics.power == 0.0
             assert metrics.work == 0.0
             assert metrics.peak_power == 0.0
+            assert metrics.graph_time == 0.0
+            assert metrics.graph_calls == 0
+            assert metrics.graph_success is False
         except ImportError:
             pytest.skip("robometrics not installed")
 
@@ -75,6 +91,9 @@ class TestBenchmarkMetrics:
                     orientation_error=0.02,
                     motion_time=1.5,
                     solve_time=0.1,
+                    graph_time=0.004,
+                    graph_calls=2,
+                    graph_success=True,
                 ),
                 CuroboMetrics(
                     success=True,
@@ -94,6 +113,8 @@ class TestBenchmarkMetrics:
                     orientation_error=0.025,
                     motion_time=2.5,
                     solve_time=0.15,
+                    graph_time=0.0,
+                    graph_calls=0,
                 ),
                 CuroboMetrics(
                     success=False,
@@ -107,6 +128,9 @@ class TestBenchmarkMetrics:
                     orientation_error=0.1,
                     motion_time=3.5,
                     solve_time=0.2,
+                    graph_time=0.003,
+                    graph_calls=1,
+                    graph_success=False,
                 ),
             ]
 
@@ -115,6 +139,13 @@ class TestBenchmarkMetrics:
             # Check that statistics were computed for successes
             assert group.time is not None
             assert group.cspace_path_length is not None
+            assert group.graph_invoked_problems == 2
+            assert group.graph_successful_problems == 1
+            assert group.graph_calls == 3
+            assert group.graph_time is not None
+            assert group.graph_time.mean == pytest.approx(0.0035)
+            assert group.graph_time_per_call is not None
+            assert group.graph_time_per_call.mean == pytest.approx(0.0025)
         except ImportError:
             pytest.skip("robometrics not installed")
 
@@ -283,4 +314,3 @@ class TestBenchmarkMetrics:
             assert group.perception_success == 50.0
         except ImportError:
             pytest.skip("robometrics not installed")
-

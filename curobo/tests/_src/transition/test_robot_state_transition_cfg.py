@@ -202,6 +202,15 @@ class TestRobotStateTransitionCfg:
 
         assert cfg.teleport_mode is True
 
+    def test_compute_jacobian_defaults_disabled(self, robot_cfg, time_traj_cfg, device_cfg):
+        cfg = RobotStateTransitionCfg(
+            robot_config=robot_cfg,
+            dt_traj_params=time_traj_cfg,
+            device_cfg=device_cfg,
+        )
+
+        assert cfg.compute_jacobian is False
+
     def test_initialization_with_return_full_act_buffer(
         self, robot_cfg, time_traj_cfg, device_cfg
     ):
@@ -358,4 +367,3 @@ class TestRobotStateTransitionCfgCreate:
         assert cfg is not None
         assert cfg.control_space == ControlSpace.ACCELERATION
         assert cfg.robot_config is robot_cfg
-

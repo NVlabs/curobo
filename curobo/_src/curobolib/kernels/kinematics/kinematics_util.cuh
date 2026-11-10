@@ -9,32 +9,6 @@
 namespace curobo{
   namespace kinematics{
 
-
-    template<typename ScalarType>
-    __device__ __forceinline__ void
-    transform_sphere(const float *transform_mat, const ScalarType *sphere, float *C)
-    {
-      float4 sphere_pos = *(float4 *)&sphere[0];
-      int    st_idx     = 0;
-
-#pragma unroll 3
-
-      for (int i = 0; i < 3; i++)
-      {
-        st_idx = i * 4;
-
-        // do dot product:
-        // C[i] = transform_mat[st_idx] * sphere_pos.x + transform_mat[st_idx+1] *
-        // sphere_pos.y + transform_mat[st_idx+2] * sphere_pos.z +
-        // transform_mat[st_idx + 3];
-        float4 tm = *(float4 *)&transform_mat[st_idx];
-        C[i] =
-          tm.x * sphere_pos.x + tm.y * sphere_pos.y + tm.z * sphere_pos.z + tm.w;
-      }
-      C[3] = sphere_pos.w;
-    }
-
-
     __device__ __forceinline__ void
     transform_sphere_float4(const float *transform_mat, const float4& sphere_pos, float4 &C)
     {

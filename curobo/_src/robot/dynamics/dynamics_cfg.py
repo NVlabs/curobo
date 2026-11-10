@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Configuration for robot dynamics (native CUDA RNEA)."""
+"""Configuration for native CUDA rigid-body dynamics."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from curobo._src.types.device_cfg import DeviceCfg
 
 @dataclass
 class DynamicsCfg:
-    """Configuration for native CUDA RNEA dynamics.
+    """Configuration for native CUDA rigid-body dynamics.
 
     Everything is derived from KinematicsParams; no external library or URDF
     export is needed.

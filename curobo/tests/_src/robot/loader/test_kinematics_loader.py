@@ -137,6 +137,65 @@ def test_cspace_only_name_must_be_configured_lock():
         KinematicsLoader(_cpu_loader_cfg(robot_params))
 
 
+def test_collision_pruned_cspace_joints_use_default_lock_positions():
+    robot_params = load_yaml(join_path(get_robot_configs_path(), "unitree_g1.yml"))[
+        "kinematics"
+    ]
+    robot_params["load_collision_spheres"] = False
+    default_positions = dict(
+        zip(
+            robot_params["cspace"]["joint_names"],
+            robot_params["cspace"]["default_joint_position"],
+            strict=True,
+        )
+    )
+    expected_lock_names = [
+        "left_hand_thumb_0_joint",
+        "left_hand_thumb_1_joint",
+        "left_hand_thumb_2_joint",
+        "left_hand_middle_0_joint",
+        "left_hand_middle_1_joint",
+        "right_hand_thumb_0_joint",
+        "right_hand_thumb_1_joint",
+        "right_hand_thumb_2_joint",
+        "right_hand_middle_0_joint",
+        "right_hand_middle_1_joint",
+    ]
+
+    robot_generator = KinematicsLoader(_cpu_loader_cfg(robot_params))
+
+    assert robot_generator.total_spheres == 0
+    assert robot_generator.lock_jointstate.joint_names == expected_lock_names
+    assert torch.allclose(
+        robot_generator.lock_jointstate.position,
+        torch.tensor(
+            [default_positions[name] for name in expected_lock_names],
+            device=robot_generator.device_cfg.device,
+        ),
+    )
+
+
+def test_collision_pruned_cspace_joint_without_default_requires_lock():
+    robot_params = _load_simple_mimic_params()
+    robot_params["tool_frames"] = ["chain_1_link_2"]
+    robot_params["lock_joints"] = None
+    robot_params["load_collision_spheres"] = False
+    robot_params["cspace"]["default_joint_position"] = None
+
+    with pytest.raises(ValueError, match="not explicitly locked"):
+        KinematicsLoader(_cpu_loader_cfg(robot_params))
+
+
+def test_collision_pruning_does_not_hide_unknown_cspace_joint():
+    robot_params = _load_simple_mimic_params()
+    robot_params["lock_joints"] = None
+    robot_params["load_collision_spheres"] = False
+    _add_cspace_joint(robot_params, "joint_typo")
+
+    with pytest.raises(ValueError, match="not active in the configured tree"):
+        KinematicsLoader(_cpu_loader_cfg(robot_params))
+
+
 def test_non_parser_cspace_lock_joint_is_rejected():
     robot_params = _load_simple_mimic_params()
     robot_params["lock_joints"] = {"joint_typo": 0.7}
