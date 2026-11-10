@@ -6,6 +6,8 @@
 Validates the CUDA kernel output against the NumPy reference and Pinocchio.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -191,6 +193,81 @@ def _run_numpy_rnea(kp, q_np, qd_np, qdd_np, gravity=-9.81, f_ext_np=None):
             )
             taus.append(tau)
         return np.stack(taus)
+
+
+@pytest.fixture(params=[0, 1, 2], ids=["prismatic_x", "prismatic_y", "prismatic_z"])
+def prismatic_model(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> tuple[KinematicsParams, DeviceCfg]:
+    """Build a slider with a rotating parent perpendicular to its sliding axis."""
+    from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
+
+    axes = ["1 0 0", "0 1 0", "0 0 1"]
+    axis = request.param
+    urdf_path = tmp_path / "rotating_slider.urdf"
+    urdf_path.write_text(f"""<robot name="rotating_slider">
+  <link name="base"/>
+  <link name="rotor">
+    <inertial>
+      <mass value="2"/><origin xyz="0.1 0.2 0.15"/>
+      <inertia ixx="0.2" iyy="0.3" izz="0.4" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+  <link name="slider">
+    <inertial>
+      <mass value="1.5"/><origin xyz="0.1 0.2 0.15"/>
+      <inertia ixx="0.1" iyy="0.2" izz="0.25" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+  <joint name="rotation" type="revolute">
+    <parent link="base"/><child link="rotor"/>
+    <axis xyz="{axes[(axis + 1) % 3]}"/>
+    <limit lower="-3" upper="3" effort="100" velocity="5"/>
+  </joint>
+  <joint name="translation" type="prismatic">
+    <parent link="rotor"/><child link="slider"/>
+    <origin xyz="0.2 -0.1 0.3"/><axis xyz="{axes[axis]}"/>
+    <limit lower="-1" upper="1" effort="100" velocity="5"/>
+  </joint>
+</robot>""")
+    device_cfg = DeviceCfg()
+    cfg = KinematicsCfg.from_data_dict(
+        {"urdf_path": str(urdf_path), "base_link": "base", "tool_frames": ["slider"]},
+        device_cfg=device_cfg,
+    )
+    params = cfg.kinematics_config
+    assert params.joint_names == ["rotation", "translation"]
+    assert (params.joint_map_type == axis).any()
+    return params, device_cfg
+
+
+def test_prismatic_coriolis_matches_numpy(
+    prismatic_model: tuple[KinematicsParams, DeviceCfg],
+) -> None:
+    """Moving sliders under angular velocity produce the correct inverse dynamics."""
+    params, device_cfg = prismatic_model
+    q = np.array([[0.3, 0.2], [-0.4, -0.1], [0.5, 0.3], [0.1, -0.2]], dtype=np.float32)
+    qd = np.array([[1.2, 0.7], [-0.8, 0.4], [0.0, 0.7], [1.2, 0.0]], dtype=np.float32)
+    qdd = np.zeros_like(q)
+    actual = _run_cuda_rnea(params, device_cfg, q, qd, qdd, gravity=0.0)
+    expected = _run_numpy_rnea(params, q, qd, qdd, gravity=0.0)
+    np.testing.assert_allclose(actual, expected, atol=1e-4, rtol=1e-4)
+
+
+def test_prismatic_gradients_match_numpy(
+    prismatic_model: tuple[KinematicsParams, DeviceCfg],
+) -> None:
+    """Prismatic RNEA gradients match the independent spatial-algebra reference."""
+    params, device_cfg = prismatic_model
+    q = np.array([[0.3, 0.2], [-0.4, -0.1]], dtype=np.float32)
+    qd = np.array([[1.2, 0.7], [-0.8, 0.4]], dtype=np.float32)
+    qdd = np.array([[0.2, -0.3], [-0.1, 0.4]], dtype=np.float32)
+    tau_bar = np.array([[0.7, -0.4], [-0.3, 1.1]], dtype=np.float32)
+    actual = _run_cuda_backward(params, device_cfg, q, qd, qdd, tau_bar, gravity=0.0)
+    expected = _run_numpy_backward(params, q, qd, qdd, tau_bar, gravity=0.0)
+    for gradient, reference in zip(actual, expected):
+        np.testing.assert_allclose(gradient, reference, atol=1e-4, rtol=1e-4)
+
 
 
 # ---------------------------------------------------------------------------

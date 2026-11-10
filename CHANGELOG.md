@@ -10,6 +10,8 @@
 
 ### Bug Fixes & Misc.
 
+- Fix `motion_cross_S` writing the prismatic-joint velocity-product term to the
+  angular components instead of the linear components of the spatial vector.
 - Speed up self-collision pair extraction during robot configuration construction
   and handle empty or fully ignored collision topologies.
 - Fix B-spline goal boundary control-point ordering and derivative signs so
