@@ -118,16 +118,21 @@ class TestCapacityAffectsRealRobots:
     """The queried capacity changes launch shapes for real robot sizes."""
 
     @pytest.mark.parametrize(
-        "num_links,threads_per_batch,direction", [(9, 1, "forward"), (21, 4, "backward")]
+        "batch_size,num_links,threads_per_batch,direction",
+        [
+            (512, 7, 32, "forward"),
+            (512, 21, 32, "forward"),
+            (8192, 7, 16, "backward"),
+        ],
     )
     def test_block_shape_differs_between_architectures(
-        self, sm_capacity, num_links, threads_per_batch, direction
+        self, sm_capacity, batch_size, num_links, threads_per_batch, direction
     ):
         calculate = getattr(DynamicsLaunchCfg, f"calculate_{direction}_config")
 
         sm_capacity(100 * 1024)
-        narrow = calculate(512, num_links, threads_per_batch)
+        narrow = calculate(batch_size, num_links, threads_per_batch)
         sm_capacity(228 * 1024)
-        wide = calculate(512, num_links, threads_per_batch)
+        wide = calculate(batch_size, num_links, threads_per_batch)
 
         assert narrow.block[0] != wide.block[0]
