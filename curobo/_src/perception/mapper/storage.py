@@ -39,8 +39,8 @@ magnitudes inside fp16's finite range.
 """
 
 import math
-from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 import warp as wp
@@ -48,10 +48,10 @@ import warp as wp
 from curobo._src.perception.mapper.checkpoint_blocks import (
     build_block_metadata,
     rebuild_import_hash_state,
+    validate_block_payload,
     validate_import_block_coords_for_grid,
     validate_import_block_coords_for_hash_layout,
     validate_import_block_coords_unique,
-    validate_block_payload,
 )
 from curobo._src.perception.mapper.constants import (
     DEFAULT_HASH_LAYOUT,
@@ -63,6 +63,7 @@ from curobo._src.perception.mapper.constants import (
     _validate_feature_block_grid_size,
     _validate_feature_channels_per_thread,
     _validate_feature_grid_shape,
+    _validate_instance_grid_size,
     validate_grid_shape_for_hash_layout,
 )
 from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
@@ -70,7 +71,7 @@ from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel im
     make_block_sparse_kernels,
 )
 from curobo._src.perception.mapper.kernel.warp_types import BlockSparseTSDFWarp
-from curobo._src.util.warp import init_warp
+from curobo._src.util.warp import get_warp_device_stream, init_warp
 from curobo.logging import log_and_raise
 
 # =============================================================================
@@ -143,6 +144,9 @@ class BlockSparseTSDFCfg:
     #: kernel specialization value; changing it requires rebuilding storage and
     #: kernels. Total storage is ``color_grid_size ** 3`` RGBW accumulators per block.
     color_grid_size: int = 1
+    #: Number of categorical instance cells per block edge. ``0`` disables
+    #: instance storage. Enabled cells pack an 8-bit slot and 8-bit confidence.
+    instance_grid_size: int = 0
     #: Upper bound on per-node RGB and feature-grid weights
     #: after each integration step. Caps the magnitude of fp16 weighted-sum
     #: accumulators so they stay inside fp16's finite range and bounds
@@ -187,6 +191,7 @@ class BlockSparseTSDFCfg:
             self.feature_block_grid_size,
             self.block_size,
         )
+        _validate_instance_grid_size(self.instance_grid_size, self.block_size)
         if self.max_blocks > DEFAULT_HASH_LAYOUT.max_pool_idx:
             raise ValueError(
                 f"max_blocks={self.max_blocks:,} exceeds the "
@@ -232,6 +237,8 @@ class BlockDataView:
     features: torch.Tensor  # (max_blocks, feature_block_grid_size**3, feature_dim) fp16 or dummy
     feature_weight: torch.Tensor  # (max_blocks, feature_block_grid_size**3) fp16 or dummy
     feature_dim: int  # 0 when the feature channel is disabled
+    instance_state: torch.Tensor  # (max_blocks, instance_grid_size**3) packed int16 or dummy
+    instance_grid_size: int  # 0 when categorical instance storage is disabled
 
     def sample_rgbw_at_centers(
         self,
@@ -257,12 +264,15 @@ class BlockDataView:
             device=coords.device,
         )
         block_base = (coords + offsets).to(dtype=centers.dtype) * float(self.block_size)
-        center_offset = torch.tensor(
-            [grid_w, grid_h, grid_d],
-            dtype=centers.dtype,
-            device=centers.device,
-        ) * 0.5
-        voxel_f = (centers - self.origin.to(device=centers.device, dtype=centers.dtype))
+        center_offset = (
+            torch.tensor(
+                [grid_w, grid_h, grid_d],
+                dtype=centers.dtype,
+                device=centers.device,
+            )
+            * 0.5
+        )
+        voxel_f = centers - self.origin.to(device=centers.device, dtype=centers.dtype)
         voxel_f = voxel_f / float(self.voxel_size) + center_offset
         local = voxel_f - block_base.to(device=centers.device)
 
@@ -298,11 +308,14 @@ class BlockDataView:
             device=coords.device,
         )
         block_base = (coords + offsets).to(dtype=centers.dtype) * float(self.block_size)
-        center_offset = torch.tensor(
-            [grid_w, grid_h, grid_d],
-            dtype=centers.dtype,
-            device=centers.device,
-        ) * 0.5
+        center_offset = (
+            torch.tensor(
+                [grid_w, grid_h, grid_d],
+                dtype=centers.dtype,
+                device=centers.device,
+            )
+            * 0.5
+        )
         voxel_f = centers - self.origin.to(device=centers.device, dtype=centers.dtype)
         voxel_f = voxel_f / float(self.voxel_size) + center_offset
         local = voxel_f - block_base.to(device=centers.device)
@@ -312,9 +325,7 @@ class BlockDataView:
         grid_f = ((local - 0.5) * scale).clamp(min=0.0, max=grid_max)
         grid_idx = torch.floor(grid_f + 0.5).to(dtype=torch.long)
         return (
-            grid_idx[:, 2]
-            * self.feature_block_grid_size
-            * self.feature_block_grid_size
+            grid_idx[:, 2] * self.feature_block_grid_size * self.feature_block_grid_size
             + grid_idx[:, 1] * self.feature_block_grid_size
             + grid_idx[:, 0]
         )
@@ -342,6 +353,69 @@ class BlockDataView:
         gathered = self.features[pool_idx, node_idx].float()
         weight = self.feature_weight[pool_idx, node_idx].float()
         return gathered / weight.clamp(min=eps).unsqueeze(-1)
+
+    def _instance_node_indices_at_centers(
+        self,
+        centers: torch.Tensor,
+        block_idx_per_voxel: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return containing categorical instance-cell indices for sample centers."""
+        if self.instance_grid_size <= 0:
+            raise RuntimeError("Instance storage is disabled. Configure instance_grid_size > 0.")
+        pool_idx = block_idx_per_voxel.long()
+        if self.instance_grid_size == 1 or self.block_size == 1:
+            return torch.zeros_like(pool_idx, dtype=torch.long)
+
+        coords = self.coords.view(-1, 3)[pool_idx].long()
+        grid_d, grid_h, grid_w = (int(v) for v in self.grid_shape)
+        blocks_x = (grid_w + self.block_size - 1) // self.block_size
+        blocks_y = (grid_h + self.block_size - 1) // self.block_size
+        blocks_z = (grid_d + self.block_size - 1) // self.block_size
+        offsets = torch.tensor(
+            [blocks_x // 2, blocks_y // 2, blocks_z // 2],
+            dtype=coords.dtype,
+            device=coords.device,
+        )
+        block_base = (coords + offsets).to(dtype=centers.dtype) * float(self.block_size)
+        center_offset = (
+            torch.tensor(
+                [grid_w, grid_h, grid_d],
+                dtype=centers.dtype,
+                device=centers.device,
+            )
+            * 0.5
+        )
+        voxel_f = centers - self.origin.to(device=centers.device, dtype=centers.dtype)
+        voxel_f = voxel_f / float(self.voxel_size) + center_offset
+        local = voxel_f - block_base.to(device=centers.device)
+        grid_idx = torch.floor(local * float(self.instance_grid_size) / float(self.block_size)).to(
+            dtype=torch.long
+        )
+        grid_idx.clamp_(min=0, max=self.instance_grid_size - 1)
+        return (
+            grid_idx[:, 2] * self.instance_grid_size * self.instance_grid_size
+            + grid_idx[:, 1] * self.instance_grid_size
+            + grid_idx[:, 0]
+        )
+
+    def sample_instance_state_at_centers(
+        self,
+        centers: torch.Tensor,
+        block_idx_per_voxel: torch.Tensor,
+    ) -> torch.Tensor:
+        """Gather packed uint16 instance owner/confidence for sample centers."""
+        if centers.numel() == 0:
+            return self.instance_state.new_empty((0,), dtype=torch.uint16)
+        pool_idx = block_idx_per_voxel.long()
+        node_idx = self._instance_node_indices_at_centers(
+            centers,
+            block_idx_per_voxel,
+        )
+        # PyTorch does not implement advanced indexing directly for uint16 on
+        # every backend. Index the identical bit pattern through int16, widen,
+        # and restore the unsigned representation.
+        signed = self.instance_state[pool_idx, node_idx]
+        return (signed.to(dtype=torch.int32) & 0xFFFF).to(dtype=torch.uint16)
 
     def features_normalized(self, eps: float = 1e-6) -> torch.Tensor:
         """Return active-block features normalized by per-block weight.
@@ -391,6 +465,23 @@ class OccupiedVoxels:
 
     def __len__(self) -> int:
         return self.centers.shape[0]
+
+    def instance_state_uint16(self) -> torch.Tensor:
+        """Return packed per-voxel instance owner/confidence as ``(N,)`` uint16."""
+        return self.block_data.sample_instance_state_at_centers(
+            self.centers,
+            self.block_idx_per_voxel,
+        )
+
+    def instance_slots_uint8(self) -> torch.Tensor:
+        """Return categorical instance slots as ``(N,)`` uint8."""
+        packed = self.instance_state_uint16().to(dtype=torch.int32)
+        return (packed & 0xFF).to(dtype=torch.uint8)
+
+    def instance_confidence_uint8(self) -> torch.Tensor:
+        """Return categorical ownership confidence as ``(N,)`` uint8."""
+        packed = self.instance_state_uint16().to(dtype=torch.int32)
+        return ((packed >> 8) & 0xFF).to(dtype=torch.uint8)
 
     def colors_uint8(self, eps: float = 1e-6, prefer_texture: bool = True) -> torch.Tensor:
         """Gather per-voxel RGB colors as ``(N, 3)`` uint8.
@@ -503,6 +594,175 @@ class MatchedVoxels:
 
 
 @dataclass
+class RenderedFeatures:
+    """Compact feature-grid references produced by a TSDF surface raycast.
+
+    Dense feature vectors are gathered lazily with :meth:`features`. The compact
+    references remain valid until the mapper changes or another feature render
+    reuses the renderer's index buffers.
+
+    Attributes:
+        depth: ``(H, W)`` or ``(N, H, W)`` float32 depth image.
+        normals: ``(H, W, 3)`` or ``(N, H, W, 3)`` float32 normals.
+        valid: Boolean mask for retained TSDF geometry hits.
+        feature_valid: Boolean mask requiring both geometry and positive feature weight.
+        feature_block_idx: Global block-pool index per pixel, or ``-1`` on a miss.
+        feature_node_idx: Local feature-node index per pixel, or ``-1`` on a miss.
+        image_origin: Absolute ``(top, left)`` origin of the raycast region.
+        full_image_shape: Full camera image shape used by the ray model.
+    """
+
+    depth: torch.Tensor
+    normals: torch.Tensor
+    valid: torch.Tensor
+    feature_valid: torch.Tensor
+    feature_block_idx: torch.Tensor
+    feature_node_idx: torch.Tensor
+    image_origin: Tuple[int, int]
+    full_image_shape: Tuple[int, int]
+    _warp_data: BlockSparseTSDFWarp = field(repr=False)
+    _feature_valid_storage: torch.Tensor = field(repr=False)
+    _feature_dim: int = field(repr=False)
+    _feature_revision: int = field(repr=False)
+    _feature_revision_getter: Callable[[], int] = field(repr=False)
+    _render_generation: int = field(repr=False)
+    _render_generation_getter: Callable[[], int] = field(repr=False)
+    _gather_fp32_kernel: Any = field(repr=False)
+    _gather_fp16_kernel: Any = field(repr=False)
+    _single_camera: bool = field(repr=False)
+    _camera_count: int = field(repr=False)
+
+    def _validate_live_references(self) -> None:
+        """Reject deferred gathers after map or render-buffer mutation."""
+        if self._feature_revision_getter() != self._feature_revision:
+            log_and_raise(
+                "RenderedFeatures references are stale because the mapper changed. "
+                "Call render_features() again before materializing features.",
+                exception_type=RuntimeError,
+            )
+        if self._render_generation_getter() != self._render_generation:
+            log_and_raise(
+                "RenderedFeatures references are stale because a later feature render "
+                "reused their index buffers. Call render_features() again.",
+                exception_type=RuntimeError,
+            )
+
+    def _resolve_image_patch(
+        self,
+        image_patch: Optional[Tuple[int, int, int, int]],
+    ) -> tuple[int, int, int, int]:
+        """Return a requested absolute patch relative to the raycast region."""
+        render_height, render_width = self.depth.shape[-2:]
+        render_top, render_left = self.image_origin
+        if image_patch is None:
+            return 0, 0, render_height, render_width
+        if not isinstance(image_patch, tuple) or len(image_patch) != 4:
+            log_and_raise("image_patch must be a (top, left, height, width) tuple.")
+        if any(not isinstance(value, int) or isinstance(value, bool) for value in image_patch):
+            log_and_raise(
+                "image_patch coordinates and dimensions must be integers.",
+                exception_type=TypeError,
+            )
+        patch_top, patch_left, patch_height, patch_width = image_patch
+        if patch_top < 0 or patch_left < 0:
+            log_and_raise("image_patch top and left must be non-negative.")
+        if patch_height <= 0 or patch_width <= 0:
+            log_and_raise("image_patch height and width must be positive.")
+        full_height, full_width = self.full_image_shape
+        if patch_top + patch_height > full_height or patch_left + patch_width > full_width:
+            log_and_raise(
+                f"image_patch={image_patch} exceeds full_image_shape={self.full_image_shape}."
+            )
+        if (
+            patch_top < render_top
+            or patch_left < render_left
+            or patch_top + patch_height > render_top + render_height
+            or patch_left + patch_width > render_left + render_width
+        ):
+            log_and_raise(
+                f"image_patch={image_patch} is outside the raycast region "
+                f"({render_top}, {render_left}, {render_height}, {render_width})."
+            )
+        return (
+            patch_top - render_top,
+            patch_left - render_left,
+            patch_height,
+            patch_width,
+        )
+
+    def features(
+        self,
+        image_patch: Optional[Tuple[int, int, int, int]] = None,
+        channels: slice = slice(None),
+        dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        """Materialize a spatial patch and contiguous feature-channel slice.
+
+        Args:
+            image_patch: Optional absolute ``(top, left, height, width)`` patch
+                contained in the region raycast by :meth:`Mapper.render_features`.
+            channels: Contiguous feature channel slice with unit step.
+            dtype: Output dtype, either ``torch.float32`` or ``torch.float16``.
+
+        Returns:
+            Dense ``(H, W, C)`` or ``(N, H, W, C)`` feature tensor. Pixels
+            where :attr:`feature_valid` is false contain zero.
+        """
+        self._validate_live_references()
+        if not isinstance(channels, slice):
+            log_and_raise("channels must be a contiguous slice.", exception_type=TypeError)
+        if channels.step not in (None, 1):
+            log_and_raise("channels must use a unit step.")
+        if dtype not in (torch.float16, torch.float32):
+            log_and_raise("dtype must be torch.float16 or torch.float32.")
+
+        channel_start, channel_stop, _ = channels.indices(self._feature_dim)
+        channel_count = max(0, channel_stop - channel_start)
+        patch_top, patch_left, patch_height, patch_width = self._resolve_image_patch(image_patch)
+        output_pixel_count = self._camera_count * patch_height * patch_width
+        output = torch.empty(
+            (output_pixel_count, channel_count),
+            dtype=dtype,
+            device=self.feature_block_idx.device,
+        )
+        if output.numel() > 0:
+            render_height, render_width = self.depth.shape[-2:]
+            kernel = (
+                self._gather_fp16_kernel if dtype == torch.float16 else self._gather_fp32_kernel
+            )
+            wp.launch(
+                kernel=kernel,
+                dim=(output_pixel_count, channel_count),
+                inputs=[
+                    self._warp_data,
+                    wp.from_torch(self.feature_block_idx.reshape(-1), dtype=wp.int32),
+                    wp.from_torch(self.feature_node_idx.reshape(-1), dtype=wp.int16),
+                    wp.from_torch(self._feature_valid_storage.reshape(-1), dtype=wp.uint8),
+                    render_width,
+                    render_height * render_width,
+                    patch_top,
+                    patch_left,
+                    patch_height,
+                    patch_width,
+                    channel_start,
+                    wp.from_torch(
+                        output,
+                        dtype=wp.float16 if dtype == torch.float16 else wp.float32,
+                    ),
+                ],
+            )
+
+        if self._single_camera:
+            return output.view(patch_height, patch_width, channel_count)
+        return output.view(
+            self._camera_count,
+            patch_height,
+            patch_width,
+            channel_count,
+        )
+
+
+@dataclass
 class BlockSparseTSDFData:
     """Dataclass holding all block-sparse TSDF tensor references.
 
@@ -529,6 +789,9 @@ class BlockSparseTSDFData:
     # Per-block feature grid (weighted-sum accumulator + dedicated weight)
     block_features: torch.Tensor  # (max_blocks, feature_block_grid_size**3, feature_dim) or dummy
     block_feature_weight: torch.Tensor  # (max_blocks, feature_block_grid_size**3) or dummy
+
+    # Per-block categorical instance grid (packed uint8 owner + uint8 confidence)
+    block_instance_state: torch.Tensor  # (max_blocks, instance_grid_size**3) packed int16 or dummy
 
     # Static SDF channel (separate tensor for primitives)
     static_block_data: torch.Tensor  # (max_blocks, block_size**3) float16 or (1, 1) dummy
@@ -571,9 +834,11 @@ class BlockSparseTSDFData:
     has_dynamic: bool = True
     has_static: bool = False
     has_features: bool = False
+    has_instances: bool = False
     feature_dim: int = 0
     color_grid_size: int = 1
     feature_block_grid_size: int = 1
+    instance_grid_size: int = 0
 
     def to_warp(self) -> BlockSparseTSDFWarp:
         """Convert to Warp struct for kernel launches.
@@ -596,6 +861,10 @@ class BlockSparseTSDFData:
         # Per-block feature grid (fp16 weighted sums, post-frame cap bounds magnitude)
         s.block_features = wp.from_torch(self.block_features, dtype=wp.float16)
         s.block_feature_weight = wp.from_torch(self.block_feature_weight, dtype=wp.float16)
+        s.block_instance_state = wp.from_torch(
+            self.block_instance_state,
+            dtype=wp.int16,
+        )
 
         # Block pool - static channel
         s.static_block_data = wp.from_torch(self.static_block_data, dtype=wp.float16)
@@ -604,9 +873,11 @@ class BlockSparseTSDFData:
         s.has_dynamic = self.has_dynamic
         s.has_static = self.has_static
         s.has_features = self.has_features
+        s.has_instances = self.has_instances
         s.feature_dim = self.feature_dim
         s.color_grid_size = self.color_grid_size
         s.feature_block_grid_size = self.feature_block_grid_size
+        s.instance_grid_size = self.instance_grid_size
 
         # Block metadata
         s.block_coords = wp.from_torch(self.block_coords, dtype=wp.int32)
@@ -729,13 +1000,8 @@ class BlockSparseTSDF:
         assert all(
             math.isclose(a, b, rel_tol=0.0, abs_tol=1.0e-6)
             for a, b in zip(kernels.origin_xyz, config_origin)
-        ), (
-            f"kernels.origin_xyz={kernels.origin_xyz} does not match "
-            f"config.origin={config_origin}"
-        )
-        assert math.isclose(
-            kernels.voxel_size, config.voxel_size, rel_tol=0.0, abs_tol=1.0e-12
-        ), (
+        ), f"kernels.origin_xyz={kernels.origin_xyz} does not match config.origin={config_origin}"
+        assert math.isclose(kernels.voxel_size, config.voxel_size, rel_tol=0.0, abs_tol=1.0e-12), (
             f"kernels.voxel_size={kernels.voxel_size} does not match "
             f"config.voxel_size={config.voxel_size}"
         )
@@ -780,6 +1046,10 @@ class BlockSparseTSDF:
             "config.feature_block_grid_size="
             f"{config.feature_block_grid_size}"
         )
+        assert kernels.instance_grid_size == config.instance_grid_size, (
+            f"kernels.instance_grid_size={kernels.instance_grid_size} does not match "
+            f"config.instance_grid_size={config.instance_grid_size}"
+        )
         assert kernels.hash_layout == DEFAULT_HASH_LAYOUT, (
             f"kernels.hash_layout={kernels.hash_layout} does not match "
             f"DEFAULT_HASH_LAYOUT={DEFAULT_HASH_LAYOUT}"
@@ -822,6 +1092,7 @@ class BlockSparseTSDF:
 
         color_grid_voxels = config.color_grid_size**3
         feature_grid_voxels = config.feature_block_grid_size**3
+        instance_grid_voxels = max(1, config.instance_grid_size**3)
 
         # Conditional allocation for per-block feature grid
         has_features = config.feature_dim > 0
@@ -854,6 +1125,12 @@ class BlockSparseTSDF:
             dtype=torch.float16,
             device=self.device,
         )
+        has_instances = config.instance_grid_size > 0
+        block_instance_state = torch.zeros(
+            ((config.max_blocks, instance_grid_voxels) if has_instances else (1, 1)),
+            dtype=torch.int16,
+            device=self.device,
+        )
 
         # Pre-allocate all tensors
         self._data = BlockSparseTSDFData(
@@ -874,6 +1151,7 @@ class BlockSparseTSDF:
             # small dummies so the Warp struct can always be built.
             block_features=block_features,
             block_feature_weight=block_feature_weight,
+            block_instance_state=block_instance_state,
             # Block pool - static channel (conditional)
             static_block_data=static_block_data,
             # Block metadata
@@ -941,9 +1219,11 @@ class BlockSparseTSDF:
             has_dynamic=config.enable_dynamic,
             has_static=config.enable_static,
             has_features=has_features,
+            has_instances=has_instances,
             feature_dim=config.feature_dim,
             color_grid_size=config.color_grid_size,
             feature_block_grid_size=config.feature_block_grid_size,
+            instance_grid_size=config.instance_grid_size,
         )
 
         # Cached Warp struct (for CUDA graph compatibility)
@@ -1027,8 +1307,39 @@ class BlockSparseTSDF:
         if self._data.has_static:
             self._data.static_block_data.fill_(float("inf"))
 
-        # Note: block_data, block_grid_rgb, and feature grids are cleared
-        # lazily when blocks are allocated.
+        # A mapper reset also resets the caller-owned instance registry, so no
+        # packed ownership may survive into the next tracker session.
+        if self._data.has_instances:
+            self._data.block_instance_state.zero_()
+
+        # Note: block_data, block_grid_rgb, and feature grids are cleared lazily
+        # when blocks are allocated.
+
+    def clear_instance_slot(self, instance_slot: int) -> None:
+        """Clear all cells owned by one compact instance slot on the GPU."""
+        if not self._data.has_instances:
+            log_and_raise("clear_instance_slot() requires instance_grid_size > 0.")
+        if (
+            not isinstance(instance_slot, int)
+            or isinstance(instance_slot, bool)
+            or instance_slot < 1
+            or instance_slot > 255
+        ):
+            log_and_raise(f"instance_slot must be an int in [1, 255], got {instance_slot!r}.")
+        data = self.get_warp_data()
+        device, stream = get_warp_device_stream(self._data.block_instance_state)
+        wp.launch(
+            self.kernels.clear_instance_slot_kernel,
+            dim=(self.config.max_blocks, self.kernels.instance_grid_voxels),
+            inputs=[
+                data.block_instance_state,
+                data.num_allocated,
+                instance_slot,
+                self.config.max_blocks,
+            ],
+            device=device,
+            stream=stream,
+        )
 
     def export_blocks(self) -> Dict[str, torch.Tensor]:
         """Export active block payload tensors in compact pool order.
@@ -1050,18 +1361,18 @@ class BlockSparseTSDF:
         }
         if self._data.has_dynamic:
             blocks["block_data"] = self._data.block_data[active_pool_idx].clone()
-            blocks["block_grid_rgb"] = self._data.block_grid_rgb[
-                active_pool_idx
-            ].clone()
+            blocks["block_grid_rgb"] = self._data.block_grid_rgb[active_pool_idx].clone()
         if self._data.has_features:
             blocks["block_features"] = self._data.block_features[active_pool_idx].clone()
             blocks["block_feature_weight"] = self._data.block_feature_weight[
                 active_pool_idx
             ].clone()
-        if self._data.has_static:
-            blocks["static_block_data"] = self._data.static_block_data[
+        if self._data.has_instances:
+            blocks["block_instance_state"] = self._data.block_instance_state[
                 active_pool_idx
             ].clone()
+        if self._data.has_static:
+            blocks["static_block_data"] = self._data.static_block_data[active_pool_idx].clone()
         return blocks
 
     def import_blocks(self, blocks: Dict[str, torch.Tensor]) -> None:
@@ -1088,9 +1399,7 @@ class BlockSparseTSDF:
                 f"{self.config.max_blocks}."
             )
 
-        coords_cpu = (
-            blocks["active_block_coords"].detach().to(device="cpu", dtype=torch.int64)
-        )
+        coords_cpu = blocks["active_block_coords"].detach().to(device="cpu", dtype=torch.int64)
         validate_import_block_coords_unique(coords_cpu)
         validate_import_block_coords_for_hash_layout(coords_cpu)
         validate_import_block_coords_for_grid(
@@ -1107,9 +1416,7 @@ class BlockSparseTSDF:
         self.reset()
         self._data.block_coords.zero_()
         self._data.hash_table.copy_(hash_table_cpu.to(device=self.device))
-        self._data.block_to_hash_slot.copy_(
-            block_to_hash_slot_cpu.to(device=self.device)
-        )
+        self._data.block_to_hash_slot.copy_(block_to_hash_slot_cpu.to(device=self.device))
         self._data.free_list.zero_()
         self._data.free_count.zero_()
         self._data.num_allocated.fill_(n_blocks)
@@ -1134,9 +1441,7 @@ class BlockSparseTSDF:
             self._data.block_data.zero_()
             self._data.block_grid_rgb.zero_()
             if n_blocks > 0:
-                self._data.block_data[:n_blocks].copy_(
-                    blocks["block_data"].to(device=self.device)
-                )
+                self._data.block_data[:n_blocks].copy_(blocks["block_data"].to(device=self.device))
                 self._data.block_grid_rgb[:n_blocks].copy_(
                     blocks["block_grid_rgb"].to(device=self.device)
                 )
@@ -1156,6 +1461,13 @@ class BlockSparseTSDF:
                 )
                 self._data.block_feature_weight[:n_blocks].copy_(
                     blocks["block_feature_weight"].to(device=self.device)
+                )
+
+        if self._data.has_instances:
+            self._data.block_instance_state.zero_()
+            if n_blocks > 0:
+                self._data.block_instance_state[:n_blocks].copy_(
+                    blocks["block_instance_state"].to(device=self.device)
                 )
 
         if self._data.has_static and n_blocks > 0:
@@ -1326,6 +1638,7 @@ class BlockSparseTSDF:
         total += self._data.block_grid_rgb.numel() * 2  # float16
         total += self._data.block_features.numel() * 2  # float16
         total += self._data.block_feature_weight.numel() * 2  # float16
+        total += self._data.block_instance_state.numel() * 2  # packed int16 bits
         total += self._data.static_block_data.numel() * 2  # float16
         total += self._data.block_coords.numel() * 4  # int32
         total += self._data.block_to_hash_slot.numel() * 4  # int32

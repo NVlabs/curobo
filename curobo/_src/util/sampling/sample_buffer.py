@@ -48,7 +48,8 @@ class SampleBuffer:
         up_bounds: List[float] = [1],
         low_bounds: List[float] = [0],
         store_buffer: Optional[int] = 2000,
-    ):
+        cache_bounded_samples: bool = False,
+    ) -> None:
         """Initialize sample buffer.
 
         Args:
@@ -58,11 +59,14 @@ class SampleBuffer:
             up_bounds: Upper bounds for bounded sampling
             low_bounds: Lower bounds for bounded sampling
             store_buffer: Size of sample buffer for performance (None to disable)
+            cache_bounded_samples: Cache the bounded form of a fixed sample buffer.
         """
         self.sequencer = sequencer
         self.device_cfg = device_cfg
         if self.sequencer.ndims != ndims:
-            log_and_raise(f"Sequencer ndims ({self.sequencer.ndims}) does not match ndims ({ndims})")
+            log_and_raise(
+                f"Sequencer ndims ({self.sequencer.ndims}) does not match ndims ({ndims})"
+            )
         self.ndims = ndims
 
         # Scale samples by joint range
@@ -82,6 +86,8 @@ class SampleBuffer:
 
         # Optional sample buffering for performance
         self._sample_buffer = None
+        self._bounded_sample_buffer = None
+        self._sample_cursor = 0
         self._store_buffer = store_buffer
         self.fixed_samples = store_buffer is not None
 
@@ -96,9 +102,14 @@ class SampleBuffer:
             self._int_gen = self._int_gen.manual_seed(getattr(sequencer, "seed", 123))
             self._generator_initial_state = self._int_gen.get_state().clone()
             self._index_buffer = None
+            if cache_bounded_samples:
+                self._bounded_sample_buffer = self.bound_samples(
+                    self._sample_buffer, self.range_b, self.low_bounds
+                ).contiguous()
 
     def reset(self):
         """Reset generator to initial state."""
+        self._sample_cursor = 0
         if self._sample_buffer is not None:
             self._int_gen.set_state(self._generator_initial_state)
         self.sequencer.reset()
@@ -113,24 +124,44 @@ class SampleBuffer:
         if self.fixed_samples:
             log_and_raise("fast forward will not work with fixed samples.")
 
-    def _get_samples(self, num_samples: int):
+    def _get_samples(self, num_samples: int, bounded: bool = False) -> torch.Tensor:
         """Get raw uniform samples from sequencer or buffer.
 
         Args:
             num_samples: Number of samples to generate
+            bounded: Use the cached bounded buffer when available.
 
         Returns:
-            Tensor of uniform samples in [0,1]^ndims
+            Tensor sampled from the uniform or cached bounded buffer.
         """
         if self._sample_buffer is not None:
-            # Sample from pre-generated buffer
-            out_buffer = None
-            if self._index_buffer is not None and self._index_buffer.shape[0] == num_samples:
-                out_buffer = self._index_buffer
-            samples, index = self.sample_by_random_index(
-                self._sample_buffer, num_samples, self._int_gen, self.device_cfg.device, out_buffer
+            # Small requests consume contiguous slices from the fixed buffer.
+            # This preserves the zero-copy view and avoids random-index and
+            # gather kernels on latency-sensitive sampling paths.
+            sample_buffer = (
+                self._bounded_sample_buffer
+                if bounded and self._bounded_sample_buffer is not None
+                else self._sample_buffer
             )
-            self._index_buffer = index
+            buffer_size = sample_buffer.shape[0]
+            if num_samples <= buffer_size // 2:
+                if self._sample_cursor + num_samples > buffer_size:
+                    self._sample_cursor = 0
+                end_cursor = self._sample_cursor + num_samples
+                samples = sample_buffer[self._sample_cursor : end_cursor]
+                self._sample_cursor = end_cursor
+            else:
+                out_buffer = None
+                if self._index_buffer is not None and self._index_buffer.shape[0] == num_samples:
+                    out_buffer = self._index_buffer
+                samples, index = self.sample_by_random_index(
+                    sample_buffer,
+                    num_samples,
+                    self._int_gen,
+                    self.device_cfg.device,
+                    out_buffer,
+                )
+                self._index_buffer = index
         else:
             # Generate samples directly from sequencer
             samples = torch.tensor(
@@ -151,8 +182,8 @@ class SampleBuffer:
         Returns:
             Tensor of samples in [0,1]^ndims or [low_bounds, up_bounds]^ndims
         """
-        samples = self._get_samples(num_samples)
-        if bounded:
+        samples = self._get_samples(num_samples, bounded)
+        if bounded and self._bounded_sample_buffer is None:
             samples = self.bound_samples(samples, self.range_b, self.low_bounds)
         return samples
 
@@ -258,13 +289,21 @@ class SampleBuffer:
         store_buffer: Optional[int] = 2000,
         seed: int = 123,
         device_cfg: DeviceCfg = DeviceCfg(),
-    ):
+        cache_bounded_samples: bool = False,
+    ) -> "SampleBuffer":
         """Create a Halton sample buffer.
 
         Args:
             ndims: Number of dimensions for sample generation
+            up_bounds: Upper bounds for bounded sampling.
+            low_bounds: Lower bounds for bounded sampling.
             seed: Seed for the random number generator
             store_buffer: Size of sample buffer for performance (None to disable)
+            device_cfg: Device and dtype configuration.
+            cache_bounded_samples: Cache the bounded form of a fixed sample buffer.
+
+        Returns:
+            Halton-backed sample buffer.
         """
         from .sequencer_halton import HaltonSequencer
 
@@ -276,6 +315,7 @@ class SampleBuffer:
             device_cfg=device_cfg,
             up_bounds=up_bounds,
             low_bounds=low_bounds,
+            cache_bounded_samples=cache_bounded_samples,
         )
 
     @classmethod

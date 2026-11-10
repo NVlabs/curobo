@@ -20,11 +20,11 @@ Use Cases
 Entry Point
 -----------
 
-The main function is :func:`curobo.geom.sphere_fit.fit_spheres_to_mesh`:
+The main function is :func:`curobo.sphere_fit.fit_spheres_to_mesh`:
 
 .. code-block:: python
 
-   from curobo.geom.sphere_fit import fit_spheres_to_mesh, SphereFitType
+   from curobo.sphere_fit import fit_spheres_to_mesh, SphereFitType
    import trimesh
 
    mesh = trimesh.load("my_object.obj")
@@ -33,7 +33,7 @@ The main function is :func:`curobo.geom.sphere_fit.fit_spheres_to_mesh`:
    result = fit_spheres_to_mesh(mesh)
 
    # Explicit sphere count
-   result = fit_spheres_to_mesh(mesh, n_spheres=50)
+   result = fit_spheres_to_mesh(mesh, num_spheres=50)
 
    # With quality metrics
    result = fit_spheres_to_mesh(mesh, compute_metrics=True)
@@ -45,7 +45,7 @@ The main function is :func:`curobo.geom.sphere_fit.fit_spheres_to_mesh`:
 
    * - Parameter
      - Description
-   * - ``n_spheres``
+   * - ``num_spheres``
      - Number of spheres to fit. When ``None``, estimated automatically from
        bounding-box volume and ``sphere_density``.
    * - ``sphere_density``
@@ -56,7 +56,7 @@ The main function is :func:`curobo.geom.sphere_fit.fit_spheres_to_mesh`:
    * - ``surface_radius``
      - Radius for surface-sampled spheres. Only affects ``SURFACE`` fit type.
    * - ``iterations``
-     - Optimization iterations for ``MORPHIT`` (default ``50``).
+     - Optimization iterations for ``MORPHIT`` (default ``200``).
    * - ``compute_metrics``
      - When ``True``, populates quality metrics on the result.
    * - ``clip_plane``
@@ -69,7 +69,7 @@ The main function is :func:`curobo.geom.sphere_fit.fit_spheres_to_mesh`:
 Fit Types
 ----------
 
-cuRobo provides three methods via :class:`curobo.geom.sphere_fit.SphereFitType`:
+cuRobo provides three methods via :class:`curobo.sphere_fit.SphereFitType`:
 
 .. list-table::
    :header-rows: 1
@@ -106,7 +106,7 @@ coloured spheres next to the original mesh. You can customise the robot, links, 
 .. code-block:: bash
 
    python -m curobo.examples.reference.sphere_fit_comparison --robot franka.yml
-   python -m curobo.examples.reference.sphere_fit_comparison --links panda_link0 panda_link7
+   python -m curobo.examples.reference.sphere_fit_comparison --robot franka.yml --links panda_link0 panda_link7
    python -m curobo.examples.reference.sphere_fit_comparison --methods surface voxel morphit
 
 The fitting pipeline automatically handles degenerate cases:
@@ -120,7 +120,7 @@ The fitting pipeline automatically handles degenerate cases:
 Result
 -------
 
-:class:`curobo.geom.sphere_fit.SphereFitResult` contains:
+:class:`curobo.sphere_fit.SphereFitResult` contains:
 
 .. list-table::
    :header-rows: 1
@@ -132,7 +132,7 @@ Result
      - Sphere centre positions, shape ``(N, 3)``.
    * - ``radii``
      - Sphere radii, shape ``(N,)``.
-   * - ``n_spheres``
+   * - ``num_spheres``
      - Number of fitted spheres.
    * - ``fit_time_s``
      - Wall-clock fitting time in seconds.
@@ -212,7 +212,7 @@ Individual geometry objects also provide a convenience method for sphere fitting
 
 .. code-block:: python
 
-   from curobo.geom.types import Capsule, WorldCfg
+   from curobo.scene import Capsule, Scene
 
    capsule = Capsule(
       name="capsule",
@@ -222,5 +222,5 @@ Individual geometry objects also provide a convenience method for sphere fitting
       pose=[0.0, 5, 0.0, 0.043, -0.471, 0.284, 0.834],
    )
 
-   sph = capsule.get_bounding_spheres(n_spheres=500)
-   WorldCfg(spheres=sph).save_world_as_mesh("bounding_spheres.obj")
+   sph = capsule.get_bounding_spheres(num_spheres=500)
+   Scene(sphere=sph).save_scene_as_mesh("bounding_spheres.obj")

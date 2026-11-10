@@ -9,10 +9,22 @@
 #   - load_obstacle_transform(obs_set, env_idx, local_idx) -> ObstacleTransform
 #   - compute_local_sdf(obs_set, env_idx, local_idx, local_point) -> float32
 #   - compute_local_sdf_with_grad(obs_set, env_idx, local_idx, local_point, query_distance) -> vec4
+#   - compute_swept_sphere_clearance_lower_bound(
+#         obs_set,
+#         env_idx,
+#         local_idx,
+#         current_world,
+#         sweep_min_world,
+#         sweep_max_world,
+#         radius_adjusted,
+#         sweep_reach,
+#     ) -> float32
 #
 # To add a new obstacle type, add its module path here.
 OBSTACLE_SDF_MODULES = [
     "curobo._src.geom.data.data_cuboid",
+    "curobo._src.geom.data.data_capsule",
+    "curobo._src.geom.data.data_cylinder",
     "curobo._src.geom.data.data_mesh",
     "curobo._src.geom.data.data_voxel",
 ]

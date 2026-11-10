@@ -137,6 +137,113 @@ def test_cuda_robot_model_gradients_enabled(franka_cfg):
     assert not torch.all(q.grad == 0)
 
 
+def _compute_weighted_kinematics_gradient(
+    robot_cfg: KinematicsCfg,
+    joint_position: torch.Tensor,
+    include_zero_jacobian_cotangent: bool = False,
+) -> torch.Tensor:
+    """Return a full-output kinematics gradient for backward parity tests."""
+    device_args = robot_cfg.device_cfg.as_torch_dict()
+    robot_model = Kinematics(
+        robot_cfg,
+        compute_jacobian=include_zero_jacobian_cotangent,
+        compute_spheres=True,
+        compute_com=True,
+    )
+    q = joint_position.clone().requires_grad_(True)
+    state = robot_model.compute_kinematics(
+        JointState.from_position(q, joint_names=robot_model.joint_names)
+    )
+    sphere_weight = torch.linspace(
+        0.25,
+        1.25,
+        state.robot_spheres[..., :3].numel(),
+        **device_args,
+    ).view_as(state.robot_spheres[..., :3])
+    position_weight = torch.linspace(
+        0.5,
+        1.5,
+        state.tool_poses.position.numel(),
+        **device_args,
+    ).view_as(state.tool_poses.position)
+    quaternion_weight = torch.linspace(
+        0.75,
+        1.75,
+        state.tool_poses.quaternion.numel(),
+        **device_args,
+    ).view_as(state.tool_poses.quaternion)
+    com_weight = torch.linspace(
+        1.0,
+        2.0,
+        state.robot_com[..., :3].numel(),
+        **device_args,
+    ).view_as(state.robot_com[..., :3])
+    loss = (
+        torch.sum(state.robot_spheres[..., :3] * sphere_weight)
+        + torch.sum(state.tool_poses.position * position_weight)
+        + torch.sum(state.tool_poses.quaternion * quaternion_weight)
+        + torch.sum(state.robot_com[..., :3] * com_weight)
+    )
+    if include_zero_jacobian_cotangent:
+        loss = loss + torch.sum(state.tool_jacobians * 0.0)
+    loss.backward()
+    return q.grad.detach().clone()
+
+
+@pytest.mark.parametrize("robot_file", ["franka.yml", "dual_ur10e.yml", "unitree_g1.yml"])
+def test_cuda_robot_model_link_wrench_backward_matches_mixed_jacobian_path(
+    robot_file, cuda_device_cfg
+):
+    """A zero Jacobian cotangent must not change the standard-output VJP."""
+    robot_data = load_yaml(join_path(get_robot_configs_path(), robot_file))
+    robot_cfg = KinematicsCfg.from_data_dict(
+        data_dict=robot_data,
+        device_cfg=cuda_device_cfg,
+    )
+    torch.manual_seed(1234)
+    joint_position = 0.1 * torch.randn(
+        (4, 1, robot_cfg.kinematics_config.num_dof),
+        **cuda_device_cfg.as_torch_dict(),
+    )
+    reference = _compute_weighted_kinematics_gradient(
+        robot_cfg,
+        joint_position,
+        include_zero_jacobian_cotangent=True,
+    )
+    actual = _compute_weighted_kinematics_gradient(robot_cfg, joint_position)
+
+    torch.testing.assert_close(actual, reference, atol=1.0e-4, rtol=2.0e-5)
+
+
+@pytest.mark.parametrize(
+    ("compute_spheres", "compute_jacobian"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_cuda_robot_model_exact_shape_forward_modes(
+    franka_cfg, compute_spheres, compute_jacobian
+):
+    """The exact-shape forward kernel should support every output mode."""
+    torch.manual_seed(1234)
+    q = torch.randn((8, 1, 7), **(franka_cfg.device_cfg.as_torch_dict()))
+    robot_model = Kinematics(
+        franka_cfg,
+        compute_jacobian=compute_jacobian,
+        compute_spheres=compute_spheres,
+        compute_com=True,
+    )
+    state = robot_model.compute_kinematics(
+        JointState.from_position(q, joint_names=robot_model.joint_names)
+    )
+
+    assert torch.isfinite(state.tool_poses.position).all()
+    assert torch.isfinite(state.tool_poses.quaternion).all()
+    assert torch.isfinite(state.robot_com).all()
+    if compute_spheres:
+        assert torch.isfinite(state.robot_spheres).all()
+    if compute_jacobian:
+        assert torch.isfinite(state.tool_jacobians).all()
+
+
 def test_cuda_robot_model_default_joint_position(franka_cfg):
     """Test default joint position."""
     robot_model = Kinematics(franka_cfg)

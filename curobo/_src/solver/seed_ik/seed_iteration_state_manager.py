@@ -114,7 +114,9 @@ class SeedIterationStateManager:
         return SeedIKState(
             joint_position=selected_values.joint_position,
             lambda_damping=updated_damping,
-            error_norm=candidate_state.error_norm,
+            error_norm=torch.where(
+                step_accepted, candidate_state.error_norm, current_state.error_norm
+            ),
             success=convergence_status,
             improvement=step_accepted,
             position_errors=selected_values.position_errors,
@@ -138,10 +140,15 @@ class SeedIterationStateManager:
         rho = (actual_reduction) / (predicted_reduction)
         """
         actual_reduction = old_error_norm - new_error_norm
-        safe_predicted_reduction = (
-            predicted_reduction.view(batch_size) + self.EPSILON_DIVISION_SAFETY
+        predicted_reduction = predicted_reduction.view(batch_size)
+        ratio = actual_reduction / (predicted_reduction + self.EPSILON_DIVISION_SAFETY)
+        valid = (
+            (predicted_reduction > 0.0)
+            & torch.isfinite(predicted_reduction)
+            & torch.isfinite(ratio)
+            & (actual_reduction >= 0.0)
         )
-        return actual_reduction / safe_predicted_reduction
+        return torch.where(valid, ratio, -torch.ones_like(ratio))
 
     @profiler.record_function("iteration_state_manager/determine_step_acceptance")
     @get_torch_jit_decorator(only_valid_for_compile=True)

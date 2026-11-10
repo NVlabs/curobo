@@ -22,10 +22,14 @@ from __future__ import annotations
 
 import warp as wp
 
-from curobo._src.perception.mapper.kernel.warp_types import BlockSparseTSDFWarp
+from curobo._src.perception.mapper.kernel.warp_types import (
+    BlockSparseTSDFWarp,
+    PreparedSemanticFilterWarp,
+)
 from curobo._src.util.warp import warp_func, warp_kernel
 
 _SDF_INFINITY = wp.constant(wp.float32(1e10))
+_Float8 = wp.types.vector(length=8, dtype=wp.float32)
 
 
 def make_raycast_kernels(
@@ -40,6 +44,9 @@ def make_raycast_kernels(
     world_to_block_and_local,
     world_to_continuous_voxel,
     color_grid_size: int = 1,
+    semantic_local_idx_keep,
+    semantic_feature_node_from_local,
+    semantic_node_keep,
 ) -> dict[str, object]:
     """Build raycast and voxel-extraction kernels."""
     BS = wp.constant(block_size)
@@ -161,11 +168,12 @@ def make_raycast_kernels(
         local_idx = actual_lz * BS * BS + actual_ly * BS + actual_lx
         return sample_voxel(tsdf, pool_idx, local_idx, minimum_tsdf_weight)
 
-    @warp_func(f"sample_tsdf_trilinear_bs{block_size}")
-    def sample_tsdf_trilinear(
+    @warp_func(f"_sample_tsdf_trilinear_bs{block_size}")
+    def _sample_tsdf_trilinear(
         tsdf: BlockSparseTSDFWarp,
         world_pos: wp.vec3,
         minimum_tsdf_weight: float,
+        normalize_observed: bool,
     ) -> wp.vec2:
         """Sample combined SDF with trilinear interpolation."""
         block_size_f = wp.float32(tsdf.block_size)
@@ -227,6 +235,34 @@ def make_raycast_kernels(
         w110 = (1.0 - tx) * ty * tz
         w111 = tx * ty * tz
 
+        if normalize_observed:
+            # Unknown corners contribute neither SDF nor interpolation weight.
+            # Do not substitute positive truncation values at observed boundaries.
+            weights = _Float8()
+            values = _Float8()
+            weights[0] = w000 * c000[1]
+            weights[1] = w001 * c001[1]
+            weights[2] = w010 * c010[1]
+            weights[3] = w011 * c011[1]
+            weights[4] = w100 * c100[1]
+            weights[5] = w101 * c101[1]
+            weights[6] = w110 * c110[1]
+            weights[7] = w111 * c111[1]
+            values[0] = wp.where(c000[1] > 0.5, c000[0], 0.0)
+            values[1] = wp.where(c001[1] > 0.5, c001[0], 0.0)
+            values[2] = wp.where(c010[1] > 0.5, c010[0], 0.0)
+            values[3] = wp.where(c011[1] > 0.5, c011[0], 0.0)
+            values[4] = wp.where(c100[1] > 0.5, c100[0], 0.0)
+            values[5] = wp.where(c101[1] > 0.5, c101[0], 0.0)
+            values[6] = wp.where(c110[1] > 0.5, c110[0], 0.0)
+            values[7] = wp.where(c111[1] > 0.5, c111[0], 0.0)
+            support = float(0.0)
+            for i in range(8):
+                support += weights[i]
+            if support <= 0.0:
+                return wp.vec2(_SDF_INFINITY, 0.0)
+            return wp.vec2(wp.dot(weights, values) / support, support)
+
         n_valid = c000[1] + c001[1] + c010[1] + c011[1] + c100[1] + c101[1] + c110[1] + c111[1]
         if n_valid < 0.5:
             return wp.vec2(_SDF_INFINITY, 0.0)
@@ -252,6 +288,20 @@ def make_raycast_kernels(
             + w111 * s111
         )
         return wp.vec2(sdf, 1.0)
+
+    @warp_func(f"sample_tsdf_trilinear_bs{block_size}")
+    def sample_tsdf_trilinear(
+        tsdf: BlockSparseTSDFWarp, world_pos: wp.vec3, minimum_tsdf_weight: float,
+    ) -> wp.vec2:
+        """Raycast interpolation; preserve the existing unknown-corner policy."""
+        return _sample_tsdf_trilinear(tsdf, world_pos, minimum_tsdf_weight, False)
+
+    @warp_func(f"sample_tsdf_trilinear_observed_bs{block_size}")
+    def sample_tsdf_trilinear_observed(
+        tsdf: BlockSparseTSDFWarp, world_pos: wp.vec3, minimum_tsdf_weight: float,
+    ) -> wp.vec2:
+        """Interpolate observed corners, returning SDF and valid weight in [0,1]."""
+        return _sample_tsdf_trilinear(tsdf, world_pos, minimum_tsdf_weight, True)
 
     @warp_func(f"sample_block_grid_rgb_bs{block_size}_gs{color_grid_size}")
     def sample_block_grid_rgb(
@@ -493,9 +543,9 @@ def make_raycast_kernels(
         block_max_y = block_max[1]
         block_max_z = block_max[2]
 
-        inv_dir_x = 1.0 / ray_dir[0] if wp.abs(ray_dir[0]) > 1e-8 else 1e10 * wp.sign(ray_dir[0])
-        inv_dir_y = 1.0 / ray_dir[1] if wp.abs(ray_dir[1]) > 1e-8 else 1e10 * wp.sign(ray_dir[1])
-        inv_dir_z = 1.0 / ray_dir[2] if wp.abs(ray_dir[2]) > 1e-8 else 1e10 * wp.sign(ray_dir[2])
+        inv_dir_x = 1.0 / ray_dir[0] if wp.abs(ray_dir[0]) > 1e-8 else 1e10
+        inv_dir_y = 1.0 / ray_dir[1] if wp.abs(ray_dir[1]) > 1e-8 else 1e10
+        inv_dir_z = 1.0 / ray_dir[2] if wp.abs(ray_dir[2]) > 1e-8 else 1e10
 
         t1_x = (block_min_x - ray_origin[0]) * inv_dir_x
         t2_x = (block_max_x - ray_origin[0]) * inv_dir_x
@@ -599,6 +649,143 @@ def make_raycast_kernels(
 
         return wp.vec2(0.0, 0.0)
 
+    @warp_func(f"feature_reference_at_world_bs{block_size}")
+    def feature_reference_at_world(
+        tsdf: BlockSparseTSDFWarp,
+        world_pos: wp.vec3,
+    ) -> wp.vec3i:
+        """Return ``(pool_idx, feature_node_idx, feature_valid)`` at a position."""
+        block_coords = world_to_block_coords(world_pos)
+        pool_idx = hash_lookup(
+            tsdf.hash_table,
+            block_coords[0],
+            block_coords[1],
+            block_coords[2],
+            tsdf.hash_capacity,
+        )
+        if pool_idx < wp.int32(0):
+            return wp.vec3i(-1, -1, 0)
+        base = block_key_to_voxel_base(
+            block_coords[0],
+            block_coords[1],
+            block_coords[2],
+        )
+        voxel_position = world_to_continuous_voxel(world_pos)
+        node_idx = semantic_feature_node_from_local(
+            voxel_position[0] - wp.float32(base[0]),
+            voxel_position[1] - wp.float32(base[1]),
+            voxel_position[2] - wp.float32(base[2]),
+        )
+        feature_valid = wp.int32(0)
+        if (
+            tsdf.has_features
+            and wp.float32(tsdf.block_feature_weight[pool_idx, node_idx])
+            > wp.float32(1.0e-6)
+        ):
+            feature_valid = wp.int32(1)
+        return wp.vec3i(pool_idx, node_idx, feature_valid)
+
+    @warp_func(f"semantic_world_keep_bs{block_size}")
+    def semantic_world_keep(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        world_pos: wp.vec3,
+    ) -> wp.bool:
+        reference = feature_reference_at_world(tsdf, world_pos)
+        if reference[0] < wp.int32(0):
+            return False
+        return semantic_node_keep(semantic_filter, reference[0], reference[1])
+
+    @warp_func(f"raycast_hit_t_semantic_bs{block_size}")
+    def raycast_hit_t_semantic(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        cam_pos: wp.vec3,
+        ray_world: wp.vec3,
+        depth_minimum_distance: wp.float32,
+        depth_maximum_distance: wp.float32,
+        minimum_tsdf_weight: wp.float32,
+    ) -> wp.vec2:
+        """Return the first semantically retained positive-to-negative hit."""
+        step_size = tsdf.voxel_size * MIN_STEP_SCALE
+        t = float(depth_minimum_distance)
+        prev_sdf = float(1e10)
+        prev_t = float(depth_minimum_distance)
+
+        curr_bx = wp.int32(-999999)
+        curr_by = wp.int32(-999999)
+        curr_bz = wp.int32(-999999)
+        curr_block_retained = bool(False)
+        curr_block_exit_t = float(0.0)
+
+        for _iteration in range(10000):
+            if t > depth_maximum_distance:
+                break
+            pos = cam_pos + ray_world * t
+            block_coords = world_to_block_coords(pos)
+            bx = block_coords[0]
+            by = block_coords[1]
+            bz = block_coords[2]
+
+            if bx != curr_bx or by != curr_by or bz != curr_bz:
+                curr_bx = bx
+                curr_by = by
+                curr_bz = bz
+                block_idx = hash_lookup(
+                    tsdf.hash_table,
+                    bx,
+                    by,
+                    bz,
+                    tsdf.hash_capacity,
+                )
+                curr_block_retained = (
+                    block_idx >= wp.int32(0)
+                    and semantic_filter.block_has_keep[block_idx] != wp.uint8(0)
+                )
+                curr_block_exit_t = ray_block_exit_t(
+                    cam_pos,
+                    ray_world,
+                    bx,
+                    by,
+                    bz,
+                )
+
+            if not curr_block_retained:
+                t = curr_block_exit_t + step_size
+                prev_sdf = 1e10
+                continue
+
+            sdf_result = sample_tsdf_trilinear(tsdf, pos, minimum_tsdf_weight)
+            sdf = sdf_result[0]
+            if sdf_result[1] < wp.float32(0.5):
+                t += step_size
+                continue
+
+            if prev_sdf < 1e9 and prev_sdf > 0.0 and sdf < 0.0:
+                hit_t = refine_hit_bisection(
+                    tsdf,
+                    cam_pos,
+                    ray_world,
+                    prev_t,
+                    t,
+                    prev_sdf,
+                    sdf,
+                    minimum_tsdf_weight,
+                )
+                hit_pos = cam_pos + ray_world * hit_t
+                if semantic_world_keep(tsdf, semantic_filter, hit_pos):
+                    return wp.vec2(hit_t, 1.0)
+                prev_sdf = 1e10
+                prev_t = hit_t
+                t += step_size
+                continue
+
+            prev_sdf = sdf
+            prev_t = t
+            t += step_size
+
+        return wp.vec2(0.0, 0.0)
+
     # =====================================================================
     # Raycast kernels (2)
     # =====================================================================
@@ -692,6 +879,281 @@ def make_raycast_kernels(
         hit_normals[tid, 2] = normal[2]
         hit_depths[tid] = z_depth
         hit_mask[tid] = wp.uint8(1)
+
+    @warp_kernel(f"raycast_block_sparse_semantic_kernel_bs{block_size}")
+    def raycast_block_sparse_semantic_kernel(
+        intrinsics: wp.array3d(dtype=wp.float32),
+        cam_positions: wp.array2d(dtype=wp.float32),
+        cam_quaternions: wp.array2d(dtype=wp.float32),
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        depth_minimum_distance: float,
+        depth_maximum_distance: float,
+        minimum_tsdf_weight: float,
+        hit_points: wp.array2d(dtype=wp.float32),
+        hit_normals: wp.array2d(dtype=wp.float32),
+        hit_depths: wp.array(dtype=wp.float32),
+        hit_mask: wp.array(dtype=wp.uint8),
+        img_H: int,
+        img_W: int,
+        pixels_per_camera: int,
+    ):
+        """Raycast depth and normals through a prepared semantic filter."""
+        tid = wp.tid()
+        hit_points[tid, 0] = 0.0
+        hit_points[tid, 1] = 0.0
+        hit_points[tid, 2] = 0.0
+        hit_normals[tid, 0] = 0.0
+        hit_normals[tid, 1] = 0.0
+        hit_normals[tid, 2] = 0.0
+        hit_depths[tid] = 0.0
+        hit_mask[tid] = wp.uint8(0)
+
+        camera_idx = tid // pixels_per_camera
+        pixel_tid = tid - camera_idx * pixels_per_camera
+        px = pixel_tid % img_W
+        py = pixel_tid // img_W
+        if py >= img_H:
+            return
+
+        fx = intrinsics[camera_idx, 0, 0]
+        fy = intrinsics[camera_idx, 1, 1]
+        cx = intrinsics[camera_idx, 0, 2]
+        cy = intrinsics[camera_idx, 1, 2]
+        cam_pos = wp.vec3(
+            cam_positions[camera_idx, 0],
+            cam_positions[camera_idx, 1],
+            cam_positions[camera_idx, 2],
+        )
+        cam_quat = wp.quat(
+            cam_quaternions[camera_idx, 1],
+            cam_quaternions[camera_idx, 2],
+            cam_quaternions[camera_idx, 3],
+            cam_quaternions[camera_idx, 0],
+        )
+        ray_cam_x = (wp.float32(px) + 0.5 - cx) / fx
+        ray_cam_y = (wp.float32(py) + 0.5 - cy) / fy
+        ray_length = wp.sqrt(
+            ray_cam_x * ray_cam_x
+            + ray_cam_y * ray_cam_y
+            + wp.float32(1.0)
+        )
+        ray_cam_z = wp.float32(1.0) / ray_length
+        ray_world = wp.quat_rotate(
+            cam_quat,
+            wp.vec3(ray_cam_x / ray_length, ray_cam_y / ray_length, ray_cam_z),
+        )
+
+        hit = raycast_hit_t_semantic(
+            tsdf,
+            semantic_filter,
+            cam_pos,
+            ray_world,
+            depth_minimum_distance,
+            depth_maximum_distance,
+            minimum_tsdf_weight,
+        )
+        if hit[1] < wp.float32(0.5):
+            return
+        hit_t = hit[0]
+        hit_pos = cam_pos + ray_world * hit_t
+        normal = compute_gradient(tsdf, hit_pos, minimum_tsdf_weight)
+        hit_points[tid, 0] = hit_pos[0]
+        hit_points[tid, 1] = hit_pos[1]
+        hit_points[tid, 2] = hit_pos[2]
+        hit_normals[tid, 0] = normal[0]
+        hit_normals[tid, 1] = normal[1]
+        hit_normals[tid, 2] = normal[2]
+        hit_depths[tid] = hit_t * ray_cam_z
+        hit_mask[tid] = wp.uint8(1)
+
+    @warp_kernel(f"raycast_block_sparse_feature_kernel_bs{block_size}")
+    def raycast_block_sparse_feature_kernel(
+        intrinsics: wp.array3d(dtype=wp.float32),
+        cam_positions: wp.array2d(dtype=wp.float32),
+        cam_quaternions: wp.array2d(dtype=wp.float32),
+        tsdf: BlockSparseTSDFWarp,
+        depth_minimum_distance: float,
+        depth_maximum_distance: float,
+        minimum_tsdf_weight: float,
+        hit_normals: wp.array2d(dtype=wp.float32),
+        hit_depths: wp.array(dtype=wp.float32),
+        hit_mask: wp.array(dtype=wp.uint8),
+        feature_valid: wp.array(dtype=wp.uint8),
+        feature_block_idx: wp.array(dtype=wp.int32),
+        feature_node_idx: wp.array(dtype=wp.int16),
+        patch_top: int,
+        patch_left: int,
+        render_height: int,
+        render_width: int,
+        pixels_per_camera: int,
+    ):
+        """Raycast a patch and write compact references into the feature grid."""
+        tid = wp.tid()
+        hit_normals[tid, 0] = 0.0
+        hit_normals[tid, 1] = 0.0
+        hit_normals[tid, 2] = 0.0
+        hit_depths[tid] = 0.0
+        hit_mask[tid] = wp.uint8(0)
+        feature_valid[tid] = wp.uint8(0)
+        feature_block_idx[tid] = wp.int32(-1)
+        feature_node_idx[tid] = wp.int16(-1)
+
+        camera_idx = tid // pixels_per_camera
+        pixel_tid = tid - camera_idx * pixels_per_camera
+        local_x = pixel_tid % render_width
+        local_y = pixel_tid // render_width
+        if local_y >= render_height:
+            return
+        pixel_x = patch_left + local_x
+        pixel_y = patch_top + local_y
+
+        fx = intrinsics[camera_idx, 0, 0]
+        fy = intrinsics[camera_idx, 1, 1]
+        cx = intrinsics[camera_idx, 0, 2]
+        cy = intrinsics[camera_idx, 1, 2]
+        cam_pos = wp.vec3(
+            cam_positions[camera_idx, 0],
+            cam_positions[camera_idx, 1],
+            cam_positions[camera_idx, 2],
+        )
+        cam_quat = wp.quat(
+            cam_quaternions[camera_idx, 1],
+            cam_quaternions[camera_idx, 2],
+            cam_quaternions[camera_idx, 3],
+            cam_quaternions[camera_idx, 0],
+        )
+        ray_cam_x = (wp.float32(pixel_x) + 0.5 - cx) / fx
+        ray_cam_y = (wp.float32(pixel_y) + 0.5 - cy) / fy
+        ray_length = wp.sqrt(
+            ray_cam_x * ray_cam_x
+            + ray_cam_y * ray_cam_y
+            + wp.float32(1.0)
+        )
+        ray_cam_z = wp.float32(1.0) / ray_length
+        ray_world = wp.quat_rotate(
+            cam_quat,
+            wp.vec3(ray_cam_x / ray_length, ray_cam_y / ray_length, ray_cam_z),
+        )
+
+        hit = raycast_hit_t(
+            tsdf,
+            cam_pos,
+            ray_world,
+            depth_minimum_distance,
+            depth_maximum_distance,
+            minimum_tsdf_weight,
+        )
+        if hit[1] < wp.float32(0.5):
+            return
+        hit_t = hit[0]
+        hit_pos = cam_pos + ray_world * hit_t
+        normal = compute_gradient(tsdf, hit_pos, minimum_tsdf_weight)
+        reference = feature_reference_at_world(tsdf, hit_pos)
+
+        hit_normals[tid, 0] = normal[0]
+        hit_normals[tid, 1] = normal[1]
+        hit_normals[tid, 2] = normal[2]
+        hit_depths[tid] = hit_t * ray_cam_z
+        hit_mask[tid] = wp.uint8(1)
+        feature_block_idx[tid] = reference[0]
+        feature_node_idx[tid] = wp.int16(reference[1])
+        feature_valid[tid] = wp.uint8(reference[2])
+
+    @warp_kernel(f"raycast_block_sparse_feature_semantic_kernel_bs{block_size}")
+    def raycast_block_sparse_feature_semantic_kernel(
+        intrinsics: wp.array3d(dtype=wp.float32),
+        cam_positions: wp.array2d(dtype=wp.float32),
+        cam_quaternions: wp.array2d(dtype=wp.float32),
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        depth_minimum_distance: float,
+        depth_maximum_distance: float,
+        minimum_tsdf_weight: float,
+        hit_normals: wp.array2d(dtype=wp.float32),
+        hit_depths: wp.array(dtype=wp.float32),
+        hit_mask: wp.array(dtype=wp.uint8),
+        feature_valid: wp.array(dtype=wp.uint8),
+        feature_block_idx: wp.array(dtype=wp.int32),
+        feature_node_idx: wp.array(dtype=wp.int16),
+        patch_top: int,
+        patch_left: int,
+        render_height: int,
+        render_width: int,
+        pixels_per_camera: int,
+    ):
+        """Raycast a patch through a semantic filter and write feature references."""
+        tid = wp.tid()
+        hit_normals[tid, 0] = 0.0
+        hit_normals[tid, 1] = 0.0
+        hit_normals[tid, 2] = 0.0
+        hit_depths[tid] = 0.0
+        hit_mask[tid] = wp.uint8(0)
+        feature_valid[tid] = wp.uint8(0)
+        feature_block_idx[tid] = wp.int32(-1)
+        feature_node_idx[tid] = wp.int16(-1)
+
+        camera_idx = tid // pixels_per_camera
+        pixel_tid = tid - camera_idx * pixels_per_camera
+        local_x = pixel_tid % render_width
+        local_y = pixel_tid // render_width
+        if local_y >= render_height:
+            return
+        pixel_x = patch_left + local_x
+        pixel_y = patch_top + local_y
+
+        fx = intrinsics[camera_idx, 0, 0]
+        fy = intrinsics[camera_idx, 1, 1]
+        cx = intrinsics[camera_idx, 0, 2]
+        cy = intrinsics[camera_idx, 1, 2]
+        cam_pos = wp.vec3(
+            cam_positions[camera_idx, 0],
+            cam_positions[camera_idx, 1],
+            cam_positions[camera_idx, 2],
+        )
+        cam_quat = wp.quat(
+            cam_quaternions[camera_idx, 1],
+            cam_quaternions[camera_idx, 2],
+            cam_quaternions[camera_idx, 3],
+            cam_quaternions[camera_idx, 0],
+        )
+        ray_cam_x = (wp.float32(pixel_x) + 0.5 - cx) / fx
+        ray_cam_y = (wp.float32(pixel_y) + 0.5 - cy) / fy
+        ray_length = wp.sqrt(
+            ray_cam_x * ray_cam_x
+            + ray_cam_y * ray_cam_y
+            + wp.float32(1.0)
+        )
+        ray_cam_z = wp.float32(1.0) / ray_length
+        ray_world = wp.quat_rotate(
+            cam_quat,
+            wp.vec3(ray_cam_x / ray_length, ray_cam_y / ray_length, ray_cam_z),
+        )
+
+        hit = raycast_hit_t_semantic(
+            tsdf,
+            semantic_filter,
+            cam_pos,
+            ray_world,
+            depth_minimum_distance,
+            depth_maximum_distance,
+            minimum_tsdf_weight,
+        )
+        if hit[1] < wp.float32(0.5):
+            return
+        hit_t = hit[0]
+        hit_pos = cam_pos + ray_world * hit_t
+        normal = compute_gradient(tsdf, hit_pos, minimum_tsdf_weight)
+        reference = feature_reference_at_world(tsdf, hit_pos)
+
+        hit_normals[tid, 0] = normal[0]
+        hit_normals[tid, 1] = normal[1]
+        hit_normals[tid, 2] = normal[2]
+        hit_depths[tid] = hit_t * ray_cam_z
+        hit_mask[tid] = wp.uint8(1)
+        feature_block_idx[tid] = reference[0]
+        feature_node_idx[tid] = wp.int16(reference[1])
+        feature_valid[tid] = wp.uint8(reference[2])
 
     @warp_kernel(f"raycast_block_sparse_color_kernel_bs{block_size}")
     def raycast_block_sparse_color_kernel(
@@ -791,9 +1253,147 @@ def make_raycast_kernels(
         hit_depths[tid] = z_depth
         hit_mask[tid] = wp.uint8(1)
 
+    @warp_kernel(f"raycast_block_sparse_color_semantic_kernel_bs{block_size}")
+    def raycast_block_sparse_color_semantic_kernel(
+        intrinsics: wp.array3d(dtype=wp.float32),
+        cam_positions: wp.array2d(dtype=wp.float32),
+        cam_quaternions: wp.array2d(dtype=wp.float32),
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        depth_minimum_distance: float,
+        depth_maximum_distance: float,
+        minimum_tsdf_weight: float,
+        hit_points: wp.array2d(dtype=wp.float32),
+        hit_normals: wp.array2d(dtype=wp.float32),
+        hit_colors: wp.array2d(dtype=wp.uint8),
+        hit_depths: wp.array(dtype=wp.float32),
+        hit_mask: wp.array(dtype=wp.uint8),
+        img_H: int,
+        img_W: int,
+        pixels_per_camera: int,
+    ):
+        """Raycast depth, normals, and color through a semantic filter."""
+        tid = wp.tid()
+        hit_points[tid, 0] = 0.0
+        hit_points[tid, 1] = 0.0
+        hit_points[tid, 2] = 0.0
+        hit_normals[tid, 0] = 0.0
+        hit_normals[tid, 1] = 0.0
+        hit_normals[tid, 2] = 0.0
+        hit_colors[tid, 0] = wp.uint8(0)
+        hit_colors[tid, 1] = wp.uint8(0)
+        hit_colors[tid, 2] = wp.uint8(0)
+        hit_depths[tid] = 0.0
+        hit_mask[tid] = wp.uint8(0)
+
+        camera_idx = tid // pixels_per_camera
+        pixel_tid = tid - camera_idx * pixels_per_camera
+        px = pixel_tid % img_W
+        py = pixel_tid // img_W
+        if py >= img_H:
+            return
+
+        fx = intrinsics[camera_idx, 0, 0]
+        fy = intrinsics[camera_idx, 1, 1]
+        cx = intrinsics[camera_idx, 0, 2]
+        cy = intrinsics[camera_idx, 1, 2]
+        cam_pos = wp.vec3(
+            cam_positions[camera_idx, 0],
+            cam_positions[camera_idx, 1],
+            cam_positions[camera_idx, 2],
+        )
+        cam_quat = wp.quat(
+            cam_quaternions[camera_idx, 1],
+            cam_quaternions[camera_idx, 2],
+            cam_quaternions[camera_idx, 3],
+            cam_quaternions[camera_idx, 0],
+        )
+        ray_cam_x = (wp.float32(px) + 0.5 - cx) / fx
+        ray_cam_y = (wp.float32(py) + 0.5 - cy) / fy
+        ray_length = wp.sqrt(
+            ray_cam_x * ray_cam_x
+            + ray_cam_y * ray_cam_y
+            + wp.float32(1.0)
+        )
+        ray_cam_z = wp.float32(1.0) / ray_length
+        ray_world = wp.quat_rotate(
+            cam_quat,
+            wp.vec3(ray_cam_x / ray_length, ray_cam_y / ray_length, ray_cam_z),
+        )
+
+        hit = raycast_hit_t_semantic(
+            tsdf,
+            semantic_filter,
+            cam_pos,
+            ray_world,
+            depth_minimum_distance,
+            depth_maximum_distance,
+            minimum_tsdf_weight,
+        )
+        if hit[1] < wp.float32(0.5):
+            return
+        hit_t = hit[0]
+        hit_pos = cam_pos + ray_world * hit_t
+        normal = compute_gradient(tsdf, hit_pos, minimum_tsdf_weight)
+        color = sample_rgb(tsdf, hit_pos)
+        hit_points[tid, 0] = hit_pos[0]
+        hit_points[tid, 1] = hit_pos[1]
+        hit_points[tid, 2] = hit_pos[2]
+        hit_normals[tid, 0] = normal[0]
+        hit_normals[tid, 1] = normal[1]
+        hit_normals[tid, 2] = normal[2]
+        hit_colors[tid, 0] = wp.uint8(color[0])
+        hit_colors[tid, 1] = wp.uint8(color[1])
+        hit_colors[tid, 2] = wp.uint8(color[2])
+        hit_depths[tid] = hit_t * ray_cam_z
+        hit_mask[tid] = wp.uint8(1)
+
     # =====================================================================
     # Voxel-extraction kernels (4, BS-invariant)
     # =====================================================================
+
+    @warp_func(f"occupied_voxel_selected_bs{block_size}")
+    def occupied_voxel_selected(
+        tsdf: BlockSparseTSDFWarp,
+        block_idx: wp.int32,
+        local_idx: wp.int32,
+        minimum_tsdf_weight: wp.float32,
+        surface_only: wp.int32,
+        sdf_threshold: wp.float32,
+    ) -> wp.bool:
+        result = sample_voxel(tsdf, block_idx, local_idx, minimum_tsdf_weight)
+        if result[1] < wp.float32(0.5):
+            return False
+        sdf = result[0]
+        if surface_only == wp.int32(1):
+            return wp.abs(sdf) < sdf_threshold
+        return sdf <= wp.float32(0.0)
+
+    @warp_func(f"write_occupied_voxel_bs{block_size}")
+    def write_occupied_voxel(
+        tsdf: BlockSparseTSDFWarp,
+        block_idx: wp.int32,
+        local_idx: wp.int32,
+        slot: wp.int32,
+        out_centers: wp.array2d(dtype=wp.float32),
+        out_pool_idx: wp.array(dtype=wp.int32),
+    ):
+        bx = tsdf.block_coords[block_idx * wp.int32(3)]
+        by = tsdf.block_coords[block_idx * wp.int32(3) + wp.int32(1)]
+        bz = tsdf.block_coords[block_idx * wp.int32(3) + wp.int32(2)]
+
+        lx = local_idx % tsdf.block_size
+        ly = (local_idx // tsdf.block_size) % tsdf.block_size
+        lz = local_idx // (tsdf.block_size * tsdf.block_size)
+
+        base = block_key_to_voxel_base(bx, by, bz)
+        world_pos = voxel_to_world(
+            wp.vec3i(base[0] + lx, base[1] + ly, base[2] + lz)
+        )
+        out_centers[slot, 0] = world_pos[0]
+        out_centers[slot, 1] = world_pos[1]
+        out_centers[slot, 2] = world_pos[2]
+        out_pool_idx[slot] = block_idx
 
     @warp_kernel(f"count_surface_voxels_kernel_bs{block_size}")
     def count_surface_voxels_kernel(
@@ -832,17 +1432,42 @@ def make_raycast_kernels(
         if tsdf.block_to_hash_slot[block_idx] < 0:
             return
 
-        result = sample_voxel(tsdf, block_idx, local_idx, minimum_tsdf_weight)
-        if result[1] < 0.5:
+        if not occupied_voxel_selected(
+            tsdf,
+            block_idx,
+            local_idx,
+            minimum_tsdf_weight,
+            surface_only,
+            sdf_threshold,
+        ):
             return
-        sdf = result[0]
+        wp.atomic_add(voxel_count, 0, 1)
 
-        if surface_only == wp.int32(1):
-            if wp.abs(sdf) >= sdf_threshold:
-                return
-        else:
-            if sdf > 0.0:
-                return
+    @warp_kernel(f"count_occupied_voxels_semantic_kernel_bs{block_size}")
+    def count_occupied_voxels_semantic_kernel(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        minimum_tsdf_weight: float,
+        surface_only: wp.int32,
+        sdf_threshold: float,
+        voxel_count: wp.array(dtype=wp.int32),
+    ):
+        block_idx, local_idx = wp.tid()
+        if block_idx >= tsdf.num_allocated[0]:
+            return
+        if tsdf.block_to_hash_slot[block_idx] < wp.int32(0):
+            return
+        if not semantic_local_idx_keep(semantic_filter, block_idx, local_idx):
+            return
+        if not occupied_voxel_selected(
+            tsdf,
+            block_idx,
+            local_idx,
+            minimum_tsdf_weight,
+            surface_only,
+            sdf_threshold,
+        ):
+            return
         wp.atomic_add(voxel_count, 0, 1)
 
     @warp_kernel(f"extract_occupied_voxels_kernel_bs{block_size}")
@@ -864,42 +1489,69 @@ def make_raycast_kernels(
         if tsdf.block_to_hash_slot[block_idx] < 0:
             return
 
-        result = sample_voxel(tsdf, block_idx, local_idx, minimum_tsdf_weight)
-        if result[1] < 0.5:
+        if not occupied_voxel_selected(
+            tsdf,
+            block_idx,
+            local_idx,
+            minimum_tsdf_weight,
+            surface_only,
+            sdf_threshold,
+        ):
             return
-        sdf = result[0]
-
-        if surface_only == wp.int32(1):
-            if wp.abs(sdf) >= sdf_threshold:
-                return
-        else:
-            if sdf > 0.0:
-                return
 
         slot = wp.atomic_add(out_count, 0, 1)
         if slot >= max_voxels:
             return
 
-        bx = tsdf.block_coords[block_idx * 3]
-        by = tsdf.block_coords[block_idx * 3 + 1]
-        bz = tsdf.block_coords[block_idx * 3 + 2]
+        write_occupied_voxel(
+            tsdf,
+            block_idx,
+            local_idx,
+            slot,
+            out_centers,
+            out_pool_idx,
+        )
 
-        lx = local_idx % tsdf.block_size
-        ly = (local_idx // tsdf.block_size) % tsdf.block_size
-        lz = local_idx // (tsdf.block_size * tsdf.block_size)
+    @warp_kernel(f"extract_occupied_voxels_semantic_kernel_bs{block_size}")
+    def extract_occupied_voxels_semantic_kernel(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        minimum_tsdf_weight: float,
+        surface_only: wp.int32,
+        sdf_threshold: float,
+        out_centers: wp.array2d(dtype=wp.float32),
+        out_pool_idx: wp.array(dtype=wp.int32),
+        out_count: wp.array(dtype=wp.int32),
+        max_voxels: wp.int32,
+    ):
+        block_idx, local_idx = wp.tid()
+        if block_idx >= tsdf.num_allocated[0]:
+            return
+        if tsdf.block_to_hash_slot[block_idx] < wp.int32(0):
+            return
+        if not semantic_local_idx_keep(semantic_filter, block_idx, local_idx):
+            return
+        if not occupied_voxel_selected(
+            tsdf,
+            block_idx,
+            local_idx,
+            minimum_tsdf_weight,
+            surface_only,
+            sdf_threshold,
+        ):
+            return
 
-        base = block_key_to_voxel_base(bx, by, bz)
-        vx = base[0] + lx
-        vy = base[1] + ly
-        vz = base[2] + lz
-
-        world_pos = voxel_to_world(wp.vec3i(vx, vy, vz))
-
-        out_centers[slot, 0] = world_pos[0]
-        out_centers[slot, 1] = world_pos[1]
-        out_centers[slot, 2] = world_pos[2]
-
-        out_pool_idx[slot] = block_idx
+        slot = wp.atomic_add(out_count, 0, 1)
+        if slot >= max_voxels:
+            return
+        write_occupied_voxel(
+            tsdf,
+            block_idx,
+            local_idx,
+            slot,
+            out_centers,
+            out_pool_idx,
+        )
 
     @warp_kernel(f"extract_occupied_voxels_masked_kernel_bs{block_size}")
     def extract_occupied_voxels_masked_kernel(
@@ -930,42 +1582,28 @@ def make_raycast_kernels(
         if block_mask[block_idx] == wp.uint8(0):
             return
 
-        result = sample_voxel(tsdf, block_idx, local_idx, minimum_tsdf_weight)
-        if result[1] < 0.5:
+        if not occupied_voxel_selected(
+            tsdf,
+            block_idx,
+            local_idx,
+            minimum_tsdf_weight,
+            surface_only,
+            sdf_threshold,
+        ):
             return
-        sdf = result[0]
-
-        if surface_only == wp.int32(1):
-            if wp.abs(sdf) >= sdf_threshold:
-                return
-        else:
-            if sdf > 0.0:
-                return
 
         slot = wp.atomic_add(out_count, 0, 1)
         if slot >= max_voxels:
             return
 
-        bx = tsdf.block_coords[block_idx * 3]
-        by = tsdf.block_coords[block_idx * 3 + 1]
-        bz = tsdf.block_coords[block_idx * 3 + 2]
-
-        lx = local_idx % tsdf.block_size
-        ly = (local_idx // tsdf.block_size) % tsdf.block_size
-        lz = local_idx // (tsdf.block_size * tsdf.block_size)
-
-        base = block_key_to_voxel_base(bx, by, bz)
-        vx = base[0] + lx
-        vy = base[1] + ly
-        vz = base[2] + lz
-
-        world_pos = voxel_to_world(wp.vec3i(vx, vy, vz))
-
-        out_centers[slot, 0] = world_pos[0]
-        out_centers[slot, 1] = world_pos[1]
-        out_centers[slot, 2] = world_pos[2]
-
-        out_pool_idx[slot] = block_idx
+        write_occupied_voxel(
+            tsdf,
+            block_idx,
+            local_idx,
+            slot,
+            out_centers,
+            out_pool_idx,
+        )
 
     @warp_kernel(f"count_occupied_voxels_masked_kernel_bs{block_size}")
     def count_occupied_voxels_masked_kernel(
@@ -987,17 +1625,15 @@ def make_raycast_kernels(
         if block_mask[block_idx] == wp.uint8(0):
             return
 
-        result = sample_voxel(tsdf, block_idx, local_idx, minimum_tsdf_weight)
-        if result[1] < 0.5:
+        if not occupied_voxel_selected(
+            tsdf,
+            block_idx,
+            local_idx,
+            minimum_tsdf_weight,
+            surface_only,
+            sdf_threshold,
+        ):
             return
-        sdf = result[0]
-
-        if surface_only == wp.int32(1):
-            if wp.abs(sdf) >= sdf_threshold:
-                return
-        else:
-            if sdf > 0.0:
-                return
         wp.atomic_add(voxel_count, 0, 1)
 
     @warp_kernel(f"extract_surface_voxels_kernel_bs{block_size}")
@@ -1060,17 +1696,28 @@ def make_raycast_kernels(
         "sample_tsdf": sample_tsdf,
         "_sample_voxel_at_block_local": _sample_voxel_at_block_local,
         "sample_tsdf_trilinear": sample_tsdf_trilinear,
+        "sample_tsdf_trilinear_observed": sample_tsdf_trilinear_observed,
         "sample_rgb": sample_rgb,
         "compute_gradient": compute_gradient,
         "compute_gradient_nearest": compute_gradient_nearest,
         "refine_hit_bisection": refine_hit_bisection,
         "ray_block_exit_t": ray_block_exit_t,
         "raycast_block_sparse_kernel": raycast_block_sparse_kernel,
+        "raycast_block_sparse_semantic_kernel": raycast_block_sparse_semantic_kernel,
         "raycast_block_sparse_color_kernel": raycast_block_sparse_color_kernel,
+        "raycast_block_sparse_color_semantic_kernel": (
+            raycast_block_sparse_color_semantic_kernel
+        ),
+        "raycast_block_sparse_feature_kernel": raycast_block_sparse_feature_kernel,
+        "raycast_block_sparse_feature_semantic_kernel": (
+            raycast_block_sparse_feature_semantic_kernel
+        ),
         "count_surface_voxels_kernel": count_surface_voxels_kernel,
         "count_occupied_voxels_kernel": count_occupied_voxels_kernel,
+        "count_occupied_voxels_semantic_kernel": count_occupied_voxels_semantic_kernel,
         "count_occupied_voxels_masked_kernel": count_occupied_voxels_masked_kernel,
         "extract_occupied_voxels_kernel": extract_occupied_voxels_kernel,
+        "extract_occupied_voxels_semantic_kernel": extract_occupied_voxels_semantic_kernel,
         "extract_occupied_voxels_masked_kernel": extract_occupied_voxels_masked_kernel,
         "extract_surface_voxels_kernel": extract_surface_voxels_kernel,
     }

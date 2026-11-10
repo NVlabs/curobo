@@ -2,43 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Obstacle-stamping helpers, overload registration, and launchers.
+"""Obstacle-stamping helpers and launchers.
 
 The five stamp kernels are built by
 :func:`curobo._src.perception.mapper.kernel.builder.builder_stamp.make_stamp_kernels`
-and are reached through ``tsdf.kernels`` at launch time. What remains
-here:
-
-- The obstacle-SDF overload registration
-  (:data:`is_obs_enabled`, :data:`load_obstacle_transform`,
-  :data:`compute_local_sdf`). These are ``@wp.func`` objects whose
-  overload set is computed by iterating
-  :data:`curobo._src.geom.data.registry.OBSTACLE_SDF_MODULES` at import time.
-  The stamp kernels call them via cross-module ``@wp.func`` resolution.
-- The public Python API (:func:`stamp_scene_obstacles`,
-  :func:`stamp_obstacles`, :func:`clear_static_channel`,
-  :func:`compute_aabb_block_bounds`) used by the integrator.
+and are reached through ``tsdf.kernels`` at launch time. This module provides
+the Python launch API used by the integrator.
 """
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import TYPE_CHECKING, Tuple, Union
 
 import torch
 import warp as wp
 
 from curobo._src.curobolib.cuda_ops.tensor_checks import check_int32_tensors
-from curobo._src.geom.data.registry import OBSTACLE_SDF_MODULES
 from curobo._src.types.pose import Pose
 from curobo._src.util.warp import get_warp_device_stream
-
-# NOTE: ``BlockSparseKernels`` is NOT imported at module scope here.
-# ``kernel/__init__.py`` imports the builder, which transitively imports
-# ``builder.builder_stamp``. That builder imports the overloaded ``@wp.func`` names
-# from this module, so importing ``curobo._src.perception.mapper.kernel`` here
-# would close an import cycle. Callers reach the bundle through
-# ``tsdf.kernels`` after this module has finished importing.
 
 if TYPE_CHECKING:
     from curobo._src.geom.data.data_cuboid import CuboidData
@@ -49,37 +30,6 @@ if TYPE_CHECKING:
         BlockSparseTSDF,
         BlockSparseTSDFData,
     )
-
-
-# =============================================================================
-# Obstacle-SDF Function Overload Registration
-# =============================================================================
-#
-# Registers SDF function overloads from all obstacle data modules.
-# Module list is centralized in curobo._src.geom.data.registry.OBSTACLE_SDF_MODULES.
-#
-# How it works:
-# - wp.func uses scope_locals.get(func.func.__name__) to find existing Functions
-# - By keeping variables named "is_obs_enabled" and "compute_local_sdf" in
-#   scope, subsequent wp.func calls detect the existing Function and add
-#   overloads.
-
-is_obs_enabled = None
-load_obstacle_transform = None
-compute_local_sdf = None
-
-for _module_path in OBSTACLE_SDF_MODULES:
-    _data_module = import_module(_module_path)
-    _obs_fn = getattr(_data_module, "is_obs_enabled")
-    _transform_fn = getattr(_data_module, "load_obstacle_transform")
-    _sdf_fn = getattr(_data_module, "compute_local_sdf")
-
-    is_obs_enabled = wp.func(_obs_fn, module=__name__)
-    load_obstacle_transform = wp.func(_transform_fn, module=__name__)
-    compute_local_sdf = wp.func(_sdf_fn, module=__name__)
-
-del _module_path, _data_module, _obs_fn, _transform_fn, _sdf_fn
-
 
 # =============================================================================
 # Python API

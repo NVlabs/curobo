@@ -39,12 +39,13 @@ class RobotSegmenter:
     distances between depth points and robot collision spheres.
 
     Example:
-        ```python
-        from curobo._src.perception.robot_segmenter import RobotSegmenter
 
-        segmenter = RobotSegmenter.from_robot_file("franka.yml")
-        mask, filtered_image = segmenter.get_robot_mask(camera_obs, joint_state)
-        ```
+        .. code-block:: python
+
+            from curobo.perception import RobotSegmenter
+
+            segmenter = RobotSegmenter.from_robot_file("franka.yml")
+            mask, filtered_image = segmenter.get_robot_mask(camera_obs, joint_state)
     """
 
     def __init__(

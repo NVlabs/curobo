@@ -341,6 +341,39 @@ class TestPositionCSpaceCost:
         # Out of bounds should have non-zero cost
         assert torch.any(result > 0)
 
+    @pytest.mark.parametrize("compute_effort", [False, True])
+    def test_effort_cost_can_be_disabled(
+        self, device_cfg, joint_limits, compute_effort
+    ):
+        """Test that no-dynamics costs skip effort values and gradients."""
+        cfg = CSpaceCostCfg(
+            weight=[0.0, 1.0],
+            activation_distance=[0.0, 0.0],
+            cost_type=CSpaceCostType.POSITION,
+            dof=7,
+            joint_limits=joint_limits,
+            compute_effort=compute_effort,
+            use_grad_input=True,
+            device_cfg=device_cfg,
+        )
+        cost = PositionCSpaceCost(cfg)
+        cost.setup_batch_tensors(batch=1, horizon=1)
+        position = torch.zeros(
+            (1, 1, 7), **device_cfg.as_torch_dict(), requires_grad=True
+        )
+        joint_torque = torch.full(
+            (1, 1, 7),
+            60.0,
+            **device_cfg.as_torch_dict(),
+            requires_grad=True,
+        )
+
+        result = cost.forward(JointState(position=position), joint_torque=joint_torque)
+        result.sum().backward()
+
+        assert bool(torch.any(result > 0).item()) is compute_effort
+        assert (joint_torque.grad is not None) is compute_effort
+
 
 class TestStateCSpaceCost:
     """Test StateCSpaceCost class."""
@@ -452,6 +485,46 @@ class TestStateCSpaceCost:
         result = cost.forward(state)
         # Output is per-DOF cost: (batch_size, horizon, dof)
         assert result.shape == (batch_size, horizon, dof)
+
+    @pytest.mark.parametrize("compute_effort", [False, True])
+    def test_effort_cost_can_be_disabled(
+        self, device_cfg, joint_limits, compute_effort
+    ):
+        """Test that state bounds preserve effort costs only with dynamics."""
+        cfg = CSpaceCostCfg(
+            weight=[0.0, 0.0, 0.0, 0.0, 1.0],
+            activation_distance=[0.0, 0.0, 0.0, 0.0, 0.0],
+            cost_type=CSpaceCostType.STATE,
+            dof=7,
+            joint_limits=joint_limits,
+            compute_effort=compute_effort,
+            use_grad_input=True,
+            device_cfg=device_cfg,
+        )
+        cost = StateCSpaceCost(cfg)
+        cost.setup_batch_tensors(batch=1, horizon=1)
+        position = torch.zeros(
+            (1, 1, 7), **device_cfg.as_torch_dict(), requires_grad=True
+        )
+        state = JointState(
+            position=position,
+            velocity=torch.zeros_like(position),
+            acceleration=torch.zeros_like(position),
+            jerk=torch.zeros_like(position),
+            dt=torch.full((1,), 0.01, **device_cfg.as_torch_dict()),
+        )
+        joint_torque = torch.full(
+            (1, 1, 7),
+            60.0,
+            **device_cfg.as_torch_dict(),
+            requires_grad=True,
+        )
+
+        result = cost.forward(state, joint_torque=joint_torque)
+        result.sum().backward()
+
+        assert bool(torch.any(result > 0).item()) is compute_effort
+        assert (joint_torque.grad is not None) is compute_effort
 
 
 class TestCSpaceCostGradients:

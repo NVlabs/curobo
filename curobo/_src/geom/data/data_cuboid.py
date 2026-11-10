@@ -13,7 +13,7 @@ This module provides:
 #from __future__ import annotations
 
 # Standard Library
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 # Third Party
@@ -21,6 +21,7 @@ import torch
 import warp as wp
 
 # CuRobo
+from curobo._src.geom.data.data_obstacle_bounds import update_world_aabb
 from curobo._src.geom.data.helper_pose import (
     get_obs_idx,
     load_transform_from_inv_pose,
@@ -47,6 +48,7 @@ class CuboidDataWarp:
     Attributes:
         dims: Full extents [x_length, y_length, z_length, pad]. Shape: (num_envs * max_n, 4).
             Note: SDF functions divide by 2 at runtime to get half_extents.
+        world_bounds: World AABB [center_xyz, pad, extent_xyz, pad].
         inv_pose: Inverse pose [x, y, z, qw, qx, qy, qz, pad]. Shape: (num_envs * max_n, 8).
         enable: Enable flag per cuboid. 1 = active, 0 = disabled.
         n_per_env: Number of active cuboids per environment.
@@ -55,6 +57,7 @@ class CuboidDataWarp:
     """
 
     dims: wp.array2d(dtype=wp.float32)
+    world_bounds: wp.array2d(dtype=wp.float32)
     inv_pose: wp.array2d(dtype=wp.float32)
     enable: wp.array(dtype=wp.uint8)
     n_per_env: wp.array(dtype=wp.int32)
@@ -74,6 +77,7 @@ class CuboidData:
 
     Tensor layouts:
         - dims: (num_envs, max_n, 4) - full extents [x, y, z, pad]
+        - world_bounds: (num_envs, max_n, 8) - world AABB center and extent
         - inv_pose: (num_envs, max_n, 8) - inverse pose [x, y, z, qw, qx, qy, qz, pad]
         - enable: (num_envs, max_n) - uint8 flags
         - count: (num_envs,) - int32 active counts
@@ -82,11 +86,17 @@ class CuboidData:
     #: Full dimensions [x_length, y_length, z_length] with padding.
     dims: torch.Tensor
 
+    #: World AABB [center_xyz, pad, extent_xyz, pad].
+    world_bounds: torch.Tensor
+
     #: Inverse pose [x, y, z, qw, qx, qy, qz] with padding.
     inv_pose: torch.Tensor
 
     #: Enable flag per cuboid. 1 = active, 0 = disabled.
     enable: torch.Tensor
+
+    #: Unsigned collision-layer membership [num_envs, max_n].
+    obstacle_layers: torch.Tensor = field(init=False)
 
     #: Number of active cuboids per environment.
     count: torch.Tensor
@@ -106,6 +116,10 @@ class CuboidData:
     # -------------------------------------------------------------------------
     # Factory Methods
     # -------------------------------------------------------------------------
+
+    def __post_init__(self) -> None:
+        """Allocate common-layer metadata once alongside obstacle storage."""
+        self.obstacle_layers = torch.ones_like(self.enable, dtype=torch.uint32)
 
     @classmethod
     def create_cache(
@@ -138,6 +152,12 @@ class CuboidData:
             device=device_cfg.device,
         )
         inv_pose[..., 3] = 1.0  # Identity quaternion (qw=1)
+        world_bounds = torch.zeros(
+            (num_envs, max_n, 8),
+            dtype=device_cfg.dtype,
+            device=device_cfg.device,
+        )
+        world_bounds[..., 4:7] = 0.005
 
         enable = torch.zeros((num_envs, max_n), dtype=torch.uint8, device=device_cfg.device)
         count = torch.zeros((num_envs,), device=device_cfg.device, dtype=torch.int32)
@@ -145,6 +165,7 @@ class CuboidData:
 
         return cls(
             dims=dims,
+            world_bounds=world_bounds,
             inv_pose=inv_pose,
             enable=enable,
             count=count,
@@ -232,6 +253,7 @@ class CuboidData:
             cuboids: List of Cuboid objects to load.
             env_idx: Environment index to load into.
         """
+        self.obstacle_layers[env_idx].fill_(1)
         num_cuboids = len(cuboids)
         if num_cuboids > self.max_n:
             log_and_raise(
@@ -252,6 +274,13 @@ class CuboidData:
 
         self.dims[env_idx, :num_cuboids, :3] = cube_tensors[0]
         self.inv_pose[env_idx, :num_cuboids, :7] = cube_tensors[1]
+        world_obstacle_pose = Pose.from_batch_list(pose_batch, self.device_cfg)
+        update_world_aabb(
+            self.world_bounds[env_idx, :num_cuboids],
+            -0.5 * self.dims[env_idx, :num_cuboids, :3],
+            0.5 * self.dims[env_idx, :num_cuboids, :3],
+            world_obstacle_pose,
+        )
         self.enable[env_idx, :num_cuboids] = 1
         self.enable[env_idx, num_cuboids:] = 0
         self.names[env_idx] = names_batch + [None] * (self.max_n - num_cuboids)
@@ -312,9 +341,17 @@ class CuboidData:
 
         if w_obj_pose is not None:
             obj_w_pose = w_obj_pose.inverse()
+        else:
+            w_obj_pose = obj_w_pose.inverse()
 
         self.dims[env_idx, current_count, :3] = dims
         self.inv_pose[env_idx, current_count, :7] = obj_w_pose.get_pose_vector()
+        update_world_aabb(
+            self.world_bounds[env_idx, current_count],
+            -0.5 * dims,
+            0.5 * dims,
+            w_obj_pose,
+        )
         self.enable[env_idx, current_count] = 1
         self.names[env_idx][current_count] = name
         self.count[env_idx] += 1
@@ -350,8 +387,12 @@ class CuboidData:
 
         if w_obj_pose is not None:
             obj_w_pose = w_obj_pose.inverse()
+        else:
+            w_obj_pose = obj_w_pose.inverse()
 
         self.inv_pose[env_idx, idx, :7] = obj_w_pose.get_pose_vector()
+        dims = self.dims[env_idx, idx, :3]
+        update_world_aabb(self.world_bounds[env_idx, idx], -0.5 * dims, 0.5 * dims, w_obj_pose)
 
     def update_dims(self, name: str, dims: torch.Tensor, env_idx: int = 0) -> None:
         """Update the dimensions of an existing cuboid.
@@ -366,6 +407,16 @@ class CuboidData:
         """
         idx = self.get_idx(name, env_idx)
         self.dims[env_idx, idx, :3] = dims
+        inverse_pose = self.inv_pose[env_idx, idx, :7]
+        world_obstacle_pose = Pose(
+            position=inverse_pose[:3], quaternion=inverse_pose[3:7]
+        ).inverse()
+        update_world_aabb(
+            self.world_bounds[env_idx, idx],
+            -0.5 * dims,
+            0.5 * dims,
+            world_obstacle_pose,
+        )
 
     def set_enabled(self, name: str, enabled: bool, env_idx: int = 0) -> None:
         """Enable or disable a cuboid for collision checking.
@@ -419,6 +470,8 @@ class CuboidData:
         Args:
             env_idx: Environment to clear. If None, clears all environments.
         """
+        layers = self.obstacle_layers if env_idx is None else self.obstacle_layers[env_idx]
+        layers.fill_(1)
         if env_idx is not None:
             self.enable[env_idx, :] = 0
             self.count[env_idx] = 0
@@ -448,6 +501,7 @@ class CuboidData:
         """
         s = CuboidDataWarp()
         s.dims = wp.from_torch(self.dims.view(-1, 4), dtype=wp.float32)
+        s.world_bounds = wp.from_torch(self.world_bounds.view(-1, 8), dtype=wp.float32)
         s.inv_pose = wp.from_torch(self.inv_pose.view(-1, 8), dtype=wp.float32)
         s.enable = wp.from_torch(self.enable.view(-1), dtype=wp.uint8)
         s.n_per_env = wp.from_torch(self.count.view(-1), dtype=wp.int32)
@@ -547,6 +601,38 @@ def compute_local_sdf(
 
     outside_dist = wp.sqrt(cx * cx + cy * cy + cz * cz)
     return outside_dist + wp.min(wp.max(qx, wp.max(qy, qz)), 0.0)
+
+
+def compute_swept_sphere_clearance_lower_bound(
+    obs_set: CuboidDataWarp,
+    env_idx: wp.int32,
+    local_idx: wp.int32,
+    current_world: wp.vec3,
+    _sweep_min_world: wp.vec3,
+    _sweep_max_world: wp.vec3,
+    radius_adjusted: wp.float32,
+    sweep_reach: wp.float32,
+) -> wp.float32:
+    """Return a conservative clearance lower bound for a swept sphere.
+
+    Bound both half-sweeps by an axis-aligned region around the current point.
+    Each axis is expanded by the maximum half-segment coordinate reach plus the
+    collision query radius. Separation from the cached cuboid world AABB is a
+    conservative clearance lower bound.
+    """
+    flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+    center_x = obs_set.world_bounds[flat_idx, 0]
+    center_y = obs_set.world_bounds[flat_idx, 1]
+    center_z = obs_set.world_bounds[flat_idx, 2]
+    extent_x = obs_set.world_bounds[flat_idx, 4]
+    extent_y = obs_set.world_bounds[flat_idx, 5]
+    extent_z = obs_set.world_bounds[flat_idx, 6]
+
+    query_reach = radius_adjusted + sweep_reach
+    dx = wp.abs(current_world[0] - center_x) - extent_x - query_reach
+    dy = wp.abs(current_world[1] - center_y) - extent_y - query_reach
+    dz = wp.abs(current_world[2] - center_z) - extent_z - query_reach
+    return wp.max(wp.max(dx, dy), wp.max(dz, 0.0))
 
 
 def compute_local_sdf_with_grad(

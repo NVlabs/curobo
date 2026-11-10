@@ -4,8 +4,7 @@ Writing Custom Optimization Problems
 ====================================
 
 .. automodule:: curobo.examples.guides.custom_optimization
-   :members:
-   :undoc-members:
+   :no-members:
 
 Run this example
 ----------------

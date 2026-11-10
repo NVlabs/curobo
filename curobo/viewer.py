@@ -11,28 +11,30 @@ Available visualizers:
       viewers (e.g., Isaac Sim, usdview).
 
 Example (Viser):
-    ```python
-    from curobo.viewer import ViserVisualizer
-    from curobo.types import JointState
+    .. code-block:: python
 
-    viz = ViserVisualizer(
-        robot_config="franka.yml",
-        connect_ip="0.0.0.0",
-        connect_port=8080,
-        add_control_frames=True,
-    )
-    # Opens web interface at http://localhost:8080
-    joint_state = JointState.from_position([0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.0])
-    viz.set_joint_state(joint_state)
-    ```
+        from curobo.viewer import ViserVisualizer
+        from curobo.types import JointState
+
+        viz = ViserVisualizer(
+            robot_config="franka.yml",
+            connect_ip="0.0.0.0",
+            connect_port=8080,
+            add_control_frames=True,
+        )
+        # Opens web interface at http://localhost:8080
+        joint_state = JointState.from_position([0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.0])
+        viz.set_joint_state(joint_state)
+
 
 Example (USD):
-    ```python
-    from curobo.viewer import UsdWriter
+    .. code-block:: python
 
-    writer = UsdWriter("trajectory.usd", robot_config="franka.yml")
-    writer.write(joint_trajectory)
-    ```
+        from curobo.viewer import UsdWriter
+
+        writer = UsdWriter("trajectory.usd", robot_config="franka.yml")
+        writer.write(joint_trajectory)
+
 """
 
 

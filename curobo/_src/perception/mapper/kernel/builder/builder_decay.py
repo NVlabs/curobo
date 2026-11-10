@@ -20,6 +20,8 @@ passes frame-varying camera tensors and depth thresholds.
 
 from __future__ import annotations
 
+from typing import Any
+
 import warp as wp
 
 from curobo._src.perception.mapper.constants import (
@@ -72,13 +74,16 @@ _REFERENCE_BLOCK_EMPTY_THRESHOLD: float = 0.01
 def make_decay_kernels(
     block_size: int,
     *,
+    color_grid_size: int,
+    feature_dim: int,
+    feature_block_grid_size: int,
     grid_shape: tuple[int, int, int],
     origin_xyz: tuple[float, float, float],
     voxel_size: float,
     num_cameras: int,
     image_height: int,
     image_width: int,
-    free_list_push,
+    free_list_push: Any,
 ) -> dict[str, object]:
     """Build TSDF weight-decay and block-recycling kernels."""
     suffix = (
@@ -103,6 +108,58 @@ def make_decay_kernels(
     block_empty_threshold = wp.constant(
         _REFERENCE_BLOCK_EMPTY_THRESHOLD * float(block_size**3) / float(REFERENCE_BLOCK_SIZE**3)
     )
+
+    @warp_kernel(
+        f"apply_decay_and_sum_kernel_{suffix}_cg{color_grid_size}_"
+        f"fd{feature_dim}_fg{feature_block_grid_size}"
+    )
+    def apply_decay_and_sum_kernel(
+        block_data: wp.array3d(dtype=wp.float16),
+        block_grid_rgb: wp.array3d(dtype=wp.float16),
+        block_features: wp.array3d(dtype=wp.float16),
+        block_feature_weight: wp.array2d(dtype=wp.float16),
+        frustum_flags: wp.array(dtype=wp.int32),
+        block_sums: wp.array(dtype=wp.float32),
+        num_allocated: wp.array(dtype=wp.int32),
+        time_decay: wp.float32,
+        frustum_decay: wp.float32,
+        use_frustum: wp.int32,
+        block_voxels: wp.int32,
+        color_grid_cells: wp.int32,
+        feature_dim_arg: wp.int32,
+        feature_cells: wp.int32,
+        max_blocks: wp.int32,
+    ):
+        """Apply per-block decay and update dynamic weight sums in one pass."""
+        block_idx, local_idx = wp.tid()
+        if block_idx >= max_blocks or block_idx >= num_allocated[0]:
+            return
+
+        factor = time_decay
+        if use_frustum != wp.int32(0) and frustum_flags[block_idx] > wp.int32(0):
+            factor *= frustum_decay
+
+        if local_idx < block_voxels:
+            weighted_sdf = wp.float32(block_data[block_idx, local_idx, 0]) * factor
+            weight = wp.float32(block_data[block_idx, local_idx, 1]) * factor
+            block_data[block_idx, local_idx, 0] = wp.float16(weighted_sdf)
+            block_data[block_idx, local_idx, 1] = wp.float16(weight)
+            wp.atomic_add(block_sums, block_idx, weight)
+
+        if local_idx < color_grid_cells:
+            node_idx = local_idx // wp.int32(4)
+            channel_idx = local_idx - node_idx * wp.int32(4)
+            value = wp.float32(block_grid_rgb[block_idx, node_idx, channel_idx])
+            block_grid_rgb[block_idx, node_idx, channel_idx] = wp.float16(value * factor)
+
+        if feature_dim_arg > wp.int32(0) and local_idx < feature_cells:
+            node_idx = local_idx // feature_dim_arg
+            channel_idx = local_idx - node_idx * feature_dim_arg
+            value = wp.float32(block_features[block_idx, node_idx, channel_idx])
+            block_features[block_idx, node_idx, channel_idx] = wp.float16(value * factor)
+            if channel_idx == wp.int32(0):
+                weight = wp.float32(block_feature_weight[block_idx, node_idx])
+                block_feature_weight[block_idx, node_idx] = wp.float16(weight * factor)
 
     # =====================================================================
     # Block-Level Frustum Marking Kernel (Pass 1)
@@ -363,6 +420,7 @@ def make_decay_kernels(
         wp.atomic_add(recycle_count, 0, wp.int32(1))
 
     return {
+        "apply_decay_and_sum_kernel": apply_decay_and_sum_kernel,
         "mark_blocks_in_frustum_kernel": mark_blocks_in_frustum_kernel,
         "mark_lidar_blocks_in_frustum_kernel": mark_lidar_blocks_in_frustum_kernel,
         "recycle_empty_blocks_kernel": recycle_empty_blocks_kernel,

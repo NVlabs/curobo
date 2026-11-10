@@ -3,12 +3,11 @@
 #
 """Unit tests for VoxelGrid collision checking kernels.
 
-Tests the sphere-vs-voxel collision pipeline at the kernel level:
-VoxelGrid → VoxelData → VoxelDataWarp → sphere_obstacle_collision_kernel.
+Tests the sphere-vs-voxel collision pipeline at the tiled-kernel level:
+VoxelGrid → VoxelData → VoxelDataWarp → tiled collision kernel.
 """
 
 # Standard Library
-from importlib import import_module
 from typing import Any
 
 # Third Party
@@ -23,39 +22,27 @@ from curobo._src.geom.collision.wp_collision_common import (
     apply_collision_activation,
     load_sphere_query,
 )
-from curobo._src.geom.collision.wp_collision_kernel import sphere_obstacle_collision_kernel
+from curobo._src.geom.collision.wp_collision_kernel import get_tiled_collision_kernel
+from curobo._src.geom.collision.wp_speed_metric import apply_speed_metric
 from curobo._src.geom.collision.wp_sweep_collision_kernel import (
-    swept_sphere_obstacle_collision_kernel,
+    get_tiled_swept_collision_kernel,
 )
-from curobo._src.geom.data.registry import OBSTACLE_SDF_MODULES
+from curobo._src.geom.data.data_obstacle_query import (
+    compute_local_sdf as _test_compute_local_sdf,
+)
+from curobo._src.geom.data.data_obstacle_query import (
+    compute_local_sdf_with_grad as _test_compute_local_sdf_with_grad,
+)
+from curobo._src.geom.data.data_obstacle_query import (
+    is_obs_enabled as _test_is_obs_enabled,
+)
+from curobo._src.geom.data.data_obstacle_query import (
+    load_obstacle_transform as _test_load_obstacle_transform,
+)
 from curobo._src.geom.data.data_voxel import VoxelData
 from curobo._src.geom.types import SceneCfg, VoxelGrid
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.warp import get_warp_device_stream
-
-# =============================================================================
-# Register compute_local_sdf overloads in THIS module's scope for standalone testing.
-# This mirrors how wp_sweep_collision_kernel.py registers overloads.
-# =============================================================================
-_test_compute_local_sdf = None
-_test_compute_local_sdf_with_grad = None
-_test_is_obs_enabled = None
-_test_load_obstacle_transform = None
-
-for _module_path in OBSTACLE_SDF_MODULES:
-    _data_module = import_module(_module_path)
-    _test_is_obs_enabled = wp.func(getattr(_data_module, "is_obs_enabled"), module=__name__)
-    _test_load_obstacle_transform = wp.func(
-        getattr(_data_module, "load_obstacle_transform"), module=__name__
-    )
-    _test_compute_local_sdf = wp.func(
-        getattr(_data_module, "compute_local_sdf"), module=__name__
-    )
-    _test_compute_local_sdf_with_grad = wp.func(
-        getattr(_data_module, "compute_local_sdf_with_grad"), module=__name__
-    )
-
-del _module_path, _data_module
 
 
 @wp.kernel(enable_backward=False)
@@ -145,7 +132,7 @@ def _test_sweep_pattern_kernel(
     result = _test_compute_local_sdf_with_grad(
         obs_set, env_idx, obs_local_idx, local_pt, radius_adjusted
     )
-    sdf_current = result[0]
+    sdf_current = result[0]  # noqa: F841 -- keep the mixed-overload diagnostic call
 
     cost_sum = wp.float32(0.0)
     jump = wp.float32(0.0)
@@ -161,7 +148,7 @@ def _test_sweep_pattern_kernel(
         penetration = -sdf + radius_adjusted
 
         if penetration > 0.0:
-            sdf_result = _test_compute_local_sdf_with_grad(
+            sdf_result = _test_compute_local_sdf_with_grad(  # noqa: F841
                 obs_set, env_idx, obs_local_idx, interp_pt, radius_adjusted
             )
             cost_sum += penetration
@@ -199,10 +186,12 @@ def _test_dual_sweep_kernel(
     # Repeated SDF calls require a local struct copy, matching the production
     # sweep kernel and avoiding invalid parameter-to-local pointer conversion.
     obs = obs_set
-    inv_t = _test_load_obstacle_transform(obs, env_idx, obs_local_idx)
+    inv_t = _test_load_obstacle_transform(  # noqa: F841 -- exercise the shared overload
+        obs, env_idx, obs_local_idx
+    )
 
     radius_adjusted = wp.float32(0.02)
-    eta = wp.float32(0.02)
+    eta = wp.float32(0.02)  # noqa: F841 -- retained from the diagnostic sweep pattern
 
     cost_sum = wp.float32(0.0)
     grad_sum_local = wp.vec3(0.0, 0.0, 0.0)
@@ -332,7 +321,9 @@ def _test_full_sweep_kernel(
     if penetration > 0.0:
         activation_result = apply_collision_activation(penetration, eta)
         cost_sum += activation_result[0]
-        grad_sum_local += activation_result[1] * wp.vec3(sdf_result[1], sdf_result[2], sdf_result[3])
+        grad_sum_local += activation_result[1] * wp.vec3(
+            sdf_result[1], sdf_result[2], sdf_result[3]
+        )
 
     if h_idx > 0 and _TEST_SWEEP_STEPS > 0:
         prev_sphere = spheres[sph_flat_idx - num_spheres]
@@ -357,7 +348,9 @@ def _test_full_sweep_kernel(
                 )
                 activation_result = apply_collision_activation(penetration, eta)
                 cost_sum += activation_result[0]
-                grad_sum_local += activation_result[1] * wp.vec3(sdf_result[1], sdf_result[2], sdf_result[3])
+                grad_sum_local += activation_result[1] * wp.vec3(
+                    sdf_result[1], sdf_result[2], sdf_result[3]
+                )
                 jump += penetration
             else:
                 if -penetration >= 1000.0:
@@ -388,7 +381,9 @@ def _test_full_sweep_kernel(
                 )
                 activation_result = apply_collision_activation(penetration, eta)
                 cost_sum += activation_result[0]
-                grad_sum_local += activation_result[1] * wp.vec3(sdf_result[1], sdf_result[2], sdf_result[3])
+                grad_sum_local += activation_result[1] * wp.vec3(
+                    sdf_result[1], sdf_result[2], sdf_result[3]
+                )
                 jump += penetration
             else:
                 if -penetration >= 1000.0:
@@ -464,13 +459,148 @@ def _make_box_esdf(
     )
 
 
+@pytest.fixture(
+    params=[
+        ((120, 20, 24), 0.01),
+        ((20, 120, 24), 0.01),
+        ((20, 24, 120), 0.01),
+        ((120, 120, 100), 0.01),
+        ((120, 120, 100), 0.02),
+        ((16, 20, 24), 0.015625),
+    ],
+    ids=["x", "y", "z", "xy", "xy-2cm", "exact-control"],
+)
+def fractional_grid_dimensions(
+    request: pytest.FixtureRequest, device_cfg: DeviceCfg
+) -> tuple[VoxelData, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build a float32-authored grid with an exactly representable affine field.
+
+    Return voxel data, query points (5, 3), expected values (5,) and the
+    normalized negative field gradient (3,). Integer and fractional voxel
+    coordinates cover interior samples and the last layer's voxel centers.
+    """
+    shape, spacing = request.param
+    # Match ESDFIntegrator.get_voxel_grid: the Python scalar originates in float32.
+    voxel_size = torch.tensor(spacing, dtype=torch.float32).item()
+    dims = [n * voxel_size for n in shape]
+    axes = [torch.arange(n, dtype=torch.float32, device=device_cfg.device) for n in shape]
+    indices = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
+    center = (torch.tensor(shape, dtype=torch.float32, device=device_cfg.device) - 1) / 2
+    coefficients = torch.tensor([1, 2, 4], dtype=torch.float32, device=device_cfg.device)
+    # Binary fractions keep all stored features exact in float16 for these shapes.
+    features = ((indices - center) * coefficients).sum(dim=-1) / 512
+    grid = VoxelGrid(
+        name="float32_dimensions",
+        pose=[0, 0, 0, 1, 0, 0, 0],
+        dims=dims,
+        voxel_size=voxel_size,
+        feature_tensor=features.to(torch.float16),
+        feature_dtype=torch.float16,
+    )
+    data = VoxelData.create_from_voxel_grids([grid], device_cfg)
+    counts = torch.tensor(shape, dtype=torch.float32, device=device_cfg.device)
+    # Establish the regression trigger through the real metadata construction.
+    if spacing == 0.015625:
+        torch.testing.assert_close(data.params[0, 0, :3], counts, rtol=0, atol=0)
+    else:
+        assert torch.any(data.params[0, 0, :3] < counts)
+    torch.testing.assert_close(data.params[0, 0, :3].round(), counts, rtol=0, atol=0)
+    torch.testing.assert_close(grid.feature_tensor.float(), features, rtol=0, atol=0)
+
+    coordinates = torch.stack(
+        [center * 0.5, center + 0.25, center * 1.5, counts - 2, counts - 1]
+    )
+    points = (coordinates - center) * voxel_size
+    # This oracle uses the known field, independent of flattened indexing and params.
+    expected = ((coordinates - center) * coefficients).sum(dim=-1) / 512
+    gradient = -coefficients / torch.linalg.vector_norm(coefficients)
+    return data, points, expected, gradient
+
+
+class TestFloat32VoxelDimensions:
+    """Preserve samples and collision gradients for float32-authored voxel grids."""
+
+    @pytest.mark.parametrize("with_grad", [False, True], ids=["distance", "with-gradient"])
+    def test_samples_match_stored_field(
+        self,
+        fractional_grid_dimensions: tuple[VoxelData, torch.Tensor, torch.Tensor, torch.Tensor],
+        with_grad: bool,
+    ) -> None:
+        """Both SDF entry points must recover integer dimensions before sampling."""
+        data, points, expected, _ = fractional_grid_dimensions
+        device, stream = get_warp_device_stream(points)
+        actual = torch.zeros_like(expected)
+        wp.launch(
+            kernel=_test_sdf_with_grad_kernel if with_grad else _test_sdf_only_kernel,
+            dim=points.shape[0],
+            inputs=[
+                data.to_warp(), wp.from_torch(points, dtype=wp.vec3), 0, 0, wp.from_torch(actual)
+            ],
+            stream=stream,
+            device=device,
+        )
+        wp.synchronize_device(device)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=2e-6)
+
+    @pytest.mark.parametrize("swept", [False, True], ids=["static", "swept"])
+    def test_collision_cost_and_gradient(
+        self,
+        fractional_grid_dimensions: tuple[VoxelData, torch.Tensor, torch.Tensor, torch.Tensor],
+        swept: bool,
+    ) -> None:
+        """The production collision path must retain known costs and gradient directions."""
+        data, points, expected, gradient = fractional_grid_dimensions
+        # Use two interior queries; one collides, the distant positive sample is free.
+        points = points[[0, 2]]
+        expected = expected[[0, 2]]
+        spheres = torch.cat([points, torch.full_like(points[:, :1], 0.01)], dim=-1)
+        spheres = spheres.reshape(1, 1, -1, 4).repeat(1, 2 if swept else 1, 1, 1)
+        launch = _launch_swept_collision if swept else _launch_collision
+        cost, actual_gradient = launch(data, spheres, activation_distance=0.02)
+        assert expected[0] < 0 and expected[1] > 0.03
+        expected_cost = torch.stack([0.02 - expected[0], torch.zeros_like(expected[1])])
+        torch.testing.assert_close(cost.flatten(), expected_cost.repeat(spheres.shape[1]), rtol=0, atol=2e-6)
+        expected_gradient = torch.zeros_like(actual_gradient)
+        expected_gradient[0, :, 0, :3] = gradient
+        torch.testing.assert_close(actual_gradient, expected_gradient, rtol=0, atol=2e-5)
+
+    @pytest.mark.parametrize(
+        "fractional_grid_dimensions", [((120, 20, 24), 0.01)], indirect=True, ids=["x"]
+    )
+    @pytest.mark.parametrize("swept", [False, True], ids=["static", "swept"])
+    @pytest.mark.parametrize("polarity", [1, -1], ids=["free", "collision"])
+    def test_collision_classification_near_surface(
+        self,
+        fractional_grid_dimensions: tuple[VoxelData, torch.Tensor, torch.Tensor, torch.Tensor],
+        swept: bool,
+        polarity: int,
+    ) -> None:
+        """Dimension rounding must preserve both free and colliding query classifications."""
+        data, points, expected, _ = fractional_grid_dimensions
+        data.features.mul_(polarity)
+        # This point is close enough to the zero surface for the half-cell shift
+        # from truncating 120 to 119 to reverse the sampled field's sign.
+        point = points[1:2] / 8
+        expected_sdf = polarity * expected[1] / 8
+        spheres = torch.cat([point, torch.zeros_like(point[:, :1])], dim=-1)
+        spheres = spheres.reshape(1, 1, 1, 4).repeat(1, 2 if swept else 1, 1, 1)
+        launch = _launch_swept_collision if swept else _launch_collision
+        cost, _ = launch(data, spheres, activation_distance=0.0)
+        assert (cost.flatten()[0].item() > 0) == (expected_sdf.item() < 0), (
+            f"Collision cost {cost.flatten()[0].item()} disagrees with expected SDF {expected_sdf.item()}"
+        )
+        torch.testing.assert_close(
+            cost.flatten(), (-expected_sdf).clamp(min=0).expand(cost.numel()), rtol=0, atol=2e-6
+        )
+
+
 def _launch_collision(
     voxel_data: VoxelData,
     spheres: torch.Tensor,
     activation_distance: float = 0.02,
     weight: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Launch sphere_obstacle_collision_kernel against VoxelDataWarp.
+    """Launch the tiled collision kernel against VoxelDataWarp.
 
     Args:
         voxel_data: VoxelData with loaded grid(s).
@@ -500,16 +630,28 @@ def _launch_collision(
     out_grad_wp = wp.from_torch(buffer.gradient.detach().view(-1), dtype=wp.float32)
 
     max_n = voxel_data.max_n
-    wp.launch(
-        kernel=sphere_obstacle_collision_kernel,
-        dim=b * h * n * max_n,
+    block_dim = 64
+    kernel = get_tiled_collision_kernel(max_n, h, n, block_dim)
+    wp.launch_tiled(
+        kernel=kernel,
+        dim=(b * h,),
         inputs=[
-            data_wp, spheres_wp, weight_wp, eta_wp, env_idx_wp,
-            out_cost_wp, out_grad_wp,
-            b, h, n, max_n, wp.uint8(0),
+            data_wp,
+            spheres_wp,
+            weight_wp,
+            eta_wp,
+            env_idx_wp,
+            out_cost_wp,
+            out_grad_wp,
+            wp.uint8(0),
+            wp.uint8(1),
+            wp.uint8(0),
+            wp.from_torch(voxel_data.obstacle_layers.view(torch.int32).view(-1), dtype=wp.uint32),
+            wp.from_torch(buffer.default_sphere_collision_mask.view(torch.int32), dtype=wp.uint32),
         ],
         stream=stream,
         device=device,
+        block_dim=block_dim,
     )
     wp.synchronize_device(device)
 
@@ -521,8 +663,10 @@ def _launch_swept_collision(
     spheres: torch.Tensor,
     activation_distance: float = 0.02,
     weight: float = 1.0,
+    speed_dt: float | None = None,
+    fused_speed_metric: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Launch swept_sphere_obstacle_collision_kernel against VoxelDataWarp.
+    """Launch the tiled swept-collision kernel against VoxelDataWarp.
 
     The swept kernel interpolates between adjacent trajectory timesteps
     (horizon dimension) to detect collisions along the swept path.
@@ -532,6 +676,8 @@ def _launch_swept_collision(
         spheres: Query spheres (batch, horizon, num_spheres, 4).
         activation_distance: Collision activation distance.
         weight: Collision cost weight.
+        speed_dt: Time delta for speed scaling, or None to disable it.
+        fused_speed_metric: Use the fused kernel instead of the reference post-pass.
 
     Returns:
         (distance, gradient) tensors.
@@ -555,24 +701,56 @@ def _launch_swept_collision(
     out_grad_wp = wp.from_torch(buffer.gradient.detach().view(-1), dtype=wp.float32)
 
     max_n = voxel_data.max_n
-    wp.launch(
-        kernel=swept_sphere_obstacle_collision_kernel,
-        dim=b * h * n * max_n,
-        inputs=[
-            data_wp, spheres_wp, weight_wp, eta_wp, env_idx_wp,
-            out_cost_wp, out_grad_wp,
-            b, h, n, max_n, wp.uint8(0),
-        ],
+    speed_dt_t = torch.tensor(
+        [0.0 if speed_dt is None else speed_dt], dtype=torch.float32, device=spheres.device
+    )
+    speed_dt_wp = wp.from_torch(speed_dt_t)
+    block_dim = 64
+    kernel = get_tiled_swept_collision_kernel(
+        max_n,
+        speed_dt is not None and fused_speed_metric,
+        h,
+        n,
+        block_dim,
+    )
+    kernel_inputs = [
+        data_wp,
+        spheres_wp,
+        weight_wp,
+        eta_wp,
+        speed_dt_wp,
+        env_idx_wp,
+        out_cost_wp,
+        out_grad_wp,
+        wp.uint8(0),
+        wp.uint8(1),
+        wp.uint8(0),
+        wp.from_torch(voxel_data.obstacle_layers.view(torch.int32).view(-1), dtype=wp.uint32),
+        wp.from_torch(buffer.default_sphere_collision_mask.view(torch.int32), dtype=wp.uint32),
+    ]
+    wp.launch_tiled(
+        kernel=kernel,
+        dim=(b * h,),
+        inputs=kernel_inputs,
         stream=stream,
         device=device,
-        block_dim=128,
+        block_dim=block_dim,
     )
+    if speed_dt is not None and not fused_speed_metric:
+        wp.launch(
+            kernel=apply_speed_metric,
+            dim=b * h * n,
+            inputs=[spheres_wp, out_cost_wp, out_grad_wp, speed_dt_wp, b, h, n],
+            stream=stream,
+            device=device,
+        )
     wp.synchronize_device(device)
 
     return buffer.distance, buffer.gradient
 
 
 # ── Fixtures ──
+
 
 @pytest.fixture(scope="module")
 def device_cfg():
@@ -582,6 +760,7 @@ def device_cfg():
 
 
 # ── VoxelData creation tests ──
+
 
 class TestVoxelDataCreation:
     """Test VoxelData creation from synthetic VoxelGrids."""
@@ -631,6 +810,7 @@ class TestVoxelDataCreation:
 
 # ── VoxelDataWarp conversion tests ──
 
+
 class TestVoxelDataWarp:
     """Test VoxelData → VoxelDataWarp conversion."""
 
@@ -657,8 +837,9 @@ class TestVoxelDataWarp:
 
 # ── Kernel launch tests (collision queries) ──
 
+
 class TestVoxelCollisionKernelEmpty:
-    """Test sphere_obstacle_collision_kernel against an empty (all-free) voxel grid."""
+    """Test tiled collision against an empty (all-free) voxel grid."""
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_sphere_in_free_space_zero_cost(self, device_cfg):
@@ -668,7 +849,9 @@ class TestVoxelCollisionKernelEmpty:
 
         # Sphere at grid center, radius 0.01; all ESDF values are +1.0
         spheres = torch.tensor(
-            [[[[0.0, 0.0, 0.0, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.0, 0.0, 0.0, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         dist, grad = _launch_collision(voxel_data, spheres)
 
@@ -682,12 +865,15 @@ class TestVoxelCollisionKernelEmpty:
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         spheres = torch.tensor(
-            [[
-                [[0.1, 0.0, 0.0, 0.01]],
-                [[-0.1, 0.0, 0.0, 0.01]],
-                [[0.0, 0.1, 0.0, 0.01]],
-            ]],
-            dtype=torch.float32, device="cuda:0",
+            [
+                [
+                    [[0.1, 0.0, 0.0, 0.01]],
+                    [[-0.1, 0.0, 0.0, 0.01]],
+                    [[0.0, 0.1, 0.0, 0.01]],
+                ]
+            ],
+            dtype=torch.float32,
+            device="cuda:0",
         )  # (1, 3, 1, 4)
         dist, grad = _launch_collision(voxel_data, spheres)
 
@@ -696,33 +882,39 @@ class TestVoxelCollisionKernelEmpty:
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_sphere_outside_grid_zero_cost(self, device_cfg):
-        """A sphere outside the grid bounds should have zero cost (default_val is large positive)."""
+        """An out-of-grid sphere should have zero cost from the positive default value."""
         grid = _make_empty_esdf(dims=(0.2, 0.2, 0.2), center=(0.0, 0.0, 0.0))
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         spheres = torch.tensor(
-            [[[[5.0, 5.0, 5.0, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[5.0, 5.0, 5.0, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         dist, grad = _launch_collision(voxel_data, spheres)
         assert dist.item() == pytest.approx(0.0, abs=1e-5)
 
 
 class TestVoxelCollisionKernelBox:
-    """Test sphere_obstacle_collision_kernel against an ESDF with a box obstacle."""
+    """Test tiled collision against an ESDF with a box obstacle."""
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_sphere_inside_box_has_cost(self, device_cfg):
         """A sphere at the center of the box obstacle should have non-zero cost."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # Sphere at box center, radius 0.01
         spheres = torch.tensor(
-            [[[[0.0, 0.0, 0.0, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.0, 0.0, 0.0, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         dist, grad = _launch_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -732,15 +924,19 @@ class TestVoxelCollisionKernelBox:
     def test_sphere_far_from_box_zero_cost(self, device_cfg):
         """A sphere far from the box obstacle should have zero cost."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # Sphere far from box (0.2m away, activation_distance=0.02)
         spheres = torch.tensor(
-            [[[[0.2, 0.2, 0.2, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.2, 0.2, 0.2, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         dist, grad = _launch_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -750,16 +946,20 @@ class TestVoxelCollisionKernelBox:
     def test_sphere_near_surface_has_cost(self, device_cfg):
         """A sphere near (within activation distance of) the box surface should have cost."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # Sphere just touching box surface: box_half=0.05, sphere at 0.05 with r=0.02
         # penetration = -sdf + (r + eta) = -0.0 + (0.02 + 0.02) = 0.04
         spheres = torch.tensor(
-            [[[[0.05, 0.0, 0.0, 0.02]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.05, 0.0, 0.0, 0.02]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         dist, grad = _launch_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -769,15 +969,19 @@ class TestVoxelCollisionKernelBox:
     def test_gradient_nonzero_at_surface(self, device_cfg):
         """Gradient should be non-zero for a sphere penetrating the box."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # Sphere inside the box
         spheres = torch.tensor(
-            [[[[0.02, 0.0, 0.0, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.02, 0.0, 0.0, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         dist, grad = _launch_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -788,19 +992,25 @@ class TestVoxelCollisionKernelBox:
     def test_inside_deeper_has_higher_cost(self, device_cfg):
         """A sphere deeper inside the box should have higher cost than one at the surface."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # Sphere at center (deep inside)
         spheres_deep = torch.tensor(
-            [[[[0.0, 0.0, 0.0, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.0, 0.0, 0.0, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         # Sphere at edge (barely inside)
         spheres_edge = torch.tensor(
-            [[[[0.04, 0.0, 0.0, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.04, 0.0, 0.0, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
 
         dist_deep, _ = _launch_collision(voxel_data, spheres_deep, activation_distance=0.02)
@@ -819,52 +1029,64 @@ class TestVoxelCollisionKernelBatch:
     def test_batch_of_spheres(self, device_cfg):
         """Test batch dimension with multiple spheres."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # batch=2, horizon=1, num_spheres=3
-        spheres = torch.tensor([
-            [[[0.0, 0.0, 0.0, 0.01], [0.2, 0.0, 0.0, 0.01], [0.04, 0.0, 0.0, 0.01]]],
-            [[[0.2, 0.2, 0.2, 0.01], [0.0, 0.0, 0.0, 0.01], [-0.2, 0.0, 0.0, 0.01]]],
-        ], dtype=torch.float32, device="cuda:0")  # (2, 1, 3, 4)
+        spheres = torch.tensor(
+            [
+                [[[0.0, 0.0, 0.0, 0.01], [0.2, 0.0, 0.0, 0.01], [0.04, 0.0, 0.0, 0.01]]],
+                [[[0.2, 0.2, 0.2, 0.01], [0.0, 0.0, 0.0, 0.01], [-0.2, 0.0, 0.0, 0.01]]],
+            ],
+            dtype=torch.float32,
+            device="cuda:0",
+        )  # (2, 1, 3, 4)
 
         dist, grad = _launch_collision(voxel_data, spheres, activation_distance=0.02)
 
         assert dist.shape == (2, 1, 3)
         # batch 0: sphere 0 inside, sphere 1 far, sphere 2 near edge
-        assert dist[0, 0, 0].item() > 0.0   # inside box
+        assert dist[0, 0, 0].item() > 0.0  # inside box
         assert dist[0, 0, 1].item() == pytest.approx(0.0, abs=1e-5)  # far away
         # batch 1: sphere 0 far, sphere 1 inside, sphere 2 far
         assert dist[1, 0, 0].item() == pytest.approx(0.0, abs=1e-5)  # far away
-        assert dist[1, 0, 1].item() > 0.0   # inside box
+        assert dist[1, 0, 1].item() > 0.0  # inside box
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_horizon_dimension(self, device_cfg):
         """Test horizon dimension (trajectory timesteps)."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # batch=1, horizon=4, num_spheres=1; moving from inside to outside
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[0.0, 0.0, 0.0, 0.01]],   # inside
-                [[0.03, 0.0, 0.0, 0.01]],   # inside (near edge)
-                [[0.06, 0.0, 0.0, 0.01]],   # just outside
-                [[0.2, 0.0, 0.0, 0.01]],    # far outside
+                [
+                    [[0.0, 0.0, 0.0, 0.01]],  # inside
+                    [[0.03, 0.0, 0.0, 0.01]],  # inside (near edge)
+                    [[0.06, 0.0, 0.0, 0.01]],  # just outside
+                    [[0.2, 0.0, 0.0, 0.01]],  # far outside
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")  # (1, 4, 1, 4)
+            dtype=torch.float32,
+            device="cuda:0",
+        )  # (1, 4, 1, 4)
 
         dist, grad = _launch_collision(voxel_data, spheres, activation_distance=0.02)
 
         assert dist.shape == (1, 4, 1)
-        assert dist[0, 0, 0].item() > 0.0   # inside box
+        assert dist[0, 0, 0].item() > 0.0  # inside box
         assert dist[0, 3, 0].item() == pytest.approx(0.0, abs=1e-5)  # far outside
 
 
@@ -880,15 +1102,19 @@ class TestVoxelCollisionUpdateFeatures:
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         spheres = torch.tensor(
-            [[[[0.0, 0.0, 0.0, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.0, 0.0, 0.0, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         dist_before, _ = _launch_collision(voxel_data, spheres, activation_distance=0.02)
         assert dist_before.item() == pytest.approx(0.0, abs=1e-5)
 
         box_grid = _make_box_esdf(
-            grid_dims=grid_dims, voxel_size=voxel_size,
+            grid_dims=grid_dims,
+            voxel_size=voxel_size,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         # Directly copy new features into the backing tensor (same layout)
         grid.feature_tensor.copy_(box_grid.feature_tensor)
@@ -899,8 +1125,9 @@ class TestVoxelCollisionUpdateFeatures:
 
 # ── Swept sphere collision tests ──
 
+
 class TestSweptVoxelCollisionFreeSpace:
-    """Test swept_sphere_obstacle_collision_kernel against an empty voxel grid."""
+    """Test tiled swept collision against an empty voxel grid."""
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_swept_horizon1_no_sweep(self, device_cfg):
@@ -909,7 +1136,9 @@ class TestSweptVoxelCollisionFreeSpace:
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         spheres = torch.tensor(
-            [[[[0.0, 0.0, 0.0, 0.01]]]], dtype=torch.float32, device="cuda:0",
+            [[[[0.0, 0.0, 0.0, 0.01]]]],
+            dtype=torch.float32,
+            device="cuda:0",
         )
         dist, grad = _launch_swept_collision(voxel_data, spheres)
         assert dist.shape == (1, 1, 1)
@@ -921,12 +1150,16 @@ class TestSweptVoxelCollisionFreeSpace:
         grid = _make_empty_esdf(dims=(1.0, 1.0, 1.0), center=(0.0, 0.0, 0.0))
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[-0.1, 0.0, 0.0, 0.01]],
-                [[0.1, 0.0, 0.0, 0.01]],
+                [
+                    [[-0.1, 0.0, 0.0, 0.01]],
+                    [[0.1, 0.0, 0.0, 0.01]],
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")
+            dtype=torch.float32,
+            device="cuda:0",
+        )
 
         dist, grad = _launch_swept_collision(voxel_data, spheres)
         assert dist.shape == (1, 2, 1)
@@ -938,14 +1171,18 @@ class TestSweptVoxelCollisionFreeSpace:
         grid = _make_empty_esdf(dims=(1.0, 1.0, 1.0), center=(0.0, 0.0, 0.0))
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[-0.3, 0.0, 0.0, 0.01]],
-                [[-0.1, 0.0, 0.0, 0.01]],
-                [[0.1, 0.0, 0.0, 0.01]],
-                [[0.3, 0.0, 0.0, 0.01]],
+                [
+                    [[-0.3, 0.0, 0.0, 0.01]],
+                    [[-0.1, 0.0, 0.0, 0.01]],
+                    [[0.1, 0.0, 0.0, 0.01]],
+                    [[0.3, 0.0, 0.0, 0.01]],
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")
+            dtype=torch.float32,
+            device="cuda:0",
+        )
 
         dist, grad = _launch_swept_collision(voxel_data, spheres)
         assert dist.shape == (1, 4, 1)
@@ -957,39 +1194,49 @@ class TestSweptVoxelCollisionFreeSpace:
         grid = _make_empty_esdf(dims=(0.2, 0.2, 0.2), center=(0.0, 0.0, 0.0))
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[5.0, 0.0, 0.0, 0.01]],
-                [[5.1, 0.0, 0.0, 0.01]],
+                [
+                    [[5.0, 0.0, 0.0, 0.01]],
+                    [[5.1, 0.0, 0.0, 0.01]],
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")
+            dtype=torch.float32,
+            device="cuda:0",
+        )
 
         dist, grad = _launch_swept_collision(voxel_data, spheres)
         assert (dist == 0.0).all()
 
 
 class TestSweptVoxelCollisionBox:
-    """Test swept_sphere_obstacle_collision_kernel against an ESDF with a box obstacle."""
+    """Test tiled swept collision against an ESDF with a box obstacle."""
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_swept_through_box_has_cost(self, device_cfg):
-        """A trajectory that sweeps through a box obstacle should have cost at collision timesteps."""
+        """A trajectory swept through a box should have cost at collision timesteps."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # Trajectory: far left → inside box → inside box → far right
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[-0.2, 0.0, 0.0, 0.01]],  # far from box
-                [[0.0, 0.0, 0.0, 0.01]],    # inside box
-                [[0.0, 0.0, 0.0, 0.01]],    # inside box
-                [[0.2, 0.0, 0.0, 0.01]],    # far from box
+                [
+                    [[-0.2, 0.0, 0.0, 0.01]],  # far from box
+                    [[0.0, 0.0, 0.0, 0.01]],  # inside box
+                    [[0.0, 0.0, 0.0, 0.01]],  # inside box
+                    [[0.2, 0.0, 0.0, 0.01]],  # far from box
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")
+            dtype=torch.float32,
+            device="cuda:0",
+        )
 
         dist, grad = _launch_swept_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -1006,20 +1253,26 @@ class TestSweptVoxelCollisionBox:
         should still detect the obstacle along the path.
         """
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # Both endpoints are in free space, but the line between them
         # passes through the box along the x-axis
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[-0.1, 0.0, 0.0, 0.01]],  # free space (before box)
-                [[0.1, 0.0, 0.0, 0.01]],    # free space (after box)
+                [
+                    [[-0.1, 0.0, 0.0, 0.01]],  # free space (before box)
+                    [[0.1, 0.0, 0.0, 0.01]],  # free space (after box)
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")
+            dtype=torch.float32,
+            device="cuda:0",
+        )
 
         dist_swept, _ = _launch_swept_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -1030,30 +1283,36 @@ class TestSweptVoxelCollisionBox:
 
         # Swept collision should detect the box along the interpolated path
         swept_total = dist_swept.sum().item()
-        assert swept_total > 0.0, (
-            "Swept collision should detect box between free-space endpoints"
-        )
+        assert swept_total > 0.0, "Swept collision should detect box between free-space endpoints"
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_swept_stationary_matches_static(self, device_cfg):
-        """A stationary trajectory (all timesteps identical) should give cost
+        """A stationary trajectory should match static collision cost.
+
+        All timesteps are identical, so both queries should produce nonzero cost
         consistent with static collision: both non-zero when inside the box.
         """
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # All timesteps at box center
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[0.0, 0.0, 0.0, 0.01]],
-                [[0.0, 0.0, 0.0, 0.01]],
-                [[0.0, 0.0, 0.0, 0.01]],
+                [
+                    [[0.0, 0.0, 0.0, 0.01]],
+                    [[0.0, 0.0, 0.0, 0.01]],
+                    [[0.0, 0.0, 0.0, 0.01]],
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")
+            dtype=torch.float32,
+            device="cuda:0",
+        )
 
         dist_swept, _ = _launch_swept_collision(voxel_data, spheres, activation_distance=0.02)
         dist_static, _ = _launch_collision(voxel_data, spheres, activation_distance=0.02)
@@ -1067,20 +1326,26 @@ class TestSweptVoxelCollisionBox:
     def test_swept_gradient_nonzero_on_collision(self, device_cfg):
         """Gradient should be non-zero when swept path intersects box."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # Sphere at t=1 is off-center inside the box (gradient is zero at exact center)
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[-0.1, 0.0, 0.0, 0.01]],
-                [[0.02, 0.0, 0.0, 0.01]],   # inside box, off-center
-                [[0.1, 0.0, 0.0, 0.01]],
+                [
+                    [[-0.1, 0.0, 0.0, 0.01]],
+                    [[0.02, 0.0, 0.0, 0.01]],  # inside box, off-center
+                    [[0.1, 0.0, 0.0, 0.01]],
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")
+            dtype=torch.float32,
+            device="cuda:0",
+        )
 
         dist, grad = _launch_swept_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -1088,22 +1353,61 @@ class TestSweptVoxelCollisionBox:
         assert grad_xyz.abs().sum().item() > 0.0
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_fused_speed_metric_matches_post_process(self, device_cfg):
+        """Fused speed scaling should match the legacy post-processing pass."""
+        grid = _make_box_esdf(
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
+            grid_center=(0.0, 0.0, 0.0),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
+        )
+        voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
+        spheres = torch.tensor(
+            [
+                [
+                    [[-0.1, 0.0, 0.0, 0.01]],
+                    [[0.02, 0.0, 0.0, 0.01]],
+                    [[0.1, 0.0, 0.0, 0.01]],
+                ],
+            ],
+            dtype=torch.float32,
+            device="cuda:0",
+        )
+
+        fused_dist, fused_grad = _launch_swept_collision(
+            voxel_data, spheres, speed_dt=0.05, fused_speed_metric=True
+        )
+        reference_dist, reference_grad = _launch_swept_collision(
+            voxel_data, spheres, speed_dt=0.05, fused_speed_metric=False
+        )
+
+        torch.testing.assert_close(fused_dist, reference_dist, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(fused_grad, reference_grad, rtol=1e-5, atol=1e-6)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_swept_far_from_box_zero_cost(self, device_cfg):
         """A trajectory entirely far from the box should have zero swept cost."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[0.15, 0.15, 0.15, 0.01]],
-                [[0.16, 0.15, 0.15, 0.01]],
-                [[0.17, 0.15, 0.15, 0.01]],
+                [
+                    [[0.15, 0.15, 0.15, 0.01]],
+                    [[0.16, 0.15, 0.15, 0.01]],
+                    [[0.17, 0.15, 0.15, 0.01]],
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")
+            dtype=torch.float32,
+            device="cuda:0",
+        )
 
         dist, grad = _launch_swept_collision(voxel_data, spheres, activation_distance=0.02)
         assert (dist == 0.0).all()
@@ -1116,27 +1420,33 @@ class TestSweptVoxelCollisionBatch:
     def test_batch_swept_collision(self, device_cfg):
         """Test swept collision with batch dimension: one trajectory collides, one doesn't."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # batch=2, horizon=3, num_spheres=1
         # Batch 0: sweeps through the box
         # Batch 1: stays far from the box
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[-0.1, 0.0, 0.0, 0.01]],
-                [[0.0, 0.0, 0.0, 0.01]],    # inside box
-                [[0.1, 0.0, 0.0, 0.01]],
+                [
+                    [[-0.1, 0.0, 0.0, 0.01]],
+                    [[0.0, 0.0, 0.0, 0.01]],  # inside box
+                    [[0.1, 0.0, 0.0, 0.01]],
+                ],
+                [
+                    [[0.2, 0.2, 0.0, 0.01]],
+                    [[0.2, 0.2, 0.01, 0.01]],
+                    [[0.2, 0.2, 0.02, 0.01]],
+                ],
             ],
-            [
-                [[0.2, 0.2, 0.0, 0.01]],
-                [[0.2, 0.2, 0.01, 0.01]],
-                [[0.2, 0.2, 0.02, 0.01]],
-            ],
-        ], dtype=torch.float32, device="cuda:0")  # (2, 3, 1, 4)
+            dtype=torch.float32,
+            device="cuda:0",
+        )  # (2, 3, 1, 4)
 
         dist, grad = _launch_swept_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -1150,22 +1460,28 @@ class TestSweptVoxelCollisionBatch:
     def test_multi_sphere_swept(self, device_cfg):
         """Test swept collision with multiple spheres per timestep."""
         grid = _make_box_esdf(
-            grid_dims=(0.5, 0.5, 0.5), voxel_size=0.01,
+            grid_dims=(0.5, 0.5, 0.5),
+            voxel_size=0.01,
             grid_center=(0.0, 0.0, 0.0),
-            box_center=(0.0, 0.0, 0.0), box_half=(0.05, 0.05, 0.05),
+            box_center=(0.0, 0.0, 0.0),
+            box_half=(0.05, 0.05, 0.05),
         )
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
         # batch=1, horizon=3, num_spheres=2
         # Sphere 0: sweeps through the box
         # Sphere 1: stays far away
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[-0.1, 0.0, 0.0, 0.01], [0.2, 0.2, 0.0, 0.01]],
-                [[0.0, 0.0, 0.0, 0.01], [0.2, 0.2, 0.01, 0.01]],
-                [[0.1, 0.0, 0.0, 0.01], [0.2, 0.2, 0.02, 0.01]],
+                [
+                    [[-0.1, 0.0, 0.0, 0.01], [0.2, 0.2, 0.0, 0.01]],
+                    [[0.0, 0.0, 0.0, 0.01], [0.2, 0.2, 0.01, 0.01]],
+                    [[0.1, 0.0, 0.0, 0.01], [0.2, 0.2, 0.02, 0.01]],
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")  # (1, 3, 2, 4)
+            dtype=torch.float32,
+            device="cuda:0",
+        )  # (1, 3, 2, 4)
 
         dist, grad = _launch_swept_collision(voxel_data, spheres, activation_distance=0.02)
 
@@ -1194,7 +1510,8 @@ class TestStandaloneComputeLocalSdf:
 
         pts = torch.tensor(
             [[0.0, 0.0, 0.0], [0.01, 0.01, 0.01], [-0.05, 0.05, 0.0]],
-            dtype=torch.float32, device="cuda:0",
+            dtype=torch.float32,
+            device="cuda:0",
         )
         pts_wp = wp.from_torch(pts, dtype=wp.vec3)
         out = torch.zeros(pts.shape[0], dtype=torch.float32, device="cuda:0")
@@ -1223,7 +1540,8 @@ class TestStandaloneComputeLocalSdf:
 
         pts = torch.tensor(
             [[0.0, 0.0, 0.0], [0.01, 0.01, 0.01], [-0.05, 0.05, 0.0]],
-            dtype=torch.float32, device="cuda:0",
+            dtype=torch.float32,
+            device="cuda:0",
         )
         pts_wp = wp.from_torch(pts, dtype=wp.vec3)
         out = torch.zeros(pts.shape[0], dtype=torch.float32, device="cuda:0")
@@ -1252,12 +1570,13 @@ class TestStandaloneComputeLocalSdf:
 
         pts = torch.tensor(
             [
-                [0.0, 0.0, 0.0],      # inside box
-                [0.1, 0.0, 0.0],       # outside box
-                [0.05, 0.05, 0.0],     # near box surface
-                [-0.1, -0.1, 0.0],     # far outside
+                [0.0, 0.0, 0.0],  # inside box
+                [0.1, 0.0, 0.0],  # outside box
+                [0.05, 0.05, 0.0],  # near box surface
+                [-0.1, -0.1, 0.0],  # far outside
             ],
-            dtype=torch.float32, device="cuda:0",
+            dtype=torch.float32,
+            device="cuda:0",
         )
         pts_wp = wp.from_torch(pts, dtype=wp.vec3)
         device, stream = get_warp_device_stream(pts)
@@ -1269,23 +1588,24 @@ class TestStandaloneComputeLocalSdf:
         wp.launch(
             kernel=_test_sdf_only_kernel,
             dim=pts.shape[0],
-            inputs=[data_wp, pts_wp, wp.int32(0), wp.int32(0),
-                    wp.from_torch(out_sdf_only)],
-            stream=stream, device=device,
+            inputs=[data_wp, pts_wp, wp.int32(0), wp.int32(0), wp.from_torch(out_sdf_only)],
+            stream=stream,
+            device=device,
         )
         wp.launch(
             kernel=_test_sdf_with_grad_kernel,
             dim=pts.shape[0],
-            inputs=[data_wp, pts_wp, wp.int32(0), wp.int32(0),
-                    wp.from_torch(out_with_grad)],
-            stream=stream, device=device,
+            inputs=[data_wp, pts_wp, wp.int32(0), wp.int32(0), wp.from_torch(out_with_grad)],
+            stream=stream,
+            device=device,
         )
         wp.synchronize_device(device)
 
         for i in range(pts.shape[0]):
-            assert out_sdf_only[i].item() == pytest.approx(
-                out_with_grad[i].item(), abs=1e-4
-            ), f"Point {i}: sdf_only={out_sdf_only[i].item()} vs with_grad={out_with_grad[i].item()}"
+            assert out_sdf_only[i].item() == pytest.approx(out_with_grad[i].item(), abs=1e-4), (
+                f"Point {i}: sdf_only={out_sdf_only[i].item()} "
+                f"vs with_grad={out_with_grad[i].item()}"
+            )
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_sdf_only_kernel_many_points(self, device_cfg):
@@ -1305,7 +1625,8 @@ class TestStandaloneComputeLocalSdf:
             kernel=_test_sdf_only_kernel,
             dim=1024,
             inputs=[data_wp, pts_wp, wp.int32(0), wp.int32(0), out_wp],
-            stream=stream, device=device,
+            stream=stream,
+            device=device,
         )
         wp.synchronize_device(device)
 
@@ -1324,12 +1645,13 @@ class TestStandaloneComputeLocalSdf:
 
         pts = torch.tensor(
             [
-                [0.0, 0.0, 0.0],      # inside box (sdf < 0)
-                [0.1, 0.0, 0.0],       # outside box
-                [0.05, 0.05, 0.0],     # near surface
-                [-0.1, -0.1, 0.0],     # far outside
+                [0.0, 0.0, 0.0],  # inside box (sdf < 0)
+                [0.1, 0.0, 0.0],  # outside box
+                [0.05, 0.05, 0.0],  # near surface
+                [-0.1, -0.1, 0.0],  # far outside
             ],
-            dtype=torch.float32, device="cuda:0",
+            dtype=torch.float32,
+            device="cuda:0",
         )
         pts_wp = wp.from_torch(pts, dtype=wp.vec3)
         out_sdf_only = torch.zeros(pts.shape[0], dtype=torch.float32, device="cuda:0")
@@ -1342,10 +1664,15 @@ class TestStandaloneComputeLocalSdf:
             kernel=_test_both_sdf_kernel,
             dim=pts.shape[0],
             inputs=[
-                data_wp, pts_wp, wp.int32(0), wp.int32(0),
-                wp.from_torch(out_sdf_only), wp.from_torch(out_sdf_grad),
+                data_wp,
+                pts_wp,
+                wp.int32(0),
+                wp.int32(0),
+                wp.from_torch(out_sdf_only),
+                wp.from_torch(out_sdf_grad),
             ],
-            stream=stream, device=device,
+            stream=stream,
+            device=device,
         )
         wp.synchronize_device(device)
 
@@ -1369,10 +1696,15 @@ class TestStandaloneComputeLocalSdf:
             kernel=_test_both_sdf_kernel,
             dim=1024,
             inputs=[
-                data_wp, pts_wp, wp.int32(0), wp.int32(0),
-                wp.from_torch(out_sdf_only), wp.from_torch(out_sdf_grad),
+                data_wp,
+                pts_wp,
+                wp.int32(0),
+                wp.int32(0),
+                wp.from_torch(out_sdf_only),
+                wp.from_torch(out_sdf_grad),
             ],
-            stream=stream, device=device,
+            stream=stream,
+            device=device,
         )
         wp.synchronize_device(device)
 
@@ -1396,7 +1728,8 @@ class TestStandaloneComputeLocalSdf:
             kernel=_test_sweep_pattern_kernel,
             dim=1024,
             inputs=[data_wp, pts_wp, wp.int32(0), wp.int32(0), out_wp],
-            stream=stream, device=device,
+            stream=stream,
+            device=device,
         )
         wp.synchronize_device(device)
 
@@ -1420,12 +1753,16 @@ class TestStandaloneComputeLocalSdf:
         grid = _make_empty_esdf(fill_value=0.5)
         voxel_data = VoxelData.create_from_voxel_grids([grid], device_cfg)
 
-        spheres = torch.tensor([
+        spheres = torch.tensor(
             [
-                [[-0.1, 0.0, 0.0, 0.01]],
-                [[0.1, 0.0, 0.0, 0.01]],
+                [
+                    [[-0.1, 0.0, 0.0, 0.01]],
+                    [[0.1, 0.0, 0.0, 0.01]],
+                ],
             ],
-        ], dtype=torch.float32, device="cuda:0")  # (1, 2, 1, 4)
+            dtype=torch.float32,
+            device="cuda:0",
+        )  # (1, 2, 1, 4)
 
         b, h, n, _ = spheres.shape
         buffer = CollisionBuffer.from_shape(spheres.shape, device_cfg)
@@ -1444,13 +1781,21 @@ class TestStandaloneComputeLocalSdf:
             kernel=_test_full_sweep_kernel,
             dim=b * h * n * max_n,
             inputs=[
-                data_wp, spheres_wp,
-                wp.from_torch(weight_t), wp.from_torch(eta_t), env_idx_wp,
+                data_wp,
+                spheres_wp,
+                wp.from_torch(weight_t),
+                wp.from_torch(eta_t),
+                env_idx_wp,
                 wp.from_torch(buffer.distance.detach().view(-1)),
                 wp.from_torch(buffer.gradient.detach().view(-1), dtype=wp.float32),
-                b, h, n, max_n, wp.uint8(0),
+                b,
+                h,
+                n,
+                max_n,
+                wp.uint8(0),
             ],
-            stream=stream, device=device,
+            stream=stream,
+            device=device,
             block_dim=128,
         )
         wp.synchronize_device(device)
@@ -1482,11 +1827,13 @@ class TestStandaloneComputeLocalSdf:
                 wp.from_torch(pts, dtype=wp.vec3),
                 wp.from_torch(prev_pts, dtype=wp.vec3),
                 wp.from_torch(next_pts, dtype=wp.vec3),
-                wp.int32(0), wp.int32(0),
+                wp.int32(0),
+                wp.int32(0),
                 wp.from_torch(out_cost),
                 wp.from_torch(out_grad),
             ],
-            stream=stream, device=device,
+            stream=stream,
+            device=device,
         )
         wp.synchronize_device(device)
 

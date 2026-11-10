@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard Library
 import time
+from types import SimpleNamespace
 
 # Third Party
 import torch
@@ -10,6 +11,7 @@ import torch
 from curobo._src.graph_planner.graph_planner_prm import PRMGraphPlanner
 from curobo._src.graph_planner.graph_planner_prm_cfg import PRMGraphPlannerCfg
 from curobo._src.state.state_joint import JointState
+from curobo._src.util.cuda_graph_util import create_graph_executor
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -58,6 +60,152 @@ def test_base_graph_planner_check_samples_feasibility():
     )
     mask = base_graph_planner.check_samples_feasibility(samples)
     assert mask.shape == (100,)
+
+
+def test_check_samples_feasibility_eager_chunking_and_predicate():
+    """The eager path chunks safely and uses the planner's exact predicate options."""
+    predicate_calls = []
+
+    class FakeCostsAndConstraints:
+        def __init__(self, action):
+            self.action = action
+
+        def get_feasible(self, include_all_hybrid, sum_horizon):
+            predicate_calls.append((include_all_hybrid, sum_horizon))
+            return self.action[:, 0, 0] >= 0.0
+
+    class FakeRollout:
+        def compute_metrics_from_action(self, action):
+            return SimpleNamespace(
+                costs_and_constraints=FakeCostsAndConstraints(action),
+            )
+
+    planner = object.__new__(PRMGraphPlanner)
+    planner.config = SimpleNamespace(feasibility_buffer_size=4)
+    planner.device_cfg = SimpleNamespace(device=torch.device("cpu"))
+    planner.feasibility_rollout = FakeRollout()
+    planner._max_act_buffer = torch.zeros((4, 1, 2))
+    planner._sample_feasibility_executor = create_graph_executor(
+        capture_fn=planner._compute_sample_feasibility,
+        device=planner.device_cfg.device,
+        use_cuda_graph=False,
+        clone_outputs=False,
+    )
+    samples = torch.tensor(
+        [
+            [-1.0, 0.0],
+            [1.0, 0.0],
+            [-2.0, 0.0],
+            [2.0, 0.0],
+            [3.0, 0.0],
+            [-3.0, 0.0],
+            [4.0, 0.0],
+            [-4.0, 0.0],
+            [5.0, 0.0],
+            [-5.0, 0.0],
+        ]
+    )
+
+    result = planner.check_samples_feasibility(samples)
+
+    assert torch.equal(result, samples[:, 0] >= 0.0)
+    assert predicate_calls
+    assert all(call == (False, True) for call in predicate_calls)
+    assert planner.check_samples_feasibility(samples[:0]).shape == (0,)
+
+
+def test_check_samples_feasibility_clones_reused_chunk_output():
+    """Earlier chunks survive when every replay reuses one output allocation."""
+
+    class ReusingExecutor:
+        def __init__(self):
+            self.input = torch.zeros((4, 1, 2))
+            self.output = torch.zeros(4, dtype=torch.bool)
+            self.reset_called = False
+
+        @property
+        def is_initialized(self):
+            return True
+
+        @property
+        def static_inputs(self):
+            return (self.input,)
+
+        def replay(self):
+            self.output.copy_(self.input[:, 0, 0] >= 0.0)
+            return self.output
+
+        def reset(self):
+            self.reset_called = True
+
+    class AuxiliaryRollout:
+        def __init__(self):
+            self.reset_called = False
+
+        def reset_cuda_graph(self):
+            self.reset_called = True
+
+    planner = object.__new__(PRMGraphPlanner)
+    planner.config = SimpleNamespace(feasibility_buffer_size=4)
+    planner._max_act_buffer = torch.zeros((4, 1, 2))
+    planner._sample_feasibility_executor = ReusingExecutor()
+    planner._sample_feasibility_env_executor = None
+    planner.auxiliary_rollout = AuxiliaryRollout()
+    samples = torch.tensor(
+        [
+            [-1.0, 0.0],
+            [1.0, 0.0],
+            [-2.0, 0.0],
+            [2.0, 0.0],
+            [3.0, 0.0],
+            [-3.0, 0.0],
+            [4.0, 0.0],
+            [-4.0, 0.0],
+            [5.0, 0.0],
+            [-5.0, 0.0],
+        ]
+    )
+
+    result = planner.check_samples_feasibility(samples)
+    assert torch.equal(result, samples[:, 0] >= 0.0)
+
+    planner.reset_cuda_graph()
+    assert planner._sample_feasibility_executor.reset_called
+    assert planner.auxiliary_rollout.reset_called
+
+
+def test_reset_buffer_clears_only_roadmap_and_retains_cuda_graphs():
+    """World-update reset clears PRM nodes/edges but preserves captures."""
+
+    class ResetCounter:
+        def __init__(self):
+            self.calls = 0
+
+        def reset_buffer(self):
+            self.calls += 1
+
+        def reset(self):
+            self.calls += 1
+
+    class Executor:
+        def __init__(self):
+            self.reset_calls = 0
+
+        def reset(self):
+            self.reset_calls += 1
+
+    planner = object.__new__(PRMGraphPlanner)
+    planner.node_manager = ResetCounter()
+    planner.graph_constructor = ResetCounter()
+    planner._sample_feasibility_executor = Executor()
+    planner._sample_feasibility_env_executor = Executor()
+
+    planner.reset_buffer()
+
+    assert planner.node_manager.calls == 1
+    assert planner.graph_constructor.calls == 1
+    assert planner._sample_feasibility_executor.reset_calls == 0
+    assert planner._sample_feasibility_env_executor.reset_calls == 0
 
 
 def test_base_graph_planner_vertex_sampling():
@@ -560,7 +708,7 @@ def test_interpolation_with_single_waypoint():
     success = torch.tensor([True], device=planner.device_cfg.device)
 
     try:
-        from curobo._src.util.trajectory import TrajInterpolationType
+        from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType
         interpolated = planner.get_interpolated_trajectory(
             single_waypoint_path, success, 50, TrajInterpolationType.LINEAR
         )
@@ -649,7 +797,7 @@ def test_compute_kinematics():
 
 def test_interpolation_cubic():
     """Test cubic interpolation."""
-    from curobo._src.util.trajectory import TrajInterpolationType
+    from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType
 
     planner = get_base_graph_planner()
 
@@ -673,7 +821,7 @@ def test_interpolation_cubic():
 
 def test_interpolation_quintic():
     """Test quintic interpolation."""
-    from curobo._src.util.trajectory import TrajInterpolationType
+    from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType
 
     planner = get_base_graph_planner()
     planner.warmup(num_warmup_iterations=3, max_batch_size=1)

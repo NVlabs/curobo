@@ -44,7 +44,9 @@ def forward_cspace_state_warp(
     out_grad_a: wp.array(dtype=wp.float32),
     out_grad_j: wp.array(dtype=wp.float32),
     out_grad_tau: wp.array(dtype=wp.float32),
-    write_grad: wp.uint8,  # this should be a bool
+    compute_effort: bool,
+    write_state_grad: wp.uint8,
+    write_effort_grad: wp.uint8,
     batch_size: wp.int32,
     horizon: wp.int32,
     dof: wp.int32,
@@ -81,12 +83,14 @@ def forward_cspace_state_warp(
         return
 
     dt = state_dt[b_id]
+    dt_sq = wp.float32(0.0)
+    dt_cu = wp.float32(0.0)
+    if retime_weights or retime_regularization_weights:
+        dt_sq = dt * dt
+        dt_cu = dt_sq * dt
     cspace_target_w = cspace_target_weight[0]
-    cspace_target_dof_w = cspace_target_dof_weight[d_id]
-    cspace_non_terminal_factor = cspace_non_terminal_weight_factor[0]
-
-    if h_id < horizon - 1:
-        cspace_target_w *= cspace_non_terminal_factor
+    if cspace_target_w > 0.0 and h_id < horizon - 1:
+        cspace_target_w *= cspace_non_terminal_weight_factor[0]
     # read weights:
     w_bounds = wp.vector(weight[0], weight[1], weight[2], weight[3], weight[4])
     w_reg = wp.vector(
@@ -99,15 +103,15 @@ def forward_cspace_state_warp(
 
     # reweight terms:
     if retime_weights:
-        w_bounds[1] = (dt) * w_bounds[1]
-        w_bounds[2] = wp.pow((dt), 2.0) * w_bounds[2]
-        w_bounds[3] = wp.pow((dt), 3.0) * w_bounds[3]
+        w_bounds[1] = dt * w_bounds[1]
+        w_bounds[2] = dt_sq * w_bounds[2]
+        w_bounds[3] = dt_cu * w_bounds[3]
 
     if retime_regularization_weights:
-        w_reg[0] = (dt) * w_reg[0]
-        w_reg[1] = wp.pow((dt), 2.0) * w_reg[1]
-        w_reg[2] = wp.pow((dt), 3.0) * w_reg[2]
-        w_reg[4] = (dt) * w_reg[4]
+        w_reg[0] = dt * w_reg[0]
+        w_reg[1] = dt_sq * w_reg[1]
+        w_reg[2] = dt_cu * w_reg[2]
+        w_reg[4] = dt * w_reg[4]
 
     # compute cost:
     b_addrs = b_id * horizon * dof + h_id * dof + d_id
@@ -117,7 +121,6 @@ def forward_cspace_state_warp(
     current_acceleration = acc[b_addrs]
     current_position = pos[b_addrs]
     current_jerk = jerk[b_addrs]
-    current_effort = effort[b_addrs]
     # if w_j > 0.0:
 
     local_activation_distance = wp.vector(
@@ -139,8 +142,6 @@ def forward_cspace_state_warp(
     acceleration_limit_upper = a_b[dof + d_id]
     jerk_limit_lower = j_b[d_id]
     jerk_limit_upper = j_b[dof + d_id]
-    effort_limit_lower = effort_b[d_id]
-    effort_limit_upper = effort_b[dof + d_id]
 
     position_limit_lower, position_limit_upper = shrink_bounds_with_activation_distance(
         position_limit_lower,
@@ -164,12 +165,6 @@ def forward_cspace_state_warp(
         jerk_limit_lower,
         jerk_limit_upper,
         local_activation_distance[3],
-    )
-
-    effort_limit_lower, effort_limit_upper = shrink_bounds_with_activation_distance(
-        effort_limit_lower,
-        effort_limit_upper,
-        local_activation_distance[4],
     )
 
     # bound cost:
@@ -206,56 +201,71 @@ def forward_cspace_state_warp(
         gradient_jerk,
     )
 
-    cost_total, gradient_effort = aggregate_bound_cost(
-        current_effort,
-        effort_limit_lower,
-        effort_limit_upper,
-        w_bounds[4],
-        cost_total,
-        gradient_effort,
-    )
+    if compute_effort:
+        current_effort = effort[b_addrs]
+        if w_bounds[4] > 0.0:
+            effort_limit_lower = effort_b[d_id]
+            effort_limit_upper = effort_b[dof + d_id]
+            effort_limit_lower, effort_limit_upper = shrink_bounds_with_activation_distance(
+                effort_limit_lower,
+                effort_limit_upper,
+                local_activation_distance[4],
+            )
+            cost_total, gradient_effort = aggregate_bound_cost(
+                current_effort,
+                effort_limit_lower,
+                effort_limit_upper,
+                w_bounds[4],
+                cost_total,
+                gradient_effort,
+            )
 
 
 
     if cspace_target_w > 0.0:
-        cspace_target_w *= cspace_target_dof_w
-        target_id = idxs_target_joint_position[b_id]
-        target_id = target_id * dof + d_id
-        target_position = target_joint_position[target_id]
-        error = current_position - target_position
-        cost_total += cspace_target_w * error * error
-        gradient_position += 2.0 * cspace_target_w * error
+        cspace_target_w *= cspace_target_dof_weight[d_id]
+        if cspace_target_w > 0.0:
+            target_id = idxs_target_joint_position[b_id]
+            target_id = target_id * dof + d_id
+            target_position = target_joint_position[target_id]
+            error = current_position - target_position
+            cost_total += cspace_target_w * error * error
+            gradient_position += 2.0 * cspace_target_w * error
 
 
-    cost_total, gradient_velocity = aggregate_squared_l2_regularization(
-        current_velocity,
-        w_reg[0],
-        cost_total,
-        gradient_velocity,
-    )
+    if w_reg[0] > 0.0:
+        cost_total, gradient_velocity = aggregate_squared_l2_regularization(
+            current_velocity,
+            w_reg[0],
+            cost_total,
+            gradient_velocity,
+        )
 
-    cost_total, gradient_acceleration = aggregate_squared_l2_regularization(
-        current_acceleration,
-        w_reg[1],
-        cost_total,
-        gradient_acceleration,
-    )
+    if w_reg[1] > 0.0:
+        cost_total, gradient_acceleration = aggregate_squared_l2_regularization(
+            current_acceleration,
+            w_reg[1],
+            cost_total,
+            gradient_acceleration,
+        )
 
-    cost_total, gradient_jerk = aggregate_squared_l2_regularization(
-        current_jerk,
-        w_reg[2],
-        cost_total,
-        gradient_jerk,
-    )
+    if w_reg[2] > 0.0:
+        cost_total, gradient_jerk = aggregate_squared_l2_regularization(
+            current_jerk,
+            w_reg[2],
+            cost_total,
+            gradient_jerk,
+        )
 
-    cost_total, gradient_effort = aggregate_squared_l2_regularization(
-        current_effort,
-        w_reg[3],
-        cost_total,
-        gradient_effort,
-    )
+    if compute_effort and w_reg[3] > 0.0:
+        cost_total, gradient_effort = aggregate_squared_l2_regularization(
+            current_effort,
+            w_reg[3],
+            cost_total,
+            gradient_effort,
+        )
 
-    if w_reg[4] > 0.0:
+    if compute_effort and w_reg[4] > 0.0:
         (
             cost_total,
             gradient_effort,
@@ -274,7 +284,7 @@ def forward_cspace_state_warp(
     out_cost[b_addrs] = cost_total
 
     # compute gradient
-    if write_grad == 1:
+    if write_state_grad == 1:
         out_grad_p[b_addrs] = gradient_position
 
         out_grad_v[b_addrs] = gradient_velocity
@@ -282,6 +292,7 @@ def forward_cspace_state_warp(
         out_grad_a[b_addrs] = gradient_acceleration
         out_grad_j[b_addrs] = gradient_jerk
 
+    if write_effort_grad == 1:
         out_grad_tau[b_addrs] = gradient_effort
 
 
@@ -317,6 +328,7 @@ class StateCSpaceFunction(torch.autograd.Function):
         retime_weights: bool,
         retime_regularization_weights: bool,
         use_grad_input: bool,
+        compute_effort: bool,
     ):
         """Compute the bound cost and gradient.
 
@@ -361,6 +373,7 @@ class StateCSpaceFunction(torch.autograd.Function):
             retime_weights: Whether to retime the weights based on the time step.
             retime_regularization_weights: Whether to retime the regularization weights based on
                 the time step.
+            compute_effort: Whether to compute effort bounds and regularization terms.
 
         Returns:
             out_cost: Output cost of shape (batch_size, horizon)
@@ -526,7 +539,10 @@ class StateCSpaceFunction(torch.autograd.Function):
                 + " expected ({})".format(5)
             )
 
-        write_grad = pos.requires_grad
+        write_state_grad = (
+            pos.requires_grad or vel.requires_grad or acc.requires_grad or jerk.requires_grad
+        )
+        write_effort_grad = compute_effort and joint_torque.requires_grad
         wp.launch(
             kernel=forward_cspace_state_warp,
             dim=b * h * dof,
@@ -556,7 +572,9 @@ class StateCSpaceFunction(torch.autograd.Function):
                 wp.from_torch(out_ga.view(-1), dtype=wp.float32),
                 wp.from_torch(out_gj.view(-1), dtype=wp.float32),
                 wp.from_torch(out_gtau.view(-1), dtype=wp.float32),
-                write_grad,
+                compute_effort,
+                write_state_grad,
+                write_effort_grad,
                 b,
                 h,
                 dof,
@@ -566,6 +584,7 @@ class StateCSpaceFunction(torch.autograd.Function):
             device=wp_device,
             stream=wp_stream,
             adjoint=False,
+            block_dim=64,
         )
 
 
@@ -573,6 +592,7 @@ class StateCSpaceFunction(torch.autograd.Function):
 
         ctx.save_for_backward(out_gp, out_gv, out_ga, out_gj, out_gtau)
         ctx.use_grad_input = use_grad_input
+        ctx.compute_effort = compute_effort
         ctx.set_materialize_grads(False)
         ctx.mark_non_differentiable(
             pos,
@@ -639,7 +659,7 @@ class StateCSpaceFunction(torch.autograd.Function):
                     j_g = j_grad * grad_out_cost
                 else:
                     j_g = j_grad
-            if ctx.needs_input_grad[4]:
+            if ctx.compute_effort and ctx.needs_input_grad[4]:
                 if ctx.use_grad_input:
                     e_g = tau_grad * grad_out_cost
                 else:
@@ -651,6 +671,7 @@ class StateCSpaceFunction(torch.autograd.Function):
             a_g,
             j_g,
             e_g,
+            None,
             None,
             None,
             None,

@@ -100,7 +100,7 @@ def clone_if_not_none(x: Union[torch.Tensor, None]) -> Union[torch.Tensor, None]
     return None
 
 
-@get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
+@get_torch_jit_decorator(only_valid_for_compile=True)
 def cat_sum(
     tensor_list: List[torch.Tensor], sum_dim: Union[Tuple[int, int], Tuple[int], int] = (0,)
 ):
