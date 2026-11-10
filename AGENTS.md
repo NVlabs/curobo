@@ -289,6 +289,12 @@ API explicitly supports updating them; do not assume the Python update API exist
 - Keep public APIs minimal and user-focused. Do not expose implementation details
   unless they are required by the user-facing contract.
 - Prefer existing local patterns and helpers over new abstractions.
+- For changes to algorithms, APIs, configuration, or behavior, check the corresponding
+  Python implementation, C++ runtime, exporters, and artifact contracts. Update affected
+  paths together and reuse shared logic where practical. Verify parity across affected
+  paths, including CUDA graph and cross-device export behavior when applicable.
+- For device-dependent behavior, use the tensor's device for Python execution and the
+  deployment target's properties for export. Reuse cached device properties.
 - For new NVIDIA-authored files, use
   `SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.`
   followed by `SPDX-License-Identifier: Apache-2.0`. Preserve existing copyright

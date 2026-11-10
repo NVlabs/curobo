@@ -16,6 +16,9 @@
   trajectories satisfy the requested goal position, velocity, acceleration, and jerk.
 - Fix voxel grid dimension rounding in static and swept collision queries to
   prevent false collisions and missed obstacles caused by float32 truncation.
+- Use the tensor device's cached shared-memory capacity when sizing RNEA launch
+  configurations instead of assuming a fixed 100 KB per SM. Export C++ runtime
+  launch profiles using the target GPU's per-SM capacity.
 
 ## Version 0.9.0
 

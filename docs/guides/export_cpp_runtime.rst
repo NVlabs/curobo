@@ -26,7 +26,9 @@ It uses only Python's standard library and ``libcuda.so.1``:
 Replace ``user@target-host`` with your deployment machine's SSH destination.
 ``--device N`` selects a visible CUDA device
 ordinal; the default is zero. The JSON records the GPU name, cubin architecture, SM count,
-and opt-in shared-memory limit. Probe the intended GPU partition when using MIG.
+and shared-memory limits per block and per SM. Probe the intended GPU partition when using MIG.
+Regenerate older descriptions to record the per-SM capacity; otherwise RNEA retains the
+historical 100 KiB assumption.
 
 Export robot artifacts
 ----------------------
@@ -44,7 +46,8 @@ Run the exporter in the development environment:
 Omit ``--target-device`` to keep exporting for the active local GPU. Use a separate output
 directory for each target. The robot kinematics manifest retains the device description;
 all exported CUDA and Warp cubins use its architecture. L-BFGS uses its shared-memory limit,
-and RNEA launch profiles use its SM count. Foreign cubins are compiled without loading them
+and RNEA launch profiles use its SM count and shared-memory capacity per SM.
+Foreign cubins are compiled without loading them
 on the export GPU; validate them on the deployment GPU before relying on performance results.
 
 The development machine still needs a supported CUDA GPU for robot preparation and IK input

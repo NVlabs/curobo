@@ -26,6 +26,8 @@ class ExportDevice:
     """Number of streaming multiprocessors visible to the CUDA device."""
     max_shared_memory_per_block: int
     """Opt-in per-block shared-memory limit, in bytes."""
+    shared_memory_per_multiprocessor: int = 100 * 1024
+    """Shared memory per SM in bytes; older descriptions retain the 100 KiB assumption."""
 
     def __post_init__(self) -> None:
         """Reject malformed architectures and unusable hardware limits."""
@@ -36,7 +38,9 @@ class ExportDevice:
             or re.fullmatch(r"sm_[1-9][0-9]{1,2}", self.arch) is None
         ):
             raise ValueError("device arch must use the form sm_110")
-        for field in ("sm_count", "max_shared_memory_per_block"):
+        for field in (
+            "sm_count", "max_shared_memory_per_block", "shared_memory_per_multiprocessor"
+        ):
             value = getattr(self, field)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"device {field} must be a positive integer")
@@ -54,7 +58,10 @@ class ExportDevice:
         fields = ("name", "arch", "sm_count", "max_shared_memory_per_block")
         if any(field not in data for field in fields):
             raise ValueError(f"export device description requires {', '.join(fields)}")
-        return cls(**{field: data[field] for field in fields})
+        values = {field: data[field] for field in fields}
+        if "shared_memory_per_multiprocessor" in data:
+            values["shared_memory_per_multiprocessor"] = data["shared_memory_per_multiprocessor"]
+        return cls(**values)
 
     @classmethod
     def current(cls, ordinal: int = 0) -> ExportDevice:
@@ -78,7 +85,9 @@ class ExportDevice:
 
         # CU_DEVICE_ATTRIBUTE values from cuda.h. No CUDA Python package is needed.
         major, minor = attribute(75), attribute(76)
-        return cls(name.value.decode(), f"sm_{major}{minor}", attribute(16), attribute(97))
+        return cls(
+            name.value.decode(), f"sm_{major}{minor}", attribute(16), attribute(97), attribute(81)
+        )
 
 
 def main() -> None:
