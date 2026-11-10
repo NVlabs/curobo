@@ -454,6 +454,42 @@ class TestSelfCollisionCost:
 class TestSelfCollisionKinematicsCfg:
     """Test SelfCollisionKinematicsCfg properties and methods."""
 
+    @pytest.mark.parametrize("num_spheres", [0, 1, 2, 7, 50, 300])
+    @pytest.mark.parametrize("pair_pattern", ["dense", "mixed", "ignored"])
+    @pytest.mark.parametrize("device", ["cpu", "cuda"])
+    def test_pair_extraction_matches_reference(
+        self, num_spheres: int, pair_pattern: str, device: str
+    ) -> None:
+        """Preserve ordered pairs, empty topologies, dtype, and device placement."""
+        if device == "cuda" and not torch.cuda.is_available():
+            pytest.skip("CUDA is required")
+        generator = torch.Generator().manual_seed(704 + num_spheres)
+        distances = torch.rand((num_spheres, num_spheres), generator=generator)
+        if pair_pattern == "mixed":
+            distances[distances < 0.5] = -torch.inf
+            distances[1::3] = -torch.inf
+            distances[:, 1::3] = -torch.inf
+        elif pair_pattern == "ignored":
+            distances.fill_(-torch.inf)
+        expected = torch.tensor(
+            [
+                [i, j]
+                for i in range(num_spheres)
+                for j in range(i + 1, num_spheres)
+                if distances[i, j] != -torch.inf
+            ],
+            dtype=torch.int16,
+        ).reshape(-1, 2)
+        padding = torch.zeros(num_spheres, device=device, dtype=torch.float32)
+        result = SelfCollisionKinematicsCfg.create_from_sphere_pair_distances(
+            distances.to(device), padding
+        )
+        torch.testing.assert_close(result.collision_pairs.cpu(), expected, rtol=0, atol=0)
+        assert result.collision_pairs.device == padding.device
+        assert result.collision_pairs.is_contiguous()
+        assert result.sphere_padding is padding
+        assert result.num_spheres == num_spheres
+
     def test_num_spheres(self, self_collision_kin_config):
         """Test num_spheres property."""
         assert self_collision_kin_config.num_spheres > 0

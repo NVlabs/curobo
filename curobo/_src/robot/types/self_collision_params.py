@@ -209,7 +209,8 @@ class SelfCollisionKinematicsCfg:
         collision_pairs = collision_pairs.contiguous().to(device=device)
         num_self_collisions = collision_pairs.shape[0]
         max_threads_per_block = 512
-        log_debug("Self Collision skipped %: " + str(100 * float(skip_count) / all_val))
+        skipped_percentage = 100 * float(skip_count) / all_val if all_val else 0.0
+        log_debug("Self Collision skipped %: " + str(skipped_percentage))
         log_debug("Self Collision count: " + str(num_self_collisions))
         log_debug(
             "Self Collision per thread: "

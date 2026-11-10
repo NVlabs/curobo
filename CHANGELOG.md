@@ -10,6 +10,8 @@
 
 ### Bug Fixes & Misc.
 
+- Speed up self-collision pair extraction during robot configuration construction
+  and handle empty or fully ignored collision topologies.
 - Fix B-spline goal boundary control-point ordering and derivative signs so
   trajectories satisfy the requested goal position, velocity, acceleration, and jerk.
 - Fix voxel grid dimension rounding in static and swept collision queries to
