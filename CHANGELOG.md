@@ -10,6 +10,8 @@
 
 ### Bug Fixes & Misc.
 
+- Fix B-spline goal boundary control-point ordering and derivative signs so
+  trajectories satisfy the requested goal position, velocity, acceleration, and jerk.
 - Fix voxel grid dimension rounding in static and swept collision queries to
   prevent false collisions and missed obstacles caused by float32 truncation.
 
