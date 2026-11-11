@@ -126,7 +126,7 @@ robot_cfg:
       camera_mount:
       - tool0
       - wrist_3_link
-      forarm_link:
+      forearm_link:
       - wrist_1_link
       upper_arm_link:
       - forearm_link
