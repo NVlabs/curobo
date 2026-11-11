@@ -639,9 +639,9 @@ def make_mesh_kernels(
         gy = base[1] + cy
         gz = base[2] + cz
 
-        center_offset_x = wp.float32(tsdf.grid_W) * 0.5
-        center_offset_y = wp.float32(tsdf.grid_H) * 0.5
-        center_offset_z = wp.float32(tsdf.grid_D) * 0.5
+        center_offset_x = wp.float32(tsdf.grid_W) * 0.5 - 0.5
+        center_offset_y = wp.float32(tsdf.grid_H) * 0.5 - 0.5
+        center_offset_z = wp.float32(tsdf.grid_D) * 0.5 - 0.5
 
         p0 = (
             tsdf.origin

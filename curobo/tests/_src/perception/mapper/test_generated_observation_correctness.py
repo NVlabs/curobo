@@ -638,6 +638,37 @@ def test_tilted_plane_surface_matches_analytic_plane(warp_init, device):
     assert torch.quantile(plane_distance, 0.90) <= 4.0 * VOXEL_SIZE
 
 
+@pytest.mark.parametrize("axis", [0, 1, 2], ids=["x", "y", "z"])
+@pytest.mark.parametrize("refine_iterations", [0, 2], ids=["unrefined", "refined"])
+def test_mesh_matches_observed_plane(
+    warp_init: bool, device: str, axis: int, refine_iterations: int
+) -> None:
+    """Mesh vertices follow the observed world-space plane on every axis."""
+    mapper = _make_mapper(device)
+    observation = _constant_plane_observation(device)
+    # Rotate camera +Z to the chosen world axis, keeping the plane at the grid center.
+    half_sqrt = 0.5**0.5
+    quaternions = [
+        [half_sqrt, 0.0, half_sqrt, 0.0],
+        [half_sqrt, -half_sqrt, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0],
+    ]
+    plane_center = torch.tensor([0.0, 0.0, PLANE_Z], dtype=torch.float32, device=device)
+    camera_position = plane_center.clone()
+    camera_position[axis] -= PLANE_Z
+    observation.pose = Pose(
+        position=camera_position.unsqueeze(0),
+        quaternion=torch.tensor([quaternions[axis]], dtype=torch.float32, device=device),
+    )
+    mapper.integrate(observation)
+    mesh = mapper.extract_mesh(surface_only=True, refine_iterations=refine_iterations)
+    vertices = torch.as_tensor(mesh.vertices, dtype=torch.float32, device=device).reshape(-1, 3)
+    assert len(vertices) > 0
+    assert torch.isfinite(vertices).all()
+    plane_error = (vertices[:, axis] - plane_center[axis]).abs()
+    assert torch.quantile(plane_error, 0.95) <= 0.1 * VOXEL_SIZE
+
+
 def test_constant_rgb_accumulates_across_frames(warp_init, device):
     mapper = _make_mapper(device)
     mapper.integrate(_constant_plane_observation(device, rgb_value=(255, 0, 0)))
