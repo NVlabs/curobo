@@ -97,7 +97,7 @@ class SampleBuffer:
                 self.sequencer.random(store_buffer),
                 device=self.device_cfg.device,
                 dtype=self.device_cfg.dtype,
-            )
+            ).contiguous()
             self._int_gen = torch.Generator(device=self.device_cfg.device)
             self._int_gen = self._int_gen.manual_seed(getattr(sequencer, "seed", 123))
             self._generator_initial_state = self._int_gen.get_state().clone()
