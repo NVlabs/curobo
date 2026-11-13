@@ -27,7 +27,15 @@ from curobo._src.geom.collision.wp_collision_kernel import get_tiled_collision_k
 from curobo._src.geom.collision.wp_sweep_collision_kernel import (
     get_tiled_swept_collision_kernel,
 )
+from curobo._src.geom.collision.wp_sweep_mesh_balanced import (
+    KERNELS as mesh_balanced_kernels,
+)
+from curobo._src.geom.collision.wp_sweep_mesh_balanced import (
+    obstacle_swept_collision,
+    reduce_obstacle_contributions,
+)
 from curobo._src.geom.data.data_collision_layers import collision_layers_to_warp
+from curobo._src.geom.data.data_mesh import MeshData
 from curobo._src.util.warp import get_warp_device_stream
 
 if TYPE_CHECKING:
@@ -265,6 +273,90 @@ class SweptSphereObstacleCollision(torch.autograd.Function):
             num_sms = curobo_runtime.resolve_kernel_launch_sm_count(actual_sms)
             block_dim = select_collision_block_dim(b * h, n, num_sms, True)
             for data_idx, data in enumerate(valid_data):
+                # Generated winner's original metadata domain. Other native types/shapes
+                # continue through the original generic implementation below.
+                if isinstance(data, MeshData) and (data.max_n, h, n, block_dim) == (8, 81, 61, 64):
+                    obs = data.to_warp()
+                    layers = collision_layers_to_warp(data.obstacle_layers)
+                    overwrite = wp.uint8(data_idx == 0)
+                    if b * h <= 4 * actual_sms:
+                        kernel = mesh_balanced_kernels[
+                            data.max_n, bool(enable_speed_metric), h, n, 64
+                        ]
+                        wp.launch_tiled(
+                            kernel,
+                            dim=(b * h,),
+                            inputs=[
+                                obs,
+                                spheres_wp,
+                                weight_wp,
+                                eta_wp,
+                                speed_dt_wp,
+                                env_idx_wp,
+                                out_cost_wp,
+                                out_grad_wp,
+                                use_multi_env_wp,
+                                overwrite,
+                                sum_distance_wp,
+                                layers,
+                                mask_wp,
+                            ],
+                            stream=stream,
+                            device=device,
+                            block_dim=64,
+                        )
+                    else:
+                        # Same timed temporary allocation and two launches as winner.run.
+                        scratch = torch.empty(
+                            (b * h * data.max_n * n, 4),
+                            dtype=torch.float32,
+                            device=query_spheres.device,
+                        )
+                        scratch_wp = wp.from_torch(scratch, dtype=wp.vec4)
+                        wp.launch_tiled(
+                            obstacle_swept_collision,
+                            dim=(b * h * data.max_n,),
+                            inputs=[
+                                obs,
+                                spheres_wp,
+                                eta_wp,
+                                env_idx_wp,
+                                scratch_wp,
+                                use_multi_env_wp,
+                                layers,
+                                mask_wp,
+                                h,
+                                n,
+                            ],
+                            stream=stream,
+                            device=device,
+                            block_dim=64,
+                        )
+                        wp.launch_tiled(
+                            reduce_obstacle_contributions,
+                            dim=(b * h,),
+                            inputs=[
+                                obs,
+                                spheres_wp,
+                                weight_wp,
+                                speed_dt_wp,
+                                env_idx_wp,
+                                scratch_wp,
+                                out_cost_wp,
+                                out_grad_wp,
+                                use_multi_env_wp,
+                                overwrite,
+                                sum_distance_wp,
+                                mask_wp,
+                                wp.uint8(bool(enable_speed_metric)),
+                                h,
+                                n,
+                            ],
+                            stream=stream,
+                            device=device,
+                            block_dim=64,
+                        )
+                    continue
                 kernel = get_tiled_swept_collision_kernel(
                     data.max_n, enable_speed_metric, h, n, block_dim
                 )
