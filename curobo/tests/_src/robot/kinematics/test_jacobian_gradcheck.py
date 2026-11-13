@@ -8,6 +8,7 @@ Tests verify:
 1. Forward jacobian values match finite difference approximation on FK.
 2. Backward pass through jacobian (dJ/dq) matches finite differences on a scalar loss.
 3. Element-wise gradient of individual jacobian entries matches finite differences.
+4. Backward pass from a quaternion orientation loss matches joint-space finite differences.
 """
 
 # Third Party
@@ -20,11 +21,18 @@ from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
 
-# Robot configs for jacobian testing (single-chain robots with reasonable DOF).
+# Robot configs for jacobian-backward testing.
 ROBOT_CONFIGS = [
     #"franka.yml",
     #"ur10e.yml",
     "unitree_g1.yml",
+]
+
+# Forward Jacobian construction must cover single-chain, branched, and multi-tool trees.
+FORWARD_JACOBIAN_ROBOT_CONFIGS = [
+    "franka.yml",
+    "dual_ur10e.yml",
+    "unitree_g1_29dof_retarget.yml",
 ]
 
 
@@ -140,7 +148,65 @@ def _sample_joint_positions(robot_model: Kinematics, n_random: int = 3):
     return configs
 
 
-@pytest.mark.parametrize("robot_file", ROBOT_CONFIGS)
+def test_quaternion_orientation_gradient_matches_finite_difference(
+    cuda_device_cfg: DeviceCfg,
+):
+    """Check quaternion-output backward against joint-space finite differences.
+
+    The loss is invariant to the quaternion double cover. Its gradient reaches the
+    kinematics backward kernel as a raw quaternion cotangent, so this test detects
+    errors in the factor or perturbation frame used to convert that cotangent to an
+    angular cotangent.
+    """
+    robot_model = _create_robot_model(
+        "franka.yml", cuda_device_cfg, compute_jacobian=False
+    )
+    q_base = cuda_device_cfg.to_device(
+        [[0.31, -0.82, 0.27, -1.91, 0.44, 1.16, -0.38]]
+    )
+    target_quaternion = cuda_device_cfg.to_device(
+        [[0.72, -0.21, 0.56, -0.35]]
+    )
+    target_quaternion = torch.nn.functional.normalize(target_quaternion, dim=-1)
+
+    def orientation_loss(joint_angles: torch.Tensor) -> torch.Tensor:
+        state = robot_model.compute_kinematics(
+            JointState.from_position(
+                joint_angles, joint_names=robot_model.joint_names
+            )
+        )
+        quaternion = state.tool_poses.quaternion[0, 0, 0]
+        quaternion_dot = torch.sum(quaternion * target_quaternion[0])
+        return 1.0 - quaternion_dot.square()
+
+    q = q_base.clone().requires_grad_(True)
+    orientation_loss(q).backward()
+    analytical_gradient = q.grad.detach().clone()
+
+    finite_difference_gradient = torch.zeros_like(q_base)
+    epsilon = 5.0e-4
+    for joint_idx in range(robot_model.get_dof()):
+        q_plus = q_base.clone()
+        q_plus[0, joint_idx] += epsilon
+        loss_plus = orientation_loss(q_plus).detach().clone()
+
+        q_minus = q_base.clone()
+        q_minus[0, joint_idx] -= epsilon
+        loss_minus = orientation_loss(q_minus).detach().clone()
+
+        finite_difference_gradient[0, joint_idx] = (
+            loss_plus - loss_minus
+        ) / (2.0 * epsilon)
+
+    torch.testing.assert_close(
+        analytical_gradient,
+        finite_difference_gradient,
+        atol=2.0e-3,
+        rtol=2.0e-2,
+    )
+
+
+@pytest.mark.parametrize("robot_file", FORWARD_JACOBIAN_ROBOT_CONFIGS)
 def test_jacobian_accuracy(robot_file: str, cuda_device_cfg: DeviceCfg):
     """Test jacobian values match finite difference approximation on FK.
 
@@ -219,6 +285,107 @@ def test_jacobian_accuracy(robot_file: str, cuda_device_cfg: DeviceCfg):
 
     assert not failures, (
         f"Jacobian accuracy failures for {robot_file}:\n" + "\n".join(failures)
+    )
+
+
+def test_jacobian_accuracy_with_mimic_joint(cuda_device_cfg: DeviceCfg):
+    """Forward Jacobian accumulates every physical link sharing one coordinate."""
+    cfg = KinematicsCfg.from_robot_yaml_file(
+        "simple_mimic_robot.yml",
+        device_cfg=cuda_device_cfg,
+        lock_joints=None,
+    )
+    robot_model = Kinematics(cfg, compute_jacobian=True, compute_spheres=False)
+    connected_link_counts = (
+        cfg.kinematics_config.joint_links_offsets[1:]
+        - cfg.kinematics_config.joint_links_offsets[:-1]
+    )
+    assert torch.max(connected_link_counts) > 1
+
+    joint_position = cuda_device_cfg.to_device([[0.2, -0.3]])
+    state = robot_model.compute_kinematics(
+        JointState.from_position(joint_position, joint_names=robot_model.joint_names)
+    )
+    analytical = state.tool_jacobians[:, 0, :, :3].clone()
+    finite_difference = torch.zeros_like(analytical)
+    epsilon = 1.0e-4
+    for joint_idx in range(robot_model.get_dof()):
+        positive = joint_position.clone()
+        positive[:, joint_idx] += epsilon
+        positive_position = robot_model.compute_kinematics(
+            JointState.from_position(positive, joint_names=robot_model.joint_names)
+        ).tool_poses.position[:, 0].clone()
+
+        negative = joint_position.clone()
+        negative[:, joint_idx] -= epsilon
+        negative_position = robot_model.compute_kinematics(
+            JointState.from_position(negative, joint_names=robot_model.joint_names)
+        ).tool_poses.position[:, 0].clone()
+        finite_difference[:, :, :, joint_idx] = (
+            positive_position - negative_position
+        ) / (2.0 * epsilon)
+
+    torch.testing.assert_close(
+        analytical,
+        finite_difference,
+        atol=1.0e-3,
+        rtol=2.0e-2,
+    )
+
+
+def test_jacobian_backward_with_mimic_joint(cuda_device_cfg: DeviceCfg):
+    """Jacobian VJP sums every physical contributor of a mimic coordinate."""
+    cfg = KinematicsCfg.from_robot_yaml_file(
+        "simple_mimic_robot.yml",
+        device_cfg=cuda_device_cfg,
+        lock_joints=None,
+    )
+    robot_model = Kinematics(cfg, compute_jacobian=True, compute_spheres=False)
+    joint_position = cuda_device_cfg.to_device([[0.2, -0.3]])
+    differentiable_position = joint_position.clone().requires_grad_(True)
+    state = robot_model.compute_kinematics(
+        JointState.from_position(
+            differentiable_position,
+            joint_names=robot_model.joint_names,
+        )
+    )
+    generator = torch.Generator(device=cuda_device_cfg.device)
+    generator.manual_seed(173)
+    cotangent = torch.randn(
+        state.tool_jacobians.shape,
+        generator=generator,
+        device=cuda_device_cfg.device,
+        dtype=cuda_device_cfg.dtype,
+    )
+    analytical = torch.autograd.grad(
+        state.tool_jacobians,
+        differentiable_position,
+        cotangent,
+    )[0]
+
+    finite_difference = torch.zeros_like(joint_position)
+    epsilon = 5.0e-4
+    for joint_idx in range(robot_model.get_dof()):
+        positive = joint_position.clone()
+        positive[:, joint_idx] += epsilon
+        positive_jacobian = robot_model.compute_kinematics(
+            JointState.from_position(positive, joint_names=robot_model.joint_names)
+        ).tool_jacobians.clone()
+
+        negative = joint_position.clone()
+        negative[:, joint_idx] -= epsilon
+        negative_jacobian = robot_model.compute_kinematics(
+            JointState.from_position(negative, joint_names=robot_model.joint_names)
+        ).tool_jacobians.clone()
+        finite_difference[:, joint_idx] = (
+            (positive_jacobian - negative_jacobian) * cotangent
+        ).sum() / (2.0 * epsilon)
+
+    torch.testing.assert_close(
+        analytical,
+        finite_difference,
+        atol=5.0e-4,
+        rtol=3.0e-2,
     )
 
 

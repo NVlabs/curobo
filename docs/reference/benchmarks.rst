@@ -1,133 +1,113 @@
 Benchmarks & Profiling
-=======================
+======================
 
-Latest Motion Generation Results
-*********************************
+Recorded C++ Results
+--------------------
 
-Motion Generation on 2600 problems from motion benchmaker and motion policy networks, on a
-RTX 6000 Ada:
+Measured October 30–31, 2026 on an NVIDIA GeForce RTX 5090 with CUDA 13.0,
+driver 595.99.02, and a Release build targeting SM 120. These are historical
+measurements, rather than results from the current checkout.
 
-+---------------------+---------------------------------------------------------------------+
-| Metric              | Value                                                               |
-+=====================+=====================================================================+
-| Success %           | 99.73                                                               |
-+---------------------+---------------------------------------------------------------------+
-| Plan Time (s)       | mean: 0.038 ± 0.014  median: 0.035  75%: 0.038  98%: 0.081          |
-+---------------------+---------------------------------------------------------------------+
-| Solve Time (s)      | mean: 0.031 ± 0.013  median: 0.029  75%: 0.031  98%: 0.064          |
-+---------------------+---------------------------------------------------------------------+
-| Position Error (mm) | mean: 0.041 ± 0.325  median: 0.000  75%: 0.000  98%: 0.373          |
-+---------------------+---------------------------------------------------------------------+
-| Path Length (rad.)  | mean: 3.126 ± 1.050  median: 3.249  75%: 3.820  98%: 5.078          |
-+---------------------+---------------------------------------------------------------------+
-| Motion Time(s)      | mean: 1.250 ± 0.357  median: 1.243  75%: 1.486  98%: 2.128          |
-+---------------------+---------------------------------------------------------------------+
-| Jerk                | mean: 227.365 ± 83.736  median: 213.841  75%: 267.641  98%: 465.294 |
-+---------------------+---------------------------------------------------------------------+
-| Energy (J)          | mean: 89.270 ± 49.704  median: 78.959  75%: 117.086  98%: 203.041   |
-+---------------------+---------------------------------------------------------------------+
-| Torque (N·m)        | mean: 71.028 ± 25.216  median: 67.328  75%: 86.430  98%: 132.991    |
-+---------------------+---------------------------------------------------------------------+
+CUDA graphs were enabled. Timings use synchronized host wall time after graph
+warmup and at least five seconds of sustained warmup.
 
-With torque limits at full payload of 3kg:
+Motion planning
+~~~~~~~~~~~~~~~
 
+The Franka workload contains 2,590 scored MotionBenchMaker and MPINets problems
+per payload, after 10 canonical exclusions. Planning time includes retries and
+time optimization; scene updates, input/output copies, and scoring are excluded.
 
-+---------------------+---------------------------------------------------------------------+
-| Metric              | Value                                                               |
-+=====================+=====================================================================+
-| Success %           | 99.73                                                               |
-+---------------------+---------------------------------------------------------------------+
-| Plan Time (s)       | mean: 0.052 ± 0.030  median: 0.043  75%: 0.053  98%: 0.135          |
-+---------------------+---------------------------------------------------------------------+
-| Solve Time (s)      | mean: 0.042 ± 0.025  median: 0.036  75%: 0.045  98%: 0.113          |
-+---------------------+---------------------------------------------------------------------+
-| Position Error (mm) | mean: 0.042 ± 0.327  median: 0.000  75%: 0.000  98%: 0.329          |
-+---------------------+---------------------------------------------------------------------+
-| Path Length (rad.)  | mean: 3.234 ± 1.136  median: 3.317  75%: 3.916  98%: 5.698          |
-+---------------------+---------------------------------------------------------------------+
-| Motion Time(s)      | mean: 1.336 ± 0.475  median: 1.304  75%: 1.540  98%: 2.738          |
-+---------------------+---------------------------------------------------------------------+
-| Jerk                | mean: 217.786 ± 82.211  median: 204.219  75%: 254.104  98%: 445.629 |
-+---------------------+---------------------------------------------------------------------+
-| Energy (J)          | mean: 81.409 ± 42.400  median: 72.707  75%: 105.417  98%: 178.045   |
-+---------------------+---------------------------------------------------------------------+
-| Torque (N·m)        | mean: 62.270 ± 13.705  median: 65.345  75%: 73.378  98%: 82.450     |
-+---------------------+---------------------------------------------------------------------+
+.. list-table:: Motion planning results
+   :header-rows: 1
 
+   * - Payload
+     - Successful problems
+     - Mean planning time (ms)
+     - Mean motion duration (s)
+   * - 0 kg
+     - 2,582 / 2,590 (99.69%)
+     - 4.464
+     - 1.177
+   * - 3 kg
+     - 2,582 / 2,590 (99.69%)
+     - 4.868
+     - 1.266
 
+Planning means include failed calls; motion durations include successful plans
+only. Both cases use 32 IK seeds, four trajectory seeds, 16 spline controls,
+one 50-step initial optimization pass, a separate 25-step refinement pass,
+and up to 20 planning attempts.
 
-Latest Inverse Kinematics Results
-*********************************
+The recorded unloaded case disables planning effort checks; the 3 kg case enables
+them. Both retain dynamics in time optimization. The current runner enables
+planning effort checks for both payloads, so its default unloaded timings use a
+different policy.
 
-Reported errors are 90th percentile. You can run this with ``python benchmark/ik_benchmark.py``.
+Inverse kinematics
+~~~~~~~~~~~~~~~~~~
 
-+----+----------------+---------------+--------------+--------------+----------------------+--------------------------+----------------------+---------------------+--------------------------------+------------------------------------+
-|    | robot          |   IK-time(ms) |   Batch-Size |   Success-IK |   Position-Error(mm) |   Orientation-Error(deg) |   C-Free-IK-time(ms) |   Success-C-Free-IK |   Position-Error-C-Free-IK(mm) |   Orientation-Error-C-Free-IK(deg) |
-+====+================+===============+==============+==============+======================+==========================+======================+=====================+================================+====================================+
-|  0 | unitree_g1.yml |      31.3916  |          100 |          100 |          0.000982541 |              5.60822e-05 |            526.871   |                98.4 |                    0.00795739  |                        0.000371568 |
-+----+----------------+---------------+--------------+--------------+----------------------+--------------------------+----------------------+---------------------+--------------------------------+------------------------------------+
-|  1 | dual_ur10e.yml |       6.05801 |          100 |          100 |          0.000191174 |              1.12155e-05 |             15.6443  |                99.2 |                    0.000170931 |                        1.03467e-05 |
-+----+----------------+---------------+--------------+--------------+----------------------+--------------------------+----------------------+---------------------+--------------------------------+------------------------------------+
-|  2 | franka.yml     |       2.60138 |          100 |          100 |          0.000127351 |              8.30968e-06 |              2.72574 |               100   |                    0.000130251 |                        8.50011e-06 |
-+----+----------------+---------------+--------------+--------------+----------------------+--------------------------+----------------------+---------------------+--------------------------------+------------------------------------+
+Each case uses five batches of 100 reachable targets. Times are mean times for
+an entire 100-query batch, including unsuccessful queries. Pose tolerances are
+5 mm and 0.05 rad. Collision-free mode checks self collision and the
+``collision_table.yml`` scene. G1 uses four wrist/ankle targets and 35 optimization
+variables; dual UR10e uses two tool targets and Franka uses one.
 
-Running Benchmarks
-********************
+.. list-table:: Inverse kinematics results
+   :header-rows: 1
 
-We use robometrics to run some of the benchmarks and also provide csv export with pandas.
-Install the ``benchmark`` extra to pull in all required dependencies
-(``tabulate``, ``pandas``, ``robometrics``, ``pin``, ``seaborn``):
+   * - Robot
+     - Pose IK (ms/batch)
+     - Success (%)
+     - Collision-free IK (ms/batch)
+     - Success (%)
+   * - G1
+     - 19.201
+     - 100
+     - 162.564
+     - 90.2
+   * - Dual UR10e
+     - 3.574
+     - 100
+     - 8.434
+     - 99.4
+   * - Franka
+     - 0.551
+     - 100
+     - 0.559
+     - 100
 
-.. code-block:: bash
+Run Benchmarks
+--------------
 
-    pip install -e ".[benchmark]"
-    # or, with uv:
-    uv sync --extra benchmark
-
-USD output (``--save_usd`` for ``motion_plan_benchmark.py``) additionally requires
-``usd-core``. Install both extras together when you need to write ``.usd`` files:
+The native runner requires CMake, a C++17 compiler, a CUDA toolkit, and a supported
+NVIDIA GPU. From the repository root:
 
 .. code-block:: bash
 
-    pip install -e ".[benchmark,usd]"
-    # or, with uv:
-    uv sync --extra benchmark --extra usd
+   source .venv/bin/activate
+   uv pip install -e ".[benchmark]"
+   python cpp_runtime/benchmarks/run_benchmarks.py \
+     --output cpp_runtime/benchmarks/outputs/full_run
 
-.. note::
+Use ``--suite motion`` or ``--suite ik`` to select a workload. ``--max-problems 2``
+produces a partial motion smoke run. ``--disable-inverse-dynamics`` disables
+planning effort checks for both payloads while retaining time-optimization
+dynamics checks.
 
-    Do not install ``usd-core`` if you are running cuRobo inside Isaac Sim;
-    Isaac Sim provides its own USD runtime.
+Outputs include ``summary.json``, ``tables.rst``, source and artifact hashes,
+frozen inputs, exclusions, failures, and trajectory data. Native export and
+cross-device deployment are covered in :doc:`../guides/export_cpp_runtime`.
 
+Profiling
+---------
 
-Kinematics & Collision Checking
-********************************
-To measure compute time and peak memory for forward kinematics, pose-cost
-gradients, self-collision, and world-collision (with and without CUDA graphs)
-across all supported robots, run:
+The native runner accepts ``--profile node`` or ``--profile graph`` for Nsight
+Systems traces. Profiled timings are diagnostic and should be kept separate
+from unprofiled results.
 
-``python benchmark/cost_gradient_benchmark.py``
+For inverse-dynamics CUDA kernel timings:
 
-Results are written to ``benchmark/log/`` as four YAML files (one per stage),
-with times reported in milliseconds and memory in MiB.
+.. code-block:: bash
 
-Inverse Kinematics
-********************************
-
-To measure success metrics and compute time for inverse kinematics and collision-free inverse kinematics, run
-
-``python benchmark/ik_benchmark.py --save_path=. --file_name=ik``
-
-This will save the results to ``ik.yml``.
-
-Motion Planning
-***************************************
-
-To run benchmarks for motion planning:
-
-``python benchmark/motion_plan_benchmark.py``, optionally with ``--use-dynamics`` to
-enable torque-limited motion planning.
-
-
-
-
-
+   python benchmark/inverse_dynamics_kernel_benchmark.py

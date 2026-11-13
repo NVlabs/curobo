@@ -1,0 +1,8 @@
+## SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+## SPDX-License-Identifier: Apache-2.0
+graph_planner_resources:
+  steer_buffer_size: 5000
+  cspace_similarity_threshold: 0.005
+  sample_rejection_ratio: 10
+  feasibility_buffer_size: 2000
+  sampler_seed: 0

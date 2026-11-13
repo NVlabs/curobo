@@ -3,7 +3,7 @@
 #
 """Warp helper functions for pose manipulation in obstacle data.
 
-These functions are shared across all obstacle types (cuboid, mesh, voxel)
+These functions are shared across all registered obstacle types
 for indexing and pose loading from obstacle data structs.
 """
 

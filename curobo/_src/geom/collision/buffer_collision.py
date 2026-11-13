@@ -3,7 +3,7 @@
 #
 """Unified collision buffer for sphere-obstacle distance computation.
 
-This module provides a single buffer for all obstacle types (cuboid, mesh, voxel).
+This module provides a single buffer for all registered obstacle types.
 The generic collision kernels use atomic accumulation, allowing all obstacle types
 to write to the same buffer without conflicts.
 """
@@ -46,12 +46,26 @@ class CollisionBuffer:
     #: Device configuration.
     device_cfg: DeviceCfg = None
 
+    #: Common-layer masks for raw queries without a robot model [1, num_spheres].
+    default_sphere_collision_mask: Optional[torch.Tensor] = None
+
+    #: Default environment-zero indices for raw queries [batch].
+    default_env_query_idx: Optional[torch.Tensor] = None
+
     def __post_init__(self):
         """Initialize shape from distance buffer if not provided."""
         if self.shape is None:
             self.shape = self.distance.shape
         if self.device_cfg is None:
             self.device_cfg = DeviceCfg()
+        if self.default_sphere_collision_mask is None:
+            self.default_sphere_collision_mask = torch.ones(
+                (1, self.shape[2]), device=self.distance.device, dtype=torch.uint32
+            )
+        if self.default_env_query_idx is None:
+            self.default_env_query_idx = torch.zeros(
+                self.shape[0], device=self.distance.device, dtype=torch.int32
+            )
 
     # -------------------------------------------------------------------------
     # Factory Methods
@@ -125,6 +139,12 @@ class CollisionBuffer:
             )
             self.shape = new_shape
             self.device_cfg = device_cfg
+            self.default_sphere_collision_mask = torch.ones(
+                (1, new_shape[2]), device=self.distance.device, dtype=torch.uint32
+            )
+            self.default_env_query_idx = torch.zeros(
+                new_shape[0], device=self.distance.device, dtype=torch.int32
+            )
 
     def clone(self) -> CollisionBuffer:
         """Create a deep copy of this buffer."""

@@ -55,10 +55,9 @@ class TestSharedKinematicsParams:
 
         kparams.link_spheres[0, sph_idx[0], 3] = 0.123
 
-        trajopt_val = (
-            planner.trajopt_solver.kinematics.config.kinematics_config
-            .link_spheres[0, sph_idx[0], 3].item()
-        )
+        trajopt_val = planner.trajopt_solver.kinematics.config.kinematics_config.link_spheres[
+            0, sph_idx[0], 3
+        ].item()
         assert trajopt_val == pytest.approx(0.123, abs=1e-6)
 
         kparams.link_spheres[0, sph_idx[0], 3] = original

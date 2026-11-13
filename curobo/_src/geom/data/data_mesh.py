@@ -22,6 +22,7 @@ import torch
 import warp as wp
 
 # CuRobo
+from curobo._src.geom.data.data_obstacle_bounds import update_world_aabb
 from curobo._src.geom.data.helper_pose import (
     get_obs_idx,
     load_transform_from_inv_pose,
@@ -88,6 +89,8 @@ class MeshData:
     Tensor layouts:
         - mesh_ids: (num_envs, max_n) - int64 Warp mesh handles
         - dims: (num_envs, max_n, 4) - bounding box dimensions [x, y, z, pad]
+        - bounds: (num_envs, max_n, 8) - local AABB [min_xyz, pad, max_xyz, pad]
+        - world_bounds: (num_envs, max_n, 8) - world AABB center and extent
         - inv_pose: (num_envs, max_n, 8) - inverse pose [x, y, z, qw, qx, qy, qz, pad]
         - enable: (num_envs, max_n) - uint8 flags
         - count: (num_envs,) - int32 active counts
@@ -99,11 +102,20 @@ class MeshData:
     #: Mesh bounding box dimensions [x, y, z, pad] in local frame.
     dims: torch.Tensor
 
+    #: Mesh local AABB [min_xyz, pad, max_xyz, pad].
+    bounds: torch.Tensor
+
+    #: World AABB [center_xyz, pad, extent_xyz, pad].
+    world_bounds: torch.Tensor
+
     #: Inverse pose [x, y, z, qw, qx, qy, qz] with padding.
     inv_pose: torch.Tensor
 
     #: Enable flag per mesh. 1 = active, 0 = disabled.
     enable: torch.Tensor
+
+    #: Unsigned collision-layer membership [num_envs, max_n].
+    obstacle_layers: torch.Tensor = field(init=False)
 
     #: Number of active meshes per environment.
     count: torch.Tensor
@@ -131,6 +143,7 @@ class MeshData:
 
     def __post_init__(self):
         """Initialize Warp device after dataclass creation."""
+        self.obstacle_layers = torch.ones_like(self.enable, dtype=torch.uint32)
         if self._wp_device is None:
             object.__setattr__(
                 self, "_wp_device", wp.device_from_torch(self.device_cfg.device)
@@ -167,6 +180,19 @@ class MeshData:
             dtype=device_cfg.dtype,
             device=device_cfg.device,
         )
+        bounds = torch.zeros(
+            (num_envs, max_n, 8),
+            dtype=device_cfg.dtype,
+            device=device_cfg.device,
+        )
+        bounds[..., :3] = -torch.inf
+        bounds[..., 4:7] = torch.inf
+        world_bounds = torch.zeros(
+            (num_envs, max_n, 8),
+            dtype=device_cfg.dtype,
+            device=device_cfg.device,
+        )
+        world_bounds[..., 4:7] = torch.inf
         inv_pose = torch.zeros(
             (num_envs, max_n, 8),
             dtype=device_cfg.dtype,
@@ -182,6 +208,8 @@ class MeshData:
         return cls(
             mesh_ids=mesh_ids,
             dims=dims,
+            bounds=bounds,
+            world_bounds=world_bounds,
             inv_pose=inv_pose,
             enable=enable,
             count=count,
@@ -297,6 +325,7 @@ class MeshData:
             meshes: List of Mesh objects to load.
             env_idx: Environment index to load into.
         """
+        self.obstacle_layers[env_idx].fill_(1)
         num_meshes = len(meshes)
         if num_meshes > self.max_n:
             log_and_raise(f"Cannot load {num_meshes} meshes, max cache size is {self.max_n}")
@@ -313,6 +342,9 @@ class MeshData:
         dims_list = torch.zeros(
             (num_meshes, 3), device=self.device_cfg.device, dtype=self.device_cfg.dtype
         )
+        bounds_list = torch.zeros(
+            (num_meshes, 8), device=self.device_cfg.device, dtype=self.device_cfg.dtype
+        )
 
         for i, mesh in enumerate(meshes):
             mesh_data = self._load_mesh_into_cache(mesh)
@@ -322,12 +354,21 @@ class MeshData:
             # Compute bounding box dimensions from mesh bounds
             lower, upper = mesh_data.get_bounds()
             dims_list[i] = upper - lower
+            bounds_list[i, :3] = lower
+            bounds_list[i, 4:7] = upper
 
         pose_buffer = Pose.from_batch_list(pose_list, self.device_cfg)
         inv_pose_buffer = pose_buffer.inverse()
 
         self.mesh_ids[env_idx, :num_meshes] = id_list
         self.dims[env_idx, :num_meshes, :3] = dims_list
+        self.bounds[env_idx, :num_meshes] = bounds_list
+        update_world_aabb(
+            self.world_bounds[env_idx, :num_meshes],
+            bounds_list[:, :3],
+            bounds_list[:, 4:7],
+            pose_buffer,
+        )
         self.inv_pose[env_idx, :num_meshes, :7] = inv_pose_buffer.get_pose_vector()
         self.enable[env_idx, :num_meshes] = 1
         self.enable[env_idx, num_meshes:] = 0
@@ -361,6 +402,9 @@ class MeshData:
 
         self.mesh_ids[env_idx, current_count] = mesh_data.mesh_id
         self.dims[env_idx, current_count, :3] = mesh_dims
+        self.bounds[env_idx, current_count, :3] = lower
+        self.bounds[env_idx, current_count, 4:7] = upper
+        update_world_aabb(self.world_bounds[env_idx, current_count], lower, upper, w_obj_pose)
         self.inv_pose[env_idx, current_count, :7] = obj_w_pose.get_pose_vector()
         self.enable[env_idx, current_count] = 1
         self.names[env_idx][current_count] = mesh_data.name
@@ -397,8 +441,16 @@ class MeshData:
 
         if w_obj_pose is not None:
             obj_w_pose = w_obj_pose.inverse()
+        else:
+            w_obj_pose = obj_w_pose.inverse()
 
         self.inv_pose[env_idx, idx, :7] = obj_w_pose.get_pose_vector()
+        update_world_aabb(
+            self.world_bounds[env_idx, idx],
+            self.bounds[env_idx, idx, :3],
+            self.bounds[env_idx, idx, 4:7],
+            w_obj_pose,
+        )
 
     def update_from_warp_id(
         self,
@@ -437,6 +489,10 @@ class MeshData:
                 self.count[env_idx] = mesh_idx + 1
 
         self.mesh_ids[env_idx, mesh_idx] = warp_mesh_id
+        self.bounds[env_idx, mesh_idx, :3] = -torch.inf
+        self.bounds[env_idx, mesh_idx, 4:7] = torch.inf
+        self.world_bounds[env_idx, mesh_idx, :3] = 0.0
+        self.world_bounds[env_idx, mesh_idx, 4:7] = torch.inf
         self.inv_pose[env_idx, mesh_idx, :7] = obj_w_pose.get_pose_vector()
         self.enable[env_idx, mesh_idx] = 1
         self.names[env_idx][mesh_idx] = name
@@ -481,6 +537,8 @@ class MeshData:
             env_idx: Environment to clear. If None, clears all environments.
             clear_warp_cache: If True, also clears the shared Warp mesh cache.
         """
+        layers = self.obstacle_layers if env_idx is None else self.obstacle_layers[env_idx]
+        layers.fill_(1)
         if env_idx is not None:
             self.enable[env_idx, :] = 0
             self.count[env_idx] = 0
@@ -512,6 +570,7 @@ class MeshData:
         s = MeshDataWarp()
         s.mesh_ids = wp.from_torch(self.mesh_ids.view(-1), dtype=wp.uint64)
         s.dims = wp.from_torch(self.dims.view(-1, 4), dtype=wp.float32)
+        s.world_bounds = wp.from_torch(self.world_bounds.view(-1, 8), dtype=wp.float32)
         s.inv_pose = wp.from_torch(self.inv_pose.view(-1, 8), dtype=wp.float32)
         s.enable = wp.from_torch(self.enable.view(-1), dtype=wp.uint8)
         s.n_per_env = wp.from_torch(self.count.view(-1), dtype=wp.int32)
@@ -533,6 +592,7 @@ class MeshDataWarp:
     Attributes:
         mesh_ids: Warp mesh handles for BVH queries. Shape: (num_envs * max_n,).
         dims: Bounding box dimensions [x, y, z, pad]. Shape: (num_envs * max_n, 4).
+        world_bounds: World AABB [center_xyz, pad, extent_xyz, pad].
         inv_pose: Inverse pose [x, y, z, qw, qx, qy, qz, pad]. Shape: (num_envs * max_n, 8).
         enable: Enable flag per mesh. 1 = active, 0 = disabled.
         n_per_env: Number of active meshes per environment.
@@ -543,6 +603,7 @@ class MeshDataWarp:
 
     mesh_ids: wp.array(dtype=wp.uint64)
     dims: wp.array2d(dtype=wp.float32)
+    world_bounds: wp.array2d(dtype=wp.float32)
     inv_pose: wp.array2d(dtype=wp.float32)
     enable: wp.array(dtype=wp.uint8)
     n_per_env: wp.array(dtype=wp.int32)
@@ -647,6 +708,44 @@ def compute_local_sdf(
     return dis_length * result.sign
 
 
+def compute_swept_sphere_clearance_lower_bound(
+    obs_set: MeshDataWarp,
+    env_idx: wp.int32,
+    local_idx: wp.int32,
+    current_world: wp.vec3,
+    sweep_min_world: wp.vec3,
+    sweep_max_world: wp.vec3,
+    radius_adjusted: wp.float32,
+    sweep_reach: wp.float32,
+) -> wp.float32:
+    """Return a conservative clearance lower bound from the mesh world AABB.
+
+    Externally supplied Warp meshes have unbounded cached bounds and therefore
+    return zero here, which safely disables broad-phase rejection for them.
+    """
+    flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+    center_x = obs_set.world_bounds[flat_idx, 0]
+    center_y = obs_set.world_bounds[flat_idx, 1]
+    center_z = obs_set.world_bounds[flat_idx, 2]
+    extent_x = obs_set.world_bounds[flat_idx, 4]
+    extent_y = obs_set.world_bounds[flat_idx, 5]
+    extent_z = obs_set.world_bounds[flat_idx, 6]
+
+    if sweep_max_world[0] < center_x - extent_x:
+        return center_x - extent_x - sweep_max_world[0]
+    if sweep_min_world[0] > center_x + extent_x:
+        return sweep_min_world[0] - center_x - extent_x
+    if sweep_max_world[1] < center_y - extent_y:
+        return center_y - extent_y - sweep_max_world[1]
+    if sweep_min_world[1] > center_y + extent_y:
+        return sweep_min_world[1] - center_y - extent_y
+    if sweep_max_world[2] < center_z - extent_z:
+        return center_z - extent_z - sweep_max_world[2]
+    if sweep_min_world[2] > center_z + extent_z:
+        return sweep_min_world[2] - center_z - extent_z
+    return wp.float32(0.0)
+
+
 def compute_local_sdf_with_grad(
     obs_set: MeshDataWarp,
     env_idx: wp.int32,
@@ -697,12 +796,9 @@ def compute_local_sdf_with_grad(
     # Signed distance: negative inside, positive outside
     signed_dist = dis_length * result.sign
 
-    # -grad(sdf): points toward the obstacle interior on both sides of the
-    # surface, matching the cuboid and voxel conventions. result.sign flips
-    # delta for interior points, where the closest surface point lies in the
-    # opposite direction.
+    # Gradient in local frame pointing toward obstacle
     grad_local = wp.vec3(0.0, 0.0, 0.0)
     if dis_length > _SDF_EPS:
-        grad_local = result.sign * delta / dis_length
+        grad_local = -delta / dis_length
 
     return wp.vec4(signed_dist, grad_local[0], grad_local[1], grad_local[2])

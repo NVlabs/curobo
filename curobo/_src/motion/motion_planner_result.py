@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+"""Result types returned by motion-planning operations."""
+
 from __future__ import annotations
 
 # Standard Library
@@ -10,12 +12,14 @@ from typing import Optional
 import torch
 
 # CuRobo
+from curobo._src.solver.solver_base_result import BaseSolverResult
 from curobo._src.state.state_joint import JointState
 
 
 @dataclass
 class MotionPlannerResult:
     """Result of a motion planning operation."""
+
     success: Optional[torch.Tensor] = None
 
 
@@ -43,3 +47,5 @@ class GraspPlanResult:
     planning_time: float = 0.0
     goalset_index: Optional[torch.Tensor] = None
 
+    #: Solver result used to select ``goalset_index``.
+    goalset_result: Optional[BaseSolverResult] = None

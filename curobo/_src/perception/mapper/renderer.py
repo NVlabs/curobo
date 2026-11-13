@@ -33,6 +33,8 @@ from typing import Optional, Tuple
 import torch
 import warp as wp
 
+from curobo._src.perception.mapper.filter_semantic import SemanticFilter
+from curobo._src.perception.mapper.storage import RenderedFeatures
 from curobo._src.types.pose import Pose
 from curobo._src.util.logging import log_and_raise
 
@@ -109,6 +111,11 @@ class BlockSparseTSDFRenderer:
         self._hit_colors = None
         self._hit_depths = None
         self._hit_mask = None
+        self._feature_buffer_size = 0
+        self._feature_block_idx = None
+        self._feature_node_idx = None
+        self._feature_valid = None
+        self._feature_render_generation = 0
 
     def _ensure_buffers(self, n_pixels: int, include_color: bool = False) -> None:
         """Ensure output buffers are large enough."""
@@ -123,6 +130,71 @@ class BlockSparseTSDFRenderer:
             return
         if self._hit_colors is None or self._hit_colors.shape[0] < n_pixels:
             self._hit_colors = torch.zeros((n_pixels, 3), dtype=torch.uint8, device=self.device)
+
+    def _ensure_feature_buffers(self, n_pixels: int) -> None:
+        """Ensure compact feature-reference buffers are large enough."""
+        if self._feature_buffer_size >= n_pixels:
+            return
+        self._feature_block_idx = torch.full(
+            (n_pixels,),
+            -1,
+            dtype=torch.int32,
+            device=self.device,
+        )
+        self._feature_node_idx = torch.full(
+            (n_pixels,),
+            -1,
+            dtype=torch.int16,
+            device=self.device,
+        )
+        self._feature_valid = torch.zeros(
+            n_pixels,
+            dtype=torch.uint8,
+            device=self.device,
+        )
+        self._feature_buffer_size = n_pixels
+
+    def _get_feature_revision(self) -> int:
+        """Return the fused-feature revision from a TSDF or ESDF integrator."""
+        if hasattr(self.integrator, "_semantic_revision"):
+            return self.integrator._semantic_revision
+        return self.integrator._tsdf_integrator._semantic_revision
+
+    def _normalize_image_patch(
+        self,
+        image_shape: Tuple[int, int],
+        image_patch: Optional[Tuple[int, int, int, int]],
+    ) -> tuple[int, int, int, int]:
+        """Validate an absolute image patch and return its render region."""
+        if not isinstance(image_shape, tuple) or len(image_shape) != 2:
+            log_and_raise("image_shape must be a (height, width) tuple.")
+        if any(not isinstance(value, int) or isinstance(value, bool) for value in image_shape):
+            log_and_raise(
+                "image_shape dimensions must be integers.",
+                exception_type=TypeError,
+            )
+        image_height, image_width = image_shape
+        if image_height <= 0 or image_width <= 0:
+            log_and_raise("image_shape dimensions must be positive.")
+        if image_patch is None:
+            return 0, 0, image_height, image_width
+        if not isinstance(image_patch, tuple) or len(image_patch) != 4:
+            log_and_raise("image_patch must be a (top, left, height, width) tuple.")
+        if any(not isinstance(value, int) or isinstance(value, bool) for value in image_patch):
+            log_and_raise(
+                "image_patch coordinates and dimensions must be integers.",
+                exception_type=TypeError,
+            )
+        patch_top, patch_left, patch_height, patch_width = image_patch
+        if patch_top < 0 or patch_left < 0:
+            log_and_raise("image_patch top and left must be non-negative.")
+        if patch_height <= 0 or patch_width <= 0:
+            log_and_raise("image_patch height and width must be positive.")
+        if patch_top + patch_height > image_height or patch_left + patch_width > image_width:
+            log_and_raise(
+                f"image_patch={image_patch} exceeds image_shape={image_shape}."
+            )
+        return image_patch
 
     def _normalize_intrinsics(self, intrinsics: torch.Tensor) -> tuple[torch.Tensor, bool]:
         """Return camera intrinsics as ``(N, 3, 3)`` and whether input was batched."""
@@ -203,6 +275,7 @@ class BlockSparseTSDFRenderer:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Render depth and normal images from block-sparse TSDF.
 
@@ -211,6 +284,7 @@ class BlockSparseTSDFRenderer:
                 intrinsics. Batched intrinsics require a pose with the same camera count.
             pose: Camera-to-world transform as :class:`Pose`.
             image_shape: (H, W) output image dimensions.
+            semantic_filter: Optional fused-feature filter applied during traversal.
 
         Returns:
             Tuple of depth, normals, and valid mask. Single-camera inputs return
@@ -229,26 +303,37 @@ class BlockSparseTSDFRenderer:
         warp_data = tsdf.get_warp_data()
         kernels = tsdf.kernels
 
+        prepared_semantic_filter = (
+            self.integrator._prepare_semantic_filter(semantic_filter)
+            if semantic_filter is not None
+            else None
+        )
+        kernel = kernels.raycast_block_sparse_kernel
+        kernel_inputs = [
+            wp.from_torch(render_inputs.intrinsics, dtype=wp.float32),
+            wp.from_torch(render_inputs.positions, dtype=wp.float32),
+            wp.from_torch(render_inputs.quaternions, dtype=wp.float32),
+            warp_data,
+            self.config.depth_minimum_distance,
+            self.config.depth_maximum_distance,
+            self.config.minimum_tsdf_weight,
+            wp.from_torch(self._hit_points[:n_pixels], dtype=wp.float32),
+            wp.from_torch(self._hit_normals[:n_pixels], dtype=wp.float32),
+            wp.from_torch(self._hit_depths[:n_pixels], dtype=wp.float32),
+            wp.from_torch(self._hit_mask[:n_pixels], dtype=wp.uint8),
+            H,
+            W,
+            n_pixels_per_camera,
+        ]
+        if prepared_semantic_filter is not None:
+            kernel = kernels.raycast_block_sparse_semantic_kernel
+            kernel_inputs.insert(4, prepared_semantic_filter)
+
         # Launch raycast kernel with struct-based API
         wp.launch(
-            kernel=kernels.raycast_block_sparse_kernel,
+            kernel=kernel,
             dim=n_pixels,
-            inputs=[
-                wp.from_torch(render_inputs.intrinsics, dtype=wp.float32),
-                wp.from_torch(render_inputs.positions, dtype=wp.float32),
-                wp.from_torch(render_inputs.quaternions, dtype=wp.float32),
-                warp_data,
-                self.config.depth_minimum_distance,
-                self.config.depth_maximum_distance,
-                self.config.minimum_tsdf_weight,
-                wp.from_torch(self._hit_points[:n_pixels], dtype=wp.float32),
-                wp.from_torch(self._hit_normals[:n_pixels], dtype=wp.float32),
-                wp.from_torch(self._hit_depths[:n_pixels], dtype=wp.float32),
-                wp.from_torch(self._hit_mask[:n_pixels], dtype=wp.uint8),
-                H,
-                W,
-                n_pixels_per_camera,
-            ],
+            inputs=kernel_inputs,
         )
 
         # Kernel clears hit_* to zero on miss, so output buffers are
@@ -268,11 +353,140 @@ class BlockSparseTSDFRenderer:
 
         return depth_image, normal_image, valid_mask
 
+    def render_features(
+        self,
+        intrinsics: torch.Tensor,
+        pose: Pose,
+        image_shape: Tuple[int, int],
+        image_patch: Optional[Tuple[int, int, int, int]] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
+    ) -> RenderedFeatures:
+        """Raycast compact references to fused features at retained surfaces.
+
+        Args:
+            intrinsics: ``(3, 3)``, ``(4,)``, ``(N, 3, 3)``, or ``(N, 4)``
+                camera intrinsics.
+            pose: Camera-to-world transform as :class:`Pose`.
+            image_shape: Full ``(height, width)`` camera image shape.
+            image_patch: Optional absolute ``(top, left, height, width)`` raycast
+                region. Intrinsics remain in full-image coordinates.
+            semantic_filter: Optional fused-feature filter applied during traversal.
+
+        Returns:
+            Compact :class:`RenderedFeatures` references. Call
+            :meth:`RenderedFeatures.features` to gather selected spatial and
+            channel ranges without another raycast.
+        """
+        tsdf = self.integrator._tsdf
+        if tsdf.config.feature_dim <= 0:
+            log_and_raise(
+                "render_features() requires feature_dim > 0. Enable fused features "
+                "in the mapper configuration.",
+                exception_type=RuntimeError,
+            )
+
+        patch_top, patch_left, render_height, render_width = (
+            self._normalize_image_patch(image_shape, image_patch)
+        )
+        image_height, image_width = image_shape
+        render_inputs = self._normalize_render_inputs(intrinsics, pose)
+        pixels_per_camera = render_height * render_width
+        n_pixels = render_inputs.camera_count * pixels_per_camera
+        self._ensure_buffers(n_pixels)
+        self._ensure_feature_buffers(n_pixels)
+
+        warp_data = tsdf.get_warp_data()
+        kernels = tsdf.kernels
+        prepared_semantic_filter = (
+            self.integrator._prepare_semantic_filter(semantic_filter)
+            if semantic_filter is not None
+            else None
+        )
+        kernel = kernels.raycast_block_sparse_feature_kernel
+        kernel_inputs = [
+            wp.from_torch(render_inputs.intrinsics, dtype=wp.float32),
+            wp.from_torch(render_inputs.positions, dtype=wp.float32),
+            wp.from_torch(render_inputs.quaternions, dtype=wp.float32),
+            warp_data,
+            self.config.depth_minimum_distance,
+            self.config.depth_maximum_distance,
+            self.config.minimum_tsdf_weight,
+            wp.from_torch(self._hit_normals[:n_pixels], dtype=wp.float32),
+            wp.from_torch(self._hit_depths[:n_pixels], dtype=wp.float32),
+            wp.from_torch(self._hit_mask[:n_pixels], dtype=wp.uint8),
+            wp.from_torch(self._feature_valid[:n_pixels], dtype=wp.uint8),
+            wp.from_torch(self._feature_block_idx[:n_pixels], dtype=wp.int32),
+            wp.from_torch(self._feature_node_idx[:n_pixels], dtype=wp.int16),
+            patch_top,
+            patch_left,
+            render_height,
+            render_width,
+            pixels_per_camera,
+        ]
+        if prepared_semantic_filter is not None:
+            kernel = kernels.raycast_block_sparse_feature_semantic_kernel
+            kernel_inputs.insert(4, prepared_semantic_filter)
+
+        self._feature_render_generation += 1
+        wp.launch(kernel=kernel, dim=n_pixels, inputs=kernel_inputs)
+
+        if render_inputs.single_camera:
+            depth = self._hit_depths[:n_pixels].view(render_height, render_width)
+            normals = self._hit_normals[:n_pixels].view(render_height, render_width, 3)
+            valid_storage = self._hit_mask[:n_pixels].view(render_height, render_width)
+            feature_valid_storage = self._feature_valid[:n_pixels].view(
+                render_height,
+                render_width,
+            )
+            feature_block_idx = self._feature_block_idx[:n_pixels].view(
+                render_height,
+                render_width,
+            )
+            feature_node_idx = self._feature_node_idx[:n_pixels].view(
+                render_height,
+                render_width,
+            )
+        else:
+            output_shape = (
+                render_inputs.camera_count,
+                render_height,
+                render_width,
+            )
+            depth = self._hit_depths[:n_pixels].view(output_shape)
+            normals = self._hit_normals[:n_pixels].view(*output_shape, 3)
+            valid_storage = self._hit_mask[:n_pixels].view(output_shape)
+            feature_valid_storage = self._feature_valid[:n_pixels].view(output_shape)
+            feature_block_idx = self._feature_block_idx[:n_pixels].view(output_shape)
+            feature_node_idx = self._feature_node_idx[:n_pixels].view(output_shape)
+
+        return RenderedFeatures(
+            depth=depth,
+            normals=normals,
+            valid=valid_storage.bool(),
+            feature_valid=feature_valid_storage.bool(),
+            feature_block_idx=feature_block_idx,
+            feature_node_idx=feature_node_idx,
+            image_origin=(patch_top, patch_left),
+            full_image_shape=(image_height, image_width),
+            _warp_data=warp_data,
+            _feature_valid_storage=feature_valid_storage,
+            _feature_dim=tsdf.config.feature_dim,
+            _feature_revision=self._get_feature_revision(),
+            _feature_revision_getter=self._get_feature_revision,
+            _render_generation=self._feature_render_generation,
+            _render_generation_getter=lambda: self._feature_render_generation,
+            _gather_fp32_kernel=kernels.gather_rendered_features_fp32_kernel,
+            _gather_fp16_kernel=kernels.gather_rendered_features_fp16_kernel,
+            _single_camera=render_inputs.single_camera,
+            _camera_count=render_inputs.camera_count,
+        )
+
     def render_color(
         self,
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Render depth, normals, and color from block-sparse TSDF.
 
@@ -281,6 +495,7 @@ class BlockSparseTSDFRenderer:
                 intrinsics. Batched intrinsics require a pose with the same camera count.
             pose: Camera-to-world transform as :class:`Pose`.
             image_shape: (H, W) output dimensions.
+            semantic_filter: Optional fused-feature filter applied during traversal.
 
         Returns:
             Tuple of depth, normals, color, and valid mask. Single-camera inputs
@@ -299,27 +514,38 @@ class BlockSparseTSDFRenderer:
         warp_data = tsdf.get_warp_data()
         kernels = tsdf.kernels
 
+        prepared_semantic_filter = (
+            self.integrator._prepare_semantic_filter(semantic_filter)
+            if semantic_filter is not None
+            else None
+        )
+        kernel = kernels.raycast_block_sparse_color_kernel
+        kernel_inputs = [
+            wp.from_torch(render_inputs.intrinsics, dtype=wp.float32),
+            wp.from_torch(render_inputs.positions, dtype=wp.float32),
+            wp.from_torch(render_inputs.quaternions, dtype=wp.float32),
+            warp_data,
+            self.config.depth_minimum_distance,
+            self.config.depth_maximum_distance,
+            self.config.minimum_tsdf_weight,
+            wp.from_torch(self._hit_points[:n_pixels], dtype=wp.float32),
+            wp.from_torch(self._hit_normals[:n_pixels], dtype=wp.float32),
+            wp.from_torch(self._hit_colors[:n_pixels], dtype=wp.uint8),
+            wp.from_torch(self._hit_depths[:n_pixels], dtype=wp.float32),
+            wp.from_torch(self._hit_mask[:n_pixels], dtype=wp.uint8),
+            H,
+            W,
+            n_pixels_per_camera,
+        ]
+        if prepared_semantic_filter is not None:
+            kernel = kernels.raycast_block_sparse_color_semantic_kernel
+            kernel_inputs.insert(4, prepared_semantic_filter)
+
         # Launch color raycast kernel with struct-based API
         wp.launch(
-            kernel=kernels.raycast_block_sparse_color_kernel,
+            kernel=kernel,
             dim=n_pixels,
-            inputs=[
-                wp.from_torch(render_inputs.intrinsics, dtype=wp.float32),
-                wp.from_torch(render_inputs.positions, dtype=wp.float32),
-                wp.from_torch(render_inputs.quaternions, dtype=wp.float32),
-                warp_data,
-                self.config.depth_minimum_distance,
-                self.config.depth_maximum_distance,
-                self.config.minimum_tsdf_weight,
-                wp.from_torch(self._hit_points[:n_pixels], dtype=wp.float32),
-                wp.from_torch(self._hit_normals[:n_pixels], dtype=wp.float32),
-                wp.from_torch(self._hit_colors[:n_pixels], dtype=wp.uint8),
-                wp.from_torch(self._hit_depths[:n_pixels], dtype=wp.float32),
-                wp.from_torch(self._hit_mask[:n_pixels], dtype=wp.uint8),
-                H,
-                W,
-                n_pixels_per_camera,
-            ],
+            inputs=kernel_inputs,
         )
 
         # Kernel clears hit_* to zero on miss, so output buffers are
@@ -348,6 +574,7 @@ class BlockSparseTSDFRenderer:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render only depth image (convenience method).
 
@@ -355,11 +582,20 @@ class BlockSparseTSDFRenderer:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as Pose.
             image_shape: (H, W) output dimensions.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             depth_image: ``(H, W)`` or ``(N, H, W)`` rendered depth in meters.
         """
-        depth, _, _ = self.render(intrinsics, pose, image_shape)
+        if semantic_filter is None:
+            depth, _, _ = self.render(intrinsics, pose, image_shape)
+        else:
+            depth, _, _ = self.render(
+                intrinsics,
+                pose,
+                image_shape,
+                semantic_filter=semantic_filter,
+            )
         return depth
 
     def render_normals(
@@ -367,6 +603,7 @@ class BlockSparseTSDFRenderer:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render only normal image (convenience method).
 
@@ -374,11 +611,20 @@ class BlockSparseTSDFRenderer:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as Pose.
             image_shape: (H, W) output dimensions.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             normal_image: ``(H, W, 3)`` or ``(N, H, W, 3)`` surface normals.
         """
-        _, normals, _ = self.render(intrinsics, pose, image_shape)
+        if semantic_filter is None:
+            _, normals, _ = self.render(intrinsics, pose, image_shape)
+        else:
+            _, normals, _ = self.render(
+                intrinsics,
+                pose,
+                image_shape,
+                semantic_filter=semantic_filter,
+            )
         return normals
 
     def render_color_only(
@@ -386,6 +632,7 @@ class BlockSparseTSDFRenderer:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render only color image (convenience method).
 
@@ -393,11 +640,20 @@ class BlockSparseTSDFRenderer:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as Pose.
             image_shape: (H, W) output dimensions.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             color_image: ``(H, W, 3)`` or ``(N, H, W, 3)`` uint8 RGB colors.
         """
-        _, _, color, _ = self.render_color(intrinsics, pose, image_shape)
+        if semantic_filter is None:
+            _, _, color, _ = self.render_color(intrinsics, pose, image_shape)
+        else:
+            _, _, color, _ = self.render_color(
+                intrinsics,
+                pose,
+                image_shape,
+                semantic_filter=semantic_filter,
+            )
         # Kernel already writes 0 for invalid pixels (see render_color).
         return color
 
@@ -406,6 +662,7 @@ class BlockSparseTSDFRenderer:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render depth as colormap for visualization.
 
@@ -413,11 +670,20 @@ class BlockSparseTSDFRenderer:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as Pose.
             image_shape: (H, W) output dimensions.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             color_image: ``(H, W, 3)`` or ``(N, H, W, 3)`` uint8 RGB colormap.
         """
-        depth, _, valid = self.render(intrinsics, pose, image_shape)
+        if semantic_filter is None:
+            depth, _, valid = self.render(intrinsics, pose, image_shape)
+        else:
+            depth, _, valid = self.render(
+                intrinsics,
+                pose,
+                image_shape,
+                semantic_filter=semantic_filter,
+            )
         return depth_to_colormap(
             depth,
             self.config.depth_minimum_distance,
@@ -430,6 +696,7 @@ class BlockSparseTSDFRenderer:
         intrinsics: torch.Tensor,
         pose: Pose,
         image_shape: Tuple[int, int],
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render normals as colormap for visualization.
 
@@ -437,11 +704,20 @@ class BlockSparseTSDFRenderer:
             intrinsics: Camera intrinsics.
             pose: Camera-to-world transform as Pose.
             image_shape: (H, W) output dimensions.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             color_image: ``(H, W, 3)`` or ``(N, H, W, 3)`` uint8 RGB colormap.
         """
-        _, normals, valid = self.render(intrinsics, pose, image_shape)
+        if semantic_filter is None:
+            _, normals, valid = self.render(intrinsics, pose, image_shape)
+        else:
+            _, normals, valid = self.render(
+                intrinsics,
+                pose,
+                image_shape,
+                semantic_filter=semantic_filter,
+            )
         return normals_to_colormap(normals, valid)
 
     def render_shaded(
@@ -452,6 +728,7 @@ class BlockSparseTSDFRenderer:
         light_direction: Tuple[float, float, float] = (0.0, 0.0, 1.0),
         ambient: float = 0.3,
         use_color: bool = True,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> torch.Tensor:
         """Render Lambertian-shaded image.
 
@@ -462,15 +739,36 @@ class BlockSparseTSDFRenderer:
             light_direction: Light direction in camera frame.
             ambient: Ambient lighting factor (0-1).
             use_color: If True, use TSDF color. If False, use gray.
+            semantic_filter: Optional fused-feature filter applied during ray traversal.
 
         Returns:
             shaded_image: ``(H, W, 3)`` or ``(N, H, W, 3)`` uint8 RGB shaded image.
         """
         if use_color:
-            _, normals, colors, valid = self.render_color(intrinsics, pose, image_shape)
+            if semantic_filter is None:
+                _, normals, colors, valid = self.render_color(
+                    intrinsics,
+                    pose,
+                    image_shape,
+                )
+            else:
+                _, normals, colors, valid = self.render_color(
+                    intrinsics,
+                    pose,
+                    image_shape,
+                    semantic_filter=semantic_filter,
+                )
             base_color = colors.float() / 255.0
         else:
-            _, normals, valid = self.render(intrinsics, pose, image_shape)
+            if semantic_filter is None:
+                _, normals, valid = self.render(intrinsics, pose, image_shape)
+            else:
+                _, normals, valid = self.render(
+                    intrinsics,
+                    pose,
+                    image_shape,
+                    semantic_filter=semantic_filter,
+                )
             base_color = torch.ones_like(normals)
 
         # Transform light to world frame and normalize

@@ -16,7 +16,8 @@ convert to float32 at runtime for computation.
 from __future__ import annotations
 
 # Standard Library
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from math import isfinite, prod
 from typing import List, Optional
 
 # Third Party
@@ -69,6 +70,9 @@ class VoxelData:
     #: Enable flag per voxel grid. 1 = active, 0 = disabled.
     enable: torch.Tensor
 
+    #: Unsigned collision-layer membership [num_envs, max_n].
+    obstacle_layers: torch.Tensor = field(init=False)
+
     #: ESDF feature values per voxel (float16).
     features: torch.Tensor
 
@@ -93,6 +97,10 @@ class VoxelData:
     # -------------------------------------------------------------------------
     # Factory Methods
     # -------------------------------------------------------------------------
+
+    def __post_init__(self) -> None:
+        """Allocate common-layer metadata once alongside obstacle storage."""
+        self.obstacle_layers = torch.ones_like(self.enable, dtype=torch.uint32)
 
     @classmethod
     def create_cache(
@@ -399,6 +407,75 @@ class VoxelData:
     # Load / Add Methods
     # -------------------------------------------------------------------------
 
+    def add(self, voxel_grid: VoxelGrid, env_idx: int = 0) -> int:
+        """Append one grid to existing storage without changing other grids.
+
+        Args:
+            voxel_grid: Grid with ESDF features matching its dimensions and voxel size.
+            env_idx: Environment to append to.
+
+        Returns:
+            Index of the appended grid in the environment.
+
+        Raises:
+            ValueError: If the environment, name, capacity, or grid data is invalid.
+                Validation failures leave existing storage unchanged.
+        """
+        if not 0 <= env_idx < self.num_envs:
+            log_and_raise("Voxel environment index is out of range")
+        current_count = self.get_active_count(env_idx)
+        if current_count >= self.max_n:
+            log_and_raise(f"Cannot add voxel grid, cache is full ({self.max_n} grids)")
+        if voxel_grid.name in self.names[env_idx]:
+            log_and_raise(f"Voxel grid already exists with name: {voxel_grid.name}")
+        if voxel_grid.feature_tensor is None:
+            log_and_raise("Voxel grid feature_tensor is required")
+        if (
+            not isfinite(voxel_grid.voxel_size)
+            or voxel_grid.voxel_size <= 0
+            or len(voxel_grid.dims) != 3
+            or any(not isfinite(dim) or dim <= 0 for dim in voxel_grid.dims)
+        ):
+            log_and_raise("Voxel grid dimensions and voxel size must be finite and positive")
+        grid_shape = voxel_grid.get_grid_shape()[0]
+        if any(size <= 0 for size in grid_shape):
+            log_and_raise("Voxel grid must contain at least one voxel in each dimension")
+        num_features = voxel_grid.feature_tensor.numel()
+        capacity = self.features.shape[2]
+        if num_features > capacity:
+            log_and_raise(
+                f"Feature tensor too large for buffer: capacity={capacity} new={num_features}"
+            )
+        if num_features != prod(grid_shape):
+            log_and_raise(
+                f"Feature tensor size {num_features} doesn't match grid dims {grid_shape}"
+            )
+
+        # Prepare every input before writing the new slot or publishing its count.
+        inverse_pose = (
+            Pose.from_list(voxel_grid.pose, self.device_cfg).inverse().get_pose_vector().reshape(7)
+        )
+        dimensions = torch.as_tensor(voxel_grid.dims, device=self.dims.device, dtype=self.dims.dtype)
+        params = torch.tensor(
+            [dim / voxel_grid.voxel_size for dim in voxel_grid.dims] + [voxel_grid.voxel_size],
+            device=self.params.device,
+            dtype=self.params.dtype,
+        )
+        features = voxel_grid.feature_tensor.to(
+            device=self.features.device, dtype=self.features.dtype
+        ).reshape(-1, 1)
+
+        self.params[env_idx, current_count].copy_(params)
+        self.dims[env_idx, current_count, :3].copy_(dimensions)
+        self.inv_pose[env_idx, current_count, :7].copy_(inverse_pose)
+        self.features[env_idx, current_count, :num_features].copy_(features)
+        self.features[env_idx, current_count, num_features:] = 0
+        self.obstacle_layers[env_idx, current_count] = 1
+        self.enable[env_idx, current_count] = 1
+        self.names[env_idx][current_count] = voxel_grid.name
+        self.count[env_idx] = current_count + 1
+        return current_count
+
     def load_batch(self, voxel_grids: List[VoxelGrid], env_idx: int) -> None:
         """Load a batch of voxel grids into an environment, replacing existing ones.
 
@@ -406,6 +483,7 @@ class VoxelData:
             voxel_grids: List of VoxelGrid objects to load.
             env_idx: Environment index to load into.
         """
+        self.obstacle_layers[env_idx].fill_(1)
         import numpy as np
 
         num_voxels = len(voxel_grids)
@@ -632,6 +710,8 @@ class VoxelData:
         Args:
             env_idx: Environment to clear. If None, clears all environments.
         """
+        layers = self.obstacle_layers if env_idx is None else self.obstacle_layers[env_idx]
+        layers.fill_(1)
         if env_idx is not None:
             self.enable[env_idx, :] = 0
             self.count[env_idx] = 0
@@ -1163,6 +1243,45 @@ def compute_local_sdf(
     )
 
     return result[0]
+
+
+def compute_swept_sphere_clearance_lower_bound(
+    obs_set: VoxelDataWarp,
+    env_idx: wp.int32,
+    local_idx: wp.int32,
+    current_world: wp.vec3,
+    sweep_min_world: wp.vec3,
+    sweep_max_world: wp.vec3,
+    radius_adjusted: wp.float32,
+    sweep_reach: wp.float32,
+) -> wp.float32:
+    """Return an ESDF lower bound over the swept-sphere query region.
+
+    A signed distance field is 1-Lipschitz, so subtracting the maximum
+    center displacement and adjusted sphere radius from the current distance
+    gives a conservative swept-clearance lower bound.
+    """
+    flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+    inv_t = load_transform_from_inv_pose(obs_set.inv_pose, flat_idx)
+    local_current = wp.transform_point(inv_t, current_world)
+    grid_dims = wp.vec3i(
+        wp.int32(obs_set.params[flat_idx, 0]),
+        wp.int32(obs_set.params[flat_idx, 1]),
+        wp.int32(obs_set.params[flat_idx, 2]),
+    )
+    voxel_size = obs_set.params[flat_idx, 3]
+    layer_start_idx = flat_idx * obs_set.n_voxels_per_layer
+    current_sdf = sample_voxel_sdf_with_grad(
+        obs_set.features,
+        layer_start_idx,
+        local_current,
+        grid_dims,
+        voxel_size,
+        obs_set.max_dist,
+    )[0]
+    if current_sdf >= obs_set.max_dist:
+        return wp.float32(0.0)
+    return current_sdf - radius_adjusted - sweep_reach
 
 
 def compute_local_sdf_with_grad(

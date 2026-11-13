@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+"""Absolute multi-link tool-pose cost."""
+
 from __future__ import annotations
 
 # Standard Library
@@ -16,12 +18,14 @@ from curobo._src.cost.wp_tool_pose import (
     ToolPoseDistance,
     create_goalset_pose_distance_kernel_with_constants,
 )
+from curobo._src.trajectory.wp_pose_reference import sample_pose_reference
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 from curobo._src.util.logging import log_and_raise
 
 if TYPE_CHECKING:
     # CuRobo
     from curobo._src.cost.cost_tool_pose_cfg import ToolPoseCostCfg
+    from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 
 
 class ToolPoseCost(BaseCost):
@@ -43,17 +47,49 @@ class ToolPoseCost(BaseCost):
         self.tool_frames = config.tool_frames
         self.num_links = len(self.tool_frames)
 
-        # Cache for warp kernels - one per link for efficiency
+        # Cache the goal-set-specialized Warp kernel.
         self._warp_kernel: Optional[wp.kernel] = None
-        self._constants = (
-            -1,
-            self.config.rotation_method,
+        self._constants = -1
+        self._reference_progress: Optional[torch.Tensor] = None
+        self._reference_counts: Optional[torch.Tensor] = None
+        self._reference_padding = 0
+        self._dense_position: Optional[torch.Tensor] = None
+        self._dense_quaternion: Optional[torch.Tensor] = None
+        # Waypoint objectives stay active while criteria retain separate acceptance bounds.
+        self._apply_tolerance_to_cost = torch.ones((), **self.device_cfg.as_torch_dict())
+        self._position_metric = torch.empty(
+            (2 * self.num_links, 3, 3),
+            dtype=self.device_cfg.dtype,
+            device=self.device_cfg.device,
         )
+        self._rotation_metric = torch.empty(
+            (2 * self.num_links, 3, 3),
+            dtype=self.device_cfg.dtype,
+            device=self.device_cfg.device,
+        )
+        self._pose_tolerance = torch.empty(
+            (2 * self.num_links, 2),
+            dtype=self.device_cfg.dtype,
+            device=self.device_cfg.device,
+        )
+        self._pose_active = torch.empty(
+            (2 * self.num_links,),
+            dtype=torch.uint8,
+            device=self.device_cfg.device,
+        )
+        self._refresh_pose_metric_buffers()
 
     def setup_batch_tensors(self, batch_size: int, horizon: int, **kwargs):
+        """Allocate reusable output and analytic-gradient buffers."""
         if batch_size != self._batch_size or horizon != self._horizon:
-
             num_links = len(self.tool_frames)
+            self._evaluation_counts = torch.full(
+                (batch_size,), horizon, device=self.device_cfg.device, dtype=torch.int32
+            )
+            self._sample_indices = torch.arange(horizon, device=self.device_cfg.device)[None, :]
+            self._dense_routes = torch.arange(
+                batch_size, device=self.device_cfg.device, dtype=torch.int32
+            ).unsqueeze(-1)
             self._out_distance = torch.zeros(
                 (batch_size, horizon, 2 * num_links),
                 dtype=torch.float32,
@@ -101,54 +137,224 @@ class ToolPoseCost(BaseCost):
             log_and_raise("current_tool_poses and goal_tool_poses must be provided")
         if current_tool_poses.tool_frames != goal_tool_poses.tool_frames:
             log_and_raise("current_tool_poses and goal_tool_poses must have the same link names")
+        if current_tool_poses.tool_frames != self.tool_frames:
+            log_and_raise(
+                "current_tool_poses and goal_tool_poses must match the cost's "
+                "configured tool_frames"
+            )
 
         num_goalset = goal_tool_poses.num_goalset
-        constants = (
-            num_goalset,
-            self.config.rotation_method,
-        )
-        if self._constants != constants:
-            self._constants = constants
-            self._warp_kernel = create_goalset_pose_distance_kernel_with_constants(
-                num_goalset,
-                self.config.rotation_method,
-            )
-
+        if self._constants != num_goalset:
+            self._constants = num_goalset
+            self._warp_kernel = create_goalset_pose_distance_kernel_with_constants(num_goalset)
 
         warp_kernel = self._warp_kernel
-        goal_pos = goal_tool_poses.position.squeeze(1)
-        goal_quat = goal_tool_poses.quaternion.squeeze(1)
-        cost, linear_distance, angular_distance, goalset_idx = (
-            ToolPoseDistance.apply(
-                current_tool_poses.position,
-                current_tool_poses.quaternion,
+        goal_pos = goal_tool_poses.position
+        goal_quat = goal_tool_poses.quaternion
+        counts = self._evaluation_counts
+        if self._reference_progress is not None:
+            dense_shape = (self._batch_size, self._horizon, self.num_links, num_goalset, 3)
+            if self._dense_position is None or self._dense_position.shape != dense_shape:
+                self._dense_position = torch.empty(dense_shape, **self.device_cfg.as_torch_dict())
+                self._dense_quaternion = torch.empty(
+                    (*dense_shape[:-1], 4), **self.device_cfg.as_torch_dict()
+                )
+            sample_pose_reference(
                 goal_pos,
                 goal_quat,
+                self._reference_progress,
                 idxs_goal,
-                self._weight,
-                self._stacked_tool_pose_criteria.terminal_pose_axes_weight_factor,
-                self._stacked_tool_pose_criteria.non_terminal_pose_axes_weight_factor,
-                self._stacked_tool_pose_criteria.terminal_pose_convergence_tolerance,
-                self._stacked_tool_pose_criteria.non_terminal_pose_convergence_tolerance,
-                self._stacked_tool_pose_criteria.project_distance_to_goal,
-                self._out_distance,
-                self._out_position_distance,
-                self._out_rotation_distance,
-                self._out_position_gradient,
-                self._out_rotation_gradient,
-                self._out_goalset_idx,
-                self.config.use_grad_input,
-                warp_kernel,
+                self._dense_position,
+                self._dense_quaternion,
+                self._reference_padding,
             )
+            goal_pos, goal_quat = self._dense_position, self._dense_quaternion
+            idxs_goal = self._dense_routes
+            counts = self._reference_counts
+        cost, linear_distance, angular_distance, goalset_idx = ToolPoseDistance.apply(
+            current_tool_poses.position,
+            current_tool_poses.quaternion,
+            goal_pos,
+            goal_quat,
+            idxs_goal,
+            self._weight,
+            self._position_metric,
+            self._rotation_metric,
+            self._pose_tolerance,
+            self._stacked_tool_pose_criteria.error_frame,
+            self._out_distance,
+            self._out_position_distance,
+            self._out_rotation_distance,
+            self._out_position_gradient,
+            self._out_rotation_gradient,
+            self._out_goalset_idx,
+            self.config.use_grad_input,
+            warp_kernel,
+            counts,
         )
         return cost, linear_distance, angular_distance, goalset_idx
 
+    def set_reference_samples(
+        self,
+        progress: torch.Tensor,
+        valid_steps: torch.Tensor,
+        padding: int,
+    ) -> None:
+        """Bind fixed-address progress and sample counts for a dense validation rollout."""
+        self._reference_progress = progress
+        self._reference_counts = valid_steps
+        self._reference_padding = padding
 
     def update_tool_pose_criteria(
         self,
         tool_pose_criteria: Dict[str, ToolPoseCriteria],
     ):
-
+        """Update selected per-link criteria in the existing stacked buffers."""
         self._stacked_tool_pose_criteria.update_tool_pose_criteria(
             tool_pose_criteria=tool_pose_criteria,
         )
+        self._refresh_pose_metric_buffers()
+
+    def get_path_feasibility(
+        self,
+        position_error: torch.Tensor,
+        rotation_error: torch.Tensor,
+        current_tool_poses: ToolPose,
+    ) -> torch.Tensor:
+        """Check enabled physical tolerances, returning ``[batch,horizon]`` validity."""
+        criteria = self._stacked_tool_pose_criteria
+        counts = (
+            self._reference_counts
+            if self._reference_progress is not None
+            else self._evaluation_counts
+        )
+        terminal = self._sample_indices == counts[:, None] - 1
+        enabled = torch.where(
+            terminal.unsqueeze(-1),
+            criteria.enforce_terminal_tolerance.view(1, 1, -1),
+            criteria.enforce_path_tolerance.view(1, 1, -1),
+        )
+        finite = torch.isfinite(current_tool_poses.position).all(dim=-1)
+        finite = finite & torch.isfinite(current_tool_poses.quaternion).all(dim=-1)
+        finite = finite & (current_tool_poses.quaternion.square().sum(dim=-1) > 0.0)
+        tolerance = self._sample_tolerances(terminal)
+        finite = finite & torch.isfinite(position_error) & torch.isfinite(rotation_error)
+        violated = (
+            (position_error > tolerance[..., 0]) | (rotation_error > tolerance[..., 1]) | ~finite
+        ) & (enabled != 0.0)
+        active = (enabled != 0.0) & (self._sample_indices < counts[:, None]).unsqueeze(-1)
+        error = torch.nan_to_num(position_error + rotation_error, nan=torch.inf, posinf=torch.inf)
+        self._out_path_error = torch.where(active, torch.where(finite, error, torch.inf), 0.0)
+        feasible = ~violated.any(dim=-1)
+        feasible = feasible | (self._sample_indices >= counts[:, None])
+        if self._reference_progress is not None:
+            feasible = feasible & (
+                torch.isfinite(self._reference_progress)
+                | (self._sample_indices >= counts[:, None])
+            )
+        return feasible
+
+    def _sample_tolerances(self, terminal: torch.Tensor) -> torch.Tensor:
+        """Return per-sample acceptance bounds ``[batch,horizon,links,2]``."""
+        criteria = self._stacked_tool_pose_criteria
+        return torch.where(
+            terminal[:, :, None, None],
+            criteria.terminal_tolerance[None, None],
+            criteria.path_tolerance[None, None],
+        )
+
+    def get_convergence_errors(
+        self,
+        position_error: torch.Tensor,
+        rotation_error: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Apply acceptance tolerances to convergence reports independently of pose costs."""
+        counts = (
+            self._reference_counts
+            if self._reference_progress is not None
+            else self._evaluation_counts
+        )
+        tolerance = self._sample_tolerances(self._sample_indices == counts[:, None] - 1)
+        return (
+            torch.where(position_error <= tolerance[..., 0], 0.0, position_error),
+            torch.where(rotation_error <= tolerance[..., 1], 0.0, rotation_error),
+        )
+
+    @staticmethod
+    def _quadratic_metric(projector: torch.Tensor, axis_scale: torch.Tensor) -> torch.Tensor:
+        """Return ``P.T @ diag(axis_scale**2) @ P`` for a projector batch."""
+        scaled_projector = axis_scale.unsqueeze(-1) * projector
+        return scaled_projector.transpose(-1, -2) @ scaled_projector
+
+    def _refresh_pose_metric_buffers(self) -> None:
+        """Refresh fixed-shape quadratic metrics without changing their addresses."""
+        criteria = self._stacked_tool_pose_criteria
+        position_metric = torch.cat(
+            (
+                self._quadratic_metric(
+                    criteria.terminal_position_projector,
+                    criteria.terminal_position_axis_scale,
+                ),
+                self._quadratic_metric(
+                    criteria.path_position_projector,
+                    criteria.path_position_axis_scale,
+                ),
+            )
+        )
+        rotation_metric = torch.cat(
+            (
+                self._quadratic_metric(
+                    criteria.terminal_rotation_projector,
+                    criteria.terminal_rotation_axis_scale,
+                ),
+                self._quadratic_metric(
+                    criteria.path_rotation_projector,
+                    criteria.path_rotation_axis_scale,
+                ),
+            )
+        )
+        self._position_metric.copy_(position_metric)
+        self._rotation_metric.copy_(rotation_metric)
+        self._pose_tolerance.copy_(
+            torch.cat((criteria.terminal_tolerance, criteria.path_tolerance))
+            * self._apply_tolerance_to_cost
+        )
+        metric_trace = torch.diagonal(position_metric, dim1=-2, dim2=-1).sum(dim=-1)
+        metric_trace += torch.diagonal(rotation_metric, dim1=-2, dim2=-1).sum(dim=-1)
+        self._pose_active.copy_((metric_trace > 0.0).to(dtype=torch.uint8))
+        self._clear_inactive_pose_outputs()
+
+    def _clear_inactive_pose_outputs(self) -> None:
+        """Clear entries whose kernel threads will return without writing."""
+        if self._batch_size < 0 or not hasattr(self, "_out_distance"):
+            return
+
+        terminal_inactive = self._pose_active[: self.num_links] == 0
+        path_inactive = self._pose_active[self.num_links :] == 0
+        self._clear_inactive_pose_output_span(
+            terminal_inactive,
+            slice(self._horizon - 1, self._horizon),
+        )
+        self._clear_inactive_pose_output_span(
+            path_inactive,
+            slice(0, self._horizon - 1),
+        )
+
+    def _clear_inactive_pose_output_span(
+        self,
+        inactive_links: torch.Tensor,
+        horizon_slice: slice,
+    ) -> None:
+        """Clear one temporal span using a device-resident per-link mask."""
+        link_mask = inactive_links.view(1, 1, self.num_links)
+        cost_mask = inactive_links.repeat_interleave(2).view(1, 1, 2 * self.num_links)
+        self._out_distance[:, horizon_slice].masked_fill_(cost_mask, 0.0)
+        self._out_position_distance[:, horizon_slice].masked_fill_(link_mask, 0.0)
+        self._out_rotation_distance[:, horizon_slice].masked_fill_(link_mask, 0.0)
+        self._out_position_gradient[:, horizon_slice].masked_fill_(
+            link_mask.unsqueeze(-1), 0.0
+        )
+        self._out_rotation_gradient[:, horizon_slice].masked_fill_(
+            link_mask.unsqueeze(-1), 0.0
+        )
+        self._out_goalset_idx[:, horizon_slice].masked_fill_(link_mask, 0)

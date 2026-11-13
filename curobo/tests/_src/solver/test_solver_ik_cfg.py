@@ -82,6 +82,8 @@ class TestIKSolverCfgCreate:
             device_cfg=cuda_device_cfg,
         )
         assert isinstance(config, IKSolverCfg)
+        assert all(not getattr(opt, "line_search_backtracking", False)
+                   for opt in config.optimizer_configs)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_default_num_seeds(self, cuda_device_cfg) -> None:
@@ -142,6 +144,35 @@ class TestIKSolverCfgCreate:
         assert config.orientation_tolerance == 0.1
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_normalizes_default_rank_weights(self, cuda_device_cfg) -> None:
+        """Default pose ranking weights normalize errors by their tolerances."""
+        config = IKSolverCfg.create(
+            robot="franka.yml",
+            device_cfg=cuda_device_cfg,
+            position_tolerance=0.01,
+            orientation_tolerance=0.2,
+        )
+
+        assert config.position_rank_weight == 100.0
+        assert config.orientation_rank_weight == 5.0
+        assert config.cspace_rank_weight == 1.0
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_sets_custom_rank_weights(self, cuda_device_cfg) -> None:
+        """Explicit ranking weights override tolerance normalization."""
+        config = IKSolverCfg.create(
+            robot="franka.yml",
+            device_cfg=cuda_device_cfg,
+            position_rank_weight=3.0,
+            orientation_rank_weight=4.0,
+            cspace_rank_weight=0.5,
+        )
+
+        assert config.position_rank_weight == 3.0
+        assert config.orientation_rank_weight == 4.0
+        assert config.cspace_rank_weight == 0.5
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_sets_use_cuda_graph(self, cuda_device_cfg):
         """Test create sets use_cuda_graph."""
         config = IKSolverCfg.create(
@@ -180,6 +211,20 @@ class TestIKSolverCfgCreate:
             self_collision_check=False,
         )
         assert config.self_collision_check is False
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_g1_without_collision_spheres_locks_pruned_joints(self, cuda_device_cfg):
+        """Test omitted G1 hand branches are reconstructed from cspace defaults."""
+        config = IKSolverCfg.create(
+            robot="unitree_g1.yml",
+            device_cfg=cuda_device_cfg,
+            load_collision_spheres=False,
+        )
+
+        kinematics = config.robot_config.kinematics.kinematics_config
+        assert kinematics.num_dof == 39
+        assert kinematics.total_spheres == 0
+        assert len(kinematics.lock_jointstate.joint_names) == 10
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_with_override_optimizer_num_iters(self, cuda_device_cfg):

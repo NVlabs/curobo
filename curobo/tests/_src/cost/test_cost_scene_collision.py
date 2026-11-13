@@ -11,9 +11,12 @@ import torch
 # CuRobo
 from curobo._src.cost.cost_scene_collision import SceneCollisionCost
 from curobo._src.cost.cost_scene_collision_cfg import SceneCollisionCostCfg
+from curobo._src.geom.collision.buffer_collision import CollisionBuffer
 from curobo._src.geom.collision.collision_scene import SceneCollisionCfg, create_scene_collision
+from curobo._src.geom.collision.wp_autograd import select_collision_block_dim
 from curobo._src.geom.types import Cuboid, SceneCfg
 from curobo._src.robot.kinematics.kinematics import Kinematics
+from curobo._src.robot.kinematics.kinematics_state import KinematicsState
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
@@ -145,6 +148,42 @@ class TestSceneCollisionCost:
         assert cost is not None
         assert cost.config == cfg
 
+    @pytest.mark.parametrize(
+        ("num_states", "num_spheres", "num_sms", "is_swept", "expected"),
+        [
+            (1, 61, 16, False, 256),
+            (32, 1000, 16, False, 512),
+            (64, 500, 16, True, 256),
+            (128, 500, 16, False, 128),
+            (324, 128, 16, True, 64),
+            (324, 1000, 16, False, 128),
+            (64, 500, 170, False, 512),
+            (64, 1000, 170, True, 1024),
+            (324, 500, 170, False, 512),
+            (324, 500, 170, True, 256),
+            (324, 1000, 170, False, 512),
+            (324, 1000, 170, True, 256),
+        ],
+    )
+    def test_state_collision_block_policy(
+        self,
+        num_states,
+        num_spheres,
+        num_sms,
+        is_swept,
+        expected,
+    ):
+        """Launch policy should reproduce the measured Orin and RTX 5090 choices."""
+        assert (
+            select_collision_block_dim(
+                num_states,
+                num_spheres,
+                num_sms,
+                is_swept,
+            )
+            == expected
+        )
+
     def test_init_missing_scene_collision_checker_raises_error(self, device_cfg):
         """Test that missing scene_collision_checker raises error."""
         cfg = SceneCollisionCostCfg(weight=1.0, device_cfg=device_cfg)
@@ -188,8 +227,116 @@ class TestSceneCollisionCost:
         )
 
         result = cost.forward(kin_state)
-        # Result shape is (batch_size, horizon, num_spheres) for collision cost
-        assert result.shape == (batch_size, horizon, num_spheres)
+        assert result.shape == (batch_size, horizon, 1)
+
+    def test_forward_sum_distance_matches_raw_sum(
+        self, device_cfg, scene_collision_checker, franka_kinematics
+    ):
+        """Summed collision output must equal the per-sphere cost sum."""
+        batch_size = 2
+        horizon = 3
+        dof = franka_kinematics.dof
+        num_spheres = franka_kinematics.total_spheres
+        q = torch.zeros((batch_size, horizon, dof), **device_cfg.as_torch_dict())
+        kin_state = franka_kinematics.compute_kinematics(
+            JointState.from_position(q, joint_names=franka_kinematics.joint_names)
+        )
+        buffer_shape = (batch_size, horizon, num_spheres, 4)
+        weight = device_cfg.to_device([1.0])
+        activation_distance = device_cfg.to_device([0.0])
+
+        raw_result = scene_collision_checker.get_sphere_distance(
+            kin_state,
+            CollisionBuffer.from_shape(buffer_shape, device_cfg),
+            weight,
+            activation_distance,
+        )
+        summed_result = scene_collision_checker.get_sphere_distance(
+            kin_state,
+            CollisionBuffer.from_shape(buffer_shape, device_cfg),
+            weight,
+            activation_distance,
+            sum_distance=True,
+        )
+
+        assert summed_result.shape == (batch_size, horizon, 1)
+        assert torch.allclose(summed_result, raw_result.sum(dim=-1, keepdim=True))
+
+    @pytest.mark.parametrize("num_spheres", [61, 1000])
+    @pytest.mark.parametrize("use_sweep", [False, True])
+    def test_state_reduction_matches_per_sphere_reference(
+        self,
+        device_cfg,
+        scene_collision_checker,
+        num_spheres,
+        use_sweep,
+    ):
+        """State reduction must preserve costs and gradients at large sphere counts."""
+        batch_size = 2
+        horizon = 4
+        x = torch.linspace(0.22, 0.78, num_spheres, **device_cfg.as_torch_dict())
+        y = torch.linspace(-0.45, 0.45, num_spheres, **device_cfg.as_torch_dict())
+        z = torch.full_like(x, 0.325)
+        radius = torch.full_like(x, 0.04)
+        spheres = torch.stack((x, y, z, radius), dim=-1)
+        spheres = spheres.view(1, 1, num_spheres, 4).repeat(batch_size, horizon, 1, 1)
+        spheres[:, :, :, 0] += torch.linspace(
+            -0.01, 0.01, horizon, **device_cfg.as_torch_dict()
+        ).view(1, horizon, 1)
+        state = KinematicsState(robot_spheres=spheres)
+        buffer_shape = spheres.shape
+        weight = device_cfg.to_device([1.0])
+        activation_distance = device_cfg.to_device([0.02])
+
+        reference_buffer = CollisionBuffer.from_shape(buffer_shape, device_cfg)
+        reduced_buffer = CollisionBuffer.from_shape(buffer_shape, device_cfg)
+        if use_sweep:
+            trajectory_dt = torch.ones(
+                batch_size, device=device_cfg.device, dtype=device_cfg.dtype
+            )
+            reference = scene_collision_checker.get_swept_sphere_distance(
+                state,
+                reference_buffer,
+                weight,
+                activation_distance,
+                trajectory_dt,
+            )
+            reduced = scene_collision_checker.get_swept_sphere_distance(
+                state,
+                reduced_buffer,
+                weight,
+                activation_distance,
+                trajectory_dt,
+                sum_distance=True,
+            )
+        else:
+            reference = scene_collision_checker.get_sphere_distance(
+                state,
+                reference_buffer,
+                weight,
+                activation_distance,
+            )
+            reduced = scene_collision_checker.get_sphere_distance(
+                state,
+                reduced_buffer,
+                weight,
+                activation_distance,
+                sum_distance=True,
+            )
+
+        assert reduced.shape == (batch_size, horizon, 1)
+        assert torch.allclose(
+            reduced,
+            reference.sum(dim=-1, keepdim=True),
+            rtol=1.0e-5,
+            atol=1.0e-5,
+        )
+        assert torch.allclose(
+            reduced_buffer.gradient,
+            reference_buffer.gradient,
+            rtol=1.0e-5,
+            atol=1.0e-5,
+        )
 
     def test_forward_default_joint_position(
         self, device_cfg, scene_collision_checker, franka_kinematics, franka_robot_cfg
@@ -206,7 +353,9 @@ class TestSceneCollisionCost:
         cost.setup_batch_tensors(batch_size, horizon)
 
         # Use default joint configuration
-        default_position = franka_robot_cfg.kinematics.kinematics_config.cspace.default_joint_position
+        default_position = (
+            franka_robot_cfg.kinematics.kinematics_config.cspace.default_joint_position
+        )
         q = default_position.view(1, 1, dof)
 
         # Get kinematic state from kinematics
@@ -215,8 +364,7 @@ class TestSceneCollisionCost:
         )
 
         result = cost.forward(kin_state)
-        # Result shape is (batch_size, horizon, num_spheres) for collision cost
-        assert result.shape == (batch_size, horizon, num_spheres)
+        assert result.shape == (batch_size, horizon, 1)
 
     def test_validate_input_wrong_sphere_count(
         self, device_cfg, scene_collision_checker, franka_kinematics
@@ -290,8 +438,7 @@ class TestSceneCollisionCostWithDifferentScenes:
         )
 
         result = cost.forward(kin_state)
-        # Result shape is (batch_size, horizon, num_spheres) for collision cost
-        assert result.shape == (batch_size, horizon, num_spheres)
+        assert result.shape == (batch_size, horizon, 1)
         # Empty scene should have zero collision cost
         assert torch.all(result == 0)
 
@@ -340,8 +487,7 @@ class TestSceneCollisionCostWithDifferentScenes:
         )
 
         result = cost.forward(kin_state)
-        # Result shape is (batch_size, horizon, num_spheres) for collision cost
-        assert result.shape == (batch_size, horizon, num_spheres)
+        assert result.shape == (batch_size, horizon, 1)
 
 
 class TestSceneCollisionCostJITFunctions:
@@ -409,12 +555,14 @@ class TestSceneCollisionCostGradients:
         # Forward pass
         result = cost.forward(kin_state)
 
-        # Check output shape (batch_size, horizon) for summed collision cost
-        assert result.shape == (batch_size, horizon, num_spheres)
+        assert result.shape == (batch_size, horizon, 1)
 
         # Verify output is a tensor that can be used in computation
         loss = result.sum()
         assert loss.requires_grad is True or loss.grad_fn is not None
+        loss.backward()
+        assert q.grad is not None
+        assert torch.all(torch.isfinite(q.grad))
 
     def test_scene_collision_cost_with_collision(
         self, device_cfg, franka_kinematics
@@ -468,7 +616,7 @@ class TestSceneCollisionCostGradients:
 
         # Verify result is a tensor
         assert isinstance(result, torch.Tensor)
-        assert result.shape == (batch_size, horizon, num_spheres)
+        assert result.shape == (batch_size, horizon, 1)
 
         # Sum and check loss has gradient
         loss = result.sum()
@@ -515,3 +663,4 @@ class TestSceneCollisionCostGradients:
 
         # Verify result is a tensor
         assert isinstance(result, torch.Tensor)
+        assert result.shape == (batch_size, horizon, 1)

@@ -2,20 +2,89 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Third Party
-
-# Third Party
 import torch
 
+# CuRobo
 from curobo._src.curobolib.backends import trajectory as trajectory_cu
 from curobo._src.curobolib.cuda_ops.tensor_checks import (
     check_float32_tensors,
     check_int32_tensors,
     check_uint8_tensors,
 )
-
-# CuRobo
 from curobo._src.state.state_joint import JointState
 from curobo._src.util.logging import log_and_raise
+
+
+def get_bspline_time_scaled_dt(
+    out_dt_per_timestep: torch.Tensor,
+    u_position: torch.Tensor,
+    start_state: JointState,
+    goal_state: JointState,
+    start_idx: torch.Tensor,
+    goal_idx: torch.Tensor,
+    use_implicit_goal_state: torch.Tensor,
+    max_velocity: torch.Tensor,
+    max_acceleration: torch.Tensor,
+    max_jerk: torch.Tensor,
+    epsilon: float = 1e-3,
+    minimum_dt: float = -1.0,
+    maximum_dt: float = -1.0,
+    bspline_degree: int = 4,
+) -> torch.Tensor:
+    """Write an absolute dt requirement for every B-spline trajectory timestep."""
+    if goal_state.dt is None:
+        log_and_raise("goal_state.dt is required for B-spline time scaling")
+    batch_size, horizon = out_dt_per_timestep.shape
+    dof = u_position.shape[-1]
+    n_knots = u_position.shape[-2]
+    device = u_position.device
+    check_float32_tensors(
+        device,
+        out_dt_per_timestep=out_dt_per_timestep,
+        u_position=u_position,
+        start_position=start_state.position,
+        start_velocity=start_state.velocity,
+        start_acceleration=start_state.acceleration,
+        start_jerk=start_state.jerk,
+        goal_position=goal_state.position,
+        goal_velocity=goal_state.velocity,
+        goal_acceleration=goal_state.acceleration,
+        goal_jerk=goal_state.jerk,
+        traj_dt=goal_state.dt,
+        max_velocity=max_velocity,
+        max_acceleration=max_acceleration,
+        max_jerk=max_jerk,
+    )
+    check_int32_tensors(device, start_idx=start_idx, goal_idx=goal_idx)
+    check_uint8_tensors(device, use_implicit_goal_state=use_implicit_goal_state)
+    trajectory_cu.launch_bspline_time_scaled_dt_kernel(
+        out_dt_per_timestep,
+        u_position,
+        start_state.position,
+        start_state.velocity,
+        start_state.acceleration,
+        start_state.jerk,
+        goal_state.position,
+        goal_state.velocity,
+        goal_state.acceleration,
+        goal_state.jerk,
+        start_idx,
+        goal_idx,
+        goal_state.dt,
+        use_implicit_goal_state,
+        max_velocity,
+        max_acceleration,
+        max_jerk,
+        epsilon,
+        minimum_dt,
+        maximum_dt,
+        batch_size,
+        horizon,
+        dof,
+        n_knots,
+        bspline_degree,
+    )
+    return out_dt_per_timestep
 
 
 def get_bspline_interpolation(

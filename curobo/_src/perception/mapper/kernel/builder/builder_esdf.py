@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import warp as wp
 
-from curobo._src.util.warp import warp_constant_suffix, warp_func, warp_kernel
-from curobo._src.perception.mapper.kernel.warp_types import BlockSparseTSDFWarp
+from curobo._src.perception.mapper.kernel.warp_types import (
+    BlockSparseTSDFWarp,
+    PreparedSemanticFilterWarp,
+)
 from curobo._src.perception.mapper.kernel.wp_tsdf_sample import (
     sample_combined_sdf,
     sample_static_sdf,
@@ -39,6 +41,7 @@ from curobo._src.perception.mapper.kernel.wp_tsdf_sample import (
 from curobo._src.perception.mapper.util.utils_quantization import (
     pack_site_coords,
 )
+from curobo._src.util.warp import warp_constant_suffix, warp_func, warp_kernel
 
 
 def make_esdf_kernels(
@@ -52,11 +55,12 @@ def make_esdf_kernels(
     hash_lookup,
     block_grid_to_key_coords,
     block_key_to_voxel_base,
+    semantic_local_idx_keep,
 ) -> dict[str, object]:
     """Build ESDF seeding and distance kernels."""
     suffix = (
         f"bs{block_size}_cfg"
-        f"{warp_constant_suffix(block_size, grid_shape, esdf_grid_shape, origin_xyz, voxel_size, truncation_distance)}"
+        f"{warp_constant_suffix(block_size, grid_shape, esdf_grid_shape, origin_xyz, voxel_size, truncation_distance)}"  # noqa: E501
     )
     BS = wp.constant(block_size)
     GRID_D = wp.constant(wp.int32(grid_shape[0]))
@@ -185,6 +189,67 @@ def make_esdf_kernels(
 
         return sample_static_sdf(tsdf, result[0], result[1])
 
+    @warp_func(f"lookup_combined_sdf_semantic_at_esdf_coords_{suffix}")
+    def lookup_combined_sdf_semantic_at_esdf_coords(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        esdf_ix: wp.int32,
+        esdf_iy: wp.int32,
+        esdf_iz: wp.int32,
+        esdf_origin: wp.array(dtype=wp.float32),
+        esdf_vs: wp.float32,
+        min_weight: wp.float32,
+    ) -> wp.float32:
+        coords = _esdf_to_tsdf_voxel_coords(
+            esdf_ix,
+            esdf_iy,
+            esdf_iz,
+            esdf_origin,
+            esdf_vs,
+        )
+        if coords[3] == wp.int32(0):
+            return wp.float32(1e10)
+        result = _hash_lookup_at_global_coords(tsdf, coords[0], coords[1], coords[2])
+        if result[0] < wp.int32(0):
+            return wp.float32(1e10)
+        if not semantic_local_idx_keep(
+            semantic_filter,
+            result[0],
+            result[1],
+        ):
+            return wp.float32(1e10)
+        return sample_combined_sdf(tsdf, result[0], result[1], min_weight)
+
+    @warp_func(f"lookup_static_sdf_semantic_at_esdf_coords_{suffix}")
+    def lookup_static_sdf_semantic_at_esdf_coords(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        esdf_ix: wp.int32,
+        esdf_iy: wp.int32,
+        esdf_iz: wp.int32,
+        esdf_origin: wp.array(dtype=wp.float32),
+        esdf_vs: wp.float32,
+    ) -> wp.float32:
+        coords = _esdf_to_tsdf_voxel_coords(
+            esdf_ix,
+            esdf_iy,
+            esdf_iz,
+            esdf_origin,
+            esdf_vs,
+        )
+        if coords[3] == wp.int32(0):
+            return wp.float32(1e10)
+        result = _hash_lookup_at_global_coords(tsdf, coords[0], coords[1], coords[2])
+        if result[0] < wp.int32(0):
+            return wp.float32(1e10)
+        if not semantic_local_idx_keep(
+            semantic_filter,
+            result[0],
+            result[1],
+        ):
+            return wp.float32(1e10)
+        return sample_static_sdf(tsdf, result[0], result[1])
+
     # =====================================================================
     # Seeding kernels.
     # =====================================================================
@@ -264,6 +329,87 @@ def make_esdf_kernels(
                 wp.int32(esdf_x), wp.int32(esdf_y), wp.int32(esdf_z)
             )
 
+    @warp_kernel(f"seed_esdf_sites_from_block_sparse_semantic_kernel_{suffix}")
+    def seed_esdf_sites_from_block_sparse_semantic_kernel(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        esdf_site_index: wp.array(dtype=wp.int32),
+        esdf_origin: wp.array(dtype=wp.float32),
+        esdf_voxel_size: wp.array(dtype=wp.float32),
+        minimum_tsdf_weight: wp.float32,
+    ):
+        """Scatter ESDF sites only from semantically retained TSDF voxels."""
+        block_idx, local_idx = wp.tid()
+        if block_idx >= tsdf.num_allocated[0]:
+            return
+        if tsdf.block_to_hash_slot[block_idx] < wp.int32(0):
+            return
+        if not semantic_local_idx_keep(semantic_filter, block_idx, local_idx):
+            return
+
+        lx = local_idx % BS
+        ly = (local_idx // BS) % BS
+        lz = local_idx // (BS * BS)
+        bx = tsdf.block_coords[block_idx * wp.int32(3)]
+        by = tsdf.block_coords[block_idx * wp.int32(3) + wp.int32(1)]
+        bz = tsdf.block_coords[block_idx * wp.int32(3) + wp.int32(2)]
+        base = block_key_to_voxel_base(bx, by, bz)
+        gx = base[0] + lx
+        gy = base[1] + ly
+        gz = base[2] + lz
+        if gx < wp.int32(0) or gx >= GRID_W:
+            return
+        if gy < wp.int32(0) or gy >= GRID_H:
+            return
+        if gz < wp.int32(0) or gz >= GRID_D:
+            return
+
+        sdf = sample_combined_sdf(tsdf, block_idx, local_idx, minimum_tsdf_weight)
+        if sdf > wp.float32(1e9):
+            return
+        world_x = (
+            TSDF_ORIGIN_X
+            + (wp.float32(gx) + wp.float32(0.5) - wp.float32(GRID_W) * wp.float32(0.5))
+            * TSDF_VOXEL_SIZE
+        )
+        world_y = (
+            TSDF_ORIGIN_Y
+            + (wp.float32(gy) + wp.float32(0.5) - wp.float32(GRID_H) * wp.float32(0.5))
+            * TSDF_VOXEL_SIZE
+        )
+        world_z = (
+            TSDF_ORIGIN_Z
+            + (wp.float32(gz) + wp.float32(0.5) - wp.float32(GRID_D) * wp.float32(0.5))
+            * TSDF_VOXEL_SIZE
+        )
+        esdf_vs = esdf_voxel_size[0]
+        esdf_x = wp.int32(
+            (world_x - esdf_origin[0]) / esdf_vs
+            + wp.float32(ESDF_D) * wp.float32(0.5)
+        )
+        esdf_y = wp.int32(
+            (world_y - esdf_origin[1]) / esdf_vs
+            + wp.float32(ESDF_H) * wp.float32(0.5)
+        )
+        esdf_z = wp.int32(
+            (world_z - esdf_origin[2]) / esdf_vs
+            + wp.float32(ESDF_W) * wp.float32(0.5)
+        )
+        if esdf_x < wp.int32(0) or esdf_x >= ESDF_D:
+            return
+        if esdf_y < wp.int32(0) or esdf_y >= ESDF_H:
+            return
+        if esdf_z < wp.int32(0) or esdf_z >= ESDF_W:
+            return
+
+        is_surface = wp.abs(sdf) <= TSDF_VOXEL_SIZE * wp.float32(0.9)
+        is_truncation_boundary = sdf < -(
+            TRUNCATION_DIST - TSDF_VOXEL_SIZE * wp.float32(1.1)
+        )
+        if is_surface or is_truncation_boundary:
+            esdf_tid = esdf_x * ESDF_H * ESDF_W + esdf_y * ESDF_W + esdf_z
+            esdf_site_index[esdf_tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
+
     @warp_func(f"_check_seed_at_world_pos_{suffix}")
     def _check_seed_at_world_pos(
         tsdf: BlockSparseTSDFWarp,
@@ -302,6 +448,54 @@ def make_esdf_kernels(
         if wp.abs(sdf) <= TSDF_VOXEL_SIZE * 0.9:
             return True
         if sdf < -(TRUNCATION_DIST - TSDF_VOXEL_SIZE * 1.1):
+            return True
+        return False
+
+    @warp_func(f"_check_seed_at_world_pos_semantic_{suffix}")
+    def _check_seed_at_world_pos_semantic(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        world_x: wp.float32,
+        world_y: wp.float32,
+        world_z: wp.float32,
+        min_weight: wp.float32,
+    ) -> wp.bool:
+        """Check retained semantics and seed geometry with one hash lookup."""
+        gx = wp.int32(
+            (world_x - TSDF_ORIGIN_X) / TSDF_VOXEL_SIZE
+            + wp.float32(GRID_W) * wp.float32(0.5)
+        )
+        gy = wp.int32(
+            (world_y - TSDF_ORIGIN_Y) / TSDF_VOXEL_SIZE
+            + wp.float32(GRID_H) * wp.float32(0.5)
+        )
+        gz = wp.int32(
+            (world_z - TSDF_ORIGIN_Z) / TSDF_VOXEL_SIZE
+            + wp.float32(GRID_D) * wp.float32(0.5)
+        )
+        if gx < wp.int32(0) or gx >= GRID_W:
+            return False
+        if gy < wp.int32(0) or gy >= GRID_H:
+            return False
+        if gz < wp.int32(0) or gz >= GRID_D:
+            return False
+
+        lookup = _hash_lookup_at_global_coords(tsdf, gx, gy, gz)
+        if lookup[0] < wp.int32(0):
+            return False
+        if not semantic_local_idx_keep(
+            semantic_filter,
+            lookup[0],
+            lookup[1],
+        ):
+            return False
+
+        sdf = sample_combined_sdf(tsdf, lookup[0], lookup[1], min_weight)
+        if sdf > wp.float32(1e9):
+            return False
+        if wp.abs(sdf) <= TSDF_VOXEL_SIZE * wp.float32(0.9):
+            return True
+        if sdf < -(TRUNCATION_DIST - TSDF_VOXEL_SIZE * wp.float32(1.1)):
             return True
         return False
 
@@ -354,7 +548,6 @@ def make_esdf_kernels(
         ):
             esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
             return
-
         if _check_seed_at_world_pos(
             tsdf,
             cx - half_step,
@@ -364,7 +557,6 @@ def make_esdf_kernels(
         ):
             esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
             return
-
         if _check_seed_at_world_pos(
             tsdf,
             cx,
@@ -374,7 +566,6 @@ def make_esdf_kernels(
         ):
             esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
             return
-
         if _check_seed_at_world_pos(
             tsdf,
             cx,
@@ -384,7 +575,6 @@ def make_esdf_kernels(
         ):
             esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
             return
-
         if _check_seed_at_world_pos(
             tsdf,
             cx,
@@ -394,7 +584,6 @@ def make_esdf_kernels(
         ):
             esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
             return
-
         if _check_seed_at_world_pos(
             tsdf,
             cx,
@@ -404,6 +593,111 @@ def make_esdf_kernels(
         ):
             esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
             return
+
+    @warp_kernel(f"seed_esdf_sites_gather_semantic_kernel_{suffix}")
+    def seed_esdf_sites_gather_semantic_kernel(
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        esdf_site_index: wp.array(dtype=wp.int32),
+        esdf_origin: wp.array(dtype=wp.float32),
+        esdf_voxel_size: wp.array(dtype=wp.float32),
+        minimum_tsdf_weight: wp.float32,
+    ):
+        """Gather ESDF sites only from semantically retained TSDF voxels."""
+        tid = wp.tid()
+        esdf_z = tid % ESDF_W
+        esdf_y = (tid // ESDF_W) % ESDF_H
+        esdf_x = tid // (ESDF_W * ESDF_H)
+        if esdf_x >= ESDF_D:
+            return
+
+        esdf_vs = esdf_voxel_size[0]
+        half_step = esdf_vs * wp.float32(0.5)
+        cx = (
+            esdf_origin[0]
+            + (wp.float32(esdf_x) + wp.float32(0.5) - wp.float32(ESDF_D) * wp.float32(0.5))
+            * esdf_vs
+        )
+        cy = (
+            esdf_origin[1]
+            + (wp.float32(esdf_y) + wp.float32(0.5) - wp.float32(ESDF_H) * wp.float32(0.5))
+            * esdf_vs
+        )
+        cz = (
+            esdf_origin[2]
+            + (wp.float32(esdf_z) + wp.float32(0.5) - wp.float32(ESDF_W) * wp.float32(0.5))
+            * esdf_vs
+        )
+
+        if _check_seed_at_world_pos_semantic(
+            tsdf,
+            semantic_filter,
+            cx,
+            cy,
+            cz,
+            minimum_tsdf_weight,
+        ):
+            esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
+            return
+        if _check_seed_at_world_pos_semantic(
+            tsdf,
+            semantic_filter,
+            cx + half_step,
+            cy,
+            cz,
+            minimum_tsdf_weight,
+        ):
+            esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
+            return
+        if _check_seed_at_world_pos_semantic(
+            tsdf,
+            semantic_filter,
+            cx - half_step,
+            cy,
+            cz,
+            minimum_tsdf_weight,
+        ):
+            esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
+            return
+        if _check_seed_at_world_pos_semantic(
+            tsdf,
+            semantic_filter,
+            cx,
+            cy + half_step,
+            cz,
+            minimum_tsdf_weight,
+        ):
+            esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
+            return
+        if _check_seed_at_world_pos_semantic(
+            tsdf,
+            semantic_filter,
+            cx,
+            cy - half_step,
+            cz,
+            minimum_tsdf_weight,
+        ):
+            esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
+            return
+        if _check_seed_at_world_pos_semantic(
+            tsdf,
+            semantic_filter,
+            cx,
+            cy,
+            cz + half_step,
+            minimum_tsdf_weight,
+        ):
+            esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
+            return
+        if _check_seed_at_world_pos_semantic(
+            tsdf,
+            semantic_filter,
+            cx,
+            cy,
+            cz - half_step,
+            minimum_tsdf_weight,
+        ):
+            esdf_site_index[tid] = pack_site_coords(esdf_x, esdf_y, esdf_z)
 
     # =====================================================================
     # Distance kernels.
@@ -490,10 +784,90 @@ def make_esdf_kernels(
 
         esdf_dist_field[tid] = wp.float16(edt_dist)
 
+    @warp_kernel(f"compute_esdf_from_min_tsdf_semantic_kernel_{suffix}")
+    def compute_esdf_from_min_tsdf_semantic_kernel(
+        esdf_site_index: wp.array(dtype=wp.int32),
+        esdf_voxel_size: wp.array(dtype=wp.float32),
+        esdf_dist_field: wp.array(dtype=wp.float16),
+        tsdf: BlockSparseTSDFWarp,
+        semantic_filter: PreparedSemanticFilterWarp,
+        minimum_tsdf_weight: wp.float32,
+        esdf_origin: wp.array(dtype=wp.float32),
+        skip_steps: wp.float32,
+    ):
+        """Compute ESDF distance and sign from retained TSDF geometry."""
+        tid = wp.tid()
+        esdf_z = tid % ESDF_W
+        esdf_y = (tid // ESDF_W) % ESDF_H
+        esdf_x = tid // (ESDF_W * ESDF_H)
+        if esdf_x >= ESDF_D:
+            return
+
+        site_packed = esdf_site_index[tid]
+        if site_packed < wp.int32(0):
+            esdf_dist_field[tid] = wp.float16(1e4)
+            return
+
+        sx = site_packed & wp.int32(0x3FF)
+        sy = (site_packed >> wp.int32(10)) & wp.int32(0x3FF)
+        sz = (site_packed >> wp.int32(20)) & wp.int32(0x3FF)
+        esdf_vs = esdf_voxel_size[0]
+        dx = wp.float32(esdf_x - sx)
+        dy = wp.float32(esdf_y - sy)
+        dz = wp.float32(esdf_z - sz)
+        dist_voxels = wp.sqrt(dx * dx + dy * dy + dz * dz)
+        edt_dist = dist_voxels * esdf_vs
+        tsdf_sdf = wp.float32(1e10)
+
+        if dist_voxels > wp.float32(1.0) and skip_steps > wp.float32(0.0):
+            inv_dist = wp.float32(1.0) / dist_voxels
+            adjacent_x = sx + wp.int32(wp.round(dx * inv_dist * skip_steps))
+            adjacent_y = sy + wp.int32(wp.round(dy * inv_dist * skip_steps))
+            adjacent_z = sz + wp.int32(wp.round(dz * inv_dist * skip_steps))
+            if (
+                adjacent_x >= wp.int32(0)
+                and adjacent_x < ESDF_D
+                and adjacent_y >= wp.int32(0)
+                and adjacent_y < ESDF_H
+                and adjacent_z >= wp.int32(0)
+                and adjacent_z < ESDF_W
+            ):
+                tsdf_sdf = lookup_static_sdf_semantic_at_esdf_coords(
+                    tsdf,
+                    semantic_filter,
+                    adjacent_x,
+                    adjacent_y,
+                    adjacent_z,
+                    esdf_origin,
+                    esdf_vs,
+                )
+
+        if tsdf_sdf > wp.float32(1e9):
+            tsdf_sdf = lookup_combined_sdf_semantic_at_esdf_coords(
+                tsdf,
+                semantic_filter,
+                esdf_x,
+                esdf_y,
+                esdf_z,
+                esdf_origin,
+                esdf_vs,
+                minimum_tsdf_weight,
+            )
+        if tsdf_sdf < wp.float32(0.0):
+            edt_dist = -edt_dist
+        esdf_dist_field[tid] = wp.float16(edt_dist)
+
     return {
         "seed_esdf_sites_from_block_sparse_kernel": seed_esdf_sites_from_block_sparse_kernel,
+        "seed_esdf_sites_from_block_sparse_semantic_kernel": (
+            seed_esdf_sites_from_block_sparse_semantic_kernel
+        ),
         "seed_esdf_sites_gather_kernel": seed_esdf_sites_gather_kernel,
+        "seed_esdf_sites_gather_semantic_kernel": seed_esdf_sites_gather_semantic_kernel,
         "compute_esdf_from_min_tsdf_kernel": compute_esdf_from_min_tsdf_kernel,
+        "compute_esdf_from_min_tsdf_semantic_kernel": (
+            compute_esdf_from_min_tsdf_semantic_kernel
+        ),
         "lookup_combined_sdf_at_esdf_coords": lookup_combined_sdf_at_esdf_coords,
         "lookup_static_sdf_at_esdf_coords": lookup_static_sdf_at_esdf_coords,
     }

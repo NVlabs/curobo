@@ -55,16 +55,9 @@ h1, h2, .rst-content .toctree-wrapper p.caption, h3, h4, h5, h6, legend, p.capti
 /* Fixes for mobile */
 .wy-nav-top {
     background-color: #fff;
-    background-image: url('../modulus_logo_v7_64h.png');
-    background-repeat: no-repeat;
-    background-position: center;
     padding: 0;
     margin: 0.4045em 0.809em;
     color: #333;
-}
-
-.wy-nav-top > a {
-    display: none;
 }
 
 @media screen and (max-width: 768px) {

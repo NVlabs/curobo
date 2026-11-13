@@ -119,7 +119,10 @@ namespace curobo{
      * velocity, acceleration, and jerk gradients simultaneously.
      *
      * @tparam Degree B-spline degree, determines support window size (Degree + 1)
-     * @tparam ScalarType Floating point type (float or double)
+     * @tparam PositionGradient Pointer or provider with device-side operator[]
+     * @tparam VelocityGradient Pointer or provider with device-side operator[]
+     * @tparam AccelerationGradient Pointer or provider with device-side operator[]
+     * @tparam JerkGradient Pointer or provider with device-side operator[]
      *
      * @param gradients Output structure to store loaded gradient values
      * @param indices Thread indices structure containing computed addressing information
@@ -137,14 +140,15 @@ namespace curobo{
      * @note Gradient loading is optimized for coalesced memory access when called by
      *       threads processing consecutive DOF indices.
      */
-    template<int Degree, typename ScalarType>
+    template<int Degree, typename PositionGradient, typename VelocityGradient,
+             typename AccelerationGradient, typename JerkGradient>
     __device__ void load_gradients(
         GradientArrays<Degree> &gradients,
         const BSplineBackwardThreadInfo &thread_info,
-        const ScalarType *grad_position,
-        const ScalarType *grad_velocity,
-        const ScalarType *grad_acceleration,
-        const ScalarType *grad_jerk)
+        PositionGradient grad_position,
+        VelocityGradient grad_velocity,
+        AccelerationGradient grad_acceleration,
+        JerkGradient grad_jerk)
     {
         constexpr int splineSupportSize = get_spline_support_size<Degree>();
         gradients.initialize();

@@ -63,6 +63,37 @@ class TestKinematicsParamsProperties:
         assert isinstance(num, int)
         assert num == 7  # Franka has 7 DOF
 
+    def test_topology_caches_are_stored_and_cloneable(self, franka_kinematics_cfg):
+        """Store reusable Jacobian/backward topology maps in KinematicsParams."""
+        config = franka_kinematics_cfg
+        assert config.joint_link_influence_words.shape == (
+            config.num_links,
+            (config.num_links + 31) // 32,
+        )
+        assert config.joint_link_influence_words.dtype == torch.int32
+        assert config.tool_joint_links_offsets.shape == (
+            config.num_pose_links * config.num_dof + 1,
+        )
+        assert config.tool_joint_links_offsets.dtype == torch.int16
+        assert config.tool_joint_links_data.dtype == torch.int16
+        assert int(config.tool_joint_links_offsets[-1].item()) == (
+            config.tool_joint_links_data.numel()
+        )
+
+        cloned = config.clone()
+        torch.testing.assert_close(
+            cloned.joint_link_influence_words,
+            config.joint_link_influence_words,
+        )
+        torch.testing.assert_close(
+            cloned.tool_joint_links_data,
+            config.tool_joint_links_data,
+        )
+        torch.testing.assert_close(
+            cloned.tool_joint_links_offsets,
+            config.tool_joint_links_offsets,
+        )
+
 
 class TestKinematicsParamsSphereOperations:
     """Test sphere-related methods of KinematicsParams."""

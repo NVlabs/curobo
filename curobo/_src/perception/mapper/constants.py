@@ -114,8 +114,7 @@ def _validate_block_grid_size(
     """Validate a compile-time per-block control-grid resolution."""
     if not isinstance(grid_size, int) or isinstance(grid_size, bool):
         log_and_raise(
-            f"{field_name} must be a plain int, got "
-            f"{type(grid_size).__name__} ({grid_size!r})."
+            f"{field_name} must be a plain int, got {type(grid_size).__name__} ({grid_size!r})."
         )
     if grid_size < 1:
         log_and_raise(f"{field_name} must be >= 1, got {grid_size}.")
@@ -143,6 +142,22 @@ def _validate_feature_block_grid_size(
     )
 
 
+def _validate_instance_grid_size(instance_grid_size: int, block_size: int) -> None:
+    """Validate the optional categorical instance-grid resolution."""
+    if not isinstance(instance_grid_size, int) or isinstance(instance_grid_size, bool):
+        log_and_raise(
+            "instance_grid_size must be a plain int, got "
+            f"{type(instance_grid_size).__name__} ({instance_grid_size!r})."
+        )
+    if instance_grid_size < 0:
+        log_and_raise(f"instance_grid_size must be >= 0, got {instance_grid_size}.")
+    if instance_grid_size > block_size:
+        log_and_raise(
+            "instance_grid_size must be <= block_size, got "
+            f"instance_grid_size={instance_grid_size}, block_size={block_size}."
+        )
+
+
 def _validate_feature_channels_per_thread(feature_channels_per_thread: int) -> None:
     """Validate feature-channel grouping for the generated integration kernel.
 
@@ -160,8 +175,7 @@ def _validate_feature_channels_per_thread(feature_channels_per_thread: int) -> N
         )
     if feature_channels_per_thread < 1:
         log_and_raise(
-            "feature_channels_per_thread must be >= 1, got "
-            f"{feature_channels_per_thread}."
+            f"feature_channels_per_thread must be >= 1, got {feature_channels_per_thread}."
         )
 
 
@@ -182,20 +196,14 @@ def _validate_feature_grid_shape(
     has_height = feature_grid_height is not None
     has_width = feature_grid_width is not None
     if has_height != has_width:
-        log_and_raise(
-            "feature_grid_height and feature_grid_width must be specified together."
-        )
+        log_and_raise("feature_grid_height and feature_grid_width must be specified together.")
     if feature_dim == 0:
         if has_height:
-            log_and_raise(
-                "feature_grid_height/feature_grid_width require feature_dim > 0."
-            )
+            log_and_raise("feature_grid_height/feature_grid_width require feature_dim > 0.")
         return
 
     if not has_height:
-        log_and_raise(
-            "feature_dim > 0 requires feature_grid_height and feature_grid_width."
-        )
+        log_and_raise("feature_dim > 0 requires feature_grid_height and feature_grid_width.")
     if not isinstance(feature_grid_height, int) or isinstance(feature_grid_height, bool):
         log_and_raise(
             "feature_grid_height must be a plain int, got "
@@ -265,24 +273,17 @@ def _validate_lidar_config(
 
     if lidar_num_sensors == 0:
         if has_image_height or has_image_width:
-            log_and_raise(
-                "lidar_image_height/lidar_image_width require lidar_num_sensors > 0."
-            )
+            log_and_raise("lidar_image_height/lidar_image_width require lidar_num_sensors > 0.")
         if has_feature_height or has_feature_width:
             log_and_raise(
-                "lidar_feature_grid_height/lidar_feature_grid_width require "
-                "lidar_num_sensors > 0."
+                "lidar_feature_grid_height/lidar_feature_grid_width require lidar_num_sensors > 0."
             )
         return
 
     if has_image_height != has_image_width:
-        log_and_raise(
-            "lidar_image_height and lidar_image_width must be specified together."
-        )
+        log_and_raise("lidar_image_height and lidar_image_width must be specified together.")
     if not has_image_height:
-        log_and_raise(
-            "lidar_num_sensors > 0 requires lidar_image_height and lidar_image_width."
-        )
+        log_and_raise("lidar_num_sensors > 0 requires lidar_image_height and lidar_image_width.")
     if not isinstance(lidar_image_height, int) or isinstance(lidar_image_height, bool):
         log_and_raise(
             "lidar_image_height must be a plain int, got "
@@ -301,14 +302,12 @@ def _validate_lidar_config(
 
     if has_feature_height != has_feature_width:
         log_and_raise(
-            "lidar_feature_grid_height and lidar_feature_grid_width must be "
-            "specified together."
+            "lidar_feature_grid_height and lidar_feature_grid_width must be specified together."
         )
     if feature_dim == 0:
         if has_feature_height:
             log_and_raise(
-                "lidar_feature_grid_height/lidar_feature_grid_width require "
-                "feature_dim > 0."
+                "lidar_feature_grid_height/lidar_feature_grid_width require feature_dim > 0."
             )
         return
 
@@ -325,9 +324,7 @@ def _validate_lidar_config(
             f"{type(lidar_feature_grid_height).__name__} "
             f"({lidar_feature_grid_height!r})."
         )
-    if not isinstance(lidar_feature_grid_width, int) or isinstance(
-        lidar_feature_grid_width, bool
-    ):
+    if not isinstance(lidar_feature_grid_width, int) or isinstance(lidar_feature_grid_width, bool):
         log_and_raise(
             "lidar_feature_grid_width must be a plain int, got "
             f"{type(lidar_feature_grid_width).__name__} "

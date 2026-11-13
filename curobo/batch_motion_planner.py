@@ -6,16 +6,17 @@ This module provides batch motion planning for solving multiple independent
 planning problems in parallel with a single IK + trajectory optimization pass.
 
 Example:
-    ```python
-    from curobo import BatchMotionPlanner, MotionPlannerCfg
+    .. code-block:: python
 
-    config = MotionPlannerCfg.create(
-        robot="franka.yml",
-        max_batch_size=16,
-    )
-    planner = BatchMotionPlanner(config)
-    result = planner.plan_pose(goal_tool_poses, current_states)
-    ```
+        from curobo import BatchMotionPlanner, MotionPlannerCfg
+
+        config = MotionPlannerCfg.create(
+            robot="franka.yml",
+            max_batch_size=16,
+        )
+        planner = BatchMotionPlanner(config)
+        result = planner.plan_pose(goal_tool_poses, current_states)
+
 """
 
 from curobo._src.motion.motion_planner_batch import BatchMotionPlanner

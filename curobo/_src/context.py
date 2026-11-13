@@ -4,17 +4,15 @@
 
 
 class CuroboRuntime:
-    """Global runtime for CuRobo kernel management.
+    """Global runtime for CUDA kernel management.
 
-    Manages caches for multiple backends (cuda.core, pybind, warp).
-    Backends are lazily initialized on first use.
+    Caches are lazily initialized on first use.
     """
 
     def __init__(self):
         # Backend-specific caches (lazy initialized)
         self._cuda_core_cache = None
         self._warp_cache = None  # Future
-        self._pybind_cache = None  # If needed
 
         # Legacy cache names (kept for compatibility)
         self.warp_runtime_kernel_cache = {}

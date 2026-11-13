@@ -6,46 +6,44 @@ This module provides common data types used throughout CuRobo for representing
 robot states, poses, camera observations, and tensor device configurations.
 
 Example:
-    ```python
-    from curobo.types import JointState, Pose, CameraObservation, LidarObservation, DeviceCfg
+    .. code-block:: python
 
-    # Create joint state
-    joint_state = JointState.from_position([0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.0])
+        from curobo.types import JointState, Pose, CameraObservation, LidarObservation, DeviceCfg
+        import torch
 
-    # Create pose
-    pose = Pose(
-        position=[0.5, 0.0, 0.5],
-        quaternion=[1, 0, 0, 0]  # w, x, y, z
-    )
+        # Create joint state
+        joint_state = JointState.from_position(
+            torch.tensor([[0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.0]], device="cuda:0")
+        )
 
-    # Create camera observation
-    camera_obs = CameraObservation(
-        depth_image=depth_tensor,
-        intrinsics=camera_intrinsics,
-        pose=camera_pose,
-    )
+        # Create pose
+        pose = Pose.from_list([0.5, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0])  # xyz, wxyz
 
-    # Specify tensor device and dtype
-    device_cfg = DeviceCfg(device="cuda:0", dtype=torch.float32)
-    ```
+        # Create camera observation
+        camera_obs = CameraObservation(
+            depth_image=depth_tensor,
+            intrinsics=camera_intrinsics,
+            pose=camera_pose,
+        )
+
+        # Specify tensor device and dtype
+        device_cfg = DeviceCfg(device=torch.device("cuda:0"), dtype=torch.float32)
+
 """
 
-# State types
-# Camera types
+# CuRobo
+from curobo._src.cost.criteria_tool_relative_transform import ToolRelativeTransformCriteria
+from curobo._src.cost.criteria_tool_velocity_limit import ToolVelocityLimitCriteria
+from curobo._src.cost.tool_pose_criteria import PoseErrorFrame, ToolPoseCriteria
 from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_robot import RobotState
 from curobo._src.types.camera import CameraObservation
-from curobo._src.types.lidar import LidarObservation
-
-# Content path
 from curobo._src.types.content_path import ContentPath
-
-# Tensor configuration
 from curobo._src.types.device_cfg import DeviceCfg
-
-# Pose types
-from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
+from curobo._src.types.lidar import LidarObservation
 from curobo._src.types.pose import Pose
+from curobo._src.types.spline_layout import SplineLayout
+from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 
 __all__ = [
@@ -54,9 +52,14 @@ __all__ = [
     "Pose",
     "ToolPose",
     "GoalToolPose",
+    "ToolRelativeTransformTarget",
+    "ToolRelativeTransformCriteria",
+    "ToolVelocityLimitCriteria",
     "ToolPoseCriteria",
+    "PoseErrorFrame",
     "CameraObservation",
     "LidarObservation",
     "ContentPath",
     "DeviceCfg",
+    "SplineLayout",
 ]

@@ -13,10 +13,10 @@ import torch
 
 # CuRobo
 from curobo._src.state.state_joint import JointState
+from curobo._src.trajectory.trajectory_seed_generator import TrajectorySeedGenerator
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise, log_warn
 from curobo._src.util.sampling.sample_buffer import SampleBuffer
-from curobo._src.util.trajectory_seed_generator import TrajectorySeedGenerator
 
 
 class SeedManager:
@@ -63,6 +63,7 @@ class SeedManager:
             low_bounds=action_bound_lows,
             seed=random_seed,
             store_buffer=2000,
+            cache_bounded_samples=True,
         )
 
         # For trajectory seeds, initialize trajectory seed generator if needed
@@ -209,7 +210,11 @@ class SeedManager:
                 )
                 generated_seeds.append(constant_seeds)
 
-        all_seeds = torch.cat(generated_seeds, dim=1)
+        all_seeds = (
+            generated_seeds[0]
+            if len(generated_seeds) == 1
+            else torch.cat(generated_seeds, dim=1)
+        )
         return all_seeds.view(-1, self.action_horizon, self.action_dim)
 
     def generate_random_actions(

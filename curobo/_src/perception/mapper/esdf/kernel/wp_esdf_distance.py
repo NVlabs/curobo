@@ -12,11 +12,12 @@ the Python launchers used by :class:`BlockSparseESDFIntegrator`.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import warp as wp
 
+from curobo._src.perception.mapper.kernel.warp_types import PreparedSemanticFilterWarp
 from curobo._src.perception.mapper.storage import BlockSparseTSDF
 from curobo._src.util.warp import get_warp_device_stream
 from curobo.logging import log_and_raise
@@ -31,6 +32,7 @@ def compute_esdf_from_min_tsdf_warp(
     esdf_origin: torch.Tensor,
     adjacent_skip_steps: float = 0.0,
     minimum_tsdf_weight: float = 0.1,
+    semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
 ) -> None:
     """Compute ESDF distances with sign from direct TSDF hash lookup."""
     esdf_D, esdf_H, esdf_W = esdf_grid_shape
@@ -56,18 +58,23 @@ def compute_esdf_from_min_tsdf_warp(
 
     kernels = tsdf.kernels
 
+    kernel = kernels.compute_esdf_from_min_tsdf_kernel
+    inputs = [
+        wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
+        wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
+        wp.from_torch(esdf_dist_field.view(-1), dtype=wp.float16),
+        warp_data,
+        wp.float32(minimum_tsdf_weight),
+        wp.from_torch(esdf_origin, dtype=wp.float32),
+        wp.float32(adjacent_skip_steps),
+    ]
+    if semantic_filter is not None:
+        kernel = kernels.compute_esdf_from_min_tsdf_semantic_kernel
+        inputs.insert(4, semantic_filter)
     wp.launch(
-        kernel=kernels.compute_esdf_from_min_tsdf_kernel,
+        kernel=kernel,
         dim=n_esdf_voxels,
-        inputs=[
-            wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
-            wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
-            wp.from_torch(esdf_dist_field.view(-1), dtype=wp.float16),
-            warp_data,
-            wp.float32(minimum_tsdf_weight),
-            wp.from_torch(esdf_origin, dtype=wp.float32),
-            wp.float32(adjacent_skip_steps),
-        ],
+        inputs=inputs,
         device=wp.device_from_torch(device),
         stream=stream,
     )

@@ -19,16 +19,19 @@ from typing import Dict, List, Optional, TypeVar, Union
 import torch
 import torch.autograd.profiler as profiler
 
+# CuRobo
 import curobo._src.runtime as curobo_runtime
-from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.collision.attachment_manager import AttachmentManager
+from curobo._src.cost.criteria_tool_relative_transform import ToolRelativeTransformCriteria
+from curobo._src.cost.criteria_tool_velocity_limit import ToolVelocityLimitCriteria
+from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.geom.collision.collision_scene import (
     SceneCollision,
     create_scene_collision,
 )
 from curobo._src.optim.multi_stage_optimizer import MultiStageOptimizer
-from curobo._src.optim.optimizer_protocol import Optimizer
 from curobo._src.optim.optim_factory import create_optimizer
+from curobo._src.optim.optimizer_protocol import Optimizer
 from curobo._src.robot.kinematics.kinematics import Kinematics, KinematicsState
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.rollout_robot import RobotRollout
@@ -37,7 +40,9 @@ from curobo._src.solver.manager_seed import SeedManager
 from curobo._src.solver.solve_state import SolveState
 from curobo._src.solver.solver_core_cfg import SolverCoreCfg
 from curobo._src.state.state_joint import JointState
+from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose
+from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise, log_warn
 from curobo._src.util.torch_util import is_cuda_graph_reset_available
 
@@ -62,6 +67,9 @@ class SolverCore:
         self._solve_state: Optional[SolveState] = None
         self._goal_buffer: Optional[GoalRegistry] = None
         self._task_initialized = False
+        self._rollout_update_executors: Dict[
+            tuple[bool, bool, bool], GraphExecutor
+        ] = {}
 
         # Goal buffer manager
         self.goal_registry_manager = GoalManager(config.device_cfg)
@@ -221,15 +229,75 @@ class SolverCore:
 
     @profiler.record_function("solver_core/update_rollout_params")
     def update_rollout_params(
-        self, goal_buffer: GoalRegistry, include_auxiliary_rollout: bool = True
-    ):
-        """Update goal parameters on all rollouts."""
-        for rollout in self.get_all_rollout_instances(
-            include_optimizer_rollouts=False,
-            include_auxiliary_rollout=include_auxiliary_rollout,
+        self,
+        goal_buffer: GoalRegistry,
+        include_auxiliary_rollout: bool = True,
+        include_optimizer_rollouts: bool = True,
+        include_metrics_rollout: bool = True,
+    ) -> None:
+        """Propagate a goal to selected rollouts, optionally through CUDA graph replay.
+
+        Graph replay is used only for the owned goal buffer when CUDA graphs are configured and
+        :attr:`curobo._src.runtime.skip_checks` is enabled. The graph executor applies the global
+        CUDA graph runtime policy. The specialized path assumes stable tensor references and
+        shapes; disabling ``skip_checks`` preserves eager validation on every call.
+        """
+        graph_key = (
+            include_metrics_rollout,
+            include_auxiliary_rollout,
+            include_optimizer_rollouts,
+        )
+        use_cuda_graph = bool(
+            getattr(getattr(self, "config", None), "use_cuda_graph", False)
+        )
+        if (
+            use_cuda_graph
+            and curobo_runtime.skip_checks
+            and goal_buffer is getattr(self, "_goal_buffer", None)
         ):
-            rollout.update_params(goal_buffer)
-        self.optimizer.update_rollout_params(goal_buffer)
+            executor = self._rollout_update_executors.get(graph_key)
+            if executor is None:
+                executor = create_graph_executor(
+                    capture_fn=self._update_rollout_params_graph,
+                    device=self.device_cfg.device,
+                    use_cuda_graph=True,
+                    clone_outputs=False,
+                    graph_key=graph_key,
+                )
+                self._rollout_update_executors[graph_key] = executor
+            executor()
+            return
+
+        self._update_rollout_params_impl(goal_buffer, graph_key)
+
+    def _update_rollout_params_graph(
+        self, graph_key: tuple[bool, bool, bool]
+    ) -> None:
+        """Capture rollout updates against the stable, solver-owned goal buffer."""
+        if self._goal_buffer is None:
+            log_and_raise("Cannot capture rollout updates before creating a goal buffer.")
+        self._update_rollout_params_impl(self._goal_buffer, graph_key)
+
+    def _update_rollout_params_impl(
+        self,
+        goal_buffer: GoalRegistry,
+        graph_key: tuple[bool, bool, bool],
+    ) -> None:
+        """Execute eager goal propagation for one rollout-selection variant."""
+        include_metrics_rollout, include_auxiliary_rollout, include_optimizer_rollouts = graph_key
+        if include_metrics_rollout:
+            self.metrics_rollout.update_params(goal_buffer)
+            for rollout in self.additional_metrics_rollouts.values():
+                rollout.update_params(goal_buffer)
+        if include_auxiliary_rollout:
+            self.auxiliary_rollout.update_params(goal_buffer)
+        if include_optimizer_rollouts:
+            self.optimizer.update_rollout_params(goal_buffer)
+
+    def _reset_rollout_update_cuda_graphs(self) -> None:
+        """Reset all captured rollout-update graph variants."""
+        for executor in self._rollout_update_executors.values():
+            executor.reset()
 
     @profiler.record_function("solver_core/reset_shape")
     def reset_shape(self):
@@ -259,6 +327,7 @@ class SolverCore:
             return
         if not is_cuda_graph_reset_available():
             log_and_raise("CUDA graph reset is not available.")
+        self._reset_rollout_update_cuda_graphs()
         if hasattr(self.optimizer, "reset_cuda_graph"):
             self.optimizer.reset_cuda_graph()
         if hasattr(self.metrics_rollout, "reset_cuda_graph"):
@@ -269,6 +338,7 @@ class SolverCore:
 
     def destroy(self):
         """Release all CUDA graph resources unconditionally."""
+        self._reset_rollout_update_cuda_graphs()
         if hasattr(self.optimizer, "reset_cuda_graph"):
             self.optimizer.reset_cuda_graph()
         if hasattr(self.metrics_rollout, "reset_cuda_graph"):
@@ -290,6 +360,7 @@ class SolverCore:
         use_implicit_goal: bool = False,
         seed_goal_state: Optional[JointState] = None,
         goal_state: Optional[JointState] = None,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
     ):
         """Update the internal goal buffer.
 
@@ -304,6 +375,7 @@ class SolverCore:
             seed_goal_js=seed_goal_state,
             goal_js=goal_state,
             use_implicit_goal=use_implicit_goal,
+            tool_relative_transform_target=tool_relative_transform_target,
         )
 
         self._solve_state = self.goal_registry_manager.solve_state
@@ -381,8 +453,9 @@ class SolverCore:
         if tool_frames is None:
             tool_frames = self.tool_frames
         tool_pose_criteria = {
-            k: ToolPoseCriteria.track_position_and_orientation(
-                non_terminal_scale=non_terminal_weight_factor
+            k: ToolPoseCriteria.track_pose(
+                non_terminal_scale=non_terminal_weight_factor,
+                device_cfg=self.device_cfg,
             )
             for k in tool_frames
         }
@@ -397,7 +470,9 @@ class SolverCore:
         """
         if tool_frames is None:
             tool_frames = self.tool_frames
-        tool_pose_criteria = {k: ToolPoseCriteria.disabled() for k in tool_frames}
+        tool_pose_criteria = {
+            k: ToolPoseCriteria.disabled(device_cfg=self.device_cfg) for k in tool_frames
+        }
         self.update_tool_pose_criteria(tool_pose_criteria)
 
     @profiler.record_function("solver_core/enable_joint_position_tracking")
@@ -438,6 +513,30 @@ class SolverCore:
         for rollout in self.optimizer_rollouts:
             rollout.update_params_cost_managers(tool_pose_criteria=tool_pose_criteria)
         self.auxiliary_rollout.update_params_cost_managers(tool_pose_criteria=tool_pose_criteria)
+
+    def update_tool_relative_transform_criteria(
+        self,
+        criteria: Dict[str, ToolRelativeTransformCriteria],
+    ) -> None:
+        """Update relative-transform criteria for all configured rollouts."""
+        for rollout in self.get_all_rollout_instances(include_optimizer_rollouts=True):
+            rollout.update_params_cost_managers(
+                tool_relative_transform_criteria=criteria
+            )
+        for rollout in self.additional_metrics_rollouts.values():
+            rollout.update_params_cost_managers(
+                tool_relative_transform_criteria=criteria
+            )
+
+    def update_tool_velocity_limit_criteria(
+        self,
+        criteria: Dict[str, ToolVelocityLimitCriteria],
+    ) -> None:
+        """Update projected tool-speed criteria for all configured rollouts."""
+        for rollout in self.get_all_rollout_instances(include_optimizer_rollouts=True):
+            rollout.update_params_cost_managers(tool_velocity_limit_criteria=criteria)
+        for rollout in self.additional_metrics_rollouts.values():
+            rollout.update_params_cost_managers(tool_velocity_limit_criteria=criteria)
 
     # -----------------------------------------------------------------------
     # Sample configs (collision activation distance passed as arg)
@@ -527,17 +626,25 @@ class SolverCore:
         com: Optional[torch.Tensor] = None,
         inertia: Optional[torch.Tensor] = None,
     ) -> None:
-        """Update inertial properties of a single link across all rollout instances."""
-        for rollout in self.get_all_rollout_instances():
+        """Update one link in optimization, metrics, and additional metrics dynamics."""
+        rollouts = self.get_all_rollout_instances() + list(
+            self.additional_metrics_rollouts.values()
+        )
+        for rollout in rollouts:
             rollout.transition_model.update_link_inertial(link_name, mass, com, inertia)
+            rollout.metrics_transition_model.update_link_inertial(link_name, mass, com, inertia)
 
     def update_links_inertial(
         self,
         link_properties: dict[str, dict[str, Union[float, torch.Tensor]]],
     ) -> None:
-        """Update inertial properties of multiple links across all rollout instances."""
-        for rollout in self.get_all_rollout_instances():
+        """Update links in optimization, metrics, and additional metrics dynamics."""
+        rollouts = self.get_all_rollout_instances() + list(
+            self.additional_metrics_rollouts.values()
+        )
+        for rollout in rollouts:
             rollout.transition_model.update_links_inertial(link_properties)
+            rollout.metrics_transition_model.update_links_inertial(link_properties)
 
     @profiler.record_function("solver_core/debug_dump")
     def debug_dump(self, file_path: str):

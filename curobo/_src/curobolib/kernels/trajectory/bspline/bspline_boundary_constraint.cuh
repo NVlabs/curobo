@@ -57,7 +57,7 @@ namespace curobo{
                     {1.0f, 1.0f, 1.0f, 1.0f},                          // POS coefficients
                     {-1.0f, 0.0f, 1.0f, 2.0f},                         // VEL coefficients
                     {1.0f/3.0f, -1.0f/6.0f, 1.0f/3.0f, 11.0f/6.0f},        // ACC coefficients (FIXED)
-                    {0.0f, 0.0f, 0.0f, 0.0f}                          // JERK coefficients (cubic can't control jerk)
+                    {0.0f, 0.0f, 0.0f, 1.0f}                          // Right-sided jerk fixes the fourth control point
                 };
                 return coeffs[row][col];
             }

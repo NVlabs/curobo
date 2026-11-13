@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
+"""Construct and connect nodes for the probabilistic roadmap planner."""
 
 from __future__ import annotations
 
@@ -83,9 +84,16 @@ class GraphConstructor:
         if goal_nodes.shape[-1] != self.action_dim + 1:
             log_and_raise("goal_nodes must have action_dim + 1 columns")
 
-        steer_nodes = self.linear_connector.steer_until_infeasible(
-            start_nodes,
-            goal_nodes,
+        connection = self.linear_connector.connect(
+            start_nodes[:, : self.action_dim],
+            goal_nodes[:, : self.action_dim],
+        )
+        steer_nodes = torch.cat(
+            (
+                connection.endpoint,
+                self.node_manager.node_idx_padding_buffer.expand(start_nodes.shape[0], 1),
+            ),
+            dim=-1,
         )
         self.node_manager.register_nodes_and_connections(
             steer_nodes, start_nodes, add_exact_node=add_exact_node
@@ -152,7 +160,10 @@ class GraphConstructor:
         Returns:
             Tuple of (default_node_in_roadmap, default_joint_position_feasible)
         """
-        if self.config.use_default_position_heuristic and self._default_joint_position_feasible is None:
+        if (
+            self.config.use_default_position_heuristic
+            and self._default_joint_position_feasible is None
+        ):
             default_feasible = self.check_feasibility_fn(
                 default_joint_state.position.view(1, self.action_dim)
             )

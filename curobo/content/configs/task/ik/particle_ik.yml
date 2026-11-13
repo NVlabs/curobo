@@ -13,16 +13,14 @@ rollout:
       cost_type: POSITION
 
     tool_pose_cfg:
-      _project_distance_to_goal: false
       weight:
         - 1000.0
         - 10.0
-
-      _terminal_pose_convergence_tolerance:
-        - 1.0e-8 #1.0e-8 #1.0e-8
-        - 1.0e-8 #1.0e-6
+      default_tool_pose_criteria:
+        terminal_tolerance:
+          - 1.0e-8
+          - 1.0e-8
       use_grad_input: false
-      use_lie_group: false
 
   constraint_cfg:
     scene_collision_cfg:

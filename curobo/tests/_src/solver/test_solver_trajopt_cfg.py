@@ -9,10 +9,48 @@ import torch
 
 # CuRobo
 from curobo._src.solver.solver_trajopt_cfg import TrajOptSolverCfg
+from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
-from curobo._src.util.trajectory import TrajInterpolationType
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
+
+
+@pytest.mark.parametrize(
+    "cap,interval",
+    [
+        (0, 50),
+        (200, 0),
+        (-1, 50),
+        (200, -1),
+        (200.5, 50),
+        (200, True),
+    ],
+)
+def test_initial_iteration_budgets_must_be_positive(cap: int, interval: int) -> None:
+    """Reject invalid initial iteration budgets before constructing solver resources."""
+    with pytest.raises(ValueError, match="must be positive"):
+        TrajOptSolverCfg.create(
+            robot="franka.yml",
+            initial_max_iters=cap,
+            initial_check_interval=interval,
+        )
+
+
+@pytest.mark.parametrize(
+    "cap,override,expected", [(None, 100, 100), (150, 100, 150), (None, None, 50)]
+)
+def test_explicit_optimizer_override_preserves_initial_iteration_cap(
+    cap: int | None,
+    override: int | None,
+    expected: int,
+) -> None:
+    """Keep explicit optimizer budgets unless the caller supplies the new initial cap."""
+    config = TrajOptSolverCfg.create(
+        robot="franka.yml",
+        override_optimizer_num_iters={"lbfgs": override},
+        initial_max_iters=cap,
+    )
+    assert config.initial_max_iters == expected
 
 
 @pytest.fixture(scope="module")
@@ -98,6 +136,15 @@ class TestTrajOptSolverCfgDataclassAttributes:
 class TestTrajOptSolverCfgCreate:
     """Test TrajOptSolverCfg.create factory method."""
 
+    @pytest.mark.parametrize("enable_timeopt", [None, False])
+    def test_timeopt_default_and_opt_out(
+        self, cuda_device_cfg: DeviceCfg, enable_timeopt: bool | None
+    ) -> None:
+        """Enable timeopt by default while honoring an explicit opt-out."""
+        options = {} if enable_timeopt is None else {"enable_timeopt": enable_timeopt}
+        config = TrajOptSolverCfg.create(robot="franka.yml", device_cfg=cuda_device_cfg, **options)
+        assert config.enable_timeopt is (enable_timeopt is None)
+
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_basic(self, cuda_device_cfg):
         """Test basic create call."""
@@ -106,6 +153,7 @@ class TestTrajOptSolverCfgCreate:
             device_cfg=cuda_device_cfg,
         )
         assert isinstance(config, TrajOptSolverCfg)
+        assert all(not opt.line_search_backtracking for opt in config.optimizer_configs)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_with_dict_robot(self, cuda_device_cfg, franka_robot_cfg_dict):
