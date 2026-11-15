@@ -10,7 +10,6 @@ from typing import Optional
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.solver.solver_base_result import BaseSolverResult
@@ -18,6 +17,7 @@ from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_joint_trajectory_ops import trim_joint_state_trajectory
 from curobo._src.trajectory.trajectory_spline import SplineTrajectory
 from curobo._src.util.logging import log_and_raise
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 @dataclass
@@ -82,7 +82,7 @@ class GraspPlanResult:
         """Return the retained lift spline, or None when not planned."""
         return self._phase_trajectory("lift")
 
-    @profiler.record_function("grasp_plan_result/get_approach_interpolated_plan")
+    @get_profiler_decorator("grasp_plan_result/get_approach_interpolated_plan")
     def get_approach_interpolated_plan(self) -> Optional[JointState]:
         if self.approach_interpolated_last_tstep is None:
             return self.approach_interpolated_trajectory
@@ -92,7 +92,7 @@ class GraspPlanResult:
             self.approach_interpolated_trajectory, 0, self.approach_interpolated_last_tstep[0],
         )
 
-    @profiler.record_function("grasp_plan_result/get_grasp_interpolated_plan")
+    @get_profiler_decorator("grasp_plan_result/get_grasp_interpolated_plan")
     def get_grasp_interpolated_plan(self) -> Optional[JointState]:
         if self.grasp_interpolated_last_tstep is None:
             return self.grasp_interpolated_trajectory
@@ -102,7 +102,7 @@ class GraspPlanResult:
             self.grasp_interpolated_trajectory, 0, self.grasp_interpolated_last_tstep[0],
         )
 
-    @profiler.record_function("grasp_plan_result/get_lift_interpolated_plan")
+    @get_profiler_decorator("grasp_plan_result/get_lift_interpolated_plan")
     def get_lift_interpolated_plan(self) -> Optional[JointState]:
         if self.lift_interpolated_last_tstep is None:
             return self.lift_interpolated_trajectory

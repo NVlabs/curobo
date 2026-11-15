@@ -17,7 +17,6 @@ from typing import Iterator, Optional, Tuple
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.geom.collision.collision_scene import SceneCollision
@@ -54,6 +53,7 @@ from curobo._src.types.target_tool_relative_transform import ToolRelativeTransfo
 from curobo._src.types.tool_pose import GoalToolPose
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.logging import log_and_raise, log_warn
+from curobo._src.util.torch_util import get_profiler_context, get_profiler_decorator
 
 
 class TrajOptSolver:
@@ -308,7 +308,7 @@ class TrajOptSolver:
     # Goal buffer
     # -------------------------------------------------------------------
 
-    @profiler.record_function("trajopt_solver/_prepare_goal_buffer")
+    @get_profiler_decorator("trajopt_solver/_prepare_goal_buffer")
     def _prepare_goal_buffer(
         self,
         solve_state: SolveState,
@@ -495,7 +495,7 @@ class TrajOptSolver:
     # TrajOpt-specific methods
     # -------------------------------------------------------------------
 
-    @profiler.record_function("trajopt_solver/_solve_impl")
+    @get_profiler_decorator("trajopt_solver/_solve_impl")
     def _solve_impl(
         self,
         current_state: JointState,
@@ -548,7 +548,7 @@ class TrajOptSolver:
             seed_traj=seed_traj,
         )
         goal_buffer = None
-        with profiler.record_function("trajopt_solver/calculate_seed_goal_state"):
+        with get_profiler_context("trajopt_solver/calculate_seed_goal_state"):
             seed_goal_state = action_seed[..., -1, :].view(-1, self.action_dim)
             seed_goal_state = seed_goal_state.view(
                 solve_state.batch_size, num_seeds, self.action_dim
@@ -748,7 +748,7 @@ class TrajOptSolver:
         dt: Optional[torch.Tensor] = None,
     ) -> TrajOptResultUpdate:
         """Validate native and dense trajectories and retain the best feasible seeds."""
-        with profiler.record_function("trajopt_solver/post_optimization"):
+        with get_profiler_context("trajopt_solver/post_optimization"):
             new_dt = dt
             if new_dt is None:
                 new_dt = self.metrics_rollout.compute_time_scaled_dt_from_action(
@@ -878,7 +878,7 @@ class TrajOptSolver:
             result.debug_info["validation"][name] = selected.clone()
         return result
 
-    @profiler.record_function("trajopt_solver/_interpolate_and_compute_metrics")
+    @get_profiler_decorator("trajopt_solver/_interpolate_and_compute_metrics")
     def _interpolate_and_compute_metrics(self, js_optimized: JointState) -> RolloutMetrics:
         """Interpolate and validate one candidate without retaining the dense trajectory."""
         interpolated_rollout = self.additional_metrics_rollouts["interpolated_rollout"]
@@ -892,11 +892,11 @@ class TrajOptSolver:
         )
         return interpolated_metrics
 
-    @profiler.record_function("trajopt_solver/_update_trajectory_dt")
+    @get_profiler_decorator("trajopt_solver/_update_trajectory_dt")
     def _update_trajectory_dt(self, dt: torch.Tensor) -> None:
         self.goal_registry_manager.update_seed_goal_dt(dt)
 
-    @profiler.record_function("trajopt_solver/get_interpolated_trajectory")
+    @get_profiler_decorator("trajopt_solver/get_interpolated_trajectory")
     def get_interpolated_trajectory(
         self,
         js_optimized: JointState,
@@ -978,7 +978,7 @@ class TrajOptSolver:
             "batched seed trajectory."
         )
 
-    @profiler.record_function("trajopt_solver/compute_trajectory_dt")
+    @get_profiler_decorator("trajopt_solver/compute_trajectory_dt")
     def compute_trajectory_dt(
         self,
         trajectory: JointState,
@@ -1257,7 +1257,7 @@ class TrajOptSolver:
     # Public solve methods
     # -------------------------------------------------------------------
 
-    @profiler.record_function("trajopt_solver/solve_pose")
+    @get_profiler_decorator("trajopt_solver/solve_pose")
     def solve_pose(
         self,
         goal_tool_poses: GoalToolPose,
@@ -1497,7 +1497,7 @@ class TrajOptSolver:
             result = _slice_batch_result(result, actual_batch_size)
         return result
 
-    @profiler.record_function("trajopt_solver/solve_cspace")
+    @get_profiler_decorator("trajopt_solver/solve_cspace")
     def solve_cspace(
         self,
         goal_state: JointState,

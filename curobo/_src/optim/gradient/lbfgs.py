@@ -19,7 +19,6 @@ from typing import Any, List, Optional
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.curobolib.backends.cuda_core_backend.optimization_config import (
     LBFGSVectorFreeLaunchCfg,
@@ -32,6 +31,7 @@ from curobo._src.optim.optimization_iteration_state import OptimizationIteration
 from curobo._src.rollout.rollout_protocol import Rollout
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
+from curobo._src.util.torch_util import get_profiler_context, get_profiler_decorator
 
 __all__ = ["LBFGSOptCfg", "LBFGSOpt"]
 
@@ -184,7 +184,7 @@ class LBFGSOpt:
     shapes. The existing fused two-loop kernel handles all other configurations.
     """
 
-    @profiler.record_function("lbfgs_opt/init")
+    @get_profiler_decorator("lbfgs_opt/init")
     def __init__(
         self,
         config: LBFGSOptCfg,
@@ -223,7 +223,7 @@ class LBFGSOpt:
             -1, self._core.opt_dim
         ).contiguous()
 
-        with profiler.record_function(
+        with get_profiler_context(
             "lbfgs/vector_free" if self._use_vector_free else "lbfgs/two_loop"
         ):
             dq = LBFGScu.apply(

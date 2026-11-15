@@ -6,6 +6,7 @@
 from unittest.mock import patch
 
 # Third Party
+import pytest
 import torch
 from packaging import version
 
@@ -13,6 +14,7 @@ from packaging import version
 from curobo._src.util.torch_util import (
     disable_torch_compile_global,
     empty_decorator,
+    get_profiler_context,
     get_profiler_decorator,
     get_torch_compile_options,
     get_torch_jit_decorator,
@@ -299,3 +301,76 @@ class TestDecorators:
         finally:
             curobo_runtime.profiler = original_value
 
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_profiler_decorator_records_only_when_enabled(enabled: bool) -> None:
+    """Decorators preserve results and record labels only when enabled at creation."""
+    from curobo import runtime as curobo_runtime
+
+    label = "test/profiler_decorator"
+
+    with patch.object(curobo_runtime, "profiler", enabled):
+
+        @get_profiler_decorator(label)
+        def double(value: int) -> int:
+            """Return twice the input."""
+            return value * 2
+
+    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as trace:
+        assert double(3) == 6
+
+    assert (label in {event.key for event in trace.key_averages()}) is enabled
+    assert double.__name__ == "double"
+
+
+def test_profiler_context_checks_flag_for_each_scope() -> None:
+    """Context scopes honor flag changes without retaining enabled annotations."""
+    from curobo import runtime as curobo_runtime
+
+    labels = ["test/context_disabled", "test/context_enabled", "test/context_disabled_again"]
+    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]) as trace:
+        for label, enabled in zip(labels, [False, True, False]):
+            with patch.object(curobo_runtime, "profiler", enabled):
+                with get_profiler_context(label):
+                    torch.ones(1, dtype=torch.float32).add_(1)
+
+    events = {event.key for event in trace.key_averages()}
+    assert labels[0] not in events
+    assert labels[1] in events
+    assert labels[2] not in events
+
+
+def test_disabled_profiler_helpers_do_not_call_torch() -> None:
+    """Disabled helpers avoid invoking the PyTorch annotation machinery."""
+    from curobo import runtime as curobo_runtime
+
+    def identity(value: int) -> int:
+        """Return the input."""
+        return value
+
+    with patch.object(curobo_runtime, "profiler", False):
+        with patch("curobo._src.util.torch_util.profiler.record_function") as record:
+            wrapped = get_profiler_decorator("test/disabled")(identity)
+            assert wrapped is identity
+            with get_profiler_context("test/disabled_context"):
+                assert wrapped(7) == 7
+            record.assert_not_called()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_profiler_helpers_preserve_exceptions(enabled: bool) -> None:
+    """Enabled and disabled scopes propagate application exceptions."""
+    from curobo import runtime as curobo_runtime
+
+    with patch.object(curobo_runtime, "profiler", enabled):
+
+        @get_profiler_decorator("test/raising_decorator")
+        def fail() -> None:
+            """Raise an application error."""
+            raise ValueError("application error")
+
+        with pytest.raises(ValueError, match="application error"):
+            fail()
+        with pytest.raises(ValueError, match="application error"):
+            with get_profiler_context("test/raising_context"):
+                raise ValueError("application error")

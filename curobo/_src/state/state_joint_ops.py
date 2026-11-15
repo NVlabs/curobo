@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List, Optional, Union
 
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import fd_tensor
+from curobo._src.util.torch_util import get_profiler_decorator
 
 from .filter_coeff import FilterCoeff
 from .state_joint_jit_helpers import (
@@ -93,7 +93,7 @@ def stack_joint_states(js1: "JointState", js2: "JointState") -> "JointState":
     )
 
 
-@profiler.record_function("state_joint_ops/cat_joint_states")
+@get_profiler_decorator("state_joint_ops/cat_joint_states")
 def cat_joint_states(js1: "JointState", js2: "JointState", dim: int) -> "JointState":
     """Concatenate two joint states along a dimension.
 
@@ -139,7 +139,7 @@ def cat_joint_states(js1: "JointState", js2: "JointState", dim: int) -> "JointSt
     )
 
 
-@profiler.record_function("state_joint_ops/repeat_joint_state")
+@get_profiler_decorator("state_joint_ops/repeat_joint_state")
 def repeat_joint_state(joint_state: "JointState", repeat_input: List[int]) -> "JointState":
     """Repeat joint state along dimensions.
 
@@ -346,7 +346,7 @@ def calculate_fd_from_position(
     return joint_state
 
 
-@profiler.record_function("state_joint_ops/reorder_joint_state")
+@get_profiler_decorator("state_joint_ops/reorder_joint_state")
 def reorder_joint_state(joint_state: "JointState", ordered_joint_names: List[str]) -> "JointState":
     """Return joint state with reordered joint names.
 
@@ -362,7 +362,7 @@ def reorder_joint_state(joint_state: "JointState", ordered_joint_names: List[str
     return new_js
 
 
-@profiler.record_function("state_joint_ops/reindex_joint_state_inplace")
+@get_profiler_decorator("state_joint_ops/reindex_joint_state_inplace")
 def reindex_joint_state_inplace(joint_state: "JointState", joint_names: List[str]) -> None:
     """Reindex joint state in-place to match new joint order.
 
@@ -388,7 +388,7 @@ def reindex_joint_state_inplace(joint_state: "JointState", joint_names: List[str
     )
 
 
-@profiler.record_function("state_joint_ops/augment_joint_state")
+@get_profiler_decorator("state_joint_ops/augment_joint_state")
 def augment_joint_state(
     joint_state: "JointState", joint_names: List[str], lock_joints: Optional["JointState"] = None
 ) -> "JointState":

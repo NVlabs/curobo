@@ -10,7 +10,6 @@ from typing import List, Optional, Tuple, Union
 # Third Party
 import numpy as np
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.types.control_space import ControlSpace
@@ -22,6 +21,7 @@ from curobo._src.util.tensor_util import (
     clone_if_not_none,
     copy_tensor,
 )
+from curobo._src.util.torch_util import get_profiler_decorator
 
 from .filter_coeff import FilterCoeff
 from .state_base import State
@@ -187,7 +187,7 @@ class JointState(State):
             joint_names=self.joint_names,
         )
 
-    @profiler.record_function("JointState/clone")
+    @get_profiler_decorator("JointState/clone")
     def clone(self):
         j_names = None
         if self.joint_names is not None:
@@ -246,7 +246,7 @@ class JointState(State):
                 return False
         return same_shape
 
-    @profiler.record_function("JointState/copy_")
+    @get_profiler_decorator("JointState/copy_")
     def copy_(self, in_joint_state: JointState, allow_clone: bool = True):
         if in_joint_state.joint_names is not None:
             self.joint_names = in_joint_state.joint_names
@@ -297,7 +297,7 @@ class JointState(State):
             self.dt = in_joint_state.dt
         return self
 
-    @profiler.record_function("JointState/unsqueeze")
+    @get_profiler_decorator("JointState/unsqueeze")
     def unsqueeze(self, idx: int):
         p = self.position.unsqueeze(idx)
         v = a = j = knot = None

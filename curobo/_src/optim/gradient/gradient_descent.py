@@ -14,7 +14,6 @@ from dataclasses import dataclass, fields
 from typing import Any, Dict, List, Optional
 
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.optim.components.action_bounds import ActionBounds
 from curobo._src.optim.components.best_tracker import BestTracker
@@ -27,6 +26,7 @@ from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import check_nan_last_dimension
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 @dataclass
@@ -106,7 +106,7 @@ class GradientDescentOpt:
 
     _graphable_methods: set = {"_opt_iters"}
 
-    @profiler.record_function("gradient_descent/init")
+    @get_profiler_decorator("gradient_descent/init")
     def __init__(
         self,
         config: GradientDescentOptCfg,
@@ -262,7 +262,7 @@ class GradientDescentOpt:
             self._record_iteration_state(iteration_state)
         return iteration_state
 
-    @profiler.record_function("gradient_descent/opt_step")
+    @get_profiler_decorator("gradient_descent/opt_step")
     def _opt_step(self, iteration_state):
         action_next = iteration_state.action + iteration_state.step_direction
         cost_next, gradient_next = self._compute_cost_and_gradient(action_next)
@@ -310,7 +310,7 @@ class GradientDescentOpt:
             converged=self._best.converged,
         )
 
-    @profiler.record_function("gradient_descent/cost_and_gradient")
+    @get_profiler_decorator("gradient_descent/cost_and_gradient")
     def _compute_cost_and_gradient(self, x):
         x_n = x.detach().requires_grad_(True)
         x_in = x_n.view(

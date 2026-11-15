@@ -1,9 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
+from __future__ import annotations
+
 # Standard Library
 import inspect
+from contextlib import AbstractContextManager, nullcontext
 from functools import wraps
+from typing import Callable
 
 # Third Party
 import torch
@@ -142,10 +146,18 @@ def get_torch_jit_decorator(
         return empty_decorator
 
 
-def get_profiler_decorator(str_name: str):
+def get_profiler_decorator(str_name: str) -> Callable:
+    """Return a labelled decorator, or the identity when profiling is disabled."""
     if curobo_runtime.profiler:
         return profiler.record_function(str_name)
     return empty_decorator
+
+
+def get_profiler_context(str_name: str) -> AbstractContextManager[None]:
+    """Return a labelled context, checking the profiler flag for each scope."""
+    if curobo_runtime.profiler:
+        return profiler.record_function(str_name)
+    return nullcontext()
 
 
 def profile_class_methods(cls):
