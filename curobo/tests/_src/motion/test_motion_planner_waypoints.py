@@ -423,8 +423,23 @@ def test_goal_waypoints_goal_reuses_graphs_and_fixed_controls(
 
         moving = state.clone()
         moving.velocity = torch.ones_like(moving.position)
-        with pytest.raises(ValueError, match="rest-to-rest"):
+        planner.prepare_pose_waypoints(waypoints, moving)
+        moving.velocity.fill_(torch.nan)
+        with pytest.raises(ValueError, match="finite"):
             planner.prepare_pose_waypoints(waypoints, moving)
+        moving.velocity.zero_()
+        moving.velocity[:, 0] = 0.01
+        moving_result = planner.plan_pose_waypoints(
+            waypoints,
+            moving,
+            path_tolerance=(0.05, 0.26),
+            final_tolerance=(0.005, 0.05),
+            max_attempts=2,
+            finetune_attempts=0,
+        )
+        assert moving_result is not None and moving_result.success.all()
+        velocities = moving_result.interpolated_trajectory.velocity
+        assert abs(float(velocities.reshape(-1, velocities.shape[-1])[0, 0]) - 0.01) < 1e-3
         impossible = waypoints.clone()
         impossible.position[:, 0, :, :, 0] += 10.0
         failed = planner.plan_pose_waypoints(

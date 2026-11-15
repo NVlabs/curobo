@@ -9,6 +9,7 @@ import ctypes
 import json
 import math
 import os
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -104,6 +105,20 @@ class _PoseRefinerResult(ctypes.Structure):
     ]
 
 
+def test_legacy_esdf_artifact_requires_reexport(tmp_path: Path) -> None:
+    """Reject legacy kernel signatures before loading or launching a CUBIN."""
+    library_path = os.environ.get("CUROBO_MAPPER_TEST_LIBRARY")
+    if library_path is None or not torch.cuda.is_available():
+        pytest.skip("CUDA and a built mapper runtime library are required")
+    (tmp_path / "mapper_aot_manifest.json").write_text('{"schema_version": 1}')
+    library = _bind_library(Path(library_path))
+    runtime = ctypes.c_void_p()
+    status = library.curobo_mapper_create(str(tmp_path).encode(), 0, ctypes.byref(runtime))
+    assert status != 0
+    assert runtime.value is None
+    assert b"re-export mapper artifacts" in library.curobo_mapper_last_error()
+
+
 def _bind_library(path: Path) -> ctypes.CDLL:
     library = ctypes.CDLL(str(path))
     void_pointer = ctypes.c_void_p
@@ -120,6 +135,10 @@ def _bind_library(path: Path) -> ctypes.CDLL:
     ]
     library.curobo_mapper_create.restype = integer
     library.curobo_mapper_destroy.argtypes = [void_pointer]
+    library.curobo_mapper_load_static_seed.argtypes = [void_pointer, ctypes.c_char_p, uint64]
+    library.curobo_mapper_load_static_seed.restype = integer
+    library.curobo_mapper_compute_esdf.argtypes = [void_pointer, uint64, uint64]
+    library.curobo_mapper_compute_esdf.restype = integer
     library.curobo_mapper_integrate.argtypes = [void_pointer, ctypes.POINTER(_Frame)]
     library.curobo_mapper_integrate.restype = integer
     library.curobo_mapper_get_device_view.argtypes = [
@@ -238,6 +257,121 @@ def _check(library: ctypes.CDLL, result: int, operation: str) -> None:
     if result != 0:
         error = library.curobo_mapper_last_error().decode()
         raise RuntimeError(f"{operation}: {error}")
+
+
+def test_native_static_seed_sign_and_graph_parity(tmp_path: Path) -> None:
+    """Preserve packed static ownership through native PBA and graph replay."""
+    artifact = os.environ.get("CUROBO_MAPPER_TEST_ARTIFACT_DIR")
+    library_path = os.environ.get("CUROBO_MAPPER_TEST_LIBRARY")
+    if artifact is None or library_path is None or not torch.cuda.is_available():
+        pytest.skip("CUDA, exported artifacts, and the native library are required")
+    from cpp_runtime.mapper.tools.export_mapper_aot import make_integrator
+    from curobo._src.geom.data.data_scene import SceneData
+    from curobo._src.perception.mapper.integrator_esdf import BlockSparseESDFIntegrator
+    from curobo.scene import Cuboid
+    from curobo.types import DeviceCfg
+
+    config = json.loads((Path(artifact) / "mapper_aot_manifest.json").read_text())["config"]
+    # Native manifests store the resolved kernel symbol, while Python accepts
+    # the policy name. This fixture only stamps static data, without fusion.
+    cfg, temporary = make_integrator({**config, "feature_integration_kernel": "grouped"})
+    del temporary
+    cfg.enable_static = True
+    mapper = BlockSparseESDFIntegrator(cfg)
+    scene = SceneData.create_cache(
+        num_envs=1, device_cfg=DeviceCfg(), cuboid_cache=1, mesh_cache=0
+    )
+    scene.add_obstacle(
+        Cuboid(name="solid", dims=[0.4, 0.4, 0.4], pose=[*config["origin"], 1, 0, 0, 0]), env_idx=0
+    )
+    mapper.update_static_obstacles(scene)
+    expected = mapper.compute_esdf().clone()
+    data = mapper.tsdf.data
+    count = int(data.num_allocated.item())
+    assert count > 0 and int(data.allocation_failures.item()) == 0
+    seed = tmp_path / "solid.tsdf"
+    arrays = [
+        data.hash_table,
+        data.block_coords[: count * 3],
+        data.block_to_hash_slot[:count],
+        data.static_block_sums[:count],
+        data.static_block_data[:count],
+        data.block_grid_rgb[:count],
+    ]
+    with seed.open("wb") as output:
+        output.write(b"STTSDF01")
+        output.write(
+            struct.pack(
+                "<8i",
+                config["hash_capacity"],
+                config["max_blocks"],
+                config["block_size"],
+                count,
+                *config["grid_shape"],
+                config["color_grid_voxels"],
+            )
+        )
+        output.write(
+            struct.pack(
+                "<5f", config["voxel_size"], config["truncation_distance"], *config["origin"]
+            )
+        )
+        for array in arrays:
+            output.write(array.cpu().contiguous().numpy().tobytes())
+    library = _bind_library(Path(library_path))
+    runtime = ctypes.c_void_p()
+    _check(
+        library,
+        library.curobo_mapper_create(artifact.encode(), 0, ctypes.byref(runtime)),
+        "create",
+    )
+    try:
+        native_stream = torch.cuda.Stream()
+        stream = native_stream.cuda_stream
+        _check(
+            library,
+            library.curobo_mapper_load_static_seed(runtime, str(seed).encode(), stream),
+            "load static seed",
+        )
+        actual = torch.empty_like(expected)
+        for _ in range(3):
+            _check(
+                library,
+                library.curobo_mapper_compute_esdf(runtime, actual.data_ptr(), stream),
+                "compute static ESDF",
+            )
+            torch.cuda.synchronize()
+            torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+        assert actual[tuple(n // 2 for n in actual.shape)] < -0.1
+        captures = ctypes.c_uint64()
+        _check(
+            library,
+            library.curobo_mapper_get_esdf_graph_capture_count(runtime, ctypes.byref(captures)),
+            "read graph capture count",
+        )
+        assert captures.value == 1
+        # Static geometry survives a semantic exclusion of unobserved features.
+        excluded = _SemanticFilter(0, 1, 0.0, 0, 1, 1, 0)
+        for _ in range(3):
+            _check(
+                library,
+                library.curobo_mapper_compute_esdf_semantic(
+                    runtime, actual.data_ptr(), ctypes.byref(excluded), stream
+                ),
+                "compute semantic static ESDF",
+            )
+            torch.cuda.synchronize()
+            torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+        _check(library, library.curobo_mapper_reset(runtime, stream), "reset")
+        _check(
+            library,
+            library.curobo_mapper_compute_esdf(runtime, actual.data_ptr(), stream),
+            "compute after reset",
+        )
+        torch.cuda.synchronize()
+        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+    finally:
+        library.curobo_mapper_destroy(runtime)
 
 
 def test_exporter_has_no_runtime_private_warp_kernels() -> None:

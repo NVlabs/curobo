@@ -181,6 +181,7 @@ void run_motion(const std::string& artifact, std::istream& input, std::ostream& 
   scene_config.max_voxel_grids = 0;
   robot::Scene scene(scene_config);
   robot::MotionPlanningConfig config;
+  config.enable_inverse_dynamics = inverse_dynamics;
   config.trajectory_optimization.num_knots = num_knots;
   config.trajectory_optimization.check_effort_limits = inverse_dynamics;
   config.inverse_kinematics.check_effort_limits = inverse_dynamics;
@@ -241,6 +242,8 @@ void run_motion(const std::string& artifact, std::istream& input, std::ostream& 
     output << "{\"index\":" << index << ",\"success\":" << int(valid)
            << ",\"payload_mass_kg\":" << payload.mass.value()
            << ",\"inverse_dynamics\":" << (inverse_dynamics ? "true" : "false")
+           << ",\"timeopt_inverse_dynamics\":"
+           << (planner.config().trajectory_optimization.enable_inverse_dynamics ? "true" : "false")
            << ",\"num_knots\":" << info.num_knots
            << ",\"outer_iterations\":" << request.outer_iterations
            << ",\"initial_max_iterations\":"
@@ -255,6 +258,7 @@ void run_motion(const std::string& artifact, std::istream& input, std::ostream& 
       int initial_iterations = 0;
       check_cuda(cudaMemcpy(&initial_iterations, planner.candidates().initial_iterations,
                             sizeof(initial_iterations), cudaMemcpyDeviceToHost));
+      // Score the actual spline samples; do not interpolate between joint positions.
       const auto trajectory = planner.timeopt_trajectory();
       int count = 0;
       float sample_dt = 0, duration = 0;
@@ -269,6 +273,7 @@ void run_motion(const std::string& artifact, std::istream& input, std::ostream& 
              << ",\"last_trajopt_initial_iterations\":" << initial_iterations
              << ",\"orientation_error_rad\":" << qe.download()[0]
              << ",\"used_rrt\":" << int(used_rrt.download()[0])
+             << ",\"trajectory_sampling\":\"spline\""
              << ",\"state_offset\":" << offset << ",\"steps\":" << count
              << ",\"dt\":" << sample_dt << ",\"motion_time_s\":" << duration;
     }

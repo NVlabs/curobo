@@ -718,38 +718,51 @@ def compile_lbfgs_kernels(
     """Compile cuRobo's current L-BFGS direction and line-search kernels."""
     from curobo._src.curobolib.backends.cuda_core_backend.optimization_config import (
         LBFGSLaunchCfg,
+        LBFGSVectorFreeLaunchCfg,
         LineSearchLaunchCfg,
         OptimizationKernelCfg,
     )
 
     history = optimizer.history
     num_line_search = len(optimizer.line_search_scale)
-    items_per_thread, lbfgs_threads = LBFGSLaunchCfg.calculate_items_and_threads(
-        optimization_dimension
-    )
-    if items_per_thread == 0:
-        raise ValueError("L-BFGS optimization dimension exceeds the native kernel limit")
-    if target is None:
-        properties = torch.cuda.get_device_properties(optimizer.device_cfg.device)
-        device_shared_memory = int(
-            getattr(properties, "shared_memory_per_block_optin", 0)
-            or properties.shared_memory_per_block
+    vector_free = bool(
+        getattr(optimizer, "use_compact_operator", True)
+    ) and LBFGSVectorFreeLaunchCfg.supports(optimization_dimension, history)
+    if vector_free:
+        components, shared_cross = LBFGSVectorFreeLaunchCfg.specialization(
+            optimization_dimension, history, arch
         )
+        lbfgs_symbol = (
+            "curobo::optimization::vector_free::kernel_lbfgs_step_vector_free"
+            f"<{history},{components},{str(optimizer.use_geometric_scaling).lower()},"
+            f"{str(shared_cross).lower()}>"
+        )
+        kernel_kind = "lbfgs_vector_free"
+        lbfgs_threads, lbfgs_shared = 128, 0
     else:
-        device_shared_memory = target.max_shared_memory_per_block
-    _, use_shared_history, lbfgs_shared = LBFGSLaunchCfg.calculate_config(
-        max_problems,
-        optimization_dimension,
-        history,
-        True,
-        device_shared_memory,
-    )
-    lbfgs_symbol = (
-        "curobo::optimization::kernel_lbfgs_step_circular"
-        f"<float, false, {history if history <= 31 else -1}, "
-        f"{str(use_shared_history).lower()}, {items_per_thread}, "
-        f"{str(optimizer.use_geometric_scaling).lower()}>"
-    )
+        items_per_thread, lbfgs_threads = LBFGSLaunchCfg.calculate_items_and_threads(
+            optimization_dimension
+        )
+        if items_per_thread == 0:
+            raise ValueError("L-BFGS optimization dimension exceeds the native kernel limit")
+        if target is None:
+            properties = torch.cuda.get_device_properties(optimizer.device_cfg.device)
+            device_shared_memory = int(
+                getattr(properties, "shared_memory_per_block_optin", 0)
+                or properties.shared_memory_per_block
+            )
+        else:
+            device_shared_memory = target.max_shared_memory_per_block
+        _, use_shared_history, lbfgs_shared = LBFGSLaunchCfg.calculate_config(
+            max_problems, optimization_dimension, history, True, device_shared_memory
+        )
+        lbfgs_symbol = (
+            "curobo::optimization::kernel_lbfgs_step_circular"
+            f"<float, false, {history if history <= 31 else -1}, "
+            f"{str(use_shared_history).lower()}, {items_per_thread}, "
+            f"{str(optimizer.use_geometric_scaling).lower()}>"
+        )
+        kernel_kind = "lbfgs"
     line_search_symbols = {
         name: (
             "curobo::optimization::line_search::kernel_line_search"
@@ -765,7 +778,7 @@ def compile_lbfgs_kernels(
         arch,
         f"{artifact_prefix}_lbfgs",
         optimization_config,
-        ["lbfgs"],
+        [kernel_kind],
         [lbfgs_symbol],
     )
     line_cubin, line_symbols = _compile_cuda_specializations(
@@ -781,7 +794,7 @@ def compile_lbfgs_kernels(
         "lbfgs": {
             "cubin": lbfgs_cubin,
             "symbol": lbfgs_symbols.get(lbfgs_symbol, lbfgs_symbol),
-            "source": "curobo_lbfgs_kernel",
+            "source": "curobo_lbfgs_vector_free_kernel" if vector_free else "curobo_lbfgs_kernel",
             "shared_memory": lbfgs_shared,
             "block_dim": lbfgs_threads,
         },
@@ -799,16 +812,10 @@ def compile_lbfgs_kernels(
 
 
 def _collision_block_dim(num_spheres: int) -> int:
-    """Choose the same supported tiled width used for small Python collision batches."""
-    if num_spheres <= 64:
-        return 64
-    if num_spheres <= 128:
-        return 128
-    if num_spheres <= 256:
-        return 256
-    if num_spheres <= 512:
-        return 512
-    return 1024
+    """Use the shared Python policy for discrete and swept collision exports."""
+    from curobo._src.geom.collision.collision_launch import select_collision_block_dim
+
+    return select_collision_block_dim(num_spheres)
 
 
 def export_ik_kernels(
@@ -1111,11 +1118,8 @@ def build_trajopt_config(
         num_seeds=max_seeds,
         num_knots=num_knots,
         use_cuda_graph=True,
-        # Native MPC shares these kernels and validates slower timing lanes at <=4 ms.
         interpolation_buffer_size=interpolation_buffer_size,
     )
-    if interpolation_buffer_size is None:
-        config.interpolation_buffer_size = max(2000, config.minimum_interpolation_buffer_size)
     if config.interpolation_buffer_size < config.minimum_interpolation_buffer_size:
         raise ValueError(
             "interpolation buffer needs at least "
@@ -1713,6 +1717,45 @@ def compile_trajopt_gradient_kernels(output_dir: Path, arch: str) -> dict[str, d
     }
 
 
+def compile_cost_reduction_kernels(
+    output_dir: Path,
+    arch: str,
+    layouts: dict[str, dict[str, tuple[int, int]]],
+) -> dict[str, dict[str, Any]]:
+    """Compile cost sums with fixed term counts, lengths, and trial strides."""
+    from curobo._src.curobolib.backends.cuda_core_backend.trajectory_config import (
+        TrajectoryKernelCfg,
+    )
+
+    class CostReductionKernelCfg(TrajectoryKernelCfg):
+        def get_kernel_files(self, kernel_type: str) -> list[str]:
+            return [str(CUROBO_REPOSITORY_ROOT / "cpp_runtime/robot/kernels/cost_reduction.cuh")]
+
+    if not layouts:
+        raise ValueError("cost layouts must not be empty")
+    expressions = {}
+    for name, terms in layouts.items():
+        if not terms or any(length < 0 or stride < 0 for length, stride in terms.values()):
+            raise ValueError("cost layouts require nonnegative lengths and strides")
+        types = ", ".join(
+            f"curobo_robot_runtime::CostTerm<{length}, {stride}>"
+            for length, stride in terms.values()
+        )
+        expressions[name] = f"curobo_robot_runtime::reduce_costs<256, {types}>"
+    cubin, symbols = _compile_cuda_specializations(
+        output_dir, arch, "cost_reduction", CostReductionKernelCfg(),
+        ["cost_reduction"], list(expressions.values()),
+    )
+    return {
+        name: {
+            "cubin": cubin, "symbol": symbols[expression],
+            "source": "curobo_cost_reduction_kernel", "shared_memory": 0, "block_dim": 256,
+            "cost_terms": list(layouts[name]),
+        }
+        for name, expression in expressions.items()
+    }
+
+
 def export_trajopt_kernels(
     output_dir: Path,
     arch: str,
@@ -1797,6 +1840,17 @@ def export_trajopt_kernels(
         "block_dim": 128,
     }
     kernels.update(compile_trajopt_gradient_kernels(output_dir, arch))
+    state_width = horizon * num_dof
+    pose_width = horizon * params.num_pose_links * 2
+    cost_layout = {
+        "cspace": (state_width, state_width),
+        "world_collision": (horizon, horizon),
+        "self_collision": (horizon, horizon),
+    }
+    kernels.update(compile_cost_reduction_kernels(output_dir, arch, {
+        "reduce_rollout_cost": {**cost_layout, "pose": (pose_width, pose_width)},
+        "reduce_rollout_cost_no_pose": cost_layout,
+    }))
     kernels["time_scaled_dt"] = {
         "cubin": cubin_name,
         "symbol": symbols.get(time_scaled_dt_symbol, time_scaled_dt_symbol),
@@ -1937,7 +1991,10 @@ def export_trajopt_kernels(
 
             validation_collision_kernel = get_tiled_collision_kernel(
                 capacity,
-                trajopt_config.interpolation_buffer_size,
+                # Native validation is single-environment. This kernel uses horizon
+                # only for multi-environment indexing, so one state works for any
+                # planner- or MPC-owned validation capacity without another export.
+                1,
                 num_spheres,
                 block_dim,
             )
@@ -2242,7 +2299,7 @@ def export_robot(args: argparse.Namespace) -> Path:
                 target,
             )
             trajopt_manifest = {
-                "schema_version": 23,
+                "schema_version": 25,
                 "arch": arch,
                 "num_dof": params.num_dof,
                 "num_links": params.num_links,
@@ -2445,7 +2502,7 @@ def parse_args() -> argparse.Namespace:
         "--interpolation-buffer-size",
         type=int,
         default=None,
-        help="dense capacity; defaults to the spline requirement or 2000, whichever is larger",
+        help="dense capacity; defaults to the spline requirement or 1024, whichever is larger",
     )
     parser.add_argument(
         "--joint-limit-expansion",

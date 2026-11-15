@@ -515,6 +515,11 @@ void DeviceBuffer::release() {
 MapperManifest loadManifest(const std::string& artifact_dir) {
   const auto path = std::filesystem::path(artifact_dir) / "mapper_aot_manifest.json";
   const std::string json = readText(path);
+  if (extractInt(json, "schema_version") != 2) {
+    throw std::runtime_error(
+        "mapper artifact schema must be 2 for packed ESDF site ownership; "
+        "re-export mapper artifacts with the matching exporter");
+  }
   const std::string config_obj = extractObject(json, "config");
   const std::string kernels_obj = extractObject(json, "kernels");
   const std::string pba_obj = extractObject(json, "pba");
@@ -816,6 +821,8 @@ void MapperRuntimeImpl::allocateBuffers() {
       bytesFor(max_blocks, sizeof(uint8_t)));
 
   buffers_.esdf_site_index.allocate(bytesFor(esdf_voxels, sizeof(int32_t)));
+  buffers_.esdf_static_site_mask.allocate(
+      bytesFor((esdf_voxels + 31) / 32, sizeof(int32_t)));
   buffers_.esdf_pba_buffer.allocate(bytesFor(esdf_voxels, sizeof(int32_t)));
   buffers_.esdf_dist_field.allocate(bytesFor(esdf_voxels, sizeof(uint16_t)));
   buffers_.esdf_origin.allocate(bytesFor(3, sizeof(float)));
@@ -2155,10 +2162,13 @@ void MapperRuntimeImpl::enqueueEsdf(uint64_t out_dist_field, cudaStream_t cuda_s
   const int n_esdf = config_.esdf_nx * config_.esdf_ny * config_.esdf_nz;
 
   buffers_.esdf_site_index.memsetAsync(0xff, cuda_stream);
+  buffers_.esdf_static_site_mask.memsetAsync(0, cuda_stream);
   buffers_.esdf_dist_field.memsetAsync(0, cuda_stream);
 
   auto tsdf = tsdfWarp();
   auto site_index = array1<wp::int32>(buffers_.esdf_site_index.ptr(), n_esdf);
+  auto static_site_mask = array1<wp::int32>(
+      buffers_.esdf_static_site_mask.ptr(), (n_esdf + 31) / 32);
   auto esdf_origin = array1<wp::float32>(buffers_.esdf_origin.ptr(), 3);
   auto esdf_voxel_size = array1<wp::float32>(buffers_.esdf_voxel_size.ptr(), 1);
   wp::float32 min_weight = config_.minimum_tsdf_weight;
@@ -2168,14 +2178,14 @@ void MapperRuntimeImpl::enqueueEsdf(uint64_t out_dist_field, cudaStream_t cuda_s
     prepared = prepareSemanticFilter(
         *semantic_filter, cuda_stream, cu_stream,
         dynamic_query ? reinterpret_cast<const uint64_t*>(buffers_.esdf_query.ptr()) : nullptr);
-    std::vector<void*> args{&dim_seed, &tsdf, &prepared, &site_index,
+    std::vector<void*> args{&dim_seed, &tsdf, &prepared, &site_index, &static_site_mask,
                             &esdf_origin, &esdf_voxel_size, &min_weight};
     kernels_.seed_esdf_gather_semantic.launch(
         gridFor(dim_seed.size), Dim3{kWarpBlockDim, 1, 1},
         kernelManifest("seed_esdf_sites_gather_semantic_kernel").shared_mem,
         cu_stream, args);
   } else {
-    std::vector<void*> args{&dim_seed, &tsdf, &site_index, &esdf_origin,
+    std::vector<void*> args{&dim_seed, &tsdf, &site_index, &static_site_mask, &esdf_origin,
                             &esdf_voxel_size, &min_weight};
     kernels_.seed_esdf_gather.launch(
         gridFor(dim_seed.size), Dim3{kWarpBlockDim, 1, 1},
@@ -2189,6 +2199,7 @@ void MapperRuntimeImpl::enqueueEsdf(uint64_t out_dist_field, cudaStream_t cuda_s
   if (semantic_filter != nullptr) {
     std::vector<void*> args{&dim_seed,
                             &site_index,
+                            &static_site_mask,
                             &esdf_voxel_size,
                             &dist_field,
                             &tsdf,
@@ -2203,6 +2214,7 @@ void MapperRuntimeImpl::enqueueEsdf(uint64_t out_dist_field, cudaStream_t cuda_s
   } else {
     std::vector<void*> args{&dim_seed,
                             &site_index,
+                            &static_site_mask,
                             &esdf_voxel_size,
                             &dist_field,
                             &tsdf,

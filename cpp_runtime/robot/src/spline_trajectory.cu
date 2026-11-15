@@ -209,17 +209,26 @@ SplineTrajectory SplineTrajectory::to(int device, cudaStream_t stream) const {
   return device == device_ ? *this : copy_to(device, stream);
 }
 InterpolatedTrajectory SplineTrajectory::interpolate(float dt, cudaStream_t stream) const {
+  return interpolate(dt, stream, 0, -1);
+}
+InterpolatedTrajectory SplineTrajectory::interpolate(float dt, cudaStream_t stream,
+                                                   float start_seconds, float end_seconds) const {
   if (!std::isfinite(dt) || dt <= 0) throw std::invalid_argument("dt must be finite and positive");
   if (device_ < 0) throw std::invalid_argument("Interpolation requires CUDA");
   DeviceScope scope(device_);
   checked_stream(stream);
   const float end = duration(stream);
   if (!std::isfinite(end) || end < 0) throw std::invalid_argument("Invalid duration");
-  const double intervals = end > 0 ? std::ceil(static_cast<double>(end) / dt) : 0;
+  const float selected_end = end_seconds < 0 ? end : end_seconds;
+  if (!std::isfinite(start_seconds) || start_seconds < 0 || start_seconds > selected_end ||
+      !std::isfinite(selected_end) || selected_end > end)
+    throw std::invalid_argument("Invalid interpolation start time");
+  const float remaining = selected_end - start_seconds;
+  const double intervals = remaining > 0 ? std::ceil(static_cast<double>(remaining) / dt) : 0;
   if ((intervals + 1) * 4 * num_dof() > std::numeric_limits<int>::max())
     throw std::invalid_argument("Too many samples");
   const int count = static_cast<int>(intervals) + 1;
-  const float actual = intervals ? static_cast<float>(end / intervals) : 0;
+  const float actual = intervals ? static_cast<float>(remaining / intervals) : 0;
   const auto plane = static_cast<size_t>(count) * num_dof();
   auto storage = allocate(4 * plane, device_);
   auto *out = static_cast<float *>(storage.get());
@@ -241,7 +250,7 @@ InterpolatedTrajectory SplineTrajectory::interpolate(float dt, cudaStream_t stre
       controls_, timing ? nullptr : std::get<UniformTiming>(timing_).knot_dt,
       timing ? timing->controls : nullptr, timing ? timing->time : nullptr, table.polynomial,
       table.nodes, table.weights, out, count_, num_dof(), count, timing ? timing->time_points : 0,
-      actual);
+      actual, start_seconds, selected_end);
   CRR_CUDA_CHECK(cudaGetLastError());
   return {storage, out,       out + plane, out + 2 * plane, out + 3 * plane,
           count,   num_dof(), actual,      names_};

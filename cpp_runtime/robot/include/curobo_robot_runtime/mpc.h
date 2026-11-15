@@ -85,8 +85,11 @@ class MpcController final {
    * Candidates stay fixed until the next phase; a solve only selects an index.
    * Updates GPU timing and dt-dependent costs without recapture. A changed dt
    * requires reset/reset_cartesian with matching seed knots before step().
-   * Rejects grids exceeding artifact timing or dense-validation capacity;
-   * never speeds a plan up or truncates validation to fit those bounds.
+   * Validation storage is allocated at construction from the knot count and
+   * slowest fixed timing candidate, at a sampling interval of at most 4 ms.
+   * Rejects grids exceeding artifact timing or this MPC-owned capacity;
+   * construct a new controller to support a longer validation horizon.
+   * Never speeds a plan up or truncates validation to fit those bounds.
    */
   void update_dt(float trajectory_dt, cudaStream_t stream = nullptr);
   /** Fixed sample dt values for the current phase, in increasing order. */

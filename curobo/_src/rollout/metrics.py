@@ -8,7 +8,6 @@ from typing import Any, List, Optional, Sequence, Tuple, Union
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 from torch.autograd import Function
 
 # CuRobo
@@ -23,6 +22,7 @@ from curobo._src.types.tensor import (
 from curobo._src.util.helpers import list_idx_if_not_none
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import cat_sum
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 class CostCollectionSum(Function):
@@ -270,7 +270,7 @@ class CostsAndConstraints:
         all_values.extend(self.hybrid_costs_constraints.values)
         return all_values
 
-    @profiler.record_function("CostsAndConstraints/_get_feasible")
+    @get_profiler_decorator("CostsAndConstraints/_get_feasible")
     def get_feasible(
         self,
         sum_horizon: bool = False,

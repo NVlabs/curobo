@@ -8,6 +8,10 @@
 #include <vector>
 
 namespace curobo::robot {
+/** One physical-time state evaluated from an owned CPU spline. */
+struct SplineState {
+  std::vector<float> position, velocity, acceleration, jerk;
+};
 /** Borrowed physical seconds per cardinal span; one float on the value's device. */
 struct UniformTiming {
   const float *knot_dt{nullptr};
@@ -50,11 +54,17 @@ class SplineTrajectory {
   const Timing &timing() const { return timing_; }
   /** Checked physical duration in seconds; reads device metadata as needed. */
   float duration(cudaStream_t stream = nullptr) const;
+  /** Evaluate a CPU spline at physical seconds; outside its horizon hold the endpoint.
+   * Transfer once with to(-1) before a command loop; this method launches no CUDA work. */
+  SplineState sample(float seconds) const;
   SplineTrajectory clone(cudaStream_t stream = nullptr) const;
   /** Same-device transfer may alias; clone() always owns an independent copy. */
   SplineTrajectory to(int device, cudaStream_t stream = nullptr) const;
   /** One CUDA evaluation of the full trajectory. dt is the maximum interval. */
   InterpolatedTrajectory interpolate(float dt, cudaStream_t stream = nullptr) const;
+  /** Interpolate a physical-time window; negative end_seconds selects the endpoint. */
+  InterpolatedTrajectory interpolate(float dt, cudaStream_t stream,
+                                    float start_seconds, float end_seconds = -1) const;
 
  private:
   SplineTrajectory copy_to(int device, cudaStream_t stream) const;

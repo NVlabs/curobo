@@ -8,12 +8,12 @@ from typing import Optional, Union
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.state.state_joint import JointState
 
 # CuRobo
 from curobo._src.util.logging import log_and_raise
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 @dataclass
@@ -76,7 +76,7 @@ class OptimizationIterationState:
     def data_ptr(self):
         return self.action.data_ptr()
 
-    @profiler.record_function("iteration_state/post_init")
+    @get_profiler_decorator("iteration_state/post_init")
     def __post_init__(self):
         if len(self.action.shape) != 3:
             log_and_raise(
@@ -132,7 +132,7 @@ class OptimizationIterationState:
                 f"Converged tensor must have shape (num_problems). Got {self.converged.shape}"
             )
 
-    @profiler.record_function("iteration_state/clone")
+    @get_profiler_decorator("iteration_state/clone")
     def clone(self) -> OptimizationIterationState:
         """Clone the optimization iteration state."""
         return OptimizationIterationState(
@@ -180,7 +180,7 @@ class OptimizationIterationState:
             converged=self.converged.clone() if self.converged is not None else None,
         )
 
-    @profiler.record_function("iteration_state/copy_")
+    @get_profiler_decorator("iteration_state/copy_")
     def copy_(self, other: OptimizationIterationState):
         """Copy the optimization iteration state from another instance.
 

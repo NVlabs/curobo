@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -18,6 +19,42 @@ namespace curobo::robot::detail {
 namespace {
 using curobo_robot_runtime::DeviceBuffer;
 constexpr int CANDIDATES = MpcConfig::TIMING_CANDIDATES;
+constexpr float VALIDATION_DT = 0.004F;
+
+std::array<float, CANDIDATES> fixed_candidate_dts(
+    const curobo_robot_runtime::TrajectoryOptimizationManifest& manifest, float initial_dt) {
+  const int spans = manifest.num_knots + manifest.spline_degree + 1;
+  const int samples_per_span = (manifest.trajectory_steps - 1) / spans;
+  if (!std::isfinite(initial_dt) || initial_dt <= 0.F)
+    throw std::invalid_argument("MPC initial dt must be finite and positive");
+  const float first = std::max(initial_dt, MpcConfig::MINIMUM_KNOT_DT / samples_per_span);
+  const float maximum = std::max(MpcConfig::DEFAULT_MAXIMUM_KNOT_DT / samples_per_span,
+                                 MpcConfig::MAXIMUM_DT_SCALE * first);
+  std::array<float, CANDIDATES> result;
+  for (int i = 0; i < CANDIDATES; ++i) {
+    result[i] = i == CANDIDATES - 1 ? maximum :
+        first * std::pow(maximum / first, static_cast<float>(i) / (CANDIDATES - 1));
+    if (!std::isfinite(result[i]) || result[i] < manifest.minimum_dt ||
+        result[i] > manifest.maximum_dt)
+      throw std::invalid_argument("MPC dt is outside artifact limits");
+  }
+  return result;
+}
+
+int validation_capacity(const curobo_robot_runtime::TrajectoryOptimizationManifest& manifest,
+                        float maximum_dt, float validation_dt) {
+  const int spans = manifest.num_knots + manifest.spline_degree + 1;
+  const int samples_per_span = (manifest.trajectory_steps - 1) / spans;
+  // Round conservatively before converting to integer: host and device FP32
+  // division can disagree at an exact sampling boundary.
+  const double samples = std::ceil(static_cast<double>(maximum_dt) * samples_per_span /
+                                  validation_dt) + 1.0;
+  const double capacity = spans * samples + 1.0;
+  if (!std::isfinite(capacity) || capacity > std::numeric_limits<int>::max())
+    throw std::invalid_argument("MPC validation horizon exceeds the supported sample count");
+  return static_cast<int>(capacity);
+}
+
 float *data(const DeviceBuffer &value) { return reinterpret_cast<float *>(value.ptr()); }
 void copy(DeviceBuffer &destination, const float *source, cudaStream_t stream) {
   CRR_CUDA_CHECK(cudaMemcpyAsync(data(destination), source, destination.bytes(),
@@ -43,9 +80,13 @@ class MpcRuntime final {
     optimizer_config.finetune_attempts = 0;
     optimizer_config.trajectory_dt = config.trajectory_dt;
     optimizer_config.collision_activation_distance = config.collision_activation_distance;
+    const auto& planner_manifest = source.trajectory_optimizer_->manifest_;
+    candidate_dts_ = fixed_candidate_dts(planner_manifest, config.trajectory_dt);
+    const float validation_dt = std::min(planner_manifest.interpolation_dt, VALIDATION_DT);
+    const int capacity = validation_capacity(planner_manifest, candidate_dts_.back(), validation_dt);
     optimizer_ = std::make_unique<TrajectoryOptimizerRuntime>(
         source.artifact_directory_, optimizer_config, source.scene_handle_,
-        source.trajectory_optimizer_->collision_);
+        source.trajectory_optimizer_->collision_, capacity, validation_dt);
     auto &opt = *optimizer_;
     const auto &manifest = opt.manifest_;
     // The current artifact uses cubic B-splines, reconstructed exactly by
@@ -66,12 +107,7 @@ class MpcRuntime final {
     // Schema-1 export verifies this matches lbfgs_mpc.yml. Native TrajOpt's
     // default scales bound weights by dt; MPC intentionally does not.
     opt.retime_cspace_weights_ = false;
-    // Dense validation checks at <=4 ms. The exported fixed buffer must cover
-    // the entire trajectory; overflow is rejected by the existing validator.
-    opt.manifest_.interpolation_dt = std::min(opt.manifest_.interpolation_dt, 0.004F);
-    candidate_dts_ = make_candidate_dts(config.trajectory_dt);
-    CRR_CUDA_CHECK(cudaMemcpy(data(opt.interpolation_dt_), &opt.manifest_.interpolation_dt,
-                              sizeof(float), cudaMemcpyHostToDevice));
+    // The optimizer allocated MPC-owned validation buffers before graph capture.
     const auto shape = opt.info();
     const size_t state_bytes = shape.num_dof * sizeof(float);
     for (auto *buffer : {&position_, &velocity_, &acceleration_, &jerk_, &goal_})
@@ -304,20 +340,8 @@ class MpcRuntime final {
 
  private:
   std::array<float, CANDIDATES> make_candidate_dts(float initial_dt) const {
-    const auto &manifest = optimizer_->manifest_;
-    const int samples_per_knot = (manifest.trajectory_steps - 1) /
-                                 (manifest.num_knots + manifest.spline_degree + 1);
-    if (!std::isfinite(initial_dt) || initial_dt <= 0.F)
-      throw std::invalid_argument("MPC initial dt must be finite and positive");
-    const float first = std::max(initial_dt, MpcConfig::MINIMUM_KNOT_DT / samples_per_knot);
-    const float maximum = std::max(MpcConfig::DEFAULT_MAXIMUM_KNOT_DT / samples_per_knot,
-                                   MpcConfig::MAXIMUM_DT_SCALE * first);
-    std::array<float, CANDIDATES> result;
-    for (int i = 0; i < CANDIDATES; ++i) {
-      result[i] = i == CANDIDATES - 1 ? maximum :
-          first * std::pow(maximum / first, static_cast<float>(i) / (CANDIDATES - 1));
-      validate_dt(result[i]);
-    }
+    const auto result = fixed_candidate_dts(optimizer_->manifest_, initial_dt);
+    for (float dt : result) validate_dt(dt);
     return result;
   }
 
@@ -330,7 +354,7 @@ class MpcRuntime final {
     const float dense_steps =
         (dt * samples + manifest.interpolation_dt) / manifest.interpolation_dt;
     if (std::floor(dense_steps) * intervals + 1 > manifest.interpolation_buffer_size)
-      throw std::invalid_argument("MPC horizon exceeds the artifact's 4 ms validation buffer");
+      throw std::invalid_argument("MPC horizon exceeds its fixed validation buffer; recreate MPC for this dt");
   }
 
   void reset_seed(const float *seed, cudaStream_t stream) {
@@ -443,7 +467,7 @@ class MpcRuntime final {
     CRR_CUDA_CHECK(launch_mpc_broadcast(data(jerk_), data(opt.resolved_start_jerks_),
                                        shape.num_dof, CANDIDATES, stream));
     for (auto *buffer : {&opt.history_s_, &opt.history_y_, &opt.history_rho_,
-                         &opt.history_head_, &opt.history_count_})
+                         &opt.history_head_, &opt.history_count_, &opt.history_cross_products_})
       buffer->clear(stream);
     opt.initialize_actions(request_, reinterpret_cast<CUstream>(stream));
     // The initializer's host scalar is frozen at graph capture. Override it

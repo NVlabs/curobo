@@ -12,7 +12,6 @@ from typing import List, Optional
 # Third Party
 import numpy as np
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.geom.collision.collision_scene import SceneCollision, create_scene_collision
 from curobo._src.graph_planner.graph.connector_linear import LinearConnector
@@ -34,10 +33,11 @@ from curobo._src.transition.robot_state_transition import RobotStateTransition
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise, log_warn
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 class PRMGraphPlanner:
-    @profiler.record_function("graph_plan_base/init")
+    @get_profiler_decorator("graph_plan_base/init")
     def __init__(
         self,
         config: PRMGraphPlannerCfg,
@@ -268,7 +268,7 @@ class PRMGraphPlanner:
 
         return torch.cat(feasible_chunks).squeeze()
 
-    @profiler.record_function("base_graph_planner/extend_roadmap_with_random_samples")
+    @get_profiler_decorator("base_graph_planner/extend_roadmap_with_random_samples")
     def extend_roadmap_with_random_samples(
         self,
         num_samples: int,
@@ -281,7 +281,7 @@ class PRMGraphPlanner:
         sample_nodes = v_set
         self.graph_constructor.connect_nodes(sample_nodes, neighbors_per_node=neighbors_per_node)
 
-    @profiler.record_function("base_graph_planner/extend_roadmap_with_ellipsoidal_samples")
+    @get_profiler_decorator("base_graph_planner/extend_roadmap_with_ellipsoidal_samples")
     def extend_roadmap_with_ellipsoidal_samples(
         self,
         x_start: torch.Tensor,
@@ -337,7 +337,7 @@ class PRMGraphPlanner:
             label = any(path_label)
         return label, path_label
 
-    @profiler.record_function("base_graph_planner/find_path")
+    @get_profiler_decorator("base_graph_planner/find_path")
     def find_path(
         self,
         x_start: torch.Tensor,

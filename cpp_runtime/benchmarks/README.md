@@ -43,6 +43,10 @@ SHA-256 hashes, frozen input files, explicit corpus exclusions, every native res
 files retain dataset/scene/problem identities. A `.states.f32` file stores each
 successful result as `[4, steps, dof]` in position/velocity/acceleration/jerk order;
 `state_offset` in its matching JSONL record counts float32 elements.
+These are samples evaluated on the actual TimeOpt spline, at most 25 ms apart.
+Scoring uses these states directly, without linear interpolation between joint
+positions. Successful records must declare `trajectory_sampling: "spline"`;
+older outputs must be regenerated.
 
 Motion planning runs the unloaded and 3 kg Franka cases, with the
 canonical per-dataset finger locks, 0.2 rad joint-bound expansion, OBB conversion,
@@ -56,18 +60,22 @@ synchronized host wall time for `plan_pose()`, including retries and time
 optimization, and excludes scene updates, input copies, output copies, and scoring.
 
 Both payload cases enable inverse dynamics and effort limits in IK, RRT, and TrajOpt
-by default. `--disable-inverse-dynamics` disables those planning effort checks for both
-payloads; the time optimizer and its final dynamics validation remain enabled.
+by default. `--disable-inverse-dynamics` disables inverse dynamics and effort checks
+throughout both payload pipelines, including time optimization and final validation.
+Collision and joint position/velocity/acceleration/jerk validation remain enabled.
+Offline scoring also skips inverse dynamics; energy and torque metrics are unavailable.
+The library provides the same full-pipeline setting as
+`MotionPlanningConfig::enable_inverse_dynamics=false` in C++ and
+`MotionPlannerCfg.create(enable_inverse_dynamics=False)` in Python.
 The setting is recorded as `motion_inverse_dynamics` in the prepared `inputs.json`,
 provenance, and summary. Native motion records retain `payload_mass_kg` and
-`inverse_dynamics` independently. Historical unloaded results with planning effort checks
-disabled describe the earlier protocol and must be distinguished from the new default.
+`inverse_dynamics` and `timeopt_inverse_dynamics` independently.
 
 Motion artifacts and the native Scene reserve only cuboids: the capacity is the
 maximum OBB count across all selected eligible problems in both corpora (41 for
 the full benchmark). Capsule, cylinder, mesh, and voxel capacities are zero.
-The motion interpolation buffer contains at least 1,000 samples, growing with the configured
-spline's worst-case dense horizon. Counts 12 and 16 retain the 1,000-sample buffer.
+The motion interpolation buffer contains at least 1,024 samples, growing with the configured
+spline's worst-case dense horizon. Counts 12 and 16 retain the 1,024-sample buffer.
 These export options
 participate in the artifact cache fingerprint.
 

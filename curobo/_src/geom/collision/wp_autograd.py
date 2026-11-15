@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import torch
 import warp as wp
 
-import curobo._src.runtime as curobo_runtime
+from curobo._src.geom.collision.collision_launch import select_collision_block_dim
 from curobo._src.geom.collision.wp_collision_kernel import get_tiled_collision_kernel
 from curobo._src.geom.collision.wp_sweep_collision_kernel import (
     get_tiled_swept_collision_kernel,
@@ -33,46 +33,6 @@ from curobo._src.util.warp import get_warp_device_stream
 if TYPE_CHECKING:
     from curobo._src.geom.collision.buffer_collision import CollisionBuffer
     from curobo._src.geom.data.data_scene import SceneData
-
-
-def select_collision_block_dim(
-    num_states: int,
-    num_spheres: int,
-    num_sms: int,
-    is_swept: bool,
-) -> int:
-    """Choose a state-block width from sphere work and blocks available per SM."""
-    if num_states < 1 or num_spheres < 1 or num_sms < 1:
-        raise ValueError("num_states, num_spheres, and num_sms must be positive")
-
-    blocks_per_sm = num_states / num_sms
-    if num_spheres <= 64:
-        block_dim = 64
-    elif num_spheres <= 128:
-        block_dim = 64 if blocks_per_sm > 8.0 else 128
-    elif num_spheres <= 256:
-        block_dim = 256 if blocks_per_sm <= 4.0 else 128
-    elif num_spheres <= 512:
-        if blocks_per_sm <= 2.0:
-            block_dim = 512
-        elif blocks_per_sm <= 4.0:
-            block_dim = 256
-        else:
-            block_dim = 128
-    elif blocks_per_sm <= 1.0:
-        block_dim = 1024
-    elif blocks_per_sm <= 2.0:
-        block_dim = 512
-    elif blocks_per_sm <= 8.0:
-        block_dim = 256
-    else:
-        block_dim = 128
-
-    if is_swept and num_sms > 32 and blocks_per_sm > 1.0:
-        block_dim = min(block_dim, 256)
-    if blocks_per_sm < 0.125:
-        block_dim = max(block_dim, 256)
-    return block_dim
 
 
 class SphereObstacleCollision(torch.autograd.Function):
@@ -135,11 +95,7 @@ class SphereObstacleCollision(torch.autograd.Function):
         if not valid_data:
             buffer.zero_()
         else:
-            actual_sms = torch.cuda.get_device_properties(
-                query_spheres.device
-            ).multi_processor_count
-            num_sms = curobo_runtime.resolve_kernel_launch_sm_count(actual_sms)
-            block_dim = select_collision_block_dim(b * h, n, num_sms, False)
+            block_dim = select_collision_block_dim(n)
             for data_idx, data in enumerate(valid_data):
                 kernel = get_tiled_collision_kernel(data.max_n, h, n, block_dim)
                 wp.launch_tiled(
@@ -259,11 +215,7 @@ class SweptSphereObstacleCollision(torch.autograd.Function):
         if not valid_data:
             buffer.zero_()
         else:
-            actual_sms = torch.cuda.get_device_properties(
-                query_spheres.device
-            ).multi_processor_count
-            num_sms = curobo_runtime.resolve_kernel_launch_sm_count(actual_sms)
-            block_dim = select_collision_block_dim(b * h, n, num_sms, True)
+            block_dim = select_collision_block_dim(n)
             for data_idx, data in enumerate(valid_data):
                 kernel = get_tiled_swept_collision_kernel(
                     data.max_n, enable_speed_metric, h, n, block_dim

@@ -119,7 +119,7 @@ class TestTrajOptSolverCfgDataclassAttributes:
             robot="franka.yml",
             device_cfg=cuda_device_cfg,
         )
-        assert config.interpolation_buffer_size == 1000
+        assert config.interpolation_buffer_size == 1024
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_sets_interpolation_config(self, cuda_device_cfg) -> None:

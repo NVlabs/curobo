@@ -11,6 +11,7 @@ import warp as wp
 
 from curobo._src.geom.data.registry import OBSTACLE_SDF_MODULES
 
+is_swept_sphere_outside_obb = None
 is_obs_enabled = None
 load_obstacle_transform = None
 compute_local_sdf = None
@@ -27,6 +28,9 @@ for _module_path in OBSTACLE_SDF_MODULES:
         _data_module, "compute_swept_sphere_clearance_lower_bound"
     )
 
+    is_swept_sphere_outside_obb = wp.func(
+        _data_module.is_swept_sphere_outside_obb, module=__name__
+    )
     is_obs_enabled = wp.func(_is_obs_enabled_fn, module=__name__)
     load_obstacle_transform = wp.func(_load_obstacle_transform_fn, module=__name__)
     compute_local_sdf = wp.func(_compute_local_sdf_fn, module=__name__)

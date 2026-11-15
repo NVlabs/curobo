@@ -81,7 +81,7 @@ class TrajOptSolverCfg:
     #: Maximum number of waypoints in the interpolation output buffer. Larger
     #: values can significantly increase GPU memory usage because position,
     #: velocity, acceleration, and jerk are allocated for each batched seed trajectory.
-    interpolation_buffer_size: int = 1000
+    interpolation_buffer_size: int = 1024
 
     #: Optimize timing for every candidate before final validation and selection by duration.
     enable_timeopt: bool = True
@@ -236,7 +236,7 @@ class TrajOptSolverCfg:
                 trajectory. Larger values produce fewer waypoints.
             interpolation_buffer_size: Maximum number of dense trajectory
                 waypoints to preallocate. None sizes the buffer from the spline layout
-                and configured dt bounds, with a minimum of 1000. Larger values can significantly
+                and configured dt bounds, with a minimum of 1024. Larger values can significantly
                 increase GPU memory usage because state buffers are allocated
                 for every batched seed trajectory.
             enable_timeopt: Apply fixed-path velocity, acceleration, jerk, and
@@ -340,7 +340,7 @@ class TrajOptSolverCfg:
                 if model.control_space in ControlSpace.bspline_types()
                 else model.native_horizon
             )
-            interpolation_buffer_size = max(1000, minimum_capacity)
+            interpolation_buffer_size = max(1024, minimum_capacity)
 
         return TrajOptSolverCfg(
             core_cfg=core_cfg,

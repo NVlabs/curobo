@@ -159,6 +159,7 @@ class MotionPlannerRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer staged_tool_goal_positions_;
   mutable curobo_robot_runtime::DeviceBuffer staged_tool_goal_quaternions_;
   mutable curobo_robot_runtime::DeviceBuffer staged_ik_seed_positions_;
+  mutable curobo_robot_runtime::DeviceBuffer staged_warm_start_knots_;
   mutable curobo_robot_runtime::DeviceBuffer staged_selected_goal_position_;
   mutable curobo_robot_runtime::DeviceBuffer staged_position_error_;
   mutable curobo_robot_runtime::DeviceBuffer staged_orientation_error_;

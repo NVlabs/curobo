@@ -47,6 +47,7 @@ class QuasiNewtonBuffers:
         self.step_q_buffer: Optional[torch.Tensor] = None
         self.history_head: Optional[torch.Tensor] = None
         self.history_count: Optional[torch.Tensor] = None
+        self.cross_products: Optional[torch.Tensor] = None
         self.compact_inverse_r: Optional[torch.Tensor] = None
         self.compact_matrix_workspace: Optional[torch.Tensor] = None
         self._compact_identity: Optional[torch.Tensor] = None
@@ -57,6 +58,7 @@ class QuasiNewtonBuffers:
         opt_dim: int,
         use_compact_operator: bool = False,
         compact_workspace_elements: int = 0,
+        use_vector_free_operator: bool = False,
     ) -> None:
         """Allocate or reallocate all buffers for given problem count and optimization dimension."""
         b = num_problems
@@ -75,6 +77,11 @@ class QuasiNewtonBuffers:
         self.history_head = torch.zeros((b,), device=device, dtype=torch.int32)
         self.history_count = torch.zeros((b,), device=device, dtype=torch.int32)
 
+        self.cross_products = (
+            torch.zeros((b, self.history, self.history), device=device, dtype=dtype)
+            if use_vector_free_operator
+            else None
+        )
         if use_compact_operator:
             self._compact_identity = torch.eye(self.history, device=device, dtype=dtype)
             self.compact_inverse_r = self._compact_identity.expand(b, -1, -1).clone()
@@ -106,6 +113,8 @@ class QuasiNewtonBuffers:
             self.step_q_buffer.fill_(0.0)
             self.history_head.fill_(0)
             self.history_count.fill_(0)
+            if self.cross_products is not None:
+                self.cross_products.zero_()
             if self.compact_inverse_r is not None:
                 self.compact_inverse_r.copy_(
                     self._compact_identity.expand_as(self.compact_inverse_r)
@@ -131,6 +140,8 @@ class QuasiNewtonBuffers:
             self.history_count.copy_(
                 torch.where(mask, torch.zeros_like(self.history_count), self.history_count)
             )
+            if self.cross_products is not None:
+                self.cross_products.masked_fill_(mask.view(-1, 1, 1), 0.0)
             if self.compact_inverse_r is not None:
                 compact_mask = mask.view(-1, 1, 1)
                 self.compact_inverse_r.copy_(
@@ -140,6 +151,27 @@ class QuasiNewtonBuffers:
                         self.compact_inverse_r,
                     )
                 )
+
+    def rebuild_vector_free_state(self) -> None:
+        """Recompute products and reciprocal curvature after an MPC history shift."""
+        if self.cross_products is None:
+            return
+        s = self.s[..., 0].transpose(0, 1)
+        y = self.y[..., 0].transpose(0, 1)
+        # Elementwise FP32 accumulation avoids the caller's TF32 matmul setting.
+        products = (s.unsqueeze(2) * y.unsqueeze(1)).sum(dim=-1)
+        diagonal = products.diagonal(dim1=1, dim2=2)
+        slots = torch.arange(self.history, device=s.device).unsqueeze(0)
+        age = (self.history_head.unsqueeze(1) - 1 - slots) % self.history
+        active = age < self.history_count.unsqueeze(1)
+        inverse = diagonal.reciprocal()
+        valid = (diagonal > 0) & torch.isfinite(diagonal) & torch.isfinite(inverse)
+        invalid = (active & ~valid).any(dim=1)
+        self.clear(invalid)
+        self.cross_products.copy_(products.masked_fill(invalid[:, None, None], 0.0))
+        self.rho[..., 0, 0].copy_(
+            torch.where(valid & ~invalid[:, None], inverse, 0.0).transpose(0, 1)
+        )
 
     def rebuild_compact_state(self) -> None:
         """Rebuild compact inverse and curvature state after shifting history."""

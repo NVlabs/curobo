@@ -45,10 +45,17 @@ int main(int argc, char **argv) {
     auto data = download(uniform);
     require(uniform.sample_count == 15 && uniform.dt <= .03F, "bad uniform grid");
     for (int i = 0; i < uniform.sample_count; ++i) {
+      const auto cpu = retained.sample(i * uniform.dt);
+      require(std::abs(cpu.position[0] - data[i]) < 2E-5F, "CPU uniform sampler differs");
       require(std::abs(data[i] - (1 + 10 * i * uniform.dt)) < 2e-5F, "bad uniform position");
       require(std::abs(data[uniform.sample_count + i] - 10) < 2e-4F, "bad uniform velocity");
     }
     dump(file, uniform, data);
+    const auto window = spline.interpolate(.02F, nullptr, .1F, .2F);
+    const auto window_data = download(window);
+    require(std::abs(window_data.front() - 2.F) < 2E-5F &&
+                std::abs(window_data[window.sample_count - 1] - 3.F) < 2E-5F,
+            "window interpolation must sample the actual spline at absolute times");
     auto copy = spline.clone().to(-1);
     require(copy.control_points()[6] == 6 && copy.joint_names()[0] == "joint",
             "GPU clone/transfer failed");
@@ -62,6 +69,12 @@ int main(int argc, char **argv) {
     auto retimed = gpu.interpolate(.01F);
     data = download(retimed);
     for (int i = 0; i < retimed.sample_count; ++i) {
+      const auto cpu = optimized.sample(i * retimed.dt);
+      require(std::abs(cpu.position[0] - data[i]) < 1E-4F, "CPU TimeOpt position differs");
+      require(std::abs(cpu.velocity[0] - data[retimed.sample_count + i]) < 1E-4F,
+              "CPU TimeOpt velocity differs");
+      require(std::abs(cpu.acceleration[0] - data[2 * retimed.sample_count + i]) < 2E-3F,
+              "CPU TimeOpt acceleration differs");
       const float t = i * retimed.dt, s = (1 + t / 2) * (1 + t / 2) - 1;
       require(std::abs(data[i] - (1 + 4 * s)) < 4e-5F, "bad retimed position");
       require(std::abs(data[retimed.sample_count + i] - 4 * (1 + t / 2)) < 4e-5F,

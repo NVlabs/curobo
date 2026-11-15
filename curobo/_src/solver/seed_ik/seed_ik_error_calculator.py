@@ -15,7 +15,6 @@ from typing import Dict, Optional, Tuple
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.cost.cost_tool_pose import ToolPoseCost
@@ -32,7 +31,7 @@ from curobo._src.util.cuda_stream_util import (
     synchronize_cuda_streams,
 )
 from curobo._src.util.logging import log_and_raise, log_info
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 
 @dataclass
@@ -134,7 +133,7 @@ class SeedIKErrorCalculator:
         # Create and return cost function
         return ToolPoseCost(cost_config)
 
-    @profiler.record_function("seed_ik_error_calculator/compute_all_errors")
+    @get_profiler_decorator("seed_ik_error_calculator/compute_all_errors")
     def compute_error_and_jacobian(
         self,
         joint_position: torch.Tensor,
@@ -239,7 +238,7 @@ class SeedIKErrorCalculator:
             joint_position=joint_position.detach(),
         )
 
-    @profiler.record_function("seed_ik_error_calculator/compute_pose_errors")
+    @get_profiler_decorator("seed_ik_error_calculator/compute_pose_errors")
     def _compute_pose_errors(
         self,
         joint_position: torch.Tensor,
@@ -306,7 +305,7 @@ class SeedIKErrorCalculator:
         """Scale raw pose Jacobian rows to match the scalar pose objective."""
         return jacobian * self._pose_jacobian_row_scale
 
-    @profiler.record_function("seed_ik_error_calculator/reduce_pose_errors")
+    @get_profiler_decorator("seed_ik_error_calculator/reduce_pose_errors")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _reduce_pose_errors(
         self,
@@ -321,7 +320,7 @@ class SeedIKErrorCalculator:
         error_norm = torch.sum(cost.view(batch_size, -1), dim=-1)
         return position_errors, orientation_errors, error_norm
 
-    @profiler.record_function("seed_ik_error_calculator/compute_analytical_pose_jTerror")
+    @get_profiler_decorator("seed_ik_error_calculator/compute_analytical_pose_jTerror")
     @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def _compute_analytical_pose_jTerror(
         self,
@@ -353,7 +352,7 @@ class SeedIKErrorCalculator:
         jTerror = jacobian.transpose(-2, -1) @ residual.view(batch_size, -1, 1)
         return jTerror.squeeze(-1)
 
-    @profiler.record_function("seed_ik_error_calculator/add_joint_limit_errors")
+    @get_profiler_decorator("seed_ik_error_calculator/add_joint_limit_errors")
     def _compute_joint_limit_errors(
         self,
         joint_position: torch.Tensor,
@@ -403,7 +402,7 @@ class SeedIKErrorCalculator:
 
         return jTlimit_error, joint_limit_jacobian, joint_limit_error
 
-    @profiler.record_function("seed_ik_error_calculator/compute_velocity_errors")
+    @get_profiler_decorator("seed_ik_error_calculator/compute_velocity_errors")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _compute_velocity_errors(
         self,
@@ -437,7 +436,7 @@ class SeedIKErrorCalculator:
 
         return jT_vel, vel_jacobian, vel_error_norm
 
-    @profiler.record_function("seed_ik_error_calculator/compute_acceleration_errors")
+    @get_profiler_decorator("seed_ik_error_calculator/compute_acceleration_errors")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _compute_acceleration_errors(
         self,
@@ -478,7 +477,7 @@ class SeedIKErrorCalculator:
 
         return jT_accel, accel_jacobian, accel_error_norm
 
-    @profiler.record_function("seed_ik_error_calculator/combine_errors")
+    @get_profiler_decorator("seed_ik_error_calculator/combine_errors")
     @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def _combine_errors(
         self,

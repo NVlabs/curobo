@@ -54,6 +54,7 @@ add_library(curobo_robot_runtime SHARED
   src/rrt_runtime.cpp
   src/scene.cpp
   src/spline_trajectory.cu
+  src/spline_sampler.cpp
   src/grasp_collision_runtime.cpp
   src/scene_runtime.cpp
   src/sphere_fit.cpp
@@ -126,6 +127,9 @@ if(BUILD_TESTING)
   add_executable(curobo_robot_mpc_test tests/mpc_test.cpp)
   target_include_directories(curobo_robot_mpc_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(curobo_robot_mpc_test PRIVATE curobo_robot_runtime)
+  add_executable(curobo_robot_mpc_capacity_test tests/mpc_capacity_test.cpp)
+  target_include_directories(curobo_robot_mpc_capacity_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(curobo_robot_mpc_capacity_test PRIVATE curobo_robot_runtime)
   add_executable(curobo_robot_mpc_shift_test tests/mpc_shift_test.cpp)
   target_include_directories(curobo_robot_mpc_shift_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(curobo_robot_mpc_shift_test PRIVATE curobo_robot_runtime)

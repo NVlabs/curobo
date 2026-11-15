@@ -7,6 +7,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <stdexcept>
@@ -80,6 +82,11 @@ TrajectorySeedFitterInfo TrajectorySeedFitterRuntime::info() const {
 }
 
 void TrajectorySeedFitterRuntime::validate_artifacts() const {
+  if (!std::isfinite(config_.reference_dt) || config_.reference_dt < 0)
+    throw std::invalid_argument("Seed-fitter reference_dt must be finite and nonnegative");
+  if (config_.reference_dt > 0 && (config_.reference_dt < trajopt_manifest_.minimum_dt ||
+                                  config_.reference_dt > trajopt_manifest_.maximum_dt))
+    throw std::invalid_argument("Seed-fitter reference_dt exceeds the artifact timestep range");
   if (config_.num_seeds <= 0 ||
       config_.num_seeds > manifest_.max_trajopt_seeds) {
     throw std::invalid_argument(
@@ -96,11 +103,19 @@ void TrajectorySeedFitterRuntime::validate_artifacts() const {
 }
 
 void TrajectorySeedFitterRuntime::load_constants() {
+  const float ratio = config_.reference_dt > 0 ? config_.reference_dt / manifest_.trajectory_dt : 1.F;
   const auto load = [&](const curobo_robot_runtime::TensorManifest& tensor,
                         const char* name,
-                        curobo_robot_runtime::DeviceBuffer* destination) {
-    destination->upload(curobo_robot_runtime::load_tensor_data(
-        artifact_directory_, tensor, name));
+                        curobo_robot_runtime::DeviceBuffer* destination, float scale = 1.F) {
+    auto bytes = curobo_robot_runtime::load_tensor_data(artifact_directory_, tensor, name);
+    if (scale != 1.F)
+      for (size_t i = 0; i < bytes.size(); i += sizeof(float)) {
+        float value;
+        std::memcpy(&value, bytes.data() + i, sizeof(value));
+        value *= scale;
+        std::memcpy(bytes.data() + i, &value, sizeof(value));
+      }
+    destination->upload(bytes);
   };
   load(manifest_.arc_progress, "seed fitter arc_progress", &arc_progress_);
   load(manifest_.fit_matrix, "seed fitter fit_matrix", &fit_matrix_);
@@ -108,26 +123,27 @@ void TrajectorySeedFitterRuntime::load_constants() {
        &start_position_coefficient_);
   load(manifest_.start_velocity_coefficient,
        "seed fitter start velocity coefficient",
-       &start_velocity_coefficient_);
+       &start_velocity_coefficient_, ratio);
   load(manifest_.start_acceleration_coefficient,
        "seed fitter start acceleration coefficient",
-       &start_acceleration_coefficient_);
+       &start_acceleration_coefficient_, ratio * ratio);
   load(manifest_.start_jerk_coefficient,
-       "seed fitter start jerk coefficient", &start_jerk_coefficient_);
+       "seed fitter start jerk coefficient", &start_jerk_coefficient_, ratio * ratio * ratio);
   load(manifest_.goal_coefficient, "seed fitter goal coefficient",
        &goal_position_coefficient_);
   load(manifest_.basis_position, "seed fitter position basis",
        &basis_position_);
   load(manifest_.basis_velocity, "seed fitter velocity basis",
-       &basis_velocity_);
+       &basis_velocity_, 1.F / ratio);
   load(manifest_.basis_acceleration, "seed fitter acceleration basis",
-       &basis_acceleration_);
-  load(manifest_.basis_jerk, "seed fitter jerk basis", &basis_jerk_);
+       &basis_acceleration_, 1.F / (ratio * ratio));
+  load(manifest_.basis_jerk, "seed fitter jerk basis", &basis_jerk_, 1.F / (ratio * ratio * ratio));
   load(manifest_.path_normal, "seed fitter path normal", &path_normal_);
   load(manifest_.max_velocity, "seed fitter velocity limit", &max_velocity_);
   load(manifest_.max_acceleration, "seed fitter acceleration limit",
        &max_acceleration_);
   load(manifest_.max_jerk, "seed fitter jerk limit", &max_jerk_);
+  if (config_.reference_dt > 0) manifest_.trajectory_dt = config_.reference_dt;
 }
 
 void TrajectorySeedFitterRuntime::load_kernels() {

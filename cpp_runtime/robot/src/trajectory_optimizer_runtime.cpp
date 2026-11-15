@@ -235,13 +235,24 @@ void launch_discrete_collision(
 
 TrajectoryOptimizerRuntime::TrajectoryOptimizerRuntime(
     std::string artifact_directory, const TrajectoryOptimizationConfig& config,
-    const Scene* scene, std::shared_ptr<RobotCollisionModel> collision)
+    const Scene* scene, std::shared_ptr<RobotCollisionModel> collision,
+    int validation_capacity, float validation_dt)
     : artifact_directory_(std::move(artifact_directory)),
       config_(config),
       scene_(scene == nullptr ? nullptr : scene->runtime_.get()),
       robot_(artifact_directory_, config.device_ordinal),
       manifest_(curobo_robot_runtime::load_trajectory_optimization_manifest(
           artifact_directory_)) {
+  if (validation_capacity != 0) {
+    if (validation_capacity < 2 || !std::isfinite(validation_dt) || validation_dt <= 0.0F) {
+      throw std::invalid_argument("invalid fixed-timing validation layout");
+    }
+    // MPC owns a fixed timing grid; its capacity is independent of the planner's
+    // exported timestep range. Schema 25 validation kernels accept this layout.
+    manifest_.interpolation_buffer_size = validation_capacity;
+    manifest_.minimum_interpolation_buffer_size = validation_capacity;
+    manifest_.interpolation_dt = validation_dt;
+  }
   if (!config_.enable_inverse_dynamics) {
     config_.check_effort_limits = false;
   }
@@ -601,6 +612,27 @@ void TrajectoryOptimizerRuntime::load_kernels() {
               &prepare_search_actions_kernel_);
   load_kernel(artifact_directory_, manifest_.reduce_rollout_cost,
               &reduce_rollout_cost_kernel_);
+  load_kernel(artifact_directory_, manifest_.reduce_rollout_cost_no_pose,
+              &reduce_rollout_cost_no_pose_kernel_);
+  // Keep argument order identical to the layouts used to compile each kernel.
+  const auto bind_costs = [&](const auto& metadata) {
+    const std::vector<std::pair<std::string, const curobo_robot_runtime::DeviceBuffer*>> buffers{
+        {"cspace", &cspace_cost_}, {"world_collision", &world_collision_cost_},
+        {"self_collision", &self_collision_cost_}, {"pose", &pose_cost_}};
+    std::vector<const curobo_robot_runtime::DeviceBuffer*> result;
+    if (metadata.cost_terms.empty())
+      throw std::runtime_error("missing cost terms; re-export the robot artifact");
+    for (const auto& name : metadata.cost_terms) {
+      const auto match = std::find_if(buffers.begin(), buffers.end(),
+                                    [&](const auto& buffer) { return buffer.first == name; });
+      if (match == buffers.end())
+        throw std::runtime_error("unregistered native cost buffer: " + name);
+      result.push_back(match->second);
+    }
+    return result;
+  };
+  cost_reduction_buffers_ = bind_costs(manifest_.reduce_rollout_cost);
+  cost_reduction_no_pose_buffers_ = bind_costs(manifest_.reduce_rollout_cost_no_pose);
   load_kernel(artifact_directory_, manifest_.accumulate, &accumulate_kernel_);
   load_kernel(artifact_directory_, manifest_.finalize, &finalize_kernel_);
   load_kernel(artifact_directory_, manifest_.line_search, &line_search_kernel_);
@@ -634,7 +666,8 @@ void TrajectoryOptimizerRuntime::allocate_workspace() {
       states, static_cast<size_t>(manifest_.num_tool_frames),
       "TrajOpt state tools");
   const size_t validation_states = checked_product(
-      max_seeds, static_cast<size_t>(manifest_.interpolation_buffer_size),
+      static_cast<size_t>(config_.num_seeds),
+      static_cast<size_t>(manifest_.interpolation_buffer_size),
       "TrajOpt validation states");
   const size_t validation_state_dof = checked_product(
       validation_states, static_cast<size_t>(manifest_.num_dof),
@@ -683,6 +716,9 @@ void TrajectoryOptimizerRuntime::allocate_workspace() {
   allocate_float(&history_rho_, max_seeds * manifest_.history);
   allocate_float(&history_y_, max_seeds * manifest_.history * opt_dim);
   allocate_float(&history_s_, max_seeds * manifest_.history * opt_dim);
+  if (manifest_.lbfgs.source == "curobo_lbfgs_vector_free_kernel") {
+    allocate_float(&history_cross_products_, max_seeds * manifest_.history * manifest_.history);
+  }
   allocate_float(&search_actions_, candidates * opt_dim);
   allocate_float(&search_gradients_, candidates * opt_dim);
   allocate_float(&search_costs_, candidates);
@@ -1669,38 +1705,20 @@ void TrajectoryOptimizerRuntime::launch_cspace(int trajectories,
 void TrajectoryOptimizerRuntime::reduce_rollout_cost(
     int trajectories, CUdeviceptr costs, bool pose_constraint_active,
     CUstream stream) const {
-  constexpr int block_size = 128;
-  const int state_values =
-      trajectories * manifest_.trajectory_steps * manifest_.num_dof;
-  const int states = trajectories * manifest_.trajectory_steps;
-  const auto bounds = warp_bounds_2d(trajectories, block_size);
-  auto cspace_cost =
-      array_1d(cspace_cost_.ptr(), state_values, sizeof(float));
-  auto world_cost =
-      array_1d(world_collision_cost_.ptr(), states, sizeof(float));
-  auto self_cost =
-      array_1d(self_collision_cost_.ptr(), states, sizeof(float));
-  auto pose_cost = array_1d(
-      pose_cost_.ptr(), states * manifest_.num_tool_frames * 2, sizeof(float));
-  auto output_cost = array_1d(costs, trajectories, sizeof(float));
-  int num_tool_frames = manifest_.num_tool_frames;
-  uint8_t use_pose_constraint = pose_constraint_active ? 1U : 0U;
-  std::vector<void*> arguments{
-      const_cast<WarpLaunchBounds2*>(&bounds),
-      &cspace_cost,
-      &world_cost,
-      &self_cost,
-      &pose_cost,
-      &num_tool_frames,
-      &use_pose_constraint,
-      &output_cost,
-  };
-  const size_t threads =
-      static_cast<size_t>(trajectories) * static_cast<size_t>(block_size);
-  reduce_rollout_cost_kernel_.launch(grid_for(threads, block_size),
-      static_cast<unsigned int>(manifest_.reduce_rollout_cost.block_dim),
-      static_cast<unsigned int>(manifest_.reduce_rollout_cost.shared_memory), stream,
-      arguments);
+  const auto& buffers = pose_constraint_active ? cost_reduction_buffers_
+                                              : cost_reduction_no_pose_buffers_;
+  std::vector<CUdeviceptr> pointers;
+  pointers.reserve(buffers.size());
+  for (const auto* buffer : buffers) pointers.push_back(buffer->ptr());
+  std::vector<void*> arguments{&costs, &trajectories};
+  for (auto& pointer : pointers) arguments.push_back(&pointer);
+  const auto& kernel = pose_constraint_active ? reduce_rollout_cost_kernel_
+                                             : reduce_rollout_cost_no_pose_kernel_;
+  const auto& metadata = pose_constraint_active ? manifest_.reduce_rollout_cost
+                                               : manifest_.reduce_rollout_cost_no_pose;
+  kernel.launch(static_cast<unsigned int>(trajectories),
+                static_cast<unsigned int>(metadata.block_dim),
+                static_cast<unsigned int>(metadata.shared_memory), stream, arguments);
 }
 
 void TrajectoryOptimizerRuntime::launch_bspline_backward(
@@ -1862,6 +1880,7 @@ void TrajectoryOptimizerRuntime::prepare_initial_state(
     history_rho_.clear(reinterpret_cast<cudaStream_t>(stream));
     history_y_.clear(reinterpret_cast<cudaStream_t>(stream));
     history_s_.clear(reinterpret_cast<cudaStream_t>(stream));
+    history_cross_products_.clear(reinterpret_cast<cudaStream_t>(stream));
   }
   const int opt_dim = manifest_.num_knots * manifest_.num_dof;
   const auto bounds = warp_tiled_bounds_2d(
@@ -2089,6 +2108,14 @@ void TrajectoryOptimizerRuntime::lbfgs_step(CUstream stream) const {
       &candidates,
       &candidate_count,
   };
+  CUdeviceptr cross_products = history_cross_products_.ptr();
+  if (manifest_.lbfgs.source == "curobo_lbfgs_vector_free_kernel") {
+    arguments = {&direction, &rho, &y, &s, &q, &reference_action, &reference_gradient,
+                 &gradient, &step_max, &batch_size, &opt_dim, &history_head, &history_count,
+                 &scale_step, &curvature, &line_search_status, &candidate_scales,
+                 &candidate_beta, &candidates, &cross_products, &epsilon,
+                 &candidate_count, &stable_mode};
+  }
   lbfgs_kernel_.launch(static_cast<unsigned int>(config_.num_seeds),
                        static_cast<unsigned int>(manifest_.lbfgs.block_dim),
                        static_cast<unsigned int>(manifest_.lbfgs.shared_memory),
@@ -2775,6 +2802,7 @@ void TrajectoryOptimizerRuntime::begin_optimization(
   history_rho_.clear(cuda_stream);
   history_y_.clear(cuda_stream);
   history_s_.clear(cuda_stream);
+  history_cross_products_.clear(cuda_stream);
   history_head_.clear(cuda_stream);
   history_count_.clear(cuda_stream);
 }

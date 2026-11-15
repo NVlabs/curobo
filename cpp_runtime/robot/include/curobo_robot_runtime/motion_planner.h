@@ -110,6 +110,12 @@ struct MotionPlanningRequest {
   float final_orientation_tolerance{-1.0F};
   /** Maximum initial solve/check passes per TrajOpt solve (50 iterations per pass by default). */
   int outer_iterations{2};
+  /** Optional CUDA float32 [num_knots,num_dof] initial guess for the first direct
+   * TrajOpt seed, in the same layout as optimized_knots. Copied before solving;
+   * may alias optimized_knots. Start boundaries and goals still come from this
+   * request. Other seeds and the configured planning stages are unchanged.
+   * Null uses the normal fitted seed. No time shifting is performed. */
+  const float* warm_start_knots{nullptr};
 };
 
 /**
@@ -161,9 +167,12 @@ struct PoseMotionPlanningRequest {
   /** Maximum initial solve/check passes per TrajOpt solve (50 iterations per pass by default).
    * Refinement has its own iteration budget. */
   int outer_iterations{2};
+  /** Optional previous optimized_knots; same contract as
+   * MotionPlanningRequest::warm_start_knots. Also used by waypoint requests. */
+  const float* warm_start_knots{nullptr};
 };
 
-/** Rest-to-rest Cartesian planning with 1..256 targets excluding the current FK pose.
+/** Cartesian planning with 1..256 targets excluding the current FK pose.
  * The count must fit spline_layout.reference_intervals (72 with default 16 controls).
  * Configure 64 controls to retain all 256 targets.
  * Positions/quaternions are CUDA float32 [num_waypoints,num_tool_frames,3/4],
