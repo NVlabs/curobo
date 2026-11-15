@@ -12,9 +12,11 @@ from __future__ import annotations
 
 # Standard Library
 import copy
+import dataclasses
 from collections import Counter
 from typing import Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 
 from curobo._src.curobolib.cuda_ops.kinematics import KinematicsFusedFunction
@@ -258,9 +260,79 @@ class KinematicsLoader(KinematicsLoaderCfg):
             if i not in chain_link_names:
                 self._add_body_to_tree(i, base=False)
                 chain_link_names.append(i)
+        self._lump_links_outside_tree()
 
         self.non_fixed_joint_names = self.joint_names.copy()
         return chain_link_names
+
+    def _lump_links_outside_tree(self):
+        """Fold the mass of links left out of the tree into the tree link they hang from.
+
+        The tree holds only the links on a chain to a tool frame, a collision link or an extra
+        link's parent. A link outside it (a camera, an IMU, a foot sole, the bars of a passive
+        linkage) is dropped, and its mass with it. Add each such link that has a mass in the URDF
+        to the nearest tree link above it: mass sum, combined center of mass, and the inertia
+        about it (parallel-axis theorem, rotated into the tree link's frame).
+
+        Joints between the link and the tree are taken at zero (a mimic joint at its offset):
+        exact through fixed joints, and through movable joints the tree does not model when the
+        mechanism sits at its zero pose (a passive linkage whose driving joint is locked at
+        zero). Where it moves with the tree's joints, its mass is kept at its zero-pose position
+        on the tree link, which is the approximation this makes.
+        """
+
+        def matrix(i: np.ndarray) -> np.ndarray:  # [ixx, iyy, izz, ixy, ixz, iyz] -> 3x3
+            return np.array([[i[0], i[3], i[4]], [i[3], i[1], i[5]], [i[4], i[5], i[2]]])
+
+        parser = self._kinematics_parser
+        lumped = {}  # tree link index -> [(mass, com, inertia 3x3)] in the tree link's frame
+        for link_name in parser._parent_map:
+            if link_name in self._name_to_idx_map or not parser.has_link_mass(link_name):
+                continue
+            # walk up to the tree with every joint on the way at zero, composing tree_T_link
+            transform = np.eye(4)
+            name = link_name
+            while name not in self._name_to_idx_map:
+                parent = parser.get_parent_at_zero(name)
+                if parent is None:
+                    break  # the URDF root, above the tree's base link
+                name, parent_t_link = parent
+                transform = parent_t_link @ transform
+            if name not in self._name_to_idx_map:
+                continue
+            mass, com, inertia = parser.get_link_inertial(link_name)
+            rotation = transform[:3, :3]
+            lumped.setdefault(self._name_to_idx_map[name], []).append(
+                (mass, transform[:3, 3] + rotation @ com, rotation @ matrix(inertia) @ rotation.T)
+            )
+        for idx, parts in lumped.items():
+            body = self._bodies[idx]
+            com = np.asarray(body.link_com, dtype=np.float64)
+            parts = [(body.link_mass, com, matrix(body.link_inertia))] + parts
+            mass = sum(m for m, _, _ in parts)
+            com = sum(m * c for m, c, _ in parts) / mass
+            inertia_matrix = np.zeros((3, 3))
+            for m, c, inertia in parts:
+                d = c - com
+                inertia_matrix += inertia + m * (np.dot(d, d) * np.eye(3) - np.outer(d, d))
+            # a new LinkParams: an extra link's comes from the config and must stay as given
+            body = dataclasses.replace(
+                body,
+                link_mass=mass,
+                link_com=com,
+                link_inertia=inertia_matrix[[0, 1, 2, 0, 0, 1], [0, 1, 2, 1, 2, 2]],
+            )
+            self._bodies[idx] = body
+            self._link_masses_com[idx] = torch.as_tensor(
+                body.get_link_com_and_mass(),
+                device=self.cpu_tensor_args.device,
+                dtype=self.cpu_tensor_args.dtype,
+            ).unsqueeze(0)
+            self._link_inertias[idx][0, :6] = torch.as_tensor(
+                body.link_inertia,
+                device=self.cpu_tensor_args.device,
+                dtype=self.cpu_tensor_args.dtype,
+            )
 
     def _get_mimic_joint_data(self) -> Dict[str, List[int]]:
         """Get joints that are mimicked from actuated joints joints.
