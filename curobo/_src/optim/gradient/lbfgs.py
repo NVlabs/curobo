@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-"""L-BFGS optimizer with compact and two-loop quasi-Newton step directions.
+"""L-BFGS optimizer with vector-free and two-loop quasi-Newton step directions.
 
 Composes GradientOptCore for gradient evaluation and lifecycle management with
 QuasiNewtonBuffers for limited-memory (s, y) history. Supports line search,
-CUDA graph acceleration, a compact tensor-core operator for supported shapes,
+CUDA graph acceleration, a vector-free operator for supported shapes,
 and the existing fused CUDA two-loop kernel as a fallback.
 """
 
@@ -21,7 +21,10 @@ from typing import Any, List, Optional
 import torch
 import torch.autograd.profiler as profiler
 
-from curobo._src.curobolib.cuda_ops.optimization import LBFGSCompactCu, LBFGScu
+from curobo._src.curobolib.backends.cuda_core_backend.optimization_config import (
+    LBFGSVectorFreeLaunchCfg,
+)
+from curobo._src.curobolib.cuda_ops.optimization import LBFGScu
 from curobo._src.optim.components.gradient_opt_core import GradientOptCore
 from curobo._src.optim.components.quasi_newton_buffers import QuasiNewtonBuffers
 from curobo._src.optim.gradient.line_search_strategy import LineSearchType
@@ -31,12 +34,6 @@ from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
 
 __all__ = ["LBFGSOptCfg", "LBFGSOpt"]
-
-_COMPACT_MIN_HISTORY = 12
-_COMPACT_MAX_HISTORY = 64
-_COMPACT_FAST_MAX_OPT_DIM = 64
-_COMPACT_LARGE_DIM_MIN_HISTORY = 30
-_COMPACT_MAX_OPT_DIM = 112
 
 
 @dataclass
@@ -98,10 +95,11 @@ class LBFGSOptCfg:
     #: Stage circular history when the active GPU can fit it. Larger problems
     #: automatically use circular global history.
     use_cuda_kernel_shared_buffers: bool = True
-    #: Automatically use the compact tensor-core step operator for benchmarked
-    #: history and optimization dimensions. Unsupported or out-of-range shapes
+    #: Automatically use the vector-free step operator for small
+    #: history (1-30) and optimization dimensions (1-256). Other shapes
     #: use the existing circular two-loop implementation. Set to False to
     #: always use circular two-loop.
+    #: The historical option name is retained; tensor-core compact is no longer dispatched.
     use_compact_operator: bool = True
     #: Use geometric scaling, ``sqrt(s^T s / y^T y)``, for the initial
     #: inverse-Hessian matrix. When False, use the
@@ -178,11 +176,11 @@ class LBFGSOptCfg:
 
 
 class LBFGSOpt:
-    """L-BFGS optimizer with compact or two-loop step directions.
+    """L-BFGS optimizer with vector-free or two-loop step directions.
 
     Uses GradientOptCore for gradient evaluation and lifecycle management, and
     QuasiNewtonBuffers for (s, y) history. Supports Wolfe and strong-Wolfe line
-    search, CUDA graph wrapping, and compact tensor-core dispatch for supported
+    search, CUDA graph wrapping, and vector-free dispatch for supported
     shapes. The existing fused two-loop kernel handles all other configurations.
     """
 
@@ -194,7 +192,7 @@ class LBFGSOpt:
         use_cuda_graph: bool = False,
     ):
         self._qn = QuasiNewtonBuffers(config.device_cfg, config.history)
-        self._compact_shared_matrix_count: Optional[int] = None
+        self._use_vector_free: bool = False
 
         self._core = GradientOptCore(
             config,
@@ -225,63 +223,39 @@ class LBFGSOpt:
             -1, self._core.opt_dim
         ).contiguous()
 
-        if self._compact_shared_matrix_count is not None:
-            with profiler.record_function("lbfgs/compact"):
-                dq = LBFGSCompactCu.apply(
-                    step_direction,
-                    iteration_state.search_actions,
-                    self._core._line_search_context.get_line_search_scale(),
-                    self._core._line_search_context.beta,
-                    self._qn.rho,
-                    self._qn.y,
-                    self._qn.s,
-                    self._qn.compact_inverse_r,
-                    self._qn.compact_matrix_workspace,
-                    q,
-                    grad_q,
-                    self._qn.x_0,
-                    self._qn.grad_0,
-                    self._qn.history_head,
-                    self._qn.history_count,
-                    self._core.action_horizon_step_max,
-                    self._core.config.epsilon,
-                    self._compact_shared_matrix_count,
-                    self._core.step_scaling_enabled,
-                    iteration_state.curvature_update_valid,
-                    self._core.config.use_geometric_scaling,
-                    iteration_state.line_search_status,
-                )
-        else:
-            with profiler.record_function("lbfgs/two_loop"):
-                dq = LBFGScu.apply(
-                    step_direction,
-                    iteration_state.search_actions,
-                    self._core._line_search_context.get_line_search_scale(),
-                    self._core._line_search_context.beta,
-                    self._qn.rho,
-                    self._qn.y,
-                    self._qn.s,
-                    q,
-                    grad_q,
-                    self._qn.x_0,
-                    self._qn.grad_0,
-                    self._qn.history_head,
-                    self._qn.history_count,
-                    self._core.config.epsilon,
-                    self._core.config.stable_mode,
-                    self._core.config.use_cuda_kernel_shared_buffers,
-                    self._core.config.use_geometric_scaling,
-                    self._core.action_horizon_step_max,
-                    self._core.step_scaling_enabled,
-                    iteration_state.curvature_update_valid,
-                    iteration_state.line_search_status,
-                )
+        with profiler.record_function(
+            "lbfgs/vector_free" if self._use_vector_free else "lbfgs/two_loop"
+        ):
+            dq = LBFGScu.apply(
+                step_direction,
+                iteration_state.search_actions,
+                self._core._line_search_context.get_line_search_scale(),
+                self._core._line_search_context.beta,
+                self._qn.rho,
+                self._qn.y,
+                self._qn.s,
+                q,
+                grad_q,
+                self._qn.x_0,
+                self._qn.grad_0,
+                self._qn.history_head,
+                self._qn.history_count,
+                self._core.config.epsilon,
+                self._core.config.stable_mode,
+                self._core.config.use_cuda_kernel_shared_buffers,
+                self._core.config.use_geometric_scaling,
+                self._core.action_horizon_step_max,
+                self._core.step_scaling_enabled,
+                iteration_state.curvature_update_valid,
+                iteration_state.line_search_status,
+                self._qn.cross_products,
+            )
 
         return dq.view(-1, self._core.action_horizon, self._core.action_dim)
 
     # -- Hooks called by GradientOptCore --
 
-    def _on_reinitialize(self, mask):
+    def _on_reinitialize(self, mask: Optional[torch.Tensor]) -> None:
         self._qn.clear(mask)
 
     def _on_initial_state(
@@ -290,67 +264,31 @@ class LBFGSOpt:
         """Prepare the first candidates and reset the quasi-Newton reference point."""
         context = self._core._line_search_context
         scales = context.beta.view(-1, 1, 1, 1) * context.get_line_search_scale().view(1, -1, 1, 1)
-        iteration_state.search_actions = self._core._line_search_strategy.jit_get_x_set(
-            iteration_state.step_direction, iteration_state.exploration_action, scales
-        ).reshape(context.num_problems, context.n_linesearch, context.opt_dim).detach()
+        iteration_state.search_actions = (
+            self._core._line_search_strategy.jit_get_x_set(
+                iteration_state.step_direction, iteration_state.exploration_action, scales
+            )
+            .reshape(context.num_problems, context.n_linesearch, context.opt_dim)
+            .detach()
+        )
         self._qn.set_reference(
             iteration_state.exploration_action.view(-1, self._core.opt_dim, 1),
             iteration_state.exploration_gradient.view(-1, self._core.opt_dim, 1),
             mask=mask,
         )
 
-    def _on_resize(self, num_problems):
-        compact_layout = self._get_compact_layout(num_problems)
-        self._compact_shared_matrix_count = (
-            compact_layout[0] if compact_layout is not None else None
+    def _on_resize(self, num_problems: int) -> None:
+        self._use_vector_free = (
+            self._core.config.use_compact_operator
+            and LBFGSVectorFreeLaunchCfg.supports(self._core.opt_dim, self._core.config.history)
         )
-        compact_workspace_elements = compact_layout[1] if compact_layout is not None else 0
         self._qn.resize(
-            num_problems,
-            self._core.opt_dim,
-            use_compact_operator=compact_layout is not None,
-            compact_workspace_elements=compact_workspace_elements,
+            num_problems, self._core.opt_dim, use_vector_free_operator=self._use_vector_free
         )
 
-    def _on_shift(self, shift_steps):
+    def _on_shift(self, shift_steps: int) -> None:
         self._qn.shift(shift_steps, self._core.action_dim)
-        self._qn.rebuild_compact_state()
-
-    def _get_compact_layout(self, num_problems: int) -> Optional[tuple[int, int]]:
-        """Return shared-matrix count and workspace size for compact L-BFGS."""
-        if not self._core.config.use_compact_operator:
-            return None
-        history = self._core.config.history
-        opt_dim = self._core.opt_dim
-        device = self._core.device_cfg.device
-        if torch.cuda.get_device_capability(device)[0] < 8:
-            return None
-
-        from curobo._src.curobolib.backends.cuda_core_backend.optimization_config import (
-            LBFGSCompactLaunchCfg,
-        )
-
-        properties = torch.cuda.get_device_properties(device)
-        shared_memory = int(
-            getattr(properties, "shared_memory_per_block_optin", 0)
-            or properties.shared_memory_per_block
-        )
-        compact_config = LBFGSCompactLaunchCfg.calculate_config(
-            num_problems,
-            opt_dim,
-            history,
-            shared_memory,
-        )
-        if compact_config is None:
-            return None
-        history_supported = _COMPACT_MIN_HISTORY <= history <= _COMPACT_MAX_HISTORY
-        dimension_supported = opt_dim <= _COMPACT_FAST_MAX_OPT_DIM or (
-            history >= _COMPACT_LARGE_DIM_MIN_HISTORY and opt_dim <= _COMPACT_MAX_OPT_DIM
-        )
-        if not history_supported or not dimension_supported:
-            return None
-        _, shared_matrix_count, workspace_elements = compact_config
-        return shared_matrix_count, workspace_elements
+        self._qn.rebuild_vector_free_state()
 
     # -- Protocol: delegate to core --
 

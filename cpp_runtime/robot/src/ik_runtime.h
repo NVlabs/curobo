@@ -188,6 +188,7 @@ class IkRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer history_rho_;
   mutable curobo_robot_runtime::DeviceBuffer history_y_;
   mutable curobo_robot_runtime::DeviceBuffer history_s_;
+  mutable curobo_robot_runtime::DeviceBuffer history_cross_products_;
   mutable curobo_robot_runtime::DeviceBuffer history_head_;
   mutable curobo_robot_runtime::DeviceBuffer history_count_;
   mutable curobo_robot_runtime::DeviceBuffer curvature_update_valid_;

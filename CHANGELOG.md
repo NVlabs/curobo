@@ -6,10 +6,21 @@
 
 ### New Features
 - Improve RRT growth sampling to have signifcantly higher chance of finding a path.
-- Add flag to disable inverse dynamics during motion planning.
+- Add flag to disable inverse dynamics during motion planning, including TimeOpt
+  and final validation.
+- Support moving starts in Cartesian waypoint planning and previous-trajectory
+  warm starts in the C++ motion planner.
+- Add C++ spline sampling and time-window interpolation.
 
 ### Bug Fixes & Misc.
 
+- Fix ESDF seeding and sign recovery for mixed stamped and sensor TSDFs in Python and C++.
+- Accelerate L-BFGS in Python and C++, and fuse native IK/TrajOpt cost reductions.
+- Speed up swept collision checks with oriented bounding-box rejection.
+- Fix B-spline interpolation gradients and derivative scaling in native
+  moving-start trajectory seeds.
+- Allocate MPC validation buffers independently and reduce motion-planning
+  buffer memory.
 - Fix `motion_cross_S` writing the prismatic-joint velocity-product term to the
   angular components instead of the linear components of the spatial vector.
 - Speed up self-collision pair extraction during robot configuration construction
@@ -21,6 +32,10 @@
 - Use the tensor device's cached shared-memory capacity when sizing RNEA launch
   configurations instead of assuming a fixed 100 KB per SM. Export C++ runtime
   launch profiles using the target GPU's per-SM capacity.
+
+### Breaking Changes
+
+- Re-export robot and mapper artifacts for TrajOpt schema 25 and mapper schema 2.
 
 ## Version 0.9.0
 

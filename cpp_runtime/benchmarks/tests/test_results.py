@@ -146,14 +146,34 @@ def test_nonfinite_statistics_are_rejected(benchmark: ModuleType) -> None:
 def test_tables_preserve_zero_success_and_unavailable_metrics(benchmark: ModuleType) -> None:
     """Table rendering must distinguish unmeasured accuracy from a zero error."""
     result = benchmark.aggregate_ik([{"batch": 0, "time_s": 0.02, "success": 0}])
-    rendered = benchmark.render_tables({"motion": {}, "ik": {"franka_pose_only": result}})
+    rendered = benchmark.render_tables(
+        {
+            "motion": {
+                "3kg": {
+                    "successes": 0,
+                    "problems": 1,
+                    "success_percent": 0,
+                    "statistics": {},
+                }
+            },
+            "motion_inverse_dynamics": False,
+            "ik": {"franka_pose_only": result},
+        }
+    )
     assert "20" in rendered
     assert "Unavailable" in rendered
     assert "franka.yml" in rendered
     assert "C-Free-IK-time(ms)" in rendered
+    assert "inverse dynamics disabled" in rendered
+    assert "Kinematic successes" in rendered
+    assert "Kinematic success %" in rendered
+    assert "With torque limits" not in rendered
 
 
-def test_trajectory_metrics_use_absolute_power(benchmark: ModuleType) -> None:
+@pytest.mark.parametrize("inverse_dynamics", [False, True])
+def test_trajectory_metrics_use_absolute_power(
+    benchmark: ModuleType, monkeypatch: pytest.MonkeyPatch, inverse_dynamics: bool
+) -> None:
     """A 2 kg horizontal slider gives analytical torque, absolute work, and path length."""
     model = pin.Model()
     joint = model.addJoint(0, pin.JointModelPX(), pin.SE3.Identity(), "slider")
@@ -167,11 +187,59 @@ def test_trajectory_metrics_use_absolute_power(benchmark: ModuleType) -> None:
         ],
         dtype=np.float32,
     )
-    metrics = benchmark.trajectory_metrics(states, 0.1, model, model.createData())
+    if not inverse_dynamics:
+
+        def unexpected_rnea(*args: object) -> None:
+            """Kinematic-only scoring must not evaluate joint torque."""
+            pytest.fail("inverse dynamics ran during kinematic-only scoring")
+
+        monkeypatch.setattr(pin, "rnea", unexpected_rnea)
+    metrics = benchmark.trajectory_metrics(
+        states, 0.1, model, model.createData(), inverse_dynamics=inverse_dynamics
+    )
     assert metrics["path_length_rad"] == pytest.approx(2.0)
-    assert metrics["torque_nm"] == pytest.approx(1.0)
-    assert metrics["energy_j"] == pytest.approx(0.3)
+    if inverse_dynamics:
+        assert metrics["torque_nm"] == pytest.approx(1.0)
+        assert metrics["energy_j"] == pytest.approx(0.3)
+    else:
+        assert metrics["torque_nm"] is None
+        assert metrics["energy_j"] is None
     assert metrics["jerk_rad_s3"] == pytest.approx(4.0)
+
+
+def test_spline_samples_preserve_native_states(benchmark: ModuleType) -> None:
+    """Read the actual spline points and derivatives without adding intermediate points."""
+    values = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
+    raw = np.concatenate((np.full(4, -1, dtype=np.float32), values.reshape(-1)))
+    row = {"trajectory_sampling": "spline", "state_offset": 4, "steps": 3, "dt": 0.025}
+    np.testing.assert_array_equal(benchmark.read_spline_samples(raw, row, 2), values)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"trajectory_sampling": "linear"},
+        {"trajectory_sampling": None},
+        {"dt": 0.05},
+        {"dt": float("nan")},
+        {"state_offset": -1},
+        {"steps": 4},
+    ],
+)
+def test_invalid_spline_samples_are_rejected(benchmark: ModuleType, changes: dict) -> None:
+    """Require spline provenance, bounded sampling intervals, and complete output."""
+    row = {"trajectory_sampling": "spline", "state_offset": 0, "steps": 3, "dt": 0.025}
+    row.update(changes)
+    with pytest.raises(ValueError):
+        benchmark.read_spline_samples(np.zeros(24, dtype=np.float32), row, 2)
+
+
+def test_missing_spline_metadata_is_rejected(benchmark: ModuleType) -> None:
+    """Older benchmark output must be regenerated rather than silently accepted."""
+    with pytest.raises(ValueError, match="rebuild and rerun"):
+        benchmark.read_spline_samples(
+            np.zeros(24, dtype=np.float32), {"state_offset": 0, "steps": 3, "dt": 0.025}, 2
+        )
 
 
 def test_samples_map_by_joint_name_and_fill_unused_joints(benchmark: ModuleType) -> None:
@@ -229,7 +297,7 @@ def test_motion_capacity_uses_both_eligible_corpora(
 def test_motion_export_options_invalidate_cached_artifacts(
     benchmark: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Motion kernels use only the exact cuboid capacity and 1,000 validation samples."""
+    """Motion kernels use only the exact cuboid capacity and 1,024 validation samples."""
     config = tmp_path / "robot.yml"
     config.write_text("robot: test\n")
     artifact = tmp_path / "artifact"
@@ -243,7 +311,7 @@ def test_motion_export_options_invalidate_cached_artifacts(
         "max-cylinders": 0,
         "max-meshes": 0,
         "max-voxel-grids": 0,
-        "interpolation-buffer-size": 1000,
+        "interpolation-buffer-size": 1024,
     }
     for name, value in options.items():
         assert commands[0][commands[0].index(f"--{name}") + 1] == str(value)

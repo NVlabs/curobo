@@ -424,7 +424,7 @@ class GraphCallTelemetry:
 def _waypoint_start_state(
     planner: Union[MotionPlanner, BatchMotionPlanner], current_state: JointState
 ) -> JointState:
-    """Validate the fixed spline and return an owned stationary active-joint state."""
+    """Validate the fixed spline and return an owned active-joint boundary state."""
     solver = planner.trajopt_solver
     solver._validate_waypoint_layout()
     state = solver.get_active_js(current_state).clone()
@@ -434,8 +434,8 @@ def _waypoint_start_state(
         log_and_raise("waypoint batch must match the configured planner batch size")
     for name in ("velocity", "acceleration", "jerk"):
         value = getattr(state, name)
-        if value is not None and not bool(torch.isfinite(value).all() & (value == 0).all()):
-            log_and_raise("high-level waypoint planning requires a rest-to-rest current state")
+        if value is not None and not bool(torch.isfinite(value).all()):
+            log_and_raise("waypoint current-state derivatives must be finite")
         # Omitted derivatives already select owned zero boundary buffers in TrajOpt.
         # Preserve their optional layout so seed preparation reuses the same graph.
     return state

@@ -14,7 +14,10 @@ import torch
 import warp as wp
 
 # CuRobo
-from curobo._src.geom.data.data_obstacle_bounds import update_world_aabb
+from curobo._src.geom.data.data_obstacle_bounds import (
+    is_swept_sphere_outside_box,
+    update_world_aabb,
+)
 from curobo._src.geom.data.helper_pose import get_obs_idx, load_transform_from_inv_pose
 from curobo._src.geom.types import Capsule, SceneCfg
 from curobo._src.types.device_cfg import DeviceCfg
@@ -462,3 +465,34 @@ def compute_local_sdf_with_grad(
         return wp.vec4(sdf, -1.0, 0.0, 0.0)
     normal = -normal / normal_length
     return wp.vec4(sdf, normal[0], normal[1], normal[2])
+
+
+def is_swept_sphere_outside_obb(
+    obs_set: CapsuleDataWarp,
+    env_idx: wp.int32,
+    local_idx: wp.int32,
+    inv_t: wp.transform,
+    local_current: wp.vec3,
+    local_previous: wp.vec3,
+    local_following: wp.vec3,
+    radius_adjusted: wp.float32,
+) -> wp.bool:
+    """Reject sweeps against an enclosing box for arbitrary local capsule endpoints."""
+    index = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+    base = wp.vec3(obs_set.params[index, 0], obs_set.params[index, 1], obs_set.params[index, 2])
+    axis = wp.vec3(obs_set.params[index, 3], obs_set.params[index, 4], obs_set.params[index, 5])
+    half_segment = 0.5 * obs_set.params[index, 6] * axis
+    radius = obs_set.params[index, 7]
+    half_extents = wp.vec3(
+        wp.abs(half_segment[0]) + radius,
+        wp.abs(half_segment[1]) + radius,
+        wp.abs(half_segment[2]) + radius,
+    )
+    return is_swept_sphere_outside_box(
+        local_current,
+        local_previous,
+        local_following,
+        base + half_segment,
+        half_extents,
+        radius_adjusted,
+    )

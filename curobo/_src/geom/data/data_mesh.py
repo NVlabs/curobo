@@ -22,7 +22,10 @@ import torch
 import warp as wp
 
 # CuRobo
-from curobo._src.geom.data.data_obstacle_bounds import update_world_aabb
+from curobo._src.geom.data.data_obstacle_bounds import (
+    is_swept_sphere_outside_box,
+    update_world_aabb,
+)
 from curobo._src.geom.data.helper_pose import (
     get_obs_idx,
     load_transform_from_inv_pose,
@@ -802,3 +805,52 @@ def compute_local_sdf_with_grad(
         grad_local = -delta / dis_length
 
     return wp.vec4(signed_dist, grad_local[0], grad_local[1], grad_local[2])
+
+
+def is_swept_sphere_outside_obb(
+    obs_set: MeshDataWarp,
+    env_idx: wp.int32,
+    local_idx: wp.int32,
+    inv_t: wp.transform,
+    local_current: wp.vec3,
+    local_previous: wp.vec3,
+    local_following: wp.vec3,
+    radius_adjusted: wp.float32,
+) -> wp.bool:
+    """Reject sweeps using known mesh bounds, including meshes with offset vertices."""
+    index = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+    world_center = wp.vec3(
+        obs_set.world_bounds[index, 0],
+        obs_set.world_bounds[index, 1],
+        obs_set.world_bounds[index, 2],
+    )
+    half_extents = 0.5 * wp.vec3(
+        obs_set.dims[index, 0], obs_set.dims[index, 1], obs_set.dims[index, 2]
+    )
+    for axis in range(3):
+        if (
+            not wp.isfinite(world_center[axis])
+            or not wp.isfinite(half_extents[axis])
+            or not wp.isfinite(obs_set.world_bounds[index, 4 + axis])
+            or half_extents[axis] < 0.0
+        ):
+            return False
+    center = wp.transform_point(inv_t, world_center)
+    translation = wp.transform_get_translation(inv_t)
+    # Center recovery can cancel large world coordinates; enlarge rather than underbound.
+    world_scale = wp.max(
+        wp.abs(world_center[0]), wp.max(wp.abs(world_center[1]), wp.abs(world_center[2]))
+    )
+    translation_scale = wp.max(
+        wp.abs(translation[0]), wp.max(wp.abs(translation[1]), wp.abs(translation[2]))
+    )
+    allowance = 1.0e-6 * (world_scale + translation_scale)
+    half_extents += wp.vec3(allowance, allowance, allowance)
+    return is_swept_sphere_outside_box(
+        local_current,
+        local_previous,
+        local_following,
+        center,
+        half_extents,
+        radius_adjusted,
+    )

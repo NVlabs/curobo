@@ -19,6 +19,7 @@ from curobo._src.geom.data.data_obstacle_query import (
     compute_local_sdf_with_grad,
     compute_swept_sphere_clearance_lower_bound,
     is_obs_enabled,
+    is_swept_sphere_outside_obb,
     load_obstacle_transform,
 )
 from curobo._src.util.warp import warp_constant_suffix, warp_kernel
@@ -357,6 +358,11 @@ def get_tiled_swept_collision_kernel(
                     local_previous = wp.transform_point(inv_t, previous_world)
                 if has_following:
                     local_following = wp.transform_point(inv_t, following_world)
+                if is_swept_sphere_outside_obb(
+                    obs, env_idx, obs_local_idx, inv_t, local_current, local_previous,
+                    local_following, radius_adjusted,
+                ):
+                    continue
                 total += compute_prepared_swept_collision_contribution(
                     obs,
                     env_idx,

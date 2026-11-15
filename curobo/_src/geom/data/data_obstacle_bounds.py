@@ -5,9 +5,44 @@
 
 # Third Party
 import torch
+import warp as wp
 
 # CuRobo
 from curobo._src.types.pose import Pose
+
+
+@wp.func
+def is_swept_sphere_outside_box(
+    current: wp.vec3,
+    previous: wp.vec3,
+    following: wp.vec3,
+    center: wp.vec3,
+    half_extents: wp.vec3,
+    radius_adjusted: wp.float32,
+) -> wp.bool:
+    """Reject both sphere half-sweeps when separated from a local-frame box."""
+    previous_midpoint = 0.5 * (current + previous)
+    following_midpoint = 0.5 * (current + following)
+    lower = wp.min(current, wp.min(previous_midpoint, following_midpoint)) - center
+    upper = wp.max(current, wp.max(previous_midpoint, following_midpoint)) - center
+    bound_scale = wp.max(
+        1.0,
+        wp.max(
+            wp.max(wp.abs(center[0]), wp.max(wp.abs(center[1]), wp.abs(center[2]))),
+            wp.max(
+                wp.abs(half_extents[0]), wp.max(wp.abs(half_extents[1]), wp.abs(half_extents[2]))
+            ),
+        ),
+    )
+    padding = radius_adjusted + 1.0e-6 * bound_scale
+    return (
+        lower[0] > half_extents[0] + padding
+        or upper[0] < -half_extents[0] - padding
+        or lower[1] > half_extents[1] + padding
+        or upper[1] < -half_extents[1] - padding
+        or lower[2] > half_extents[2] + padding
+        or upper[2] < -half_extents[2] - padding
+    )
 
 
 def update_world_aabb(

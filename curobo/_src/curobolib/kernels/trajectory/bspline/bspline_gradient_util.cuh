@@ -87,16 +87,18 @@ namespace curobo{
 
           unsigned int mask = __ballot_sync(0xFFFFFFFF, true);
 
-          int shift = (knots_per_warp * interpolation_steps + 1) / 2; // Ensure correct rounding
+          // The caller reduces only when interpolation_steps > 1. Start at
+          // the largest power of two below the sample count, including odd counts.
+          const int shift = 1 << (31 - __clz(static_cast<unsigned int>(interpolation_steps - 1)));
           const int lane_idx = threadIdx.x % 32;
+          const int interpolation_idx = lane_idx / knots_per_warp;
 
 
-          for (int offset = shift; offset >= knots_per_warp; offset = (offset + 1) / 2) {
-            // Ensure correct rounding in the loop
-            float other_val = __shfl_down_sync(mask, val, offset);
+          for (int offset = shift; offset > 0; offset /= 2) {
+            float other_val = __shfl_down_sync(mask, val, offset * knots_per_warp);
             // only add if it's with the correct lane index:
 
-            bool condition = (lane_idx + offset) < 32; // This will always be true?
+            bool condition = interpolation_idx + offset < interpolation_steps;
             float to_sum_value = condition ? other_val : 0;
             val += to_sum_value;
 

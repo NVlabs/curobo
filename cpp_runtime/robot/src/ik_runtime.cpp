@@ -653,6 +653,9 @@ void IkRuntime::allocate_workspace() {
   allocate_float(&history_rho_, max_problems * manifest_.history);
   allocate_float(&history_y_, max_problems * manifest_.history * dof);
   allocate_float(&history_s_, max_problems * manifest_.history * dof);
+  if (manifest_.lbfgs.source == "curobo_lbfgs_vector_free_kernel") {
+    allocate_float(&history_cross_products_, max_problems * manifest_.history * manifest_.history);
+  }
   allocate_float(&search_actions_, max_evaluations * dof);
   exploration_indices_.allocate(
       max_problems * manifest_.num_line_search * sizeof(int32_t));
@@ -1153,6 +1156,7 @@ void IkRuntime::prepare_lbfgs(int problems, CUstream stream) const {
   history_rho_.clear(reinterpret_cast<cudaStream_t>(stream));
   history_y_.clear(reinterpret_cast<cudaStream_t>(stream));
   history_s_.clear(reinterpret_cast<cudaStream_t>(stream));
+  history_cross_products_.clear(reinterpret_cast<cudaStream_t>(stream));
   const auto bounds = warp_tiled_bounds_2d(
       problems, manifest_.prepare_initial_state.block_dim);
   auto seed_action =
@@ -1372,6 +1376,14 @@ void IkRuntime::lbfgs_step(int problems, CUstream stream) const {
       &candidates,
       &candidate_count,
   };
+  CUdeviceptr cross_products = history_cross_products_.ptr();
+  if (manifest_.lbfgs.source == "curobo_lbfgs_vector_free_kernel") {
+    arguments = {&direction, &rho, &y, &s, &q, &reference_action, &reference_gradient,
+                 &gradient, &step_max, &problems, &opt_dim, &history_head, &history_count,
+                 &scale_step, &curvature, &line_search_status, &candidate_scales,
+                 &candidate_beta, &candidates, &cross_products, &epsilon,
+                 &candidate_count, &stable_mode};
+  }
   lbfgs_kernel_.launch(
       static_cast<unsigned int>(problems),
       static_cast<unsigned int>(manifest_.lbfgs.block_dim),

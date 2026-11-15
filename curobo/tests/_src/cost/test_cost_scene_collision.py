@@ -149,40 +149,24 @@ class TestSceneCollisionCost:
         assert cost.config == cfg
 
     @pytest.mark.parametrize(
-        ("num_states", "num_spheres", "num_sms", "is_swept", "expected"),
+        ("num_spheres", "expected"),
         [
-            (1, 61, 16, False, 256),
-            (32, 1000, 16, False, 512),
-            (64, 500, 16, True, 256),
-            (128, 500, 16, False, 128),
-            (324, 128, 16, True, 64),
-            (324, 1000, 16, False, 128),
-            (64, 500, 170, False, 512),
-            (64, 1000, 170, True, 1024),
-            (324, 500, 170, False, 512),
-            (324, 500, 170, True, 256),
-            (324, 1000, 170, False, 512),
-            (324, 1000, 170, True, 256),
+            (1, 32),
+            (32, 32),
+            (33, 64),
+            (61, 64),
+            (64, 64),
+            (65, 128),
+            (128, 128),
+            (129, 128),
+            (176, 128),
+            (512, 128),
+            (1000, 128),
         ],
     )
-    def test_state_collision_block_policy(
-        self,
-        num_states,
-        num_spheres,
-        num_sms,
-        is_swept,
-        expected,
-    ):
-        """Launch policy should reproduce the measured Orin and RTX 5090 choices."""
-        assert (
-            select_collision_block_dim(
-                num_states,
-                num_spheres,
-                num_sms,
-                is_swept,
-            )
-            == expected
-        )
+    def test_state_collision_block_policy(self, num_spheres: int, expected: int) -> None:
+        """Round up small sphere counts and cap strided collision queries at 128."""
+        assert select_collision_block_dim(num_spheres) == expected
 
     def test_init_missing_scene_collision_checker_raises_error(self, device_cfg):
         """Test that missing scene_collision_checker raises error."""

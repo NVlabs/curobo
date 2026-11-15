@@ -71,7 +71,9 @@ def test_backtracking_preserves_direction_and_history_in_graph(compact: bool) ->
         if compact:
             LBFGSCompactCu.apply(
                 step,
-                candidates, scales, beta,
+                candidates,
+                scales,
+                beta,
                 buffers.rho,
                 buffers.y,
                 buffers.s,
@@ -94,7 +96,9 @@ def test_backtracking_preserves_direction_and_history_in_graph(compact: bool) ->
         else:
             LBFGScu.apply(
                 step,
-                candidates, scales, beta,
+                candidates,
+                scales,
+                beta,
                 buffers.rho,
                 buffers.y,
                 buffers.s,
@@ -1128,87 +1132,27 @@ def test_compact_step_matches_two_loop_during_history_startup(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
-def test_compact_operator_auto_selection_and_two_loop_flag():
-    """Select compact for benchmarked shapes and retain explicit fallback."""
-    if torch.cuda.get_device_capability()[0] < 8:
-        pytest.skip("Compact L-BFGS requires TF32 tensor cores")
-
-    rollout = MockRollout(num_dof=7, action_horizon=16, batch_size=2)
-    compact_config = LBFGSOptCfg(
-        num_problems=2,
-        num_iters=10,
-        history=32,
-        step_scale=0.98,
-    )
-    compact_optimizer = LBFGSOpt(compact_config, [rollout, rollout])
-    assert compact_config.use_compact_operator
-    assert compact_optimizer._compact_shared_matrix_count is not None
-    assert compact_optimizer._qn.compact_inverse_r is not None
-
-    two_loop_config = LBFGSOptCfg(
-        num_problems=2,
-        num_iters=10,
-        history=32,
-        step_scale=0.98,
-        use_compact_operator=False,
-    )
-    two_loop_optimizer = LBFGSOpt(two_loop_config, [rollout, rollout])
-    assert two_loop_optimizer._compact_shared_matrix_count is None
-    assert two_loop_optimizer._qn.compact_inverse_r is None
-
-    padded_dimension_rollout = MockRollout(num_dof=7, action_horizon=10, batch_size=2)
-    padded_dimension_optimizer = LBFGSOpt(
-        LBFGSOptCfg(
-            num_problems=2,
-            num_iters=10,
-            history=32,
-            step_scale=0.98,
-        ),
-        [padded_dimension_rollout, padded_dimension_rollout],
-    )
-    assert padded_dimension_optimizer.opt_dim == 70
-    assert padded_dimension_optimizer._compact_shared_matrix_count is not None
-
-    short_history_rollout = MockRollout(num_dof=7, action_horizon=1, batch_size=2)
-    short_history_optimizer = LBFGSOpt(
-        LBFGSOptCfg(
-            num_problems=2,
-            num_iters=10,
-            history=7,
-            step_scale=0.98,
-        ),
-        [short_history_rollout, short_history_rollout],
-    )
-    assert short_history_optimizer.opt_dim == 7
-    assert short_history_optimizer._compact_shared_matrix_count is None
-    assert short_history_optimizer._qn.compact_inverse_r is None
-
-    large_dimension_rollout = MockRollout(num_dof=257, action_horizon=1, batch_size=2)
-    large_dimension_optimizer = LBFGSOpt(
-        LBFGSOptCfg(
-            num_problems=2,
-            num_iters=10,
-            history=16,
-            step_scale=0.98,
-        ),
-        [large_dimension_rollout, large_dimension_rollout],
-    )
-    assert large_dimension_optimizer.opt_dim == 257
-    assert large_dimension_optimizer._compact_shared_matrix_count is None
-    assert large_dimension_optimizer._qn.compact_inverse_r is None
-
-    conventional_optimizer = LBFGSOpt(
-        LBFGSOptCfg(
-            num_problems=2,
-            num_iters=10,
-            history=32,
-            step_scale=0.98,
-            use_geometric_scaling=False,
-        ),
-        [rollout, rollout],
-    )
-    assert conventional_optimizer._compact_shared_matrix_count is not None
-    assert conventional_optimizer._qn.compact_inverse_r is not None
+def test_vector_free_auto_selection_and_two_loop_flag():
+    """Select vector-free in its bounded range, retain compact only as standalone code."""
+    for history, dimension, enabled in (
+        (1, 1, True),
+        (26, 112, True),
+        (30, 256, True),
+        (31, 112, True),
+        (30, 257, True),
+        (26, 112, False),
+    ):
+        rollout = MockRollout(num_dof=dimension, action_horizon=1, batch_size=2)
+        optimizer = LBFGSOpt(
+            LBFGSOptCfg(
+                num_problems=2, num_iters=10, history=history, use_compact_operator=enabled
+            ),
+            [rollout, rollout],
+        )
+        expected = enabled and history <= 30 and dimension <= 256
+        assert optimizer._use_vector_free is expected
+        assert (optimizer._qn.cross_products is not None) is expected
+        assert optimizer._qn.compact_inverse_r is None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
@@ -1225,47 +1169,29 @@ def test_compact_operator_auto_selection_and_two_loop_flag():
         (32, 128),
     ],
 )
-def test_compact_operator_auto_selection_thresholds(history: int, opt_dim: int):
-    """Apply performance thresholds only after checking shared-memory fit."""
-    device = torch.device("cuda")
-    if torch.cuda.get_device_capability(device)[0] < 8:
-        pytest.skip("Compact L-BFGS requires TF32 tensor cores")
-
-    properties = torch.cuda.get_device_properties(device)
-    shared_memory = int(
-        getattr(properties, "shared_memory_per_block_optin", 0)
-        or properties.shared_memory_per_block
-    )
-    layout_fits = (
-        LBFGSCompactLaunchCfg.calculate_config(2, opt_dim, history, shared_memory) is not None
-    )
-    in_history_range = 12 <= history <= 64
-    in_dimension_range = opt_dim <= 64 or (history >= 30 and opt_dim <= 112)
-    expect_compact = layout_fits and in_history_range and in_dimension_range
+def test_vector_free_operator_auto_selection_thresholds(history: int, opt_dim: int):
+    """Apply the bounded vector-free dispatch in the main optimizer."""
     rollout = MockRollout(num_dof=opt_dim, action_horizon=1, batch_size=2)
     optimizer = LBFGSOpt(
-        LBFGSOptCfg(num_problems=2, num_iters=10, history=history),
-        [rollout, rollout],
+        LBFGSOptCfg(num_problems=2, num_iters=10, history=history), [rollout, rollout]
     )
-
-    assert (optimizer._compact_shared_matrix_count is not None) is expect_compact
-    assert (optimizer._qn.compact_inverse_r is not None) is expect_compact
+    expected = history <= 30 and opt_dim <= 256
+    assert optimizer._use_vector_free is expected
+    assert (optimizer._qn.cross_products is not None) is expected
+    assert optimizer._qn.compact_inverse_r is None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_history_128_selects_two_loop_for_all_problem_shapes():
-    """Use circular two-loop above the compact performance range."""
-    if torch.cuda.get_device_capability()[0] < 8:
-        pytest.skip("Compact L-BFGS requires TF32 tensor cores")
-
-    compact_rollout = MockRollout(num_dof=6, action_horizon=8, batch_size=2)
-    compact_optimizer = LBFGSOpt(
+    """Use circular two-loop outside the bounded vector-free history range."""
+    small_rollout = MockRollout(num_dof=6, action_horizon=8, batch_size=2)
+    small_optimizer = LBFGSOpt(
         LBFGSOptCfg(num_problems=2, num_iters=10, history=128),
-        [compact_rollout, compact_rollout],
+        [small_rollout, small_rollout],
     )
-    assert compact_optimizer.opt_dim == 48
-    assert compact_optimizer._compact_shared_matrix_count is None
-    assert compact_optimizer._qn.compact_inverse_r is None
+    assert small_optimizer.opt_dim == 48
+    assert not small_optimizer._use_vector_free
+    assert small_optimizer._qn.compact_inverse_r is None
 
     fallback_rollout = MockRollout(num_dof=1, action_horizon=1025, batch_size=2)
     fallback_optimizer = LBFGSOpt(
@@ -1273,7 +1199,7 @@ def test_history_128_selects_two_loop_for_all_problem_shapes():
         [fallback_rollout, fallback_rollout],
     )
     assert fallback_optimizer.opt_dim == 1025
-    assert fallback_optimizer._compact_shared_matrix_count is None
+    assert not fallback_optimizer._use_vector_free
     assert fallback_optimizer._qn.compact_inverse_r is None
 
 

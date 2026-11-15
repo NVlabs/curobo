@@ -8,12 +8,12 @@ __global__ void interpolate_spline_kernel(
     const float* controls, const float* knot_dt, const float* timing,
     const float* time, const float* polynomial, const float* nodes,
     const float* weights, float* output, int count, int dof, int samples,
-    int time_points, float output_dt) {
+    int time_points, float output_dt, float start_time, float end_time) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= samples) return;
   const int spans = count - 3, plane = samples * dof;
   const float duration = timing ? time[time_points - 1] : knot_dt[0] * spans;
-  const float requested = i == samples - 1 ? duration : fminf(duration, i * output_dt);
+  const float requested = i == samples - 1 ? end_time : fminf(end_time, start_time + i * output_dt);
   float x[3] = {duration > 0 ? 1.0f / (duration * duration) : 0.0f, 0, 0};
   const float s = duration == 0 ? 0.0f : (timing
       ? progress_at_time(polynomial, timing, nodes, weights, time, 0,

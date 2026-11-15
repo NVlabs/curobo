@@ -62,8 +62,9 @@ Those are independent of spatial controls: both sides of every spatial knot are 
 to the constraint grid. The former C++ 512-spatial-control validation cap is now 1,024.
 The same count is available through `info().native_horizon()` and
 `info().spline_layout.native_horizon`. Use this query when allocating native
-state and waypoint-reference buffers. Default dense capacity grows with the
-layout and timestep bounds; an explicit `--interpolation-buffer-size` is checked
+state and waypoint-reference buffers. Default dense capacity is at least 1,024 samples
+and grows with the layout and timestep bounds, matching Python;
+an explicit `--interpolation-buffer-size` is checked
 against the exported minimum.
 
 Python uses the same layout:
@@ -168,7 +169,7 @@ Each MPC problem owns one GPU beta value: failed probe fans multiply it by `0.1`
 reset it to `1`. Retries leave the search direction and L-BFGS history unchanged
 and consume the fixed CUDA-graph iteration budget. Set the solver configuration
 flag to `false` to disable this policy. Re-export existing artifacts after this
-kernel ABI update (IK schema 20, TrajOpt schema 23). The artifacts contain separate
+kernel ABI update (IK schema 20, TrajOpt schema 25). The artifacts contain separate
 fixed-fan and backtracking kernels, selected before graph capture. The fixed-fan
 candidate and line-search kernels do not read or update the backtracking scale.
 
@@ -264,7 +265,7 @@ consistent with its derivatives. Rebuild the runtime and re-export IK artifacts 
 
 LM retains the Jacobian and gradient with each accepted seed; rejected steps keep the
 previous derivatives. Native L-BFGS initialization distributes each seed across one warp;
-its launch ABI requires IK schema 20 and TrajOpt schema 23 artifacts.
+its launch ABI requires IK schema 20 and TrajOpt schema 25 artifacts.
 
 IK first runs pose-only Levenberg-Marquardt seed refinement, with no world- or
 self-collision cost in the refinement loop. It then evaluates pose convergence,
@@ -295,7 +296,7 @@ previous solver calls before changing policy; these synchronous setters run outs
 
 `MotionPlanner` shares link-local spheres, masks, and attachment state between ordinary IK,
 grasp IK, RRT, and TrajOpt, while keeping solver workspaces separate. Native scenes remain
-single-environment. Re-export artifacts for IK schema 20, TrajOpt schema 23, and RRT schema 9
+single-environment. Re-export artifacts for IK schema 20, TrajOpt schema 25, and RRT schema 9
 before loading them into the updated runtime.
 
 `GraspPlanningRequest::collision_policy` enables the two-field grasp path. The caller owns
@@ -607,6 +608,15 @@ request.stream = stream;
 planner.plan(request);
 ```
 
+`MotionPlanningRequest::warm_start_knots` and
+`PoseMotionPlanningRequest::warm_start_knots` optionally accept CUDA float32
+`[num_knots, num_dof]` controls in the `optimized_knots` layout. The planner copies
+them before solving, so they may alias the previous output. They initialize only the
+first direct TrajOpt seed; the other fitted seeds and configured planning stages are
+unchanged. The requested current state and goal still set the boundary conditions.
+There is no automatic time shifting of the supplied controls. A null pointer restores
+normal seed fitting. Waypoint planning uses `waypoints.motion.warm_start_knots`.
+
 Timeopt is enabled by default inside the planner's retry loop for both direct and
 RRT-seeded TrajOpt. Set `config.trajectory_optimization.enable_timeopt=false` to disable
 it. After a successful
@@ -720,21 +730,23 @@ planner.plan_pose_waypoints(waypoints);
 Waypoint planning defaults to four initial solve/check passes (up to 200 optimizer iterations),
 independent of `waypoints.motion.outer_iterations`. This budget applies only to the current
 call; later ordinary pose calls retain their two-pass default.
-The current state must be stationary. The planner prepends its FK pose,
+The current state must be finite; optional current velocity and acceleration set
+moving-start boundary conditions. The planner prepends its FK pose,
 linearly interpolates position and SLERPs orientation onto the native reference grid, and
 holds the boundary spans. The cubic spline retains its initialization-time control count
 (default 16), and all reference buffers use the exported native horizon.
 Every target is retained, so the count must also fit `spline_layout.reference_intervals`.
 The default 16 controls support up to 72 targets; configure/export 64 controls for 256 targets.
 Terminal IK uses the current configuration and Halton seeds, then TrajOpt starts
-from joint-space linear interpolation. Waypoint costs remain active inside the
-acceptance tolerances. Defaults are 5 cm / 15 degrees along the path and
+from joint-space linear interpolation unless warm-start controls are supplied.
+Waypoint costs remain active inside the acceptance tolerances. Defaults are
+5 cm / 15 degrees along the path and
 5 mm / 0.05 radians at the endpoint; each request can override them. Angular
 API values use radians. Dense checks use the actual spline progress after
 retiming and ignore unused output capacity. RRT fallback is disabled for these
 requests. Normal pose planning and either waypoint orientation mode reuse the
 same TrajOpt graph stages; ordinary initialization suffices before replay.
-Re-export artifacts for IK schema 20 and TrajOpt schema 23.
+Re-export artifacts for IK schema 20 and TrajOpt schema 25.
 
 These schemas require L-BFGS to emit the next line-search candidates along with its limited
 direction. The runtime prepares the first candidates before each optimization pass, then consumes
@@ -797,7 +809,7 @@ Selected, approach, and lift poses are prepared on the GPU. Contact-link toggles
 update device sphere radii without uploading the full sphere array. Host success
 reads remain at phase boundaries. TrajOpt validates and retains state/joint values
 in parallel, then reduces the per-seed ranks and copies the winner in parallel
-(TrajOpt artifact schema 23).
+(TrajOpt artifact schema 25).
 
 ## Joint-space and Cartesian MPC
 
@@ -889,10 +901,13 @@ at handoff, and discard late or invalid results. `validate_trajectory()` checks
 fixed-size CUDA q/v/a/jerk samples with a separate captured graph. It uses swept
 world collision, self collision, joint limits, and a sphere-displacement sampling
 guard. Native candidate validation additionally samples at at most 4 ms; the
-fixed artifact validation buffer must cover the entire horizon. New native
-exports reserve 2,000 samples per lane. Regenerate older artifacts to use this
-capacity: it is compiled into the validation kernels, not only the manifest.
-Timing grids beyond artifact dt limits or buffer capacity are rejected, never
+MPC-owned validation buffer covers the entire horizon. At construction, MPC sizes
+this buffer from the knot count and slowest fixed timing candidate. Ordinary
+motion planning retains its independently exported interpolation capacity.
+Schema 25 validation kernels accept either runtime capacity; re-export older
+artifacts once. Timing updates reuse the captured graph when they fit this fixed
+MPC capacity; construct a new MPC controller to support a longer horizon.
+Timing grids beyond artifact dt limits or the MPC buffer capacity are rejected, never
 truncated or checked at a coarser resolution to make them fit.
 
 On rejection, validate a deceleration spline, stop/hold, and keep solving. Do not
@@ -1121,6 +1136,14 @@ cpp_runtime/build/robot/curobo_robot_seed_fitter_test \
   cpp_runtime/robot/artifacts/franka
 ```
 
-TrajOpt schema 23 uses gradient assembly inside B-spline backward exclusively. The Warp
-cost reducer accepts only cost buffers and can overlap the backward passes. Re-export
-older artifacts to update the cost-reduction kernel ABI.
+TrajOpt schema 25 uses gradient assembly inside B-spline backward exclusively. The CUDA
+cost reducer specializes term counts, lengths, and trial strides at export and can overlap
+the backward passes. Its kernel accepts only buffer pointers and the trial count. Python
+continues to use its fused PyTorch/Triton reduction. Re-export older artifacts for the
+updated native cost-reduction ABI.
+
+Each reduction specialization records its ordered `cost_terms` in the manifest. To add
+a native cost, register its produced buffer in the runtime binding table and its fixed
+length/stride in the export layout. Export compiles the resulting term count and the
+runtime builds its argument list from that same order; unregistered buffers are rejected
+at construction. Python-only cost implementations require a native producer before export.

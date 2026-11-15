@@ -41,6 +41,18 @@ exporter when image size, camera count, block size, grid shape, color-grid size,
 feature-grid size, texture camera shape, support capacity, ESDF shape, or GPU
 architecture changes.
 
+Mapper artifacts use schema version 2 for source-aware ESDF seeding. Re-export
+older artifacts before using this runtime; the ESDF kernel argument layout has
+changed. Saved static TSDF seeds retain their existing format. Static seed
+ownership is regenerated in a packed buffer using one bit per ESDF voxel.
+
+Stamped geometry supplies surface sites and permits static sign recovery.
+Sensor data supplies surface and negative-truncation sites, with query-local
+signs and the existing unsigned fallback for unobserved queries. Static sign
+recovery is restricted to TSDF coverage; queries outside that volume also retain
+unsigned distance. Mixed maps assume sensor sites, including negative-truncation
+sites, lie outside stamped solid interiors. Coincident sites use the static policy.
+
 ## Build Runtime
 
 ```bash

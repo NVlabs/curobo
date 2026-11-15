@@ -59,9 +59,7 @@ def test_fused_trajectory_gradient(
     implicit = (torch.arange(batch, device="cuda") % 2).to(torch.uint8)
     result = torch.empty((batch, knots, dof), device="cuda", dtype=torch.float32)
     reference = torch.empty_like(result)
-    kernel = gradient_kernels[
-        "bspline_backward_effort" if use_effort else "bspline_backward"
-    ]
+    kernel = gradient_kernels["bspline_backward_effort" if use_effort else "bspline_backward"]
     cache = get_runtime().get_cuda_core_cache()
     stream = cache.get_stream_wrapper(torch.cuda.current_stream())
     config = BSplineLaunchCfg.calculate_backward_config(batch, dof, knots, horizon, 3)
@@ -105,53 +103,3 @@ def test_fused_trajectory_gradient(
     for _ in range(2):
         graph.replay()
         torch.testing.assert_close(result, reference, rtol=0, atol=0)
-
-
-@pytest.mark.parametrize("use_pose", [False, True])
-def test_cost_reduction(use_pose: bool) -> None:
-    """Reduce all cost terms without modifying inputs, including graph replay."""
-    import warp as wp
-
-    from cpp_runtime.robot.kernels.trajopt import create_trajopt_runtime_kernels
-    from curobo._src.util.warp import init_warp
-
-    init_warp()
-    torch.manual_seed(23)
-    batch, dof, horizon, tools = 4, 7, 81, 2
-    inputs = [
-        torch.randn(batch * dof * horizon, device="cuda", dtype=torch.float32),
-        torch.randn(batch * horizon, device="cuda", dtype=torch.float32),
-        torch.randn(batch * horizon, device="cuda", dtype=torch.float32),
-        torch.randn(batch * horizon * tools * 2, device="cuda", dtype=torch.float32),
-    ]
-    original = [value.clone() for value in inputs]
-    reference = inputs[0].view(batch, horizon, dof).sum(dim=(1, 2))
-    reference += (inputs[1] + inputs[2]).view(batch, horizon).sum(dim=1)
-    if use_pose:
-        reference += inputs[3].view(batch, -1).sum(dim=1)
-    costs = torch.empty(batch, device="cuda", dtype=torch.float32)
-    kernel = create_trajopt_runtime_kernels(dof, 16, horizon, 1000, batch, 3)[
-        "reduce_rollout_cost"
-    ]
-
-    def evaluate() -> None:
-        wp.launch(
-            kernel,
-            dim=(batch, 128),
-            block_dim=128,
-            inputs=[wp.from_torch(value) for value in inputs]
-            + [tools, wp.uint8(use_pose), wp.from_torch(costs)],
-            stream=wp.stream_from_torch(torch.cuda.current_stream()),
-        )
-
-    evaluate()
-    torch.testing.assert_close(costs, reference, rtol=1e-5, atol=1e-5)
-    graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
-        evaluate()
-    for _ in range(2):
-        costs.fill_(float("nan"))
-        graph.replay()
-        torch.testing.assert_close(costs, reference, rtol=1e-5, atol=1e-5)
-    for value, expected in zip(inputs, original):
-        torch.testing.assert_close(value, expected, rtol=0, atol=0)

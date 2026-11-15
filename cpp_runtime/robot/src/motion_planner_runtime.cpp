@@ -178,6 +178,9 @@ MotionPlannerRuntime::MotionPlannerRuntime(
       config_.trajectory_optimization.device_ordinal;
   seed_fitter_config.num_seeds = config_.trajectory_optimization.num_seeds;
   seed_fitter_config.use_cuda_graph = config_.use_cuda_graph;
+  // Keep physical moving-boundary derivatives in the optimizer's configured
+  // reference time, rather than the artifact's normalized fitting interval.
+  seed_fitter_config.reference_dt = config_.trajectory_optimization.trajectory_dt;
   seed_fitter_ = std::make_unique<TrajectorySeedFitter>(
       artifact_directory_, seed_fitter_config);
   auto inverse_kinematics_config = config_.inverse_kinematics;
@@ -734,6 +737,7 @@ void MotionPlannerRuntime::allocate_workspace() {
   staged_start_velocity_.allocate(dof * sizeof(float));
   staged_start_acceleration_.allocate(dof * sizeof(float));
   staged_goal_position_.allocate(dof * sizeof(float));
+  staged_warm_start_knots_.allocate(knots * dof * sizeof(float));
   staged_seed_start_positions_.allocate(seeds * dof * sizeof(float));
   staged_seed_goal_positions_.allocate(seeds * dof * sizeof(float));
   staged_seed_valid_.allocate(seeds * sizeof(uint8_t));
@@ -916,6 +920,12 @@ void MotionPlannerRuntime::fit_seed_knots(
       reinterpret_cast<float*>(fitted_seed_required_dt_.ptr());
   fitter_request.stream = reinterpret_cast<cudaStream_t>(stream);
   seed_fitter_->fit(fitter_request);
+  if (use_linear_path && request.warm_start_knots != nullptr) {
+    // Retain fresh fitted guesses for the remaining seeds and every RRT path.
+    CRR_CUDA_CHECK(cudaMemcpyAsync(
+        reinterpret_cast<void *>(fitted_seed_knots_.ptr()), request.warm_start_knots,
+        manifest_.num_knots * dof * sizeof(float), cudaMemcpyDeviceToDevice, cuda_stream));
+  }
 }
 
 void MotionPlannerRuntime::set_rrt_outputs(
@@ -1145,6 +1155,12 @@ void MotionPlannerRuntime::plan(const MotionPlanningRequest& request) const {
       reinterpret_cast<const float*>(staged_start_acceleration_.ptr());
   stable_request.goal_position =
       reinterpret_cast<const float*>(staged_goal_position_.ptr());
+  if (request.warm_start_knots != nullptr) {
+    copy_to_staging(&staged_warm_start_knots_, request.warm_start_knots,
+                    static_cast<size_t>(manifest_.num_knots) * dof * sizeof(float));
+    stable_request.warm_start_knots =
+        reinterpret_cast<const float *>(staged_warm_start_knots_.ptr());
+  }
   if (request.seed_start_positions != nullptr) {
     copy_to_staging(&staged_seed_start_positions_,
                     request.seed_start_positions, seeds * dof * sizeof(float));
@@ -1432,8 +1448,8 @@ PoseMotionPlanningRequest MotionPlannerRuntime::prepare_pose_waypoints(
                                    info.num_dof * sizeof(float), cudaMemcpyDeviceToHost, stream));
   CRR_CUDA_CHECK(cudaStreamSynchronize(stream));
   for (size_t i = 0; i < state.size(); ++i) {
-    if (!std::isfinite(state[i]) || (i >= static_cast<size_t>(info.num_dof) && state[i] != 0.0F))
-      throw std::invalid_argument("waypoint planning requires a finite stationary current state");
+    if (!std::isfinite(state[i]))
+      throw std::invalid_argument("waypoint planning requires a finite current state");
   }
   for (const float value : values) {
     if (!std::isfinite(value)) throw std::invalid_argument("waypoint poses must be finite");
@@ -1534,6 +1550,12 @@ void MotionPlannerRuntime::plan_pose(const PoseMotionPlanningRequest &request,
       reinterpret_cast<const float*>(staged_start_velocity_.ptr());
   stable_request.current_acceleration =
       reinterpret_cast<const float*>(staged_start_acceleration_.ptr());
+  if (request.warm_start_knots != nullptr) {
+    copy_to_staging(&staged_warm_start_knots_, request.warm_start_knots,
+                    static_cast<size_t>(manifest_.num_knots) * dof * sizeof(float));
+    stable_request.warm_start_knots =
+        reinterpret_cast<const float *>(staged_warm_start_knots_.ptr());
+  }
   if (request.ik_seed_positions != nullptr) {
     const auto ik_seed_values =
         static_cast<size_t>(inverse_kinematics_->config().lm_num_seeds) * dof;
@@ -1766,6 +1788,7 @@ void MotionPlannerRuntime::plan_pose_impl(const PoseMotionPlanningRequest &reque
     motion_request.start_position = request.current_position;
     motion_request.start_velocity = request.current_velocity;
     motion_request.start_acceleration = request.current_acceleration;
+    motion_request.warm_start_knots = request.warm_start_knots;
     motion_request.goal_position = reinterpret_cast<const float*>(pose_joint_goal_.ptr());
     motion_request.seed_goal_positions =
         reinterpret_cast<const float*>(ik_solutions_.ptr());
