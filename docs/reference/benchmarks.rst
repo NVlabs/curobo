@@ -10,32 +10,32 @@ Run this script to reproduce the timings:
    python cpp_runtime/benchmarks/run_benchmarks.py \
      --output cpp_runtime/benchmarks/outputs/full_run
 
-Metrics measured on an NVIDIA GeForce RTX 5090 are shown below. The C++ runtime
-uses CUDA 13.0, a Release build targeting SM 120, and CUDA graphs. Timings are
-warmed, synchronized host wall time.
+Metrics use warmed C++ Release builds with CUDA graphs on an RTX 5090
+(CUDA 13.0, SM 120) and Jetson AGX Orin in MAXN mode (CUDA 13.2, SM 87).
+Timings are synchronized host wall time.
 
 Motion planning
 ---------------
 
-Franka: 2,590 MotionBenchMaker and MPINets problems per payload, after 10 exclusions.
+Franka without payload: 2,590 MotionBenchMaker and MPINets problems, after 10 exclusions.
 Planning time includes retries and TimeOpt; scene updates, I/O, and scoring are
 excluded. Planning means include failures; motion durations use successful plans.
 
 .. list-table:: Motion planning with inverse dynamics
    :header-rows: 1
 
-   * - Payload
+   * - GPU
      - Successful problems
      - Mean planning time (ms)
      - Mean motion duration (s)
-   * - 0 kg
+   * - RTX 5090
      - 2,583 / 2,590 (99.73%)
      - 3.797
      - 1.189
-   * - 3 kg
+   * - Jetson AGX Orin
      - 2,583 / 2,590 (99.73%)
-     - 3.974
-     - 1.253
+     - 25.662
+     - 1.188
 
 Without inverse dynamics
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -47,17 +47,17 @@ final validation.
 .. list-table:: Motion planning without inverse dynamics
    :header-rows: 1
 
-   * - Payload
+   * - GPU
      - Kinematic successes
      - Mean planning time (ms)
      - Mean motion duration (s)
-   * - 0 kg
+   * - RTX 5090
      - 2,583 / 2,590 (99.73%)
      - 3.348
      - 1.168
-   * - 3 kg
+   * - Jetson AGX Orin
      - 2,583 / 2,590 (99.73%)
-     - 3.355
+     - 20.800
      - 1.170
 
 Inverse kinematics
@@ -65,7 +65,7 @@ Inverse kinematics
 
 Mean time per 100-query batch, five batches per case; tolerances are 5 mm and 0.05 rad.
 
-.. list-table:: Inverse kinematics results
+.. list-table:: Inverse kinematics on RTX 5090
    :header-rows: 1
 
    * - Robot

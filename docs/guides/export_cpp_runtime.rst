@@ -126,9 +126,9 @@ The native motion invocation is:
 
 Use the dataset artifact/input and capacities from ``inputs.json``. ``PAYLOAD_3KG=0`` selects the
 unloaded case and ``1`` selects the 3 kg case. Both enable inverse dynamics and planning effort
-limits by default. Append ``--disable-inverse-dynamics`` to disable effort checks in IK, RRT,
-and TrajOpt while retaining the payload mass. Time optimization and its final dynamics
-validation remain enabled. Pass ``0`` for the unused argument; the executable runs every
+limits by default. Append ``--disable-inverse-dynamics`` to disable inverse dynamics and effort
+checks throughout planning, TimeOpt, and final validation. Collision and joint kinematic
+checks remain enabled. Pass ``0`` for the unused argument; the executable runs every
 problem in the prepared input. The native IK invocation is:
 
 .. code-block:: text
