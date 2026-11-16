@@ -14,6 +14,10 @@
 
 ### Bug Fixes & Misc.
 
+- Apply joint-limit scales once during robot loading and preserve scaled limits
+  when cloning the model.
+- Avoid planner cleanup during interpreter shutdown and safely release initialized
+  components after construction failures.
 - Fix ESDF seeding and sign recovery for mixed stamped and sensor TSDFs in Python and C++.
 - Accelerate L-BFGS in Python and C++, and fuse native IK/TrajOpt cost reductions.
 - Speed up swept collision checks with oriented bounding-box rejection.

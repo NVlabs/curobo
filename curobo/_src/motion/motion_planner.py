@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -703,6 +704,8 @@ class MotionPlanner:
     def destroy(self):
         """Release all CUDA graph resources.
 
+        Safe after partial initialization and repeated calls.
+
         Call before dropping the last reference to avoid ``cudaMallocAsync``
         warnings about captured allocations freed outside graph replay.
 
@@ -710,21 +713,27 @@ class MotionPlanner:
         in :meth:`GraphExecutor._initialize_cuda_graph` ensures stale
         ``cuGraphExecDestroy`` calls complete before any new capture begins.
         """
-        if self._destroyed:
+        if getattr(self, "_destroyed", True):
             return
         self._destroyed = True
         grasp_phase_planner = getattr(self, "_grasp_phase_planner", None)
         if grasp_phase_planner is not None:
             grasp_phase_planner.destroy()
-        self.ik_solver.destroy()
-        self.trajopt_solver.destroy()
-        if self.graph_planner is not None and hasattr(self.graph_planner, "reset_cuda_graph"):
-            self.graph_planner.reset_cuda_graph()
+        for solver in (getattr(self, "ik_solver", None), getattr(self, "trajopt_solver", None)):
+            if solver is not None:
+                solver.destroy()
+        graph_planner = getattr(self, "graph_planner", None)
+        if graph_planner is not None and hasattr(graph_planner, "reset_cuda_graph"):
+            graph_planner.reset_cuda_graph()
         graph_seed_fitter = getattr(self, "graph_seed_fitter", None)
         if graph_seed_fitter is not None:
             graph_seed_fitter.reset_cuda_graph()
 
     def __del__(self):
+        # During interpreter shutdown torch and the CUDA context are already
+        # being torn down, so releasing CUDA graphs here raises and is moot.
+        if sys.is_finalizing():
+            return
         self.destroy()
 
     def __enter__(self):

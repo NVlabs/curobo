@@ -299,6 +299,22 @@ class TestKinematicsParamsMethods:
         assert cloned.tool_frames == franka_kinematics_cfg.tool_frames
         assert torch.equal(cloned.link_spheres, franka_kinematics_cfg.link_spheres)
 
+    def test_clone_preserves_scaled_joint_limits(self) -> None:
+        """Repeated clones preserve already-scaled limits without scaling them again."""
+        robot_data = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))
+        cspace = robot_data["robot_cfg"]["kinematics"]["cspace"]
+        cspace.update(velocity_scale=0.5, acceleration_scale=0.4, jerk_scale=0.3)
+        params = KinematicsCfg.from_robot_yaml_file(robot_data).kinematics_config
+        expected = {
+            field: getattr(params.joint_limits, field).clone()
+            for field in ("position", "velocity", "acceleration", "jerk", "effort")
+        }
+
+        for _ in range(2):
+            params = params.clone()
+            for field, limits in expected.items():
+                torch.testing.assert_close(getattr(params.joint_limits, field), limits)
+
     def test_kinematics_device_cfg_make_contiguous(self, franka_kinematics_cfg):
         """Test make_contiguous method."""
         # Should make all tensors contiguous
