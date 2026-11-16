@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+import copy
+
 import pytest
 import torch
 
@@ -97,6 +99,45 @@ def test_cuda_robot_generator_config_cspace():
     robot_generator = KinematicsLoader(config)
 
     assert len(robot_generator.cspace.max_jerk) == 7
+
+
+@pytest.mark.parametrize(
+    "scales",
+    [
+        (0.5, 1.0, 1.0),
+        (1.0, 0.5, 1.0),
+        (1.0, 1.0, 0.5),
+        (0.5, 0.4, 0.3),
+        (
+            [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+            [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2],
+            [0.3, 0.5, 0.7, 0.9, 0.2, 0.4, 0.6],
+        ),
+    ],
+    ids=["velocity", "acceleration", "jerk", "combined", "per_joint"],
+)
+def test_cspace_limit_scales_apply_once(scales: tuple[float | list[float], ...]) -> None:
+    """Apply scalar and per-joint derivative scales once, independently."""
+    robot_file = "franka.yml"
+    robot_params = load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"][
+        "kinematics"
+    ]
+    base_limits = KinematicsLoader(
+        KinematicsLoaderCfg(**copy.deepcopy(robot_params))
+    ).kinematics_config.joint_limits
+
+    scaled_params = copy.deepcopy(robot_params)
+    for field, scale in zip(("velocity", "acceleration", "jerk"), scales):
+        scaled_params["cspace"][field + "_scale"] = scale
+    scaled_limits = KinematicsLoader(
+        KinematicsLoaderCfg(**scaled_params)
+    ).kinematics_config.joint_limits
+
+    for field, scale in zip(("velocity", "acceleration", "jerk"), scales):
+        base = getattr(base_limits, field)
+        torch.testing.assert_close(getattr(scaled_limits, field), base * base.new_tensor(scale))
+    torch.testing.assert_close(scaled_limits.position, base_limits.position)
+    torch.testing.assert_close(scaled_limits.effort, base_limits.effort)
 
 
 def test_cspace_only_configured_lock_joint_uses_configured_value():
