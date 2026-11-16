@@ -4,6 +4,7 @@
 
 # Standard Library
 import gc
+from contextlib import nullcontext
 from typing import Callable, Optional, Tuple, Union
 
 # Third Party
@@ -102,15 +103,19 @@ class GraphExecutor:
 
         # Copy values into the fixed inputs only when the caller supplied different storage.
         # With borrowed inputs this intentionally updates the original borrowed buffers.
-        for i, inp in enumerate(inputs):
-            if hasattr(self._graph_input[i], "copy_"):
-                if hasattr(self._graph_input[i], "data_ptr") and callable(
-                    self._graph_input[i].data_ptr
-                ):
-                    if self._graph_input[i].data_ptr() != inp.data_ptr():
+        # Graph input copies stage data, not differentiable work. Tracking them would retain
+        # every request through a growing CopyBackwards chain. Keep normal autograd behavior
+        # for direct execution.
+        with torch.no_grad() if self._use_cuda_graph else nullcontext():
+            for i, inp in enumerate(inputs):
+                if hasattr(self._graph_input[i], "copy_"):
+                    if hasattr(self._graph_input[i], "data_ptr") and callable(
+                        self._graph_input[i].data_ptr
+                    ):
+                        if self._graph_input[i].data_ptr() != inp.data_ptr():
+                            self._graph_input[i].copy_(inp)
+                    else:
                         self._graph_input[i].copy_(inp)
-                else:
-                    self._graph_input[i].copy_(inp)
 
         return self.replay(clone_outputs=clone_outputs)
 
