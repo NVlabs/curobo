@@ -101,8 +101,23 @@ def test_cuda_robot_generator_config_cspace():
     assert len(robot_generator.cspace.max_jerk) == 7
 
 
-def test_cspace_limit_scales_apply_once():
-    """Velocity, acceleration, and jerk scales multiply joint limits once."""
+@pytest.mark.parametrize(
+    "scales",
+    [
+        (0.5, 1.0, 1.0),
+        (1.0, 0.5, 1.0),
+        (1.0, 1.0, 0.5),
+        (0.5, 0.4, 0.3),
+        (
+            [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+            [0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2],
+            [0.3, 0.5, 0.7, 0.9, 0.2, 0.4, 0.6],
+        ),
+    ],
+    ids=["velocity", "acceleration", "jerk", "combined", "per_joint"],
+)
+def test_cspace_limit_scales_apply_once(scales: tuple[float | list[float], ...]) -> None:
+    """Apply scalar and per-joint derivative scales once, independently."""
     robot_file = "franka.yml"
     robot_params = load_yaml(join_path(get_robot_configs_path(), robot_file))["robot_cfg"][
         "kinematics"
@@ -112,17 +127,17 @@ def test_cspace_limit_scales_apply_once():
     ).kinematics_config.joint_limits
 
     scaled_params = copy.deepcopy(robot_params)
-    scaled_params["cspace"]["velocity_scale"] = 0.5
-    scaled_params["cspace"]["acceleration_scale"] = 0.5
-    scaled_params["cspace"]["jerk_scale"] = 0.5
+    for field, scale in zip(("velocity", "acceleration", "jerk"), scales):
+        scaled_params["cspace"][field + "_scale"] = scale
     scaled_limits = KinematicsLoader(
         KinematicsLoaderCfg(**scaled_params)
     ).kinematics_config.joint_limits
 
-    assert torch.allclose(scaled_limits.velocity, base_limits.velocity * 0.5)
-    assert torch.allclose(scaled_limits.acceleration, base_limits.acceleration * 0.5)
-    assert torch.allclose(scaled_limits.jerk, base_limits.jerk * 0.5)
-    assert torch.allclose(scaled_limits.position, base_limits.position)
+    for field, scale in zip(("velocity", "acceleration", "jerk"), scales):
+        base = getattr(base_limits, field)
+        torch.testing.assert_close(getattr(scaled_limits, field), base * base.new_tensor(scale))
+    torch.testing.assert_close(scaled_limits.position, base_limits.position)
+    torch.testing.assert_close(scaled_limits.effort, base_limits.effort)
 
 
 def test_cspace_only_configured_lock_joint_uses_configured_value():
