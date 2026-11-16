@@ -147,6 +147,8 @@ class BatchMotionPlanner:
     def destroy(self):
         """Release all CUDA graph resources.
 
+        Safe after partial initialization and repeated calls.
+
         Call before dropping the last reference to avoid ``cudaMallocAsync``
         warnings about captured allocations freed outside graph replay.
         """
@@ -156,10 +158,12 @@ class BatchMotionPlanner:
         grasp_phase_planner = getattr(self, "_grasp_phase_planner", None)
         if grasp_phase_planner is not None:
             grasp_phase_planner.destroy()
-        self.ik_solver.destroy()
-        self.trajopt_solver.destroy()
-        if self.graph_planner is not None and hasattr(self.graph_planner, "reset_cuda_graph"):
-            self.graph_planner.reset_cuda_graph()
+        for solver in (getattr(self, "ik_solver", None), getattr(self, "trajopt_solver", None)):
+            if solver is not None:
+                solver.destroy()
+        graph_planner = getattr(self, "graph_planner", None)
+        if graph_planner is not None and hasattr(graph_planner, "reset_cuda_graph"):
+            graph_planner.reset_cuda_graph()
         graph_seed_fitter = getattr(self, "graph_seed_fitter", None)
         if graph_seed_fitter is not None:
             graph_seed_fitter.reset_cuda_graph()
