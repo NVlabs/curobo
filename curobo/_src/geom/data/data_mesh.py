@@ -749,6 +749,27 @@ def compute_swept_sphere_clearance_lower_bound(
     return wp.float32(0.0)
 
 
+@wp.func_native("""
+    const wp::Mesh mesh = wp::mesh_get(mesh_id);
+    const int root = *mesh.bvh.root;
+    const wp::BVHPackedNodeHalf lower = wp::bvh_load_node(mesh.bvh.node_lowers, root);
+    const wp::BVHPackedNodeHalf upper = wp::bvh_load_node(mesh.bvh.node_uppers, root);
+    return local_pt[0] < lower.x || local_pt[0] > upper.x
+        || local_pt[1] < lower.y || local_pt[1] > upper.y
+        || local_pt[2] < lower.z || local_pt[2] > upper.z;
+""")
+def _mesh_point_outside_root(mesh_id: wp.uint64, local_pt: wp.vec3) -> wp.bool: ...
+
+@wp.func_native("""
+    float hit_sign = 0.0f;
+    return wp::mesh_query_ray_closest_sign(wp::mesh_get(mesh_id), local_pt, direction, hit_sign)
+        && hit_sign < 0.0f;
+""")
+def _mesh_ray_inside_vote(
+    mesh_id: wp.uint64, local_pt: wp.vec3, direction: wp.vec3
+) -> wp.bool: ...
+
+
 def compute_local_sdf_with_grad(
     obs_set: MeshDataWarp,
     env_idx: wp.int32,
@@ -786,7 +807,7 @@ def compute_local_sdf_with_grad(
     max_distance = wp.max(max_distance, query_distance)
 
     # Query mesh for closest point
-    result = wp.mesh_query_point(mesh_id, local_pt, max_distance)
+    result = wp.mesh_query_point_no_sign(mesh_id, local_pt, max_distance)
 
     if not result.result:
         return wp.vec4(max_distance, 0.0, 0.0, 0.0)
@@ -796,8 +817,19 @@ def compute_local_sdf_with_grad(
     delta = cl_pt - local_pt
     dis_length = wp.length(delta)
 
-    # Signed distance: negative inside, positive outside
-    signed_dist = dis_length * result.sign
+    # Outside the root bounds, the point is exterior without any sign rays.
+    inside = False
+    if not _mesh_point_outside_root(mesh_id, local_pt):
+        inside_x = _mesh_ray_inside_vote(mesh_id, local_pt, wp.vec3(1.0, 0.0, 0.0))
+        inside_y = _mesh_ray_inside_vote(mesh_id, local_pt, wp.vec3(0.0, 1.0, 0.0))
+        inside = inside_x
+        # Two agreeing votes decide the three-axis majority without the third ray.
+        if inside_x != inside_y:
+            inside = _mesh_ray_inside_vote(mesh_id, local_pt, wp.vec3(0.0, 0.0, 1.0))
+    sign = wp.float32(1.0)
+    if inside:
+        sign = wp.float32(-1.0)
+    signed_dist = dis_length * sign
 
     # Gradient in local frame pointing toward obstacle
     grad_local = wp.vec3(0.0, 0.0, 0.0)
