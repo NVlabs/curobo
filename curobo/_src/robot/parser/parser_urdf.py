@@ -297,7 +297,9 @@ class UrdfRobotParser(RobotParser):
                 else:
                     log_and_raise("Joint type not supported")
                 if joint_axis[0] == -1 or joint_axis[1] == -1 or joint_axis[2] == -1:
-                    joint_offset[0] = -1.0 * joint_offset[0]
+                    # Moving by (scale * q + offset) along a negative axis is the same as
+                    # moving by -(scale * q + offset) along the positive axis, so flip both.
+                    joint_offset = [-1.0 * joint_offset[0], -1.0 * joint_offset[1]]
                     joint_axis = [abs(x) for x in joint_axis]
                 body_params["joint_type"] = joint_type
                 body_params["joint_offset"] = joint_offset
