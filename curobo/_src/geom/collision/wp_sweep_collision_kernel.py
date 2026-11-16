@@ -15,6 +15,7 @@ from typing import Any
 # Third Party
 import warp as wp
 
+from curobo._src.geom.data.data_mesh import MeshDataWarp
 from curobo._src.geom.data.data_obstacle_query import (
     compute_local_sdf_with_grad,
     compute_swept_sphere_clearance_lower_bound,
@@ -24,6 +25,7 @@ from curobo._src.geom.data.data_obstacle_query import (
 from curobo._src.util.warp import warp_constant_suffix, warp_kernel
 
 SWEEP_STEPS = wp.constant(3)
+_SDF_EPS = 1e-6
 
 _SUPPORTED_STATE_BLOCK_DIMS = (32, 64, 128, 256, 512, 1024)
 
@@ -31,6 +33,89 @@ _SUPPORTED_STATE_BLOCK_DIMS = (32, 64, 128, 256, 512, 1024)
 # =============================================================================
 # Generic Swept-Sphere Collision Functions
 # =============================================================================
+
+
+@wp.func_native("""
+    const wp::Mesh mesh = wp::mesh_get(mesh_id);
+    const int root = *mesh.bvh.root;
+    const wp::BVHPackedNodeHalf lower = wp::bvh_load_node(mesh.bvh.node_lowers, root);
+    const wp::BVHPackedNodeHalf upper = wp::bvh_load_node(mesh.bvh.node_uppers, root);
+    return local_pt[0] < lower.x || local_pt[0] > upper.x
+        || local_pt[1] < lower.y || local_pt[1] > upper.y
+        || local_pt[2] < lower.z || local_pt[2] > upper.z;
+""")
+def _sweep_point_outside_root(mesh_id: wp.uint64, local_pt: wp.vec3) -> wp.bool: ...
+
+
+@wp.func_native("""
+    float hit_sign = 0.0f;
+    return wp::mesh_query_ray_closest_sign(wp::mesh_get(mesh_id), local_pt, direction, hit_sign)
+        && hit_sign < 0.0f;
+""")
+def _sweep_ray_inside_vote(
+    mesh_id: wp.uint64, local_pt: wp.vec3, direction: wp.vec3
+) -> wp.bool: ...
+
+
+@wp.func
+def _sweep_mesh_sdf_deferred(
+    mesh_id: wp.uint64, max_distance: wp.float32, local_pt: wp.vec3
+) -> wp.vec4:
+    result = wp.mesh_query_point_no_sign(mesh_id, local_pt, max_distance)
+    if not result.result:
+        return wp.vec4(max_distance, 0.0, 0.0, 0.0)
+    inside = False
+    # A point outside the mesh root bounds is exterior; no sign rays are needed.
+    if not _sweep_point_outside_root(mesh_id, local_pt):
+        inside_x = _sweep_ray_inside_vote(mesh_id, local_pt, wp.vec3(1.0, 0.0, 0.0))
+        inside_y = _sweep_ray_inside_vote(mesh_id, local_pt, wp.vec3(0.0, 1.0, 0.0))
+        inside = inside_x
+        # Two agreeing votes decide the three-axis majority without a third ray.
+        if inside_x != inside_y:
+            inside = _sweep_ray_inside_vote(mesh_id, local_pt, wp.vec3(0.0, 0.0, 1.0))
+    sign = wp.float32(1.0)
+    if inside:
+        sign = wp.float32(-1.0)
+    cl_pt = wp.mesh_eval_position(mesh_id, result.face, result.u, result.v)
+    delta = cl_pt - local_pt
+    dis_length = wp.length(delta)
+    signed_dist = dis_length * sign
+    grad_local = -delta
+    return wp.vec4(signed_dist, grad_local[0], grad_local[1], grad_local[2])
+
+
+@wp.func
+def _query_swept_sdf(
+    obs_set: Any,
+    env_idx: wp.int32,
+    obs_local_idx: wp.int32,
+    local_pt: wp.vec3,
+    query_distance: wp.float32,
+) -> wp.vec4:
+    return compute_local_sdf_with_grad(obs_set, env_idx, obs_local_idx, local_pt, query_distance)
+
+
+@wp.func
+def _query_swept_sdf(
+    obs_set: MeshDataWarp,
+    env_idx: wp.int32,
+    obs_local_idx: wp.int32,
+    local_pt: wp.vec3,
+    query_distance: wp.float32,
+) -> wp.vec4:
+    flat_idx = env_idx * obs_set.max_n + obs_local_idx
+    mesh_id = obs_set.mesh_ids[flat_idx]
+    dimensions = wp.vec3(
+        obs_set.dims[flat_idx, 0], obs_set.dims[flat_idx, 1], obs_set.dims[flat_idx, 2]
+    )
+    max_distance = wp.max(wp.length(dimensions) * 0.5, query_distance)
+    result = _sweep_mesh_sdf_deferred(mesh_id, max_distance, local_pt)
+    gradient = wp.vec3(0.0, 0.0, 0.0)
+    distance = wp.abs(result[0])
+    # Preserve normalized gradients for active contributions; inactive ones are unused.
+    if -result[0] + query_distance > 0.0 and distance > _SDF_EPS:
+        gradient = wp.vec3(result[1], result[2], result[3]) / distance
+    return wp.vec4(result[0], gradient[0], gradient[1], gradient[2])
 
 
 @wp.func
@@ -99,7 +184,7 @@ def compute_sweep_segment_contribution(
             if jump >= half_dist:
                 break
             local_pt = local_current + jump * sweep_direction
-            sdf_result = compute_local_sdf_with_grad(
+            sdf_result = _query_swept_sdf(
                 obs_set, env_idx, obs_local_idx, local_pt, radius_adjusted
             )
             penetration = -sdf_result[0] + radius_adjusted
@@ -124,7 +209,7 @@ def compute_prepared_swept_collision_contribution(
     eta: wp.float32,
 ) -> wp.vec4:
     """Compute one swept contribution from prepared local-frame points."""
-    current_sdf_result = compute_local_sdf_with_grad(
+    current_sdf_result = _query_swept_sdf(
         obs_set, env_idx, obs_local_idx, local_current, radius_adjusted
     )
     current_penetration = -current_sdf_result[0] + radius_adjusted
