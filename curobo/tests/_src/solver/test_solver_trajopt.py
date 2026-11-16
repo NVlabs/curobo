@@ -10,13 +10,134 @@ import pytest
 import torch
 
 # CuRobo
+from curobo._src.robot.dynamics.dynamics import Dynamics
+from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
+from curobo._src.rollout.metrics import RolloutMetrics
+from curobo._src.solver.processor_trajopt_result import (
+    TorchTrajOptResultProcessor,
+    TrajOptResultUpdate,
+)
+from curobo._src.solver.solver_timeopt import TimeOptSolver
 from curobo._src.solver.solver_trajopt import TrajOptSolver
 from curobo._src.solver.solver_trajopt_cfg import TrajOptSolverCfg
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
+from curobo._src.trajectory.trajectory_pose_reference import interpolate_pose_waypoints
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
 from curobo._src.types.tool_pose import GoalToolPose
+from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
+
+
+@pytest.mark.parametrize("use_cuda_graph", [False, True])
+@pytest.mark.parametrize("mode", ["pose", "cspace", "waypoints"])
+@pytest.mark.parametrize("success_check", [-1, 1, 2, 3, 0])
+def test_initial_checkpoints_stop_after_dense_success(
+    monkeypatch: pytest.MonkeyPatch,
+    use_cuda_graph: bool,
+    mode: str,
+    success_check: int,
+) -> None:
+    """Continue for unresolved batch rows, respecting dense validation and the initial cap."""
+    config = TrajOptSolverCfg.create(
+        robot="franka.yml",
+        num_seeds=1,
+        max_batch_size=2,
+        use_cuda_graph=use_cuda_graph,
+    )
+    solver = TrajOptSolver(config)
+    try:
+        start = JointState.from_position(
+            solver.default_joint_state.position.view(1, -1).repeat(
+                1 if success_check == -1 else 2,
+                1,
+            ),
+            joint_names=solver.joint_names,
+        )
+        goal = start.clone()
+        goal.position[:, 0] += 0.02
+        poses = solver.compute_kinematics(goal).tool_poses
+        targets = GoalToolPose(
+            poses.tool_frames,
+            poses.position.unsqueeze(3),
+            poses.quaternion.unsqueeze(3),
+        )
+        dense_checks = []
+        original_dense = solver._interpolate_and_compute_metrics
+
+        def check_dense(trajectory: JointState) -> RolloutMetrics:
+            metrics = original_dense(trajectory)
+            dense_checks.append(1)
+            # Row zero is solved immediately. Row one deliberately needs more iterations.
+            if success_check <= 0 or len(dense_checks) < success_check:
+                metrics.feasible[1].fill_(False)
+            if len(dense_checks) > 1:
+                metrics.feasible[0].fill_(False)
+            return metrics
+
+        monkeypatch.setattr(solver, "_interpolate_and_compute_metrics", check_dense)
+        reinitializations = []
+        original_reinitialize = solver.optimizer.reinitialize
+
+        def reinitialize(actions: torch.Tensor, **kwargs: object) -> None:
+            reinitializations.append(1)
+            original_reinitialize(actions, **kwargs)
+
+        monkeypatch.setattr(solver.optimizer, "reinitialize", reinitialize)
+        original_optimize = solver.optimizer.optimize
+        original_continue = solver.optimizer.continue_optimization
+        optimization_dt = []
+
+        def optimize(actions: torch.Tensor) -> torch.Tensor:
+            optimization_dt.append(solver.core._goal_buffer.seed_goal_js.dt.clone())
+            return original_optimize(actions)
+
+        def continue_optimization(actions: torch.Tensor) -> torch.Tensor:
+            torch.testing.assert_close(
+                solver.core._goal_buffer.seed_goal_js.dt,
+                optimization_dt[0],
+                atol=0,
+                rtol=0,
+            )
+            return original_continue(actions)
+
+        monkeypatch.setattr(solver.optimizer, "optimize", optimize)
+        monkeypatch.setattr(solver.optimizer, "continue_optimization", continue_optimization)
+        if mode == "cspace":
+            result = solver.solve_cspace(goal, start, finetune_attempts=0)
+        else:
+            kwargs = {}
+            if mode == "waypoints":
+                targets = interpolate_pose_waypoints(
+                    targets,
+                    solver.compute_kinematics(start).tool_poses,
+                    horizon=solver.horizon,
+                    padding=4,
+                )
+                kwargs = {
+                    "track_intermediate": True,
+                    "path_tolerance": (0.02, 0.2),
+                    "final_tolerance": (0.005, 0.05),
+                }
+            result = solver.solve_pose(
+                targets,
+                start,
+                seed_config=goal.position.unsqueeze(1),
+                use_implicit_goal=True,
+                finetune_attempts=0,
+                **kwargs,
+            )
+        max_checks = config.initial_max_iters // config.initial_check_interval
+        expected_checks = (
+            1 if success_check == -1 else min(success_check or max_checks, max_checks)
+        )
+        assert len(dense_checks) == expected_checks
+        assert result.debug_info["initial_iterations"] == 50 * expected_checks
+        assert len(reinitializations) == 1
+        assert solver.optimizer.optimizers[-1].config.num_iters == 50
+        assert result.success[0].all()
+    finally:
+        solver.destroy()
 
 
 @pytest.fixture(scope="module")
@@ -25,6 +146,183 @@ def cuda_device_cfg():
     if torch.cuda.is_available():
         return DeviceCfg(device=torch.device("cuda:0"), dtype=torch.float32)
     pytest.skip("CUDA not available")
+
+
+@pytest.mark.parametrize("use_cuda_graph", [False, True])
+@pytest.mark.parametrize("mode", ["pose", "cspace", "waypoints"])
+def test_final_retiming_failure_restores_initial_solution(
+    monkeypatch: pytest.MonkeyPatch,
+    use_cuda_graph: bool,
+    mode: str,
+) -> None:
+    """A refinement rejected during final retiming falls back to the original geometry."""
+    solver = TrajOptSolver(
+        TrajOptSolverCfg.create(
+            robot="franka.yml",
+            num_seeds=1,
+            max_batch_size=2,
+            use_cuda_graph=use_cuda_graph,
+        )
+    )
+    try:
+        start = JointState.from_position(
+            solver.default_joint_state.position.view(1, -1).repeat(2, 1),
+            joint_names=solver.joint_names,
+        )
+        goal = start.clone()
+        goal.position[:, 0] += 0.02
+        initial = []
+        process = solver._process_optimization_result
+
+        def record_initial(*args: object, **kwargs: object) -> TrajOptResultUpdate:
+            update = process(*args, **kwargs)
+            if not initial:
+                initial.append(solver._result_processor.get_interpolation_input().clone())
+            return update
+
+        retimed = []
+        timeopt = TimeOptSolver.timeopt
+
+        def reject_refinement(
+            owner: TimeOptSolver,
+            native: JointState,
+            current: JointState,
+            seeds: int,
+        ) -> tuple[JointState, torch.Tensor, torch.Tensor, torch.Tensor]:
+            retimed.append(native.knot.clone())
+            dense, counts, success, duration = timeopt(owner, native, current, seeds)
+            if len(retimed) == 1:
+                success = success.clone()
+                success[-1] = False
+            return dense, counts, success, duration
+
+        monkeypatch.setattr(solver, "_process_optimization_result", record_initial)
+        monkeypatch.setattr(TimeOptSolver, "timeopt", reject_refinement)
+        if mode == "cspace":
+            result = solver.solve_cspace(goal, start, finetune_attempts=1)
+        else:
+            poses = solver.compute_kinematics(goal).tool_poses
+            targets = GoalToolPose(
+                poses.tool_frames,
+                poses.position.unsqueeze(3),
+                poses.quaternion.unsqueeze(3),
+            )
+            kwargs = {}
+            if mode == "waypoints":
+                targets = interpolate_pose_waypoints(
+                    targets,
+                    solver.compute_kinematics(start).tool_poses,
+                    horizon=solver.horizon,
+                    padding=4,
+                )
+                kwargs = {
+                    "track_intermediate": True,
+                    "path_tolerance": (0.02, 0.2),
+                    "final_tolerance": (0.005, 0.05),
+                }
+            result = solver.solve_pose(
+                targets,
+                start,
+                seed_config=goal.position.unsqueeze(1),
+                use_implicit_goal=True,
+                finetune_attempts=1,
+                **kwargs,
+            )
+        assert result.success.all()
+        assert len(retimed) == 2
+        torch.testing.assert_close(retimed[1], initial[0].knot, atol=0, rtol=0)
+        torch.testing.assert_close(result.solution[1, 0], initial[0].knot[1], atol=0, rtol=0)
+        torch.testing.assert_close(result.solution[0, 0], retimed[0][0], atol=0, rtol=0)
+        torch.testing.assert_close(result.js_solution.knot, result.solution, atol=0, rtol=0)
+        assert all(value.all() for value in result.debug_info["validation"].values())
+    finally:
+        solver.destroy()
+
+
+@pytest.mark.parametrize("use_cuda_graph", [False, True])
+def test_failed_finetune_keeps_initial_without_continuing(
+    monkeypatch: pytest.MonkeyPatch,
+    use_cuda_graph: bool,
+) -> None:
+    """Only the initial solve can continue; a failed 25-iteration refinement retains it."""
+    solver = TrajOptSolver(
+        TrajOptSolverCfg.create(
+            robot="franka.yml",
+            num_seeds=1,
+            use_cuda_graph=use_cuda_graph,
+        )
+    )
+    try:
+        start = JointState.from_position(
+            solver.default_joint_state.position.view(1, -1),
+            joint_names=solver.joint_names,
+        )
+        goal = start.clone()
+        goal.position[:, 0] += 0.02
+        initial_actions = []
+        original_dense = solver._interpolate_and_compute_metrics
+
+        def check_dense(trajectory: JointState) -> RolloutMetrics:
+            metrics = original_dense(trajectory)
+            if not initial_actions:
+                initial_actions.append(trajectory.knot.clone())
+            else:
+                metrics.feasible.fill_(False)
+            return metrics
+
+        iterations = []
+        original_optimize = solver.optimizer.optimize
+
+        def optimize(actions: torch.Tensor) -> torch.Tensor:
+            iterations.append(solver.optimizer.optimizers[-1].config.num_iters)
+            return original_optimize(actions)
+
+        monkeypatch.setattr(solver, "_interpolate_and_compute_metrics", check_dense)
+        monkeypatch.setattr(solver.optimizer, "optimize", optimize)
+        result = solver.solve_cspace(goal, start, finetune_attempts=3)
+        assert iterations == [50, 25]
+        assert result.debug_info["initial_iterations"] == 50
+        assert result.success.all()
+        torch.testing.assert_close(result.solution[0, 0], initial_actions[0][0])
+    finally:
+        solver.destroy()
+
+
+@pytest.mark.parametrize("cap,interval", [(None, 50), (100, 25)])
+def test_initial_iteration_override_caps_continuation(
+    monkeypatch: pytest.MonkeyPatch, cap: int | None, interval: int
+) -> None:
+    """An explicit initial budget overrides the default cap and permits a final partial block."""
+    solver = TrajOptSolver(
+        TrajOptSolverCfg.create(
+            robot="franka.yml",
+            num_seeds=1,
+            use_cuda_graph=True,
+            initial_max_iters=cap,
+            initial_check_interval=interval,
+        )
+    )
+    try:
+        start = JointState.from_position(
+            solver.default_joint_state.position.view(1, -1),
+            joint_names=solver.joint_names,
+        )
+        goal = start.clone()
+        goal.position[:, 0] += 0.02
+        original_dense = solver._interpolate_and_compute_metrics
+
+        def reject_dense(trajectory: JointState) -> RolloutMetrics:
+            metrics = original_dense(trajectory)
+            metrics.feasible.fill_(False)
+            return metrics
+
+        monkeypatch.setattr(solver, "_interpolate_and_compute_metrics", reject_dense)
+        for override, expected in ((None, 100), (75, 75), (25, 25)):
+            result = solver.solve_cspace(goal, start, initial_iters=override, finetune_attempts=0)
+            assert result.debug_info["initial_iterations"] == expected
+            assert solver.optimizer.optimizers[-1].config.num_iters == 50
+    finally:
+        solver.destroy()
 
 
 @pytest.fixture(scope="module")
@@ -92,6 +390,82 @@ def sample_start_state_goalset(trajopt_solver_goalset):
     )
 
 
+@pytest.mark.parametrize("budget,interval", [(201, 50), (200, 51), (1, 50), (200, 1)])
+def test_initial_budget_rejects_partial_cuda_graph_blocks(
+    trajopt_solver: TrajOptSolver,
+    sample_start_state: JointState,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int,
+    interval: int,
+) -> None:
+    """An iteration cap cannot silently expand to the next captured optimizer block."""
+    monkeypatch.setattr(trajopt_solver.config, "initial_check_interval", interval)
+    with pytest.raises(ValueError, match="positive multiple of inner_iters"):
+        trajopt_solver.solve_cspace(
+            sample_start_state.clone(),
+            sample_start_state,
+            initial_iters=budget,
+        )
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_payload_updates_refresh_metrics_dynamics(
+    cuda_device_cfg: DeviceCfg, batched: bool
+) -> None:
+    """Keep every rollout's torques consistent after loading and unloading a payload."""
+    robot = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))["robot_cfg"]
+    robot["load_dynamics"] = True
+    solver = TrajOptSolver(
+        TrajOptSolverCfg.create(
+            robot=robot, device_cfg=cuda_device_cfg, num_seeds=1, use_cuda_graph=False
+        )
+    )
+    rollouts = solver.core.get_all_rollout_instances() + list(
+        solver.core.additional_metrics_rollouts.values()
+    )
+    assert "interpolated_rollout" in solver.core.additional_metrics_rollouts
+    models = [
+        model
+        for rollout in rollouts
+        for model in (rollout.transition_model, rollout.metrics_transition_model)
+    ]
+    position = solver.default_joint_state.position.reshape(1, 1, -1).clone()
+    state = JointState(
+        position=position,
+        velocity=torch.full_like(position, 0.1),
+        acceleration=torch.full_like(position, 0.2),
+    )
+    for model in models:
+        assert model.compute_inverse_dynamics
+        model.robot_dynamics.setup_batch_size(1, 1)
+    previous_torque = models[0].robot_dynamics.compute_inverse_dynamics(state).clone()
+    com = torch.tensor([0.01, 0.02, 0.1], **cuda_device_cfg.as_torch_dict())
+    for mass in (1.0, 0.1):
+        inertia = torch.tensor(
+            [0.001, 0.002, 0.003, 0.0, 0.0, 0.0], **cuda_device_cfg.as_torch_dict()
+        ) * mass
+        if batched:
+            solver.update_links_inertial(
+                {"attached_object": {"mass": mass, "com": com, "inertia": inertia}}
+            )
+        else:
+            solver.update_link_inertial("attached_object", mass, com, inertia)
+        reference = Dynamics(
+            DynamicsCfg(
+                kinematics_config=solver.kinematics.config.kinematics_config,
+                device_cfg=cuda_device_cfg,
+            )
+        )
+        reference.setup_batch_size(1, 1)
+        expected_torque = reference.compute_inverse_dynamics(state).clone()
+        assert not torch.allclose(expected_torque, previous_torque)
+        for model in models:
+            torch.testing.assert_close(
+                model.robot_dynamics.compute_inverse_dynamics(state), expected_torque
+            )
+        previous_torque = expected_torque
+
+
 class TestTrajOptSolverCfgCreation:
     """Test TrajOptSolverCfg creation."""
 
@@ -137,6 +511,7 @@ class TestTrajOptSolverInitialization:
         assert hasattr(solver, 'seed_manager')
         assert hasattr(solver, 'goal_registry_manager')
         assert hasattr(solver, '_trajectory_seed_generator')
+        assert isinstance(solver.result_processor, TorchTrajOptResultProcessor)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_init_creates_interpolated_rollout(self, franka_trajopt_config):
@@ -252,6 +627,64 @@ class TestTrajOptSolverSolvePose:
         if result.solution is not None:
             assert result.solution.ndim == 4
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_trajectory_dt_update_is_visible_to_all_rollouts(
+        self, trajopt_solver, sample_start_state, sample_goal_pose
+    ):
+        """A central dt write is visible through every rollout's cached goal aliases."""
+        tool_frames = trajopt_solver.kinematics.tool_frames
+        goal_tool_poses = GoalToolPose.from_poses(
+            {tool_frames[0]: sample_goal_pose.unsqueeze(1)},
+            ordered_tool_frames=tool_frames,
+        )
+        trajopt_solver.solve_pose(
+            current_state=sample_start_state,
+            goal_tool_poses=goal_tool_poses,
+        )
+        goal_buffer = trajopt_solver.core._goal_buffer
+        central_dt = goal_buffer.seed_goal_js.dt
+        updated_dt = torch.full_like(central_dt, 0.04)
+
+        trajopt_solver._update_trajectory_dt(updated_dt)
+
+        for rollout in trajopt_solver.get_all_rollout_instances(
+            include_optimizer_rollouts=True, include_auxiliary_rollout=False
+        ):
+            assert rollout._metrics_goal.seed_goal_js.dt is central_dt
+            assert rollout._num_particles_goal.seed_goal_js.dt is central_dt
+            torch.testing.assert_close(rollout._num_particles_goal.seed_goal_js.dt, updated_dt)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_seed_config_reuses_initial_goal_buffer(
+        self, trajopt_solver, sample_start_state, sample_goal_pose, monkeypatch
+    ):
+        """Initial retiming and optimization share one full goal-buffer preparation."""
+        tool_frames = trajopt_solver.kinematics.tool_frames
+        goal_tool_poses = GoalToolPose.from_poses(
+            {tool_frames[0]: sample_goal_pose.unsqueeze(1)},
+            ordered_tool_frames=tool_frames,
+        )
+        seed_config = sample_start_state.position.view(1, 1, -1).repeat(
+            1, trajopt_solver.config.num_seeds, 1
+        )
+        prepare_calls = 0
+        original_prepare = trajopt_solver._prepare_goal_buffer
+
+        def count_prepare(*args, **kwargs):
+            nonlocal prepare_calls
+            prepare_calls += 1
+            return original_prepare(*args, **kwargs)
+
+        monkeypatch.setattr(trajopt_solver, "_prepare_goal_buffer", count_prepare)
+
+        trajopt_solver.solve_pose(
+            current_state=sample_start_state,
+            goal_tool_poses=goal_tool_poses,
+            seed_config=seed_config,
+        )
+
+        assert prepare_calls == 1
+
 
 class TestTrajOptSolverProperties2:
     """Test additional TrajOptSolver properties."""
@@ -326,6 +759,9 @@ class TestTrajOptSolverResultFromSolve:
         )
 
         assert hasattr(result, 'interpolated_trajectory')
+        full_joint_names = trajopt_solver.kinematics.all_articulated_joint_names
+        assert result.interpolated_trajectory.joint_names == full_joint_names
+        assert result.interpolated_trajectory.shape[-1] == len(full_joint_names)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_result_has_js_solution(
@@ -415,6 +851,81 @@ class TestTrajOptSolverPrepareTrajectorySeeds:
         """Test prepare_trajectory_seeds method exists."""
         assert hasattr(trajopt_solver, 'prepare_trajectory_seeds')
         assert callable(trajopt_solver.prepare_trajectory_seeds)
+
+
+class TestTrajOptSolverEvaluateSeed:
+    """Test retiming and dense validation without optimization."""
+
+    @staticmethod
+    def _make_cspace_seed(trajopt_solver, sample_start_state):
+        goal_state = sample_start_state.clone()
+        goal_state.position[..., 0] += 0.1
+        num_seeds = trajopt_solver.config.num_seeds
+        seed_config = goal_state.position.view(1, 1, -1).repeat(1, num_seeds, 1)
+        seed_traj = trajopt_solver.prepare_trajectory_seeds(
+            1,
+            num_seeds,
+            sample_start_state,
+            seed_config=seed_config,
+        ).view(1, num_seeds, trajopt_solver.action_horizon, trajopt_solver.action_dim)
+        return goal_state, seed_traj
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_seed_valid_mask_rejects_non_graph_lanes(
+        self,
+        trajopt_solver,
+        sample_start_state,
+    ):
+        """Do not count straight-line fallbacks as graph-planner successes."""
+        goal_state, seed_traj = self._make_cspace_seed(trajopt_solver, sample_start_state)
+        seed_valid_mask = torch.zeros(
+            (1, trajopt_solver.config.num_seeds),
+            dtype=torch.bool,
+            device=seed_traj.device,
+        )
+
+        result = trajopt_solver.evaluate_cspace_seed(
+            goal_state,
+            sample_start_state,
+            seed_traj,
+            seed_valid_mask=seed_valid_mask,
+        )
+
+        assert not result.success.any()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_required_dt_above_maximum_rejects_seed(
+        self,
+        trajopt_solver,
+        sample_start_state,
+        monkeypatch,
+    ):
+        """Without fixed-path timeopt, reject seeds exceeding the native dt limit."""
+        monkeypatch.setattr(trajopt_solver.config, "enable_timeopt", False)
+        goal_state, seed_traj = self._make_cspace_seed(trajopt_solver, sample_start_state)
+
+        def above_maximum_dt(trajectory, epsilon=1e-3, scale_dt=True):
+            del epsilon, scale_dt
+            return torch.full(
+                (trajectory.shape[0],),
+                trajopt_solver.config.maximum_trajectory_dt + 0.1,
+                device=trajectory.position.device,
+                dtype=trajectory.position.dtype,
+            )
+
+        monkeypatch.setattr(
+            trajopt_solver,
+            "_compute_unclamped_trajectory_dt",
+            above_maximum_dt,
+        )
+
+        result = trajopt_solver.evaluate_cspace_seed(
+            goal_state,
+            sample_start_state,
+            seed_traj,
+        )
+
+        assert not result.success.any()
 
 
 class TestTrajOptSolverResetMethods:

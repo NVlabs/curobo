@@ -57,8 +57,8 @@ class JointLimits:
             log_and_raise("lower acceleration limits must be less than upper acceleration limits")
         if (self.jerk[0, :] >= self.jerk[1, :]).any():
             log_and_raise("lower jerk limits must be less than upper jerk limits")
-        if self.effort is not None and (self.effort[0, :] >= self.effort[1, :]).any():
-            log_and_raise("lower effort limits must be less than upper effort limits")
+        if self.effort is not None and (self.effort[0, :] > self.effort[1, :]).any():
+            log_and_raise("lower effort limits must not exceed upper effort limits")
 
     @staticmethod
     def from_data_dict(

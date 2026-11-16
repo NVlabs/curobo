@@ -16,8 +16,8 @@ Before starting, ensure you have:
 3. **NVIDIA Driver >= 580.65.06** (driver should support at least CUDA 12)
 4. **Python>=3.10** (> 3.13 is not validated)
 
-Installation
-------------------
+Install cuRobo
+--------------
 
 We recommend using `uv <https://docs.astral.sh/uv/getting-started/installation/>`_ for
 installation.

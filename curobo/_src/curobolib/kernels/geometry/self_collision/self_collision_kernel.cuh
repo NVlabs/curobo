@@ -14,49 +14,234 @@ namespace curobo{
   namespace geometry{
     namespace self_collision {
 
+    constexpr int SELF_COLLISION_MAX = 0;
+    constexpr int SELF_COLLISION_SUM = 1;
+    constexpr int SELF_COLLISION_PER_SPHERE_MAX = 2;
+    static_assert(
+      sizeof(CollisionPair) == sizeof(unsigned long long),
+      "Self-collision reduction storage assumes an eight-byte CollisionPair");
 
-
-    template<bool STORE_PAIR_DISTANCE>
-    __global__ void self_collision_max_distance_kernel(
-      float *out_distance,        // batch x 1
-      float *out_gradient,             // batch x nspheres x 4
-      float *pair_distance,       // batch x num_collision_pairs * 2
-      uint8_t *sparse_index, // batch x nspheres
-      const float *robot_spheres, // batch x horizon x nspheres x 4
-      const float *offsets,       // nspheres
-      const float *weight,
-      int16_t *pair_locations,
+    template<
+      int ReductionMode,
+      bool WriteGrad,
+      int StaticNumSpheres,
+      int StaticNumLinkPairs,
+      int StaticNumCollisionLinks,
+      int StaticBlockThreads>
+    __global__ void self_collision_link_aabb_distance_kernel(
+      float* out_distance,
+      float* out_gradient,
+      uint8_t* sparse_index,
+      const float* robot_spheres,
+      const float* sphere_padding,
+      const float* weight,
+      const int16_t* pair_locations,
+      const int16_t* link_sphere_indices,
+      const int32_t* link_sphere_offsets,
+      const int16_t* link_pairs,
+      const int32_t* link_pair_offsets,
       const int batch_size,
       const int horizon,
-      const int num_spheres,
-      const int num_collision_pairs,
-      const bool write_grad
-      )
+      const int runtime_num_spheres,
+      const int runtime_num_link_pairs,
+      const int runtime_num_collision_links)
     {
-      extern __shared__ float4 spheres_shared[];
+      static_assert(
+        ReductionMode >= SELF_COLLISION_MAX &&
+        ReductionMode <= SELF_COLLISION_PER_SPHERE_MAX,
+        "Unsupported AABB self-collision reduction mode");
+      constexpr bool has_static_shape =
+        StaticNumSpheres > 0 &&
+        StaticNumLinkPairs > 0 &&
+        StaticNumCollisionLinks > 0 &&
+        StaticBlockThreads > 0;
+      const int num_spheres =
+        has_static_shape ? StaticNumSpheres : runtime_num_spheres;
+      const int num_link_pairs =
+        has_static_shape ? StaticNumLinkPairs : runtime_num_link_pairs;
+      const int num_collision_links =
+        has_static_shape ? StaticNumCollisionLinks : runtime_num_collision_links;
+      const int num_threads_per_block =
+        has_static_shape ? StaticBlockThreads : blockDim.x;
 
-      __shared__ CollisionPair block_reduce_shared_data[32];
-      __shared__ CollisionPair reduced_max_d;
+      extern __shared__ float4 shared_data[];
+      __shared__ unsigned long long block_reduce_storage[32];
+      __shared__ unsigned long long reduced_storage;
+      float4* spheres_shared = shared_data;
+      float4* link_aabbs_shared = spheres_shared + num_spheres;
+      const uint32_t batch_horizon_idx = blockIdx.x;
+      const uint32_t batch_idx = batch_horizon_idx / horizon;
+      if (batch_idx >= batch_size)
+      {
+        return;
+      }
 
-      // Initialize shared memory if needed
+      load_spheres_and_zero_gradients(
+        spheres_shared,
+        out_gradient,
+        sparse_index,
+        robot_spheres,
+        sphere_padding,
+        batch_horizon_idx,
+        num_spheres,
+        num_threads_per_block);
+      if constexpr (ReductionMode != SELF_COLLISION_MAX)
+      {
+        float4* gradients_shared = link_aabbs_shared + 2 * num_collision_links;
+        zero_shared_gradients(
+          gradients_shared, num_spheres, num_threads_per_block);
+        if constexpr (ReductionMode == SELF_COLLISION_PER_SPHERE_MAX)
+        {
+          unsigned long long* per_sphere_max =
+            reinterpret_cast<unsigned long long*>(gradients_shared + num_spheres);
+          zero_shared_per_sphere_max(
+            per_sphere_max, num_spheres, num_threads_per_block);
+        }
+      }
+      __syncthreads();
+      compute_link_aabbs(
+        spheres_shared,
+        link_aabbs_shared,
+        link_sphere_indices,
+        link_sphere_offsets,
+        num_collision_links);
+      __syncthreads();
 
+      if constexpr (ReductionMode == SELF_COLLISION_MAX)
+      {
+        const CollisionPair max_d = compute_link_aabb_max_collision_distance(
+          spheres_shared,
+          link_aabbs_shared,
+          pair_locations,
+          link_pairs,
+          link_pair_offsets,
+          num_link_pairs,
+          num_threads_per_block,
+          reinterpret_cast<CollisionPair*>(block_reduce_storage),
+          reinterpret_cast<CollisionPair*>(&reduced_storage));
+        if (threadIdx.x == 0)
+        {
+          finalize_collision_results(
+            max_d,
+            spheres_shared,
+            out_distance,
+            out_gradient,
+            sparse_index,
+            batch_horizon_idx,
+            num_spheres,
+            weight[0],
+            WriteGrad);
+        }
+      }
+      else
+      {
+        float4* gradients_shared = link_aabbs_shared + 2 * num_collision_links;
+        float sum_distance = 0.0f;
+        if constexpr (ReductionMode == SELF_COLLISION_SUM)
+        {
+          sum_distance = compute_link_aabb_sum_collision_distance(
+            spheres_shared,
+            link_aabbs_shared,
+            gradients_shared,
+            pair_locations,
+            link_pairs,
+            link_pair_offsets,
+            num_link_pairs,
+            num_threads_per_block,
+            weight[0],
+            reinterpret_cast<float*>(block_reduce_storage),
+            reinterpret_cast<float*>(&reduced_storage));
+        }
+        else
+        {
+          unsigned long long* per_sphere_max =
+            reinterpret_cast<unsigned long long*>(gradients_shared + num_spheres);
+          compute_link_aabb_per_sphere_max_collision_distance(
+            spheres_shared,
+            link_aabbs_shared,
+            per_sphere_max,
+            pair_locations,
+            link_pairs,
+            link_pair_offsets,
+            num_link_pairs,
+            num_threads_per_block);
+          __syncthreads();
+          sum_distance = finalize_per_sphere_max_collision_distance(
+            spheres_shared,
+            gradients_shared,
+            per_sphere_max,
+            num_spheres,
+            num_threads_per_block,
+            weight[0],
+            reinterpret_cast<float*>(block_reduce_storage),
+            reinterpret_cast<float*>(&reduced_storage));
+        }
+        __syncthreads();
+        finalize_sum_collision_results(
+          sum_distance,
+          gradients_shared,
+          out_distance,
+          out_gradient,
+          sparse_index,
+          batch_horizon_idx,
+          num_spheres,
+          num_threads_per_block,
+          weight[0],
+          WriteGrad);
+      }
+    }
 
-      uint32_t batch_horizon_idx = blockIdx.x;
-      uint32_t batch_idx = batch_horizon_idx / horizon ;
+    template<
+      int ReductionMode,
+      bool StorePairDistance,
+      bool WriteGrad,
+      int StaticNumSpheres,
+      int StaticNumCollisionPairs,
+      int StaticBlockThreads>
+    __global__ void self_collision_exact_distance_kernel(
+      float* out_distance,
+      float* out_gradient,
+      float* pair_distance,
+      uint8_t* sparse_index,
+      const float* robot_spheres,
+      const float* offsets,
+      const float* weight,
+      const int16_t* pair_locations,
+      const int batch_size,
+      const int horizon,
+      const int runtime_num_spheres,
+      const int runtime_num_collision_pairs)
+    {
+      static_assert(
+        ReductionMode >= SELF_COLLISION_MAX &&
+        ReductionMode <= SELF_COLLISION_PER_SPHERE_MAX,
+        "Unsupported exact self-collision reduction mode");
+      static_assert(
+        ReductionMode == SELF_COLLISION_MAX || !StorePairDistance,
+        "Pair-distance storage is supported only for global-max self collision");
+
+      constexpr bool has_static_shape =
+        StaticNumSpheres > 0 &&
+        StaticNumCollisionPairs > 0 &&
+        StaticBlockThreads > 0;
+      const int num_spheres =
+        has_static_shape ? StaticNumSpheres : runtime_num_spheres;
+      const int num_collision_pairs =
+        has_static_shape ? StaticNumCollisionPairs : runtime_num_collision_pairs;
+      const int num_threads_per_block =
+        has_static_shape ? StaticBlockThreads : blockDim.x;
+
+      extern __shared__ float4 shared_data[];
+      __shared__ unsigned long long block_reduce_storage[32];
+      __shared__ unsigned long long reduced_storage;
+      float4* spheres_shared = shared_data;
+      const uint32_t batch_horizon_idx = blockIdx.x;
+      const uint32_t batch_idx = batch_horizon_idx / horizon;
       if (batch_idx >= batch_size || batch_horizon_idx >= batch_size * horizon)
       {
         return;
       }
 
-      const float local_weight = weight[0];
-
-
-      // uint32_t horizon_idx = batch_horizon_idx % horizon;
-      // get how many threads were launched:
-      const uint32_t num_threads_per_block = blockDim.x;
-
-
-      // Load spheres into shared memory and initialize gradients
       load_spheres_and_zero_gradients(
         spheres_shared,
         out_gradient,
@@ -67,234 +252,100 @@ namespace curobo{
         num_spheres,
         num_threads_per_block);
 
-
-      __syncthreads();
-
-      // Call the new device function to compute max distance
-      CollisionPair max_d = compute_max_collision_distance<STORE_PAIR_DISTANCE>(
-        spheres_shared,
-        pair_distance,
-        pair_locations,
-        batch_horizon_idx,
-        num_collision_pairs,
-        num_collision_pairs,
-        num_threads_per_block,
-        &block_reduce_shared_data[0],
-        &reduced_max_d,
-        0);
-
-      if (threadIdx.x > 0)
+      if constexpr (ReductionMode == SELF_COLLISION_MAX)
       {
-        return;
-      }
-
-
-      // Process final collision results
-      finalize_collision_results<true>(
-        max_d,
-        spheres_shared,
-        offsets,
-        out_distance,
-        out_gradient,
-        sparse_index,
-        batch_horizon_idx,
-        batch_idx,
-        num_spheres,
-        local_weight,
-        write_grad
-        );
-
-
-
-
-
-    } // end of kernel
-
- template<bool STORE_PAIR_DISTANCE>
-    __global__ void self_collision_max_block_kernel(
-      float *out_gradient,             // batch x nspheres x 4
-      float *pair_distance,       // batch x num_collision_pairs * 2
-      uint8_t *sparse_index, // batch x nspheres
-      const float *robot_spheres, // batch x horizon x nspheres x 4
-      const float *offsets,       // nspheres
-      int16_t *pair_locations, // This is to be mapped to n_spheres index in robot_spheres.
-      float *block_batch_max_value,
-      int16_t *block_batch_max_index,
-      const int num_blocks_per_batch,
-      const int batch_size,
-      const int horizon,
-      const int num_spheres,
-      const int num_collision_pairs
-      )
-    {
-      extern __shared__ float4 spheres_shared[];
-
-      __shared__ CollisionPair block_reduce_shared_data[32];
-      __shared__ CollisionPair reduced_max_d;
-
-      // Initialize shared memory if needed
-      if (threadIdx.x == 0) {
-          reduced_max_d = {0.0f, 0, 0};
-      }
-
-      uint32_t batch_horizon_idx = blockIdx.x / num_blocks_per_batch;
-      uint32_t local_block_idx = blockIdx.x % num_blocks_per_batch;
-      uint32_t batch_idx = batch_horizon_idx / horizon ;
-      if (batch_idx >= batch_size || batch_horizon_idx >= batch_size * horizon)
-      {
-        return;
-      }
-
-
-
-      // uint32_t horizon_idx = batch_horizon_idx % horizon;
-      // get how many threads were launched:
-      const uint32_t num_threads_per_block = blockDim.x;
-      const uint32_t num_collision_pairs_per_block = curobo::common::ceil_div(num_collision_pairs, num_blocks_per_batch);
-
-      load_spheres(
-        spheres_shared,
-        robot_spheres,
-        offsets,
-        batch_horizon_idx,
-        num_spheres,
-        num_threads_per_block);
-
-      __syncthreads();
-
-      const int start_index = local_block_idx * num_collision_pairs_per_block;
-      // Call the new device function to compute max distance
-      CollisionPair max_d = compute_max_collision_distance<STORE_PAIR_DISTANCE>(
-        spheres_shared,
-        pair_distance,
-        pair_locations,
-        batch_horizon_idx,
-        num_collision_pairs,
-        num_collision_pairs_per_block,
-        num_threads_per_block,
-        &block_reduce_shared_data[0],
-        &reduced_max_d,
-        start_index);
-
-      if (threadIdx.x > 0)
-      {
-        return;
-      }
-
-
-      // write out max collision pair:
-      block_batch_max_value[num_blocks_per_batch * batch_horizon_idx + local_block_idx] = max_d.d;
-      // write as short2:
-      int16_t __align__(8) sphere_pair_idx[2] = {max_d.i, max_d.j};
-      write_indices(sphere_pair_idx, block_batch_max_index, num_blocks_per_batch * batch_horizon_idx + local_block_idx);
-
-
-
-
-
-    } // end of kernel
-
-    __global__ void self_collision_max_reduce_kernel(
-      float *out_distance,        // batch x 1
-      float *out_gradient,             // batch x nspheres x 4
-      float *pair_distance,       // batch x num_collision_pairs * 2
-      uint8_t *sparse_index, // batch x nspheres
-      const float *robot_spheres, // batch x horizon x nspheres x 4
-      const float *offsets,       // nspheres
-      const float *weight,
-      int16_t *pair_locations,
-      float *block_batch_max_value,
-      int16_t *block_batch_max_index,
-      const int num_blocks_per_batch,
-      const int batch_size,
-      const int horizon,
-      const int num_spheres,
-      const int num_collision_pairs,
-      const bool write_grad
-      )
-      {
-
-        __shared__ CollisionPair block_reduce_shared_data[32];
-        __shared__ CollisionPair reduced_max_d;
-
-        // Initialize shared memory if needed
-        if (threadIdx.x == 0) {
-            reduced_max_d = {0.0f, 0, 0};
-        }
-
-        // Launches num_blocks_per_batch threads
-        const int batch_horizon_idx = blockIdx.x;
-        const int batch_idx = batch_horizon_idx / horizon;
-        const float local_weight = weight[0];
-
-        const int thread_idx = threadIdx.x;
-        const int num_threads_per_block = blockDim.x;
-
-        if (thread_idx >= num_blocks_per_batch)
-        {
-          return;
-        }
-        // zero gradients:
-        zero_gradients(out_gradient, sparse_index, batch_horizon_idx, num_spheres, num_threads_per_block);
-        CollisionPair max_d = {0.0f, 0, 0};
-
-        // if num_blocks_per_batch > num_threads_per_block, use a for loop to reduce across blocks
-        int16_t sphere_pair_idx[2];
-        const int start_batch_idx = batch_horizon_idx * num_blocks_per_batch;
-        const int blocks_per_thread = curobo::common::ceil_div(num_blocks_per_batch, num_threads_per_block);
-        // each thread will read blocks_per_thread = num_blocks_per_batch / num_threads_per_block blocks
-        // first thread will read 0, blocks_per_thread, 2*blocks_per_thread, ...
-        // second thread will read 1, blocks_per_thread+1, 2*blocks_per_thread+1, ...
-        for (int i = 0; i < blocks_per_thread; i++)
-        {
-          // read collision pair
-
-          int block_idx = i * num_threads_per_block + thread_idx;
-
-          if (block_idx >= num_blocks_per_batch)
-          {
-            break;
-          }
-          block_idx = start_batch_idx + block_idx;
-
-          // read float
-          float d = block_batch_max_value[block_idx];
-          // read as short:
-          read_indices(sphere_pair_idx, block_batch_max_index, block_idx);
-
-          CollisionPair current_pair = {d, sphere_pair_idx[0], sphere_pair_idx[1]};
-
-          max_d = max(max_d, current_pair);
-
-
-        }
-
-
-        // reduce across block:
-        curobo::common::block_reduce_max(max_d, num_threads_per_block, &block_reduce_shared_data[0], &reduced_max_d);
-
-        if (thread_idx > 0)
-        {
-          return;
-        }
-
-        max_d = reduced_max_d;
-        // Process final collision results
-        finalize_collision_results<false>(
-          max_d,
-          reinterpret_cast<const float4*>(robot_spheres), // float*
-          offsets,
-          out_distance,
-          out_gradient,
-          sparse_index,
+        __syncthreads();
+        const CollisionPair max_d = compute_max_collision_distance<StorePairDistance>(
+          spheres_shared,
+          pair_distance,
+          pair_locations,
           batch_horizon_idx,
-          batch_idx,
-          num_spheres,
-          local_weight,
-          write_grad
-          );
-
+          num_collision_pairs,
+          num_threads_per_block,
+          reinterpret_cast<CollisionPair*>(block_reduce_storage));
+        if (threadIdx.x == 0)
+        {
+          finalize_collision_results(
+            max_d,
+            spheres_shared,
+            out_distance,
+            out_gradient,
+            sparse_index,
+            batch_horizon_idx,
+            num_spheres,
+            weight[0],
+            WriteGrad);
+        }
       }
+      else
+      {
+        float4* gradients_shared = spheres_shared + num_spheres;
+        zero_shared_gradients(
+          gradients_shared, num_spheres, num_threads_per_block);
+
+        if constexpr (ReductionMode == SELF_COLLISION_SUM)
+        {
+          __syncthreads();
+          const float sum_distance = compute_sum_collision_distance(
+            spheres_shared,
+            gradients_shared,
+            pair_locations,
+            num_collision_pairs,
+            num_threads_per_block,
+            weight[0],
+            reinterpret_cast<float*>(block_reduce_storage),
+            reinterpret_cast<float*>(&reduced_storage));
+          __syncthreads();
+          finalize_sum_collision_results(
+            sum_distance,
+            gradients_shared,
+            out_distance,
+            out_gradient,
+            sparse_index,
+            batch_horizon_idx,
+            num_spheres,
+            num_threads_per_block,
+            weight[0],
+            WriteGrad);
+        }
+        else
+        {
+          unsigned long long* per_sphere_max =
+            reinterpret_cast<unsigned long long*>(gradients_shared + num_spheres);
+          zero_shared_per_sphere_max(
+            per_sphere_max, num_spheres, num_threads_per_block);
+          __syncthreads();
+          compute_per_sphere_max_collision_distance(
+            spheres_shared,
+            per_sphere_max,
+            pair_locations,
+            num_collision_pairs,
+            num_threads_per_block);
+          __syncthreads();
+          const float sum_distance = finalize_per_sphere_max_collision_distance(
+            spheres_shared,
+            gradients_shared,
+            per_sphere_max,
+            num_spheres,
+            num_threads_per_block,
+            weight[0],
+            reinterpret_cast<float*>(block_reduce_storage),
+            reinterpret_cast<float*>(&reduced_storage));
+          __syncthreads();
+          finalize_sum_collision_results(
+            sum_distance,
+            gradients_shared,
+            out_distance,
+            out_gradient,
+            sparse_index,
+            batch_horizon_idx,
+            num_spheres,
+            num_threads_per_block,
+            weight[0],
+            WriteGrad);
+        }
+      }
+    }
 
 
 

@@ -12,11 +12,10 @@ from dataclasses import dataclass
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.solver.seed_ik.seed_ik_state import SeedIKState
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 
 class SeedIterationStateManager:
@@ -70,7 +69,7 @@ class SeedIterationStateManager:
         self.convergence_orientation_tolerance = convergence_orientation_tolerance
         self.convergence_joint_limit_weight = convergence_joint_limit_weight
 
-    @profiler.record_function("iteration_state_manager/update_state")
+    @get_profiler_decorator("iteration_state_manager/update_state")
     @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def update_iteration_state(
         self,
@@ -114,7 +113,9 @@ class SeedIterationStateManager:
         return SeedIKState(
             joint_position=selected_values.joint_position,
             lambda_damping=updated_damping,
-            error_norm=candidate_state.error_norm,
+            error_norm=torch.where(
+                step_accepted, candidate_state.error_norm, current_state.error_norm
+            ),
             success=convergence_status,
             improvement=step_accepted,
             position_errors=selected_values.position_errors,
@@ -123,7 +124,7 @@ class SeedIterationStateManager:
             jacobian=selected_values.jacobian,
         )
 
-    @profiler.record_function("iteration_state_manager/calculate_trust_ratio")
+    @get_profiler_decorator("iteration_state_manager/calculate_trust_ratio")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _calculate_trust_region_ratio(
         self,
@@ -138,12 +139,17 @@ class SeedIterationStateManager:
         rho = (actual_reduction) / (predicted_reduction)
         """
         actual_reduction = old_error_norm - new_error_norm
-        safe_predicted_reduction = (
-            predicted_reduction.view(batch_size) + self.EPSILON_DIVISION_SAFETY
+        predicted_reduction = predicted_reduction.view(batch_size)
+        ratio = actual_reduction / (predicted_reduction + self.EPSILON_DIVISION_SAFETY)
+        valid = (
+            (predicted_reduction > 0.0)
+            & torch.isfinite(predicted_reduction)
+            & torch.isfinite(ratio)
+            & (actual_reduction >= 0.0)
         )
-        return actual_reduction / safe_predicted_reduction
+        return torch.where(valid, ratio, -torch.ones_like(ratio))
 
-    @profiler.record_function("iteration_state_manager/determine_step_acceptance")
+    @get_profiler_decorator("iteration_state_manager/determine_step_acceptance")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _determine_step_acceptance(
         self,
@@ -153,7 +159,7 @@ class SeedIterationStateManager:
         """Determine whether to accept the proposed step."""
         return (trust_ratio >= self.rho_min).view(batch_size)
 
-    @profiler.record_function("iteration_state_manager/update_damping")
+    @get_profiler_decorator("iteration_state_manager/update_damping")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _update_damping_parameter(
         self,
@@ -186,7 +192,7 @@ class SeedIterationStateManager:
         position_errors: torch.Tensor
         orientation_errors: torch.Tensor
 
-    @profiler.record_function("iteration_state_manager/select_values")
+    @get_profiler_decorator("iteration_state_manager/select_values")
     @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def _select_state_values(
         self,
@@ -217,7 +223,7 @@ class SeedIterationStateManager:
             ),
         )
 
-    @profiler.record_function("iteration_state_manager/check_convergence")
+    @get_profiler_decorator("iteration_state_manager/check_convergence")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _check_convergence(
         self,

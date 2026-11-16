@@ -9,7 +9,8 @@ import random
 import networkx as nx
 import numpy as np
 import torch
-from torch import profiler
+
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 class NetworkXPathFinder:
@@ -21,7 +22,7 @@ class NetworkXPathFinder:
         # maintain edge buffer
         self.edge_list = []
 
-    @profiler.record_function("networkx_path_finder/reset_graph")
+    @get_profiler_decorator("networkx_path_finder/reset_graph")
     def reset_graph(self):
         self.graph.clear()
         self.edge_list = []
@@ -37,23 +38,23 @@ class NetworkXPathFinder:
         np.random.seed(self.seed)
         random.seed(self.seed)
 
-    @profiler.record_function("networkx_path_finder/add_node")
+    @get_profiler_decorator("networkx_path_finder/add_node")
     def add_node(self, i):
         self.node_list.append(i)
 
-    @profiler.record_function("networkx_path_finder/add_edges")
+    @get_profiler_decorator("networkx_path_finder/add_edges")
     def add_edges(self, edge_list):
         self.edge_list += edge_list
 
-    @profiler.record_function("networkx_path_finder/add_nodes")
+    @get_profiler_decorator("networkx_path_finder/add_nodes")
     def add_nodes(self, node_list):
         self.node_list += node_list
 
-    @profiler.record_function("networkx_path_finder/add_edge")
+    @get_profiler_decorator("networkx_path_finder/add_edge")
     def add_edge(self, start_i, end_i, weight):
         self.edge_list.append([start_i, end_i, weight])
 
-    @profiler.record_function("networkx_path_finder/update_graph")
+    @get_profiler_decorator("networkx_path_finder/update_graph")
     def update_graph(self):
         if len(self.edge_list) > 0:
             self.graph.add_weighted_edges_from(self.edge_list)
@@ -62,12 +63,12 @@ class NetworkXPathFinder:
             self.graph.add_nodes_from(self.node_list)
             self.node_list = []
 
-    @profiler.record_function("networkx_path_finder/get_edges")
+    @get_profiler_decorator("networkx_path_finder/get_edges")
     def get_edges(self, attribue="weight"):
         edge_list = list(self.graph.edges.data("weight"))
         return edge_list
 
-    @profiler.record_function("networkx_path_finder/path_exists")
+    @get_profiler_decorator("networkx_path_finder/path_exists")
     def path_exists(self, start_node_idx, goal_node_idx):
         self.update_graph()
         # check if nodes exist in the graph
@@ -76,7 +77,7 @@ class NetworkXPathFinder:
         else:
             return False
 
-    @profiler.record_function("networkx_path_finder/get_shortest_path")
+    @get_profiler_decorator("networkx_path_finder/get_shortest_path")
     def get_shortest_path(self, start_node_idx, goal_node_idx, return_length=False):
         self.update_graph()
         length, path = nx.bidirectional_dijkstra(
@@ -86,7 +87,7 @@ class NetworkXPathFinder:
             return path, length
         return path
 
-    @profiler.record_function("networkx_path_finder/get_path_lengths")
+    @get_profiler_decorator("networkx_path_finder/get_path_lengths")
     def get_path_lengths(self, goal_node_idx):
         self.update_graph()
         path_length_dict = nx.shortest_path_length(

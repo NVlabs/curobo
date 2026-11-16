@@ -12,7 +12,7 @@ import torch
 # CuRobo
 from curobo._src.cost.cost_base import BaseCost
 from curobo._src.geom.collision.buffer_collision import CollisionBuffer
-from curobo._src.util.logging import log_and_raise, log_info
+from curobo._src.util.logging import log_and_raise
 from curobo._src.util.torch_util import get_torch_jit_decorator
 
 if TYPE_CHECKING:
@@ -34,6 +34,13 @@ class SceneCollisionCost(BaseCost):
         if self.config.scene_collision_checker is None:
             log_and_raise("scene_collision_checker must be set before using world collision cost")
         self._collision_buffer: Optional[CollisionBuffer] = None
+
+    @property
+    def dense_temporal_support_span(self) -> int:
+        """Return the dense-time span used by one collision contribution."""
+        # The swept kernel at an interior point reads both the previous and
+        # following dense states. Discrete collision remains pointwise.
+        return 2 if self.config.use_sweep else 0
 
     def setup_batch_tensors(self, batch_size: int, horizon: int):
         self._batch_size = batch_size
@@ -70,7 +77,9 @@ class SceneCollisionCost(BaseCost):
             trajectory_dt: The trajectory dt. This is of shape (batch,).
 
         Returns:
-            The world collision cost. This is of shape (batch, horizon).
+            World collision costs with shape ``(batch, horizon, 1)`` when
+            ``sum_distance`` is enabled, otherwise
+            ``(batch, horizon, num_spheres)``.
         """
         self.validate_input(
             state.robot_spheres,
@@ -136,10 +145,11 @@ class SceneCollisionCost(BaseCost):
             world environments in the world collision checker.
 
         Returns:
-            The world collision cost. This is of shape (batch, horizon).
+            World collision costs with shape ``(batch, horizon, 1)`` when
+            ``sum_distance`` is enabled, otherwise
+            ``(batch, horizon, num_spheres)``.
         """
         if not self.config.sum_distance:
-            log_info("sum_distance=False will be slower than sum_distance=True")
             self.use_grad_input = True
 
         if self.config.convert_to_binary:
@@ -154,6 +164,7 @@ class SceneCollisionCost(BaseCost):
             enable_speed_metric=self.config.use_speed_metric,
             env_query_idx=env_query_idx,
             return_loss=self.config.use_grad_input,
+            sum_distance=self.config.sum_distance,
         )
         return dist
 
@@ -171,10 +182,11 @@ class SceneCollisionCost(BaseCost):
             world environments in the world collision checker.
 
         Returns:
-            The world collision cost. This is of shape (batch, horizon).
+            World collision costs with shape ``(batch, horizon, 1)`` when
+            ``sum_distance`` is enabled, otherwise
+            ``(batch, horizon, num_spheres)``.
         """
         if not self.config.sum_distance:
-            log_info("sum_distance=False will be slower than sum_distance=True")
             self.use_grad_input = True
 
         if self.config.convert_to_binary:
@@ -185,6 +197,7 @@ class SceneCollisionCost(BaseCost):
                 activation_distance=self.config.activation_distance,
                 env_query_idx=env_query_idx,
                 return_loss=self.config.use_grad_input,
+                sum_distance=self.config.sum_distance,
             )
         else:
             dist = self.config.scene_collision_checker.get_sphere_distance(
@@ -194,6 +207,7 @@ class SceneCollisionCost(BaseCost):
                 activation_distance=self.config.activation_distance,
                 env_query_idx=env_query_idx,
                 return_loss=self.config.use_grad_input,
+                sum_distance=self.config.sum_distance,
             )
         return dist
 

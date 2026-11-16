@@ -5,7 +5,6 @@
 # Standard Library
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from typing import Any, Optional, Tuple, Union
 
@@ -37,23 +36,28 @@ def warp_func(name: str) -> Callable[[Callable[..., Any]], Any]:
 
 
 def warp_kernel(name: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Any]:
-    """Return a decorator that names a template before ``wp.kernel`` sees it."""
+    """Register a compact kernel key and retain the requested Python display name.
+
+    Warp's unique modules distinguish kernel bodies and captured constants. Keeping
+    the registered key short also keeps Warp's cache filenames within filesystem limits.
+    """
 
     def _decorate(func: Callable[..., Any]) -> Any:
-        return wp.kernel(module="unique", **kwargs)(_set_warp_name(func, name))
+        kernel = wp.kernel(module="unique", **kwargs)(_set_warp_name(func, func.__name__))
+        return _set_warp_name(kernel, name)
 
     return _decorate
 
 
 def warp_constant_suffix(*values: object) -> str:
-    """Hash compile-time constants into a stable Warp symbol suffix.
+    """Encode compile-time constants into a stable Warp symbol suffix.
 
     Warp function/kernel names must change when their closed-over
     compile-time constants change, otherwise generated modules can collide.
     Callers should pass resolved primitive constants or tuples/lists of
     primitive constants, not tensors or mutable runtime objects.
     """
-    return hashlib.sha1(repr(values).encode("ascii")).hexdigest()[:12]
+    return repr(values).encode("ascii").hex()
 
 
 def init_warp(

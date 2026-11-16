@@ -371,6 +371,50 @@ class TestMPCSolverGoalUpdates:
         result = solver.optimize_action_sequence(new_current_state)
         assert result is not None
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_update_goal_with_single_graph_seed(self, cuda_device_cfg):
+        """Test one IK + RRT + B-spline seed can initialize MPC."""
+        config = MPCSolverCfg.create(
+            robot="franka.yml",
+            scene_model="collision_table.yml",
+            device_cfg=cuda_device_cfg,
+            use_cuda_graph=True,
+            optimization_dt=0.025,
+            interpolation_steps=4,
+            use_graph_seed=True,
+        )
+        solver = MPCSolver(config)
+        current_state = JointState.from_position(
+            solver.default_joint_position.clone().unsqueeze(0),
+            joint_names=solver.joint_names,
+        )
+        current_state.velocity = torch.zeros_like(current_state.position)
+        current_state.acceleration = torch.zeros_like(current_state.position)
+        solver.setup(current_state)
+        solver.warmup_graph_seed()
+
+        goal_poses = solver.compute_kinematics(current_state).tool_poses.to_dict()
+        goal_poses[solver.tool_frames[0]].position[..., 1] += 0.2
+        goal = GoalToolPose.from_poses(
+            goal_poses,
+            ordered_tool_frames=solver.tool_frames,
+            num_goalset=1,
+        )
+
+        assert solver.update_goal_tool_poses_with_graph_seed(goal, current_state)
+        assert solver.ik_solver.config.num_seeds == 1
+        assert solver.ik_solver.seed_ik_solver.config.num_seeds == 1
+        assert solver.graph_seed_fitter.config.trajectory_dt == config.optimization_dt
+        assert solver.last_graph_seed_success
+        assert solver.trajectory_execution_manager.get_action_buffer().shape == (
+            1,
+            solver.action_horizon,
+            solver.action_dim,
+        )
+
+        result = solver.optimize_action_sequence(current_state)
+        assert result.action_sequence is not None
+
 
 class TestMPCSolverResetSeed:
     """Test MPCSolver.reset_seed method."""

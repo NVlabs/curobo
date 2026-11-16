@@ -6,15 +6,16 @@ Differentiable forward kinematics with Jacobian computation, center of mass
 calculation, and collision sphere generation.
 
 Example:
-    ```python
-    from curobo.kinematics import Kinematics, KinematicsCfg
-    from curobo.types import JointState
+    .. code-block:: python
 
-    config = KinematicsCfg.from_robot_yaml_file("franka.yml")
-    kin = Kinematics(config)
-    js = JointState.from_position(q, joint_names=kin.joint_names)
-    state = kin.compute_kinematics(js)
-    ```
+        from curobo.kinematics import Kinematics, KinematicsCfg
+        from curobo.types import JointState
+
+        config = KinematicsCfg.from_robot_yaml_file("franka.yml")
+        kin = Kinematics(config)
+        js = JointState.from_position(q, joint_names=kin.joint_names)
+        state = kin.compute_kinematics(js)
+
 """
 
 from curobo._src.robot.kinematics.kinematics import Kinematics

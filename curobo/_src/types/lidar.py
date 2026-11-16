@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
-from torch.profiler import record_function
 
 from curobo._src.types.pose import Pose
 from curobo._src.util.logging import log_and_raise
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 @dataclass
@@ -48,7 +48,7 @@ class LidarObservation:
             log_and_raise("range_image is None, cannot get shape")
         return self.range_image.shape
 
-    @record_function("lidar/copy_")
+    @get_profiler_decorator("lidar/copy_")
     def copy_(self, new_data: LidarObservation):
         if self.range_image is not None:
             self.range_image.copy_(new_data.range_image)
@@ -66,7 +66,7 @@ class LidarObservation:
             self.timestamp.copy_(new_data.timestamp)
         return self
 
-    @record_function("lidar/clone")
+    @get_profiler_decorator("lidar/clone")
     def clone(self):
         return LidarObservation(
             name=self.name,

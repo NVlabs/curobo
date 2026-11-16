@@ -228,7 +228,8 @@ def build_new_robot(args):
     if args.visualize:
         print(f"\nStarting visualization server at http://localhost:{args.viz_port}")
         print("Press Ctrl+C to stop")
-        viser = builder.visualize(config, port=args.viz_port)
+        # Retain the viewer for the lifetime of the interactive loop.
+        _visualizer = builder.visualize(config, port=args.viz_port)
         try:
             import time
 
@@ -295,7 +296,8 @@ def edit_existing_robot(args):
     if args.visualize:
         print(f"\nStarting visualization server at http://localhost:{args.viz_port}")
         print("Press Ctrl+C to stop")
-        viser = builder.visualize(config, port=args.viz_port)
+        # Retain the viewer for the lifetime of the interactive loop.
+        _visualizer = builder.visualize(config, port=args.viz_port)
         try:
             import time
 

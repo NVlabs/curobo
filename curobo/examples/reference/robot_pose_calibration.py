@@ -244,14 +244,11 @@ def main():
 
             print("\n[LOCAL/SDF] Running from frame pose...")
             print(f"  Initial: pos=[{frame_pos[0]:.3f}, {frame_pos[1]:.3f}, {frame_pos[2]:.3f}]")
-            print("JS changed: ", state["js_changed"])
             result = sdf_detector.detect_from_points(
                 observed_points.to(device),
                 config=joint_angles if state["js_changed"] else None,
                 initial_pose=initial_pose,
             )
-
-
 
             state["js_changed"] = False
             trans_err, rot_err = compute_pose_error(result.pose, gt_pose)

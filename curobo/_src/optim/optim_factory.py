@@ -4,11 +4,13 @@
 
 Provides :func:`create_optimization_config` and :func:`create_optimizer` which
 look up the solver_type in a registry and instantiate the corresponding config
-and optimizer (L-BFGS, L-SR1, CG, MPPI, ES, etc.) with the given rollout list.
+and optimizer (L-BFGS, CG, MPPI, ES, etc.) with the given rollout list.
 """
+
 from __future__ import annotations
 
-from typing import Dict, List
+from dataclasses import dataclass
+from typing import Any, Dict, List, Type
 
 from curobo._src.optim.external.scipy_opt import ScipyOpt, ScipyOptCfg
 from curobo._src.optim.external.torch_opt import TorchOpt, TorchOptCfg
@@ -22,7 +24,6 @@ from curobo._src.optim.gradient.gradient_descent import (
     LineSearchGradientDescentOpt,
 )
 from curobo._src.optim.gradient.lbfgs import LBFGSOpt, LBFGSOptCfg
-from curobo._src.optim.gradient.lsr1 import LSR1Opt
 from curobo._src.optim.particle.evolution_strategies import (
     EvolutionStrategies,
     EvolutionStrategiesCfg,
@@ -33,37 +34,35 @@ from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
 
 
-# Config mapping: solver_type string -> config class
-_SOLVER_CONFIG_MAP = {
-    "lbfgs": LBFGSOptCfg,
-    "gradient_descent": GradientDescentOptCfg,
-    "line_search_gradient_descent": GradientDescentOptCfg,
-    "conjugate_gradient": ConjugateGradientOptCfg,
-    "lsr1": LBFGSOptCfg,
-    "scipy": ScipyOptCfg,
-    "torch": TorchOptCfg,
-    "mppi": MPPICfg,
-    "es": EvolutionStrategiesCfg,
-}
+@dataclass(frozen=True)
+class _OptimizerSpec:
+    """Pair an optimizer configuration with its implementation class."""
 
-# Optimizer mapping: solver_type string -> optimizer class
-_SOLVER_MAP = {
-    "lbfgs": LBFGSOpt,
-    "gradient_descent": GradientDescentOpt,
-    "line_search_gradient_descent": LineSearchGradientDescentOpt,
-    "conjugate_gradient": ConjugateGradientOpt,
-    "lsr1": LSR1Opt,
-    "scipy": ScipyOpt,
-    "torch": TorchOpt,
-    "mppi": MPPI,
-    "es": EvolutionStrategies,
+    config_class: Type[Any]
+    """Configuration class associated with the solver type."""
+
+    optimizer_class: Type[Any]
+    """Optimizer implementation associated with the solver type."""
+
+
+_SOLVER_REGISTRY: Dict[str, _OptimizerSpec] = {
+    "lbfgs": _OptimizerSpec(LBFGSOptCfg, LBFGSOpt),
+    "gradient_descent": _OptimizerSpec(GradientDescentOptCfg, GradientDescentOpt),
+    "line_search_gradient_descent": _OptimizerSpec(
+        GradientDescentOptCfg, LineSearchGradientDescentOpt
+    ),
+    "conjugate_gradient": _OptimizerSpec(ConjugateGradientOptCfg, ConjugateGradientOpt),
+    "scipy": _OptimizerSpec(ScipyOptCfg, ScipyOpt),
+    "torch": _OptimizerSpec(TorchOptCfg, TorchOpt),
+    "mppi": _OptimizerSpec(MPPICfg, MPPI),
+    "es": _OptimizerSpec(EvolutionStrategiesCfg, EvolutionStrategies),
 }
 
 
 def create_optimization_config(
-    config_dict: Dict,
+    config_dict: Dict[str, Any],
     device_cfg: DeviceCfg,
-):
+) -> Any:
     """Create an optimizer configuration based on solver_type in the config dictionary.
 
     Args:
@@ -74,21 +73,20 @@ def create_optimization_config(
         The appropriate optimizer configuration object.
     """
     solver_type = config_dict.get("solver_type", "")
-    config_class = _SOLVER_CONFIG_MAP.get(solver_type)
-    if config_class is None:
+    solver_spec = _SOLVER_REGISTRY.get(solver_type)
+    if solver_spec is None:
         raise ValueError(
-            f"Unsupported solver type: {solver_type}. "
-            f"Available: {list(_SOLVER_CONFIG_MAP.keys())}"
+            f"Unsupported solver type: {solver_type}. Available: {list(_SOLVER_REGISTRY.keys())}"
         )
-    config_dict = config_class.create_data_dict(config_dict.copy(), device_cfg)
-    return config_class(**config_dict)
+    config_dict = solver_spec.config_class.create_data_dict(config_dict.copy(), device_cfg)
+    return solver_spec.config_class(**config_dict)
 
 
 def create_optimizer(
-    config,
+    config: Any,
     rollout: List[Rollout],
     use_cuda_graph: bool = False,
-):
+) -> Any:
     """Create an optimizer instance based on the config object.
 
     All optimizers are standalone and accept use_cuda_graph as a constructor parameter.
@@ -106,13 +104,14 @@ def create_optimizer(
     if not isinstance(rollout, list):
         log_and_raise("rollout must be a list of Rollout")
 
-    optimizer_class = _SOLVER_MAP.get(solver_type)
-    if optimizer_class is None:
+    solver_spec = _SOLVER_REGISTRY.get(solver_type)
+    if solver_spec is None:
         raise ValueError(
-            f"Unsupported solver type: {solver_type}. "
-            f"Available: {list(_SOLVER_MAP.keys())}"
+            f"Unsupported solver type: {solver_type}. Available: {list(_SOLVER_REGISTRY.keys())}"
         )
 
-    return optimizer_class(
-        config=config, rollout_list=rollout, use_cuda_graph=use_cuda_graph
+    return solver_spec.optimizer_class(
+        config=config,
+        rollout_list=rollout,
+        use_cuda_graph=use_cuda_graph,
     )

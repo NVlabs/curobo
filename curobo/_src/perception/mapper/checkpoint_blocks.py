@@ -26,12 +26,12 @@ from curobo._src.perception.mapper.constants import (
     PY_POSITIVE_MASK,
     _validate_color_grid_size,
     _validate_feature_block_grid_size,
+    _validate_instance_grid_size,
 )
 from curobo.logging import log_and_raise
 
-
 BLOCK_CHECKPOINT_FORMAT = "curobo.mapper_blocks"
-BLOCK_CHECKPOINT_SCHEMA_VERSION = 1.0
+BLOCK_CHECKPOINT_SCHEMA_VERSION = 2.0
 
 BLOCK_CHECKPOINT_KEYS = {
     "format",
@@ -50,6 +50,7 @@ BLOCK_METADATA_KEYS = {
     "feature_dim",
     "feature_block_grid_size",
     "color_grid_size",
+    "instance_grid_size",
 }
 
 
@@ -69,6 +70,7 @@ def build_block_metadata(tsdf) -> Dict[str, Any]:
         "feature_dim": int(data.feature_dim),
         "feature_block_grid_size": int(data.feature_block_grid_size),
         "color_grid_size": int(data.color_grid_size),
+        "instance_grid_size": int(data.instance_grid_size),
     }
 
 
@@ -104,8 +106,7 @@ def clone_blocks_to_cpu(blocks: Dict[str, torch.Tensor]) -> Dict[str, torch.Tens
     for key, value in blocks.items():
         if not isinstance(value, torch.Tensor):
             log_and_raise(
-                f"Block payload field {key!r} must be a torch.Tensor, got "
-                f"{type(value).__name__}."
+                f"Block payload field {key!r} must be a torch.Tensor, got {type(value).__name__}."
             )
         out[key] = value.detach().to(device="cpu").clone()
     return out
@@ -117,8 +118,7 @@ def clone_blocks(blocks: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     for key, value in blocks.items():
         if not isinstance(value, torch.Tensor):
             log_and_raise(
-                f"Block payload field {key!r} must be a torch.Tensor, got "
-                f"{type(value).__name__}."
+                f"Block payload field {key!r} must be a torch.Tensor, got {type(value).__name__}."
             )
         out[key] = value.detach().clone()
     return out
@@ -127,9 +127,7 @@ def clone_blocks(blocks: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
 def validate_block_checkpoint(checkpoint: Any) -> None:
     """Validate the top-level checkpoint schema."""
     if not isinstance(checkpoint, dict):
-        log_and_raise(
-            f"Block checkpoint must be a dict, got {type(checkpoint).__name__}."
-        )
+        log_and_raise(f"Block checkpoint must be a dict, got {type(checkpoint).__name__}.")
     if checkpoint.get("format") != BLOCK_CHECKPOINT_FORMAT:
         log_and_raise(
             f"Unsupported block checkpoint format {checkpoint.get('format')!r}; "
@@ -155,9 +153,7 @@ def validate_block_checkpoint(checkpoint: Any) -> None:
 def validate_block_metadata(block_metadata: Any) -> None:
     """Validate source block metadata."""
     if not isinstance(block_metadata, dict):
-        log_and_raise(
-            f"block_metadata must be a dict, got {type(block_metadata).__name__}."
-        )
+        log_and_raise(f"block_metadata must be a dict, got {type(block_metadata).__name__}.")
     missing = BLOCK_METADATA_KEYS.difference(block_metadata.keys())
     if missing:
         log_and_raise(f"block_metadata missing required fields: {sorted(missing)}.")
@@ -176,6 +172,11 @@ def validate_block_metadata(block_metadata: Any) -> None:
     )
     _validate_feature_block_grid_size(
         int(block_metadata["feature_block_grid_size"]),
+        int(block_metadata["block_size"]),
+    )
+    require_nonnegative_int(block_metadata, "instance_grid_size")
+    _validate_instance_grid_size(
+        int(block_metadata["instance_grid_size"]),
         int(block_metadata["block_size"]),
     )
     require_nonnegative_int(block_metadata, "feature_dim")
@@ -199,10 +200,7 @@ def validate_block_payload(
 
     coords = require_tensor(blocks, "active_block_coords", torch.int32)
     if coords.ndim != 2 or coords.shape[1] != 3:
-        log_and_raise(
-            "active_block_coords must have shape (N, 3), got "
-            f"{tuple(coords.shape)}."
-        )
+        log_and_raise(f"active_block_coords must have shape (N, 3), got {tuple(coords.shape)}.")
     n_blocks = int(coords.shape[0])
     block_size = int(block_metadata["block_size"])
     block_voxels = block_size**3
@@ -210,6 +208,8 @@ def validate_block_payload(
     color_grid_voxels = color_grid_size**3
     feature_block_grid_size = int(block_metadata["feature_block_grid_size"])
     feature_grid_voxels = feature_block_grid_size**3
+    instance_grid_size = int(block_metadata["instance_grid_size"])
+    instance_grid_voxels = max(1, instance_grid_size**3)
     has_dynamic = bool(block_metadata["has_dynamic"])
     has_static = bool(block_metadata["has_static"])
     feature_dim = int(block_metadata["feature_dim"])
@@ -219,6 +219,8 @@ def validate_block_payload(
         expected_keys.update(("block_data", "block_grid_rgb"))
     if feature_dim > 0:
         expected_keys.update(("block_features", "block_feature_weight"))
+    if instance_grid_size > 0:
+        expected_keys.add("block_instance_state")
     if has_static:
         expected_keys.add("static_block_data")
     extra = set(blocks.keys()).difference(expected_keys)
@@ -242,13 +244,19 @@ def validate_block_payload(
             "block_features",
             (n_blocks, feature_grid_voxels, feature_dim),
         )
-        block_feature_weight = require_tensor(
-            blocks, "block_feature_weight", torch.float16
-        )
+        block_feature_weight = require_tensor(blocks, "block_feature_weight", torch.float16)
         require_shape(
             block_feature_weight,
             "block_feature_weight",
             (n_blocks, feature_grid_voxels),
+        )
+
+    if instance_grid_size > 0:
+        block_instance_state = require_tensor(blocks, "block_instance_state", torch.int16)
+        require_shape(
+            block_instance_state,
+            "block_instance_state",
+            (n_blocks, instance_grid_voxels),
         )
 
     if has_static:
@@ -299,22 +307,24 @@ def validate_block_metadata_for_target(
             f"checkpoint={block_metadata['color_grid_size']}, "
             f"target={data.color_grid_size}."
         )
-    if int(block_metadata["feature_block_grid_size"]) != int(
-        data.feature_block_grid_size
-    ):
+    if int(block_metadata["feature_block_grid_size"]) != int(data.feature_block_grid_size):
         log_and_raise(
             "feature_block_grid_size mismatch: "
             f"checkpoint={block_metadata['feature_block_grid_size']}, "
             f"target={data.feature_block_grid_size}."
+        )
+    if int(block_metadata["instance_grid_size"]) != int(data.instance_grid_size):
+        log_and_raise(
+            "instance_grid_size mismatch: "
+            f"checkpoint={block_metadata['instance_grid_size']}, "
+            f"target={data.instance_grid_size}."
         )
 
     source_center = [float(x) for x in block_metadata["grid_center"]]
     target_center = [float(x) for x in data.origin.detach().to(device="cpu").tolist()]
     for i, (a, b) in enumerate(zip(source_center, target_center)):
         if not math.isclose(a, b, rel_tol=0.0, abs_tol=1.0e-6):
-            log_and_raise(
-                f"grid_center[{i}] mismatch: checkpoint={a}, target={b}."
-            )
+            log_and_raise(f"grid_center[{i}] mismatch: checkpoint={a}, target={b}.")
 
 
 def ceil_div_positive(value: int, divisor: int) -> int:
@@ -336,19 +346,12 @@ def pack_hash_entry_host(bx: int, by: int, bz: int, pool_idx: int) -> int:
     y = (int(by) + y_bias) & y_mask
     z = (int(bz) + z_bias) & z_mask
     v = int(pool_idx) & layout.value_mask
-    entry = (
-        (x << layout.x_shift)
-        | (y << layout.y_shift)
-        | (z << layout.z_shift)
-        | v
-    )
+    entry = (x << layout.x_shift) | (y << layout.y_shift) | (z << layout.z_shift) | v
     return signed_int64_from_uint64(entry)
 
 
 def spatial_hash_host(bx: int, by: int, bz: int, capacity: int) -> int:
-    h = (int(bx) * PY_HASH_PRIME_X) ^ (int(by) * PY_HASH_PRIME_Y) ^ (
-        int(bz) * PY_HASH_PRIME_Z
-    )
+    h = (int(bx) * PY_HASH_PRIME_X) ^ (int(by) * PY_HASH_PRIME_Y) ^ (int(bz) * PY_HASH_PRIME_Z)
     h = h & PY_POSITIVE_MASK
     return int(h % int(capacity))
 
@@ -424,8 +427,7 @@ def rebuild_import_hash_state(
             slot = (slot + 1) % hash_capacity
         if not inserted:
             log_and_raise(
-                "Could not rebuild block hash table during import; "
-                "hash capacity is full."
+                "Could not rebuild block hash table during import; hash capacity is full."
             )
 
     return hash_table, block_to_hash_slot
@@ -451,8 +453,7 @@ def prepare_blocks_for_import(
         log_and_raise(f"import_weight must be positive, got {weight}.")
     if weight < float(minimum_tsdf_weight):
         log_and_raise(
-            f"import_weight ({weight}) must be >= minimum_tsdf_weight "
-            f"({minimum_tsdf_weight})."
+            f"import_weight ({weight}) must be >= minimum_tsdf_weight ({minimum_tsdf_weight})."
         )
 
     if bool(block_metadata["has_dynamic"]):
@@ -482,16 +483,11 @@ def apply_constant_dynamic_weight(
     observed_rgb = old_rgb_weight > 0.0
     if observed_rgb.any():
         avg_rgb = torch.zeros_like(block_grid_rgb[..., :3], dtype=torch.float32)
-        avg_rgb[observed_rgb] = (
-            block_grid_rgb[..., :3].float()[observed_rgb]
-            / old_rgb_weight[observed_rgb].unsqueeze(-1)
-        )
-        block_grid_rgb[..., :3] = (avg_rgb * import_weight).to(
-            dtype=block_grid_rgb.dtype
-        )
-        block_grid_rgb[..., 3] = (
-            observed_rgb.to(dtype=block_grid_rgb.dtype) * import_weight
-        )
+        avg_rgb[observed_rgb] = block_grid_rgb[..., :3].float()[observed_rgb] / old_rgb_weight[
+            observed_rgb
+        ].unsqueeze(-1)
+        block_grid_rgb[..., :3] = (avg_rgb * import_weight).to(dtype=block_grid_rgb.dtype)
+        block_grid_rgb[..., 3] = observed_rgb.to(dtype=block_grid_rgb.dtype) * import_weight
 
 
 def apply_constant_feature_weight(
@@ -505,9 +501,7 @@ def apply_constant_feature_weight(
     if not observed.any():
         return
     avg_features = torch.zeros_like(block_features, dtype=torch.float32)
-    avg_features[observed] = (
-        block_features.float()[observed] / old_weight[observed].unsqueeze(-1)
-    )
+    avg_features[observed] = block_features.float()[observed] / old_weight[observed].unsqueeze(-1)
     block_features[:] = (avg_features * import_weight).to(dtype=block_features.dtype)
     block_feature_weight[:] = observed.to(dtype=block_feature_weight.dtype) * import_weight
 
@@ -548,9 +542,7 @@ def require_tensor(
         log_and_raise(f"blocks missing required field {key!r}.")
     value = blocks[key]
     if not isinstance(value, torch.Tensor):
-        log_and_raise(
-            f"blocks[{key!r}] must be a torch.Tensor, got {type(value).__name__}."
-        )
+        log_and_raise(f"blocks[{key!r}] must be a torch.Tensor, got {type(value).__name__}.")
     if value.dtype != dtype:
         log_and_raise(f"blocks[{key!r}] dtype must be {dtype}, got {value.dtype}.")
     return value
@@ -563,11 +555,7 @@ def require_shape(tensor: torch.Tensor, key: str, shape: tuple[int, ...]) -> Non
 
 def require_positive_float(block_metadata: Dict[str, Any], key: str) -> None:
     value = block_metadata.get(key)
-    if (
-        not isinstance(value, (float, int))
-        or isinstance(value, bool)
-        or float(value) <= 0.0
-    ):
+    if not isinstance(value, (float, int)) or isinstance(value, bool) or float(value) <= 0.0:
         log_and_raise(f"block_metadata[{key!r}] must be a positive float, got {value!r}.")
 
 
@@ -580,9 +568,7 @@ def require_positive_int(block_metadata: Dict[str, Any], key: str) -> None:
 def require_nonnegative_int(block_metadata: Dict[str, Any], key: str) -> None:
     value = block_metadata.get(key)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        log_and_raise(
-            f"block_metadata[{key!r}] must be a non-negative int, got {value!r}."
-        )
+        log_and_raise(f"block_metadata[{key!r}] must be a non-negative int, got {value!r}.")
 
 
 def require_bool(block_metadata: Dict[str, Any], key: str) -> None:

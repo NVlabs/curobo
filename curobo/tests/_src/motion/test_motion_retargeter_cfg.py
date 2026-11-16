@@ -1,22 +1,24 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 import pytest
+import torch
 
 from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.motion.motion_retargeter_cfg import MotionRetargeterCfg
+from curobo._src.types.device_cfg import DeviceCfg
 
 
 def _sample_criteria():
     return {
-        "link_a": ToolPoseCriteria.track_position_and_orientation(
-            xyz=[1.0, 1.0, 1.0], rpy=[0.5, 0.5, 0.5],
+        "link_a": ToolPoseCriteria.track_pose(
+            xyz=[1.0, 1.0, 1.0],
+            rpy=[0.5, 0.5, 0.5],
         ),
         "link_b": ToolPoseCriteria.track_position(xyz=[1.0, 1.0, 1.0]),
     }
 
 
 class TestMotionRetargeterCfg:
-
     def test_create_defaults(self):
         cfg = MotionRetargeterCfg.create(
             robot="unitree_g1_29dof_retarget.yml",
@@ -38,6 +40,21 @@ class TestMotionRetargeterCfg:
             tool_pose_criteria=criteria,
         )
         assert cfg.tool_frames == ["link_a", "link_b"]
+
+    def test_criteria_are_aligned_to_config_device_and_dtype(self):
+        source_device_cfg = DeviceCfg(device=torch.device("cpu"), dtype=torch.float64)
+        target_device_cfg = DeviceCfg(device=torch.device("cpu"), dtype=torch.float32)
+        source = ToolPoseCriteria.track_pose(device_cfg=source_device_cfg)
+
+        cfg = MotionRetargeterCfg.create(
+            robot="unitree_g1_29dof_retarget.yml",
+            tool_pose_criteria={"link": source},
+            device_cfg=target_device_cfg,
+        )
+
+        assert cfg.tool_pose_criteria["link"] is not source
+        assert cfg.tool_pose_criteria["link"].device_cfg == target_device_cfg
+        assert cfg.tool_pose_criteria["link"].terminal_tolerance.dtype == torch.float32
 
     def test_create_mpc_mode(self):
         cfg = MotionRetargeterCfg.create(

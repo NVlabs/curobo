@@ -20,17 +20,20 @@ from curobo._src.util.torch_util import get_torch_jit_decorator
 from curobo._src.util.warp import get_warp_device_stream, init_warp
 
 
-def quaternion_rate_to_axis_angle_rate(
-    quaternion_rate: torch.Tensor, current_quaternion: torch.Tensor
+def quaternion_cotangent_to_angular_gradient(
+    quaternion_cotangent: torch.Tensor, current_quaternion: torch.Tensor
 ) -> torch.Tensor:
-    """Convert quaternion rate/gradient to angular velocity (axis-angle rate).
+    """Pull a quaternion cotangent back to a world-frame angular gradient.
+
+    The pullback is the transpose of
+    ``q_dot = 0.5 * (0, omega_world) * q``.
 
     Args:
-        quaternion_rate: Quaternion gradient/rate tensor (..., 4) in wxyz format
+        quaternion_cotangent: Quaternion cotangent tensor ``[..., 4]`` in wxyz format.
         current_quaternion: Current quaternion tensor (..., 4) in wxyz format
 
     Returns:
-        Angular velocity tensor (..., 3) in xyz format
+        World-frame angular gradient tensor ``[..., 3]`` in xyz format.
     """
     # Ensure quaternions are normalized
     current_quaternion = current_quaternion / torch.norm(current_quaternion, dim=-1, keepdim=True)
@@ -41,22 +44,28 @@ def quaternion_rate_to_axis_angle_rate(
     qy = current_quaternion[..., 2]
     qz = current_quaternion[..., 3]
 
-    # Extract quaternion rate components (wxyz format)
-    dqw = quaternion_rate[..., 0]
-    dqx = quaternion_rate[..., 1]
-    dqy = quaternion_rate[..., 2]
-    dqz = quaternion_rate[..., 3]
+    # Extract quaternion cotangent components (wxyz format)
+    dqw = quaternion_cotangent[..., 0]
+    dqx = quaternion_cotangent[..., 1]
+    dqy = quaternion_cotangent[..., 2]
+    dqz = quaternion_cotangent[..., 3]
 
-    # Compute angular velocity using the Jacobian transpose
-    # This implements: ω = 2 * Im(q* ⊗ dq/dt)
-    omega_x = 0.5 * (-qx * dqw + qw * dqx + qz * dqy - qy * dqz)
-    omega_y = 0.5 * (-qy * dqw - qz * dqx + qw * dqy + qx * dqz)
-    omega_z = 0.5 * (-qz * dqw + qy * dqx - qx * dqy + qw * dqz)
+    # Apply the world-frame quaternion JVP transpose.
+    omega_x = 0.5 * (-qx * dqw + qw * dqx - qz * dqy + qy * dqz)
+    omega_y = 0.5 * (-qy * dqw + qz * dqx + qw * dqy - qx * dqz)
+    omega_z = 0.5 * (-qz * dqw - qy * dqx + qx * dqy + qw * dqz)
 
     # Stack into output tensor
     omega = torch.stack([omega_x, omega_y, omega_z], dim=-1)
 
     return omega
+
+
+def quaternion_rate_to_axis_angle_rate(
+    quaternion_rate: torch.Tensor, current_quaternion: torch.Tensor
+) -> torch.Tensor:
+    """Compatibility alias for quaternion cotangent pullback."""
+    return quaternion_cotangent_to_angular_gradient(quaternion_rate, current_quaternion)
 
 
 def transform_points(

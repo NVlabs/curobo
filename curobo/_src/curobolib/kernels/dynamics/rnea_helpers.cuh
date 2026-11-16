@@ -127,14 +127,12 @@ __device__ __forceinline__ void compute_local_Rp(
 // ========================================================================
 // Forward cache save/load helpers
 //
-// Cache layout per link (CACHE_FLOATS_PER_LINK = 20):
+// Cooperative cache layout per link (stride 32; serial kernels use [0:20]):
 //   [0:12]  v+a packed  (3×float4, no padding)
 //   [12:20] f padded    (2×float4, 6 useful + 2 pad)
+//   [20:32] R,p packed  (3×float4)
 //
-// R and p are NOT cached; recomputed via compute_local_Rp in backward.
-// This avoids 3×float4 global stores per link in the forward sequential loop.
-//
-// Stride of 20 is a multiple of 4, so all float4 accesses are aligned
+// Stride of 32 is a multiple of 4, so all float4 accesses are aligned
 // when the base pointer is 16-byte aligned.
 // ========================================================================
 
@@ -200,6 +198,75 @@ __device__ __forceinline__ void cache_load_f(
     const float4 r1 = *reinterpret_cast<const float4*>(&src[4]);
     dst[0] = r0.x; dst[1] = r0.y; dst[2] = r0.z; dst[3] = r0.w;
     dst[4] = r1.x; dst[5] = r1.y;
+}
+
+/** @brief Copy packed R[9],p[3] from shared memory to the forward cache. */
+__device__ __forceinline__ void cache_save_rp(
+    const float *src, float *dst
+) {
+    *reinterpret_cast<float4*>(&dst[0]) =
+        *reinterpret_cast<const float4*>(&src[0]);
+    *reinterpret_cast<float4*>(&dst[4]) =
+        *reinterpret_cast<const float4*>(&src[4]);
+    *reinterpret_cast<float4*>(&dst[8]) =
+        *reinterpret_cast<const float4*>(&src[8]);
+}
+
+/** @brief Copy packed R[9],p[3] from the forward cache to aligned shared memory. */
+__device__ __forceinline__ void cache_load_rp(
+    const float *src, float *dst
+) {
+    *reinterpret_cast<float4*>(&dst[0]) =
+        *reinterpret_cast<const float4*>(&src[0]);
+    *reinterpret_cast<float4*>(&dst[4]) =
+        *reinterpret_cast<const float4*>(&src[4]);
+    *reinterpret_cast<float4*>(&dst[8]) =
+        *reinterpret_cast<const float4*>(&src[8]);
+}
+
+/**
+ * @brief Sum one spatial vector per equal-key lane and accumulate once.
+ *
+ * Every lane in batch_mask must call this function. Lanes with valid=false use
+ * only the key for warp convergence and do not access dst. This replaces shared
+ * atomics when links at one tree level contribute to the same parent.
+ */
+__device__ __forceinline__ void warp_group_accumulate_spatial(
+    unsigned batch_mask,
+    int key,
+    bool valid,
+    const float *value,
+    float *dst
+) {
+    const unsigned peers = __match_any_sync(batch_mask, key);
+    if (!valid) return;
+
+    float s0 = value[0], s1 = value[1], s2 = value[2];
+    float s3 = value[3], s4 = value[4], s5 = value[5];
+    if (__popc(peers) > 1) {
+        s0 = s1 = s2 = s3 = s4 = s5 = 0.0f;
+        unsigned remaining = peers;
+        while (remaining != 0) {
+            const int source_lane = __ffs(remaining) - 1;
+            s0 += __shfl_sync(peers, value[0], source_lane);
+            s1 += __shfl_sync(peers, value[1], source_lane);
+            s2 += __shfl_sync(peers, value[2], source_lane);
+            s3 += __shfl_sync(peers, value[3], source_lane);
+            s4 += __shfl_sync(peers, value[4], source_lane);
+            s5 += __shfl_sync(peers, value[5], source_lane);
+            remaining &= remaining - 1;
+        }
+    }
+
+    const int lane = threadIdx.x & 31;
+    if (lane == __ffs(peers) - 1) {
+        dst[0] += s0;
+        dst[1] += s1;
+        dst[2] += s2;
+        dst[3] += s3;
+        dst[4] += s4;
+        dst[5] += s5;
+    }
 }
 
 } // namespace dynamics

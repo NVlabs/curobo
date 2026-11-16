@@ -11,7 +11,6 @@ from typing import Dict, Optional
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.rollout.metrics import RolloutMetrics
@@ -20,7 +19,7 @@ from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_joint_trajectory_ops import copy_joint_state_at_batch_seed_indices
 from curobo._src.state.state_robot import RobotState
 from curobo._src.util.logging import log_and_raise
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 
 @dataclass
@@ -76,7 +75,7 @@ class BaseSolverResult:
     """Boolean tensor indicating constraint feasibility per (batch, seed). True when all
     constraints (collision, joint limits) are satisfied, independent of pose convergence."""
 
-    @profiler.record_function("solver_base_result/clone")
+    @get_profiler_decorator("solver_base_result/clone")
     @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def clone(self) -> "BaseSolverResult":
         """Create a deep copy of the result."""
@@ -129,7 +128,7 @@ class BaseSolverResult:
             feasible=self.feasible.clone() if self.feasible is not None else None,
         )
 
-    @profiler.record_function("solver_base_result/copy_successful_solutions")
+    @get_profiler_decorator("solver_base_result/copy_successful_solutions")
     def copy_successful_solutions(self, other: "BaseSolverResult") -> None:
         """Copy successful solutions from other result to self.
 

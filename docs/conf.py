@@ -90,9 +90,10 @@ author = "NVIDIA"
 
 output_dir = os.path.join(root, "docs", "api")
 module_dir = os.path.join(root, "curobo")
-exclude_patterns = [
+apidoc_exclude_patterns = [
     module_dir + "/content",
-    module_dir + "/test",
+    module_dir + "/examples",
+    module_dir + "/tests",
 ]
 
 import curobo._src.runtime as curobo_runtime
@@ -105,10 +106,12 @@ apidoc_args = [
     "--force",
     "--separate",
     "--module-first",
+    "--templatedir",
+    str(root / "docs" / "_templates" / "apidoc"),
     "-o",
     f"{output_dir}",
     f"{module_dir}",
-] + exclude_patterns
+] + apidoc_exclude_patterns
 
 try:
     apidoc.main(apidoc_args)
@@ -134,7 +137,6 @@ extensions = [
     # Third-party extensions:
     "sphinx_copybutton",
     "sphinx_reredirects",
-    "sphinx_autodoc_typehints",  # better typehints
     # "sphinx_github_style",
     "myst_parser",
 ]
@@ -151,6 +153,7 @@ html_context = {
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
+exclude_patterns = ["api/curobo.examples*", "api/curobo.tests*"]
 
 
 intersphinx_mapping = {
@@ -158,7 +161,7 @@ intersphinx_mapping = {
     "numpy": ("https://numpy.org/doc/stable", None),
     "torch": ("https://pytorch.org/docs/stable/", None),
     "trimesh": ("https://trimesh.org/", None),
-    "warp": ("https://nvidia.github.io/warp", None),
+    "warp": ("https://nvidia.github.io/warp/stable/", None),
 }
 
 
@@ -191,7 +194,7 @@ html_extra_path = ["_html_extra"]
 
 html_css_files = ["custom_furo.css"]
 html_js_files = ["version-switcher.js"]
-html_logo = "_static/logo-light-mode.png"
+html_logo = None
 
 # Furo's default sidebar plus our custom external links block.
 html_sidebars = {
@@ -214,7 +217,6 @@ html_sidebars = {
 autoclass_content = "both"
 autodoc_class_signature = "mixed"
 autodoc_member_order = "bysource"
-autodoc_typehints = "signature"
 autodoc_warningiserror = False
 suppress_warnings.extend(["autodoc"])
 autodoc_default_options = {
@@ -232,6 +234,7 @@ autodoc_typehints_format = "fully-qualified"
 
 # Add support for documenting type aliases
 napoleon_attr_annotations = True  # For Google-style docstrings
+napoleon_use_ivar = True
 
 maximum_signature_line_length = 40
 
@@ -270,7 +273,6 @@ if html_theme == "sphinx_rtd_theme":
         "sticky_navigation": True,
     }
 elif html_theme == "furo":
-    html_logo = None
     html_theme_options = {
         # "top_of_page_button": None,
         "source_repository": repo_url,
@@ -301,8 +303,6 @@ elif html_theme == "furo":
             "color-brand-content": "#76b900",
             "color-sidebar-background": "#000000",
         },
-        "light_logo": "logo-light-mode.png",
-        "dark_logo": "logo-dark-mode.png",
         "footer_icons": [
             {
                 "name": "GitHub",

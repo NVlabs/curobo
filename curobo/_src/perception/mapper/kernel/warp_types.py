@@ -69,6 +69,8 @@ class BlockSparseTSDFWarp:
     block_features: wp.array3d(dtype=wp.float16)
     # Shape: (max_blocks, feature_block_grid_size**3)
     block_feature_weight: wp.array2d(dtype=wp.float16)
+    # Shape: (max_blocks, instance_grid_size**3), packed owner/confidence.
+    block_instance_state: wp.array2d(dtype=wp.int16)
 
     # Block pool - static channel (primitive SDF)
     static_block_data: wp.array2d(dtype=wp.float16)  # (max_blocks, BLOCK_SIZE**3) or (1, 1) dummy
@@ -77,9 +79,11 @@ class BlockSparseTSDFWarp:
     has_dynamic: wp.bool  # True if dynamic channel is enabled
     has_static: wp.bool  # True if static channel is enabled
     has_features: wp.bool  # True if per-block feature channel is enabled
+    has_instances: wp.bool  # True if categorical instance storage is enabled
     feature_dim: int  # 0 when the feature channel is disabled
     color_grid_size: int
     feature_block_grid_size: int
+    instance_grid_size: int
 
     # Block metadata
     block_coords: wp.array(dtype=wp.int32)  # (max_blocks * 3,) signed block keys
@@ -115,3 +119,12 @@ class BlockSparseTSDFWarp:
     grid_W: int  # Grid width (nx)
     grid_H: int  # Grid height (ny)
     grid_D: int  # Grid depth (nz)
+
+
+@wp.struct
+class PreparedSemanticFilterWarp:
+    """Warp view over one prepared semantic-output filter."""
+
+    node_match: wp.array2d(dtype=wp.uint8)
+    block_has_keep: wp.array(dtype=wp.uint8)
+    exclude: wp.bool

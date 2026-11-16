@@ -5,13 +5,14 @@
 This module provides collision-aware trajectory generation with optimization.
 
 Example:
-    ```python
-    from curobo import TrajectoryOptimizer, TrajectoryOptimizerCfg
+    .. code-block:: python
 
-    config = TrajectoryOptimizerCfg.create(robot="franka.yml")
-    trajopt = TrajectoryOptimizer(config)
-    result = trajopt.solve_pose(goal_tool_poses=target_poses)
-    ```
+        from curobo import TrajectoryOptimizer, TrajectoryOptimizerCfg
+
+        config = TrajectoryOptimizerCfg.create(robot="franka.yml")
+        trajopt = TrajectoryOptimizer(config)
+        result = trajopt.solve_pose(goal_tool_poses=target_poses)
+
 """
 
 from curobo._src.solver.solver_trajopt import TrajOptSolver as TrajectoryOptimizer

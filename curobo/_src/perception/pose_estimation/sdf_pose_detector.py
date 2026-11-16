@@ -283,6 +283,14 @@ class SDFPoseDetector:
             observed_points, n_points, position, quaternion
         )
 
+        # Initial state must own these values. _evaluate_at_pose returns views
+        # of reusable scratch buffers; GraphExecutor warmup evaluates candidate
+        # poses before copying this state into its graph inputs. Aliasing would
+        # pair the initial pose with the last warmup candidate's cost/Jacobian.
+        JtJ, Jtr, sum_sq, n_valid = (
+            value.clone() for value in (JtJ, Jtr, sum_sq, n_valid)
+        )
+
         # Compute initial error
         error = torch.sqrt(sum_sq / (n_valid + 1e-8))
 

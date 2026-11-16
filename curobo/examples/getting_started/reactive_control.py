@@ -67,11 +67,13 @@ The example runs five stages:
    configuration and zero velocity/acceleration via ``setup``.
 
 3. **Set the goal**: Compute the current end-effector pose with FK, offset it
-   by 20 cm in Y, and pass it to ``update_goal_tool_poses``.
+   by 20 cm in Y, then initialize MPC with one IK solution, one RRT path, and
+   a B-spline fit. This reseeding path does not run TrajOpt.
 
 4. **Control loop**: At each step call ``optimize_action_sequence``, extract the
-   last action in the optimized horizon, and feed it back as the current state
-   for the next iteration. The solver warm-starts from the previous solution.
+   next command after the current-state boundary sample, and feed it back as
+   the current state for the next iteration. The solver warm-starts from the
+   previous solution.
 
 5. **Save**: Stack the collected joint positions into a trajectory and plot
    the joint positions over time with ``matplotlib``.
@@ -103,8 +105,24 @@ import torch
 # CuRobo
 from curobo import runtime
 from curobo.model_predictive_control import ModelPredictiveControl, ModelPredictiveControlCfg
+from curobo.servo import JointTargetServo
 from curobo.types import ContentPath, GoalToolPose, JointState, Pose
 from curobo.viewer import ViserVisualizer
+
+
+def _make_joint_state(
+    position: torch.Tensor,
+    joint_names: list[str],
+    velocity: torch.Tensor | None = None,
+    acceleration: torch.Tensor | None = None,
+) -> JointState:
+    """Create a joint state with zero missing derivatives."""
+    joint_state = JointState.from_position(position, joint_names=joint_names)
+    joint_state.velocity = torch.zeros_like(position) if velocity is None else velocity
+    joint_state.acceleration = (
+        torch.zeros_like(position) if acceleration is None else acceleration
+    )
+    return joint_state
 
 
 def reactive_control(num_steps: int = 100):
@@ -128,18 +146,24 @@ def reactive_control(num_steps: int = 100):
         use_cuda_graph=True,
         optimization_dt=0.025,
         interpolation_steps=4,
+        num_seeds=1,
+        use_graph_seed=True,
     )
     mpc = ModelPredictiveControl(config)
+    servo = JointTargetServo(
+        joint_limits=mpc.kinematics.get_joint_limits(),
+        servo_dt_s=config.optimization_dt,
+    )
 
     # 2. Setup from retract configuration
-    current_state = JointState.from_position(
+    current_state = _make_joint_state(
         mpc.default_joint_position.clone().unsqueeze(0),
         joint_names=mpc.joint_names,
     )
-    current_state.velocity = torch.zeros_like(current_state.position)
-    current_state.acceleration = torch.zeros_like(current_state.position)
+    servo.reset(current_state)
 
     mpc.setup(current_state)
+    mpc.warmup_graph_seed()
 
     # 3. Set goal: offset current end-effector pose by 20 cm in Y
     kin_result = mpc.compute_kinematics(current_state)
@@ -147,12 +171,19 @@ def reactive_control(num_steps: int = 100):
     target_link = mpc.tool_frames[0]
     goal_poses[target_link].position[..., 1] += 0.2
 
-    mpc.update_goal_tool_poses(
+    graph_seed_success = mpc.update_goal_tool_poses_with_graph_seed(
         GoalToolPose.from_poses(goal_poses, ordered_tool_frames=mpc.tool_frames, num_goalset=1),
-        run_ik=True,
+        current_state=current_state,
     )
 
     print(f"Target link: {target_link}")
+    print(
+        f"Graph seed: {'success' if graph_seed_success else 'failed'} "
+        f"({mpc.last_graph_seed_time * 1000.0:.2f} ms total, "
+        f"{mpc.last_graph_seed_ik_time * 1000.0:.2f} ms IK, "
+        f"{mpc.last_graph_seed_graph_time * 1000.0:.2f} ms RRT, "
+        f"{mpc.last_graph_seed_fit_time * 1000.0:.2f} ms fit)"
+    )
     print(f"Running MPC for {num_steps} steps...")
 
     # 4. Control loop
@@ -162,15 +193,16 @@ def reactive_control(num_steps: int = 100):
         result = mpc.optimize_action_sequence(current_state)
 
         if result.action_sequence is not None and result.action_sequence.position.shape[1] > 0:
-            next_position = result.action_sequence.position[:, -1, :]
-            current_state = JointState.from_position(
-                next_position.clone(),
+            target_state = _make_joint_state(
+                result.action_sequence.position[:, -1, :].clone(),
                 joint_names=mpc.joint_names,
+                velocity=result.action_sequence.velocity[:, -1, :],
+                acceleration=result.action_sequence.acceleration[:, -1, :],
             )
-            current_state.velocity = result.action_sequence.velocity[:, -1, :]
-            current_state.acceleration = result.action_sequence.acceleration[:, -1, :]
+            servo.set_target(target_state)
+            current_state = servo.step(current_state)
 
-            trajectory_positions.append(next_position.squeeze(0).clone())
+            trajectory_positions.append(current_state.position.squeeze(0).clone())
 
         if (step + 1) % 25 == 0:
             pos_err = result.position_error
@@ -229,6 +261,8 @@ def interactive_mpc_example(robot_file="franka.yml", port=8080):
         optimization_dt=0.03,
         interpolation_steps=4,
         optimizer_collision_activation_distance=0.03,
+        num_seeds=1,
+        use_graph_seed=True,
     )
 
     scene_cfg = config.scene_collision_cfg.scene_model
@@ -239,15 +273,19 @@ def interactive_mpc_example(robot_file="franka.yml", port=8080):
     }
 
     mpc = ModelPredictiveControl(config)
+    servo = JointTargetServo(
+        joint_limits=mpc.kinematics.get_joint_limits(),
+        servo_dt_s=config.optimization_dt,
+    )
 
-    current_state = JointState.from_position(
+    current_state = _make_joint_state(
         mpc.default_joint_position.clone().unsqueeze(0),
         joint_names=mpc.joint_names,
     )
-    current_state.velocity = torch.zeros_like(current_state.position)
-    current_state.acceleration = torch.zeros_like(current_state.position)
+    servo.reset(current_state)
 
     mpc.setup(current_state)
+    mpc.warmup_graph_seed()
 
     kin_result = mpc.compute_kinematics(current_state)
     target_link_poses = kin_result.tool_poses.to_dict()
@@ -267,6 +305,7 @@ def interactive_mpc_example(robot_file="franka.yml", port=8080):
     pose_changed = False
 
     while True:
+        loop_start = time.perf_counter()
         obstacle_poses = {
             k: Pose.from_numpy(obstacle_frames[k].position, obstacle_frames[k].wxyz)
             for k in obstacle_frames.keys()
@@ -293,30 +332,39 @@ def interactive_mpc_example(robot_file="franka.yml", port=8080):
             target_link_poses = {
                 k.replace("target_", ""): v for k, v in target_poses.items()
             }
-            mpc.update_goal_tool_poses(
+            graph_seed_success = mpc.update_goal_tool_poses_with_graph_seed(
                 GoalToolPose.from_poses(
                     target_link_poses,
                     ordered_tool_frames=mpc.tool_frames,
                     num_goalset=1,
                 ),
-                run_ik=False,
+                current_state=current_state,
+            )
+            print(
+                f"Graph seed: {'success' if graph_seed_success else 'failed'} "
+                f"({mpc.last_graph_seed_time * 1000.0:.2f} ms)"
             )
             pose_changed = False
 
         mpc_result = mpc.optimize_action_sequence(current_state)
 
-        if mpc_result.action_sequence is not None and mpc_result.action_sequence.position.shape[1] > 0:
-            next_position = mpc_result.action_sequence.position[:, -1, :]
-            current_state = JointState.from_position(
-                next_position.clone(),
+        if (
+            mpc_result.action_sequence is not None
+            and mpc_result.action_sequence.position.shape[1] > 0
+        ):
+            target_state = _make_joint_state(
+                mpc_result.action_sequence.position[:, -1, :].clone(),
                 joint_names=mpc.joint_names,
+                velocity=mpc_result.action_sequence.velocity[:, -1, :],
+                acceleration=mpc_result.action_sequence.acceleration[:, -1, :],
             )
-            current_state.velocity = mpc_result.action_sequence.velocity[:, -1, :]
-            current_state.acceleration = mpc_result.action_sequence.acceleration[:, -1, :]
+            servo.set_target(target_state)
+            current_state = servo.step(current_state)
 
             viser_viz.set_joint_state(current_state.squeeze(0))
 
-        time.sleep(0.001)
+        loop_time = time.perf_counter() - loop_start
+        time.sleep(max(0.0, config.optimization_dt - loop_time))
 
 
 def test():

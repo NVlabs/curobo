@@ -4,12 +4,16 @@
 
 """Unit tests for RobotStateTransition with full coverage of control spaces."""
 
+# Standard Library
+from dataclasses import replace
+
 # Third Party
 import pytest
 import torch
 
 # CuRobo
 from curobo._src.state.state_joint import JointState
+from curobo._src.state.state_joint_ops import augment_joint_state
 from curobo._src.state.state_robot import RobotState
 from curobo._src.transition.fns_state_transition import (
     StateFromAcceleration,
@@ -26,6 +30,7 @@ from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
 from curobo._src.util.state_filter import FilterCfg
+from curobo._src.trajectory.trajectory_interpolation import calculate_dt_no_clamp
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
 
 # ============================================================================
@@ -519,6 +524,212 @@ class TestRobotStateTransitionForwardBSpline:
         # so a smooth ramp should stay well below that.
         max_jerk = torch.abs(result.joint_state.jerk).max()
         assert max_jerk < 100000
+
+
+class TestRobotStateTransitionTimeScaledDt:
+    """Test direct action-to-time-scaled-dt computation."""
+
+    @staticmethod
+    def _compute_reference_dt(
+        transition: RobotStateTransition,
+        state: JointState,
+        epsilon: float,
+        minimum_dt: float = -1.0,
+        maximum_dt: float = -1.0,
+    ) -> torch.Tensor:
+        """Compute the legacy rollout-and-reduction result."""
+        score = calculate_dt_no_clamp(
+            state.velocity,
+            state.acceleration,
+            state.jerk,
+            transition.max_velocity,
+            transition.max_acceleration,
+            transition.max_jerk,
+            epsilon=epsilon,
+        )
+        result = score * state.dt
+        if minimum_dt >= 0.0:
+            result = torch.clamp_min(result, minimum_dt)
+        if maximum_dt >= 0.0:
+            result = torch.clamp_max(result, maximum_dt)
+        return result
+
+    def test_base_time_scaled_dt_matches_rollout_reduction(
+        self,
+        position_clique_transition_cfg,
+        cuda_device_cfg,
+    ) -> None:
+        """The base implementation matches the existing trajectory reduction."""
+        transition = RobotStateTransition(position_clique_transition_cfg)
+        batch_size = 3
+        start_state, start_state_idx = create_start_state_with_idx(
+            transition, batch_size, cuda_device_cfg
+        )
+        goal_state, goal_state_idx, use_implicit_goal_state = create_goal_state_with_idx(
+            transition, batch_size, cuda_device_cfg, transition.horizon
+        )
+        action = torch.randn(
+            batch_size,
+            transition.action_horizon,
+            transition.action_dim,
+            **cuda_device_cfg.as_torch_dict(),
+        ) * 0.05
+        epsilon = 1e-3
+
+        state = transition.forward(
+            start_state,
+            action,
+            start_state_idx,
+            goal_state,
+            goal_state_idx,
+            use_implicit_goal_state,
+        ).joint_state
+        expected = self._compute_reference_dt(transition, state, epsilon)
+
+        result = transition.compute_time_scaled_dt_from_action(
+            start_state,
+            action,
+            transition.get_state_bounds(),
+            epsilon=epsilon,
+            start_state_idx=start_state_idx,
+            goal_state=goal_state,
+            goal_state_idx=goal_state_idx,
+            use_implicit_goal_state=use_implicit_goal_state,
+        )
+
+        torch.testing.assert_close(result, expected)
+
+    @pytest.mark.parametrize(
+        ("minimum_dt", "maximum_dt"),
+        [(-1.0, -1.0), (0.01, -1.0), (-1.0, 0.03), (0.01, 0.03)],
+    )
+    @pytest.mark.parametrize(
+        "control_space",
+        [ControlSpace.BSPLINE_3, ControlSpace.BSPLINE_4, ControlSpace.BSPLINE_5],
+    )
+    def test_bspline_time_scaled_dt_matches_rollout_reduction(
+        self,
+        bspline_transition_cfg,
+        cuda_device_cfg,
+        minimum_dt: float,
+        maximum_dt: float,
+        control_space: ControlSpace,
+    ) -> None:
+        """The B-spline specialization preserves scaling and clamp semantics."""
+        transition = RobotStateTransition(
+            replace(bspline_transition_cfg, control_space=control_space)
+        )
+        batch_size = 4
+        start_state, start_state_idx = create_start_state_with_idx(
+            transition, batch_size, cuda_device_cfg
+        )
+        goal_state = JointState.zeros(
+            (batch_size, 1, transition.num_dof), cuda_device_cfg
+        )
+        goal_state.position = torch.randn_like(goal_state.position) * 0.1
+        goal_state.dt = torch.linspace(
+            0.012,
+            0.027,
+            batch_size,
+            **cuda_device_cfg.as_torch_dict(),
+        ).view(batch_size, 1)
+        goal_state_idx = torch.arange(
+            batch_size,
+            device=cuda_device_cfg.device,
+            dtype=torch.int32,
+        )
+        use_implicit_goal_state = torch.zeros(
+            (batch_size, 1),
+            device=cuda_device_cfg.device,
+            dtype=torch.uint8,
+        )
+        use_implicit_goal_state[::2] = 1
+        action = torch.randn(
+            batch_size,
+            transition.action_horizon,
+            transition.action_dim,
+            **cuda_device_cfg.as_torch_dict(),
+        ) * 0.05
+        epsilon = 1e-3
+
+        state = transition.forward(
+            start_state,
+            action,
+            start_state_idx,
+            goal_state,
+            goal_state_idx,
+            use_implicit_goal_state,
+        ).joint_state
+        expected = self._compute_reference_dt(
+            transition,
+            state,
+            epsilon,
+            minimum_dt,
+            maximum_dt,
+        )
+
+        result = transition.compute_time_scaled_dt_from_action(
+            start_state,
+            action,
+            transition.get_state_bounds(),
+            epsilon=epsilon,
+            minimum_dt=minimum_dt,
+            maximum_dt=maximum_dt,
+            start_state_idx=start_state_idx,
+            goal_state=goal_state,
+            goal_state_idx=goal_state_idx,
+            use_implicit_goal_state=use_implicit_goal_state,
+        )
+
+        torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-6)
+
+    def test_time_scaled_dt_reuses_preallocated_output(
+        self,
+        bspline_transition_cfg,
+        cuda_device_cfg,
+    ) -> None:
+        """Repeated calls reuse output tensors allocated by batch-size updates."""
+        transition = RobotStateTransition(bspline_transition_cfg)
+        batch_size = 2
+        start_state, start_state_idx = create_start_state_with_idx(
+            transition, batch_size, cuda_device_cfg
+        )
+        goal_state, goal_state_idx, use_implicit_goal_state = create_goal_state_with_idx(
+            transition, batch_size, cuda_device_cfg, transition.horizon
+        )
+        action = torch.randn(
+            batch_size,
+            transition.action_horizon,
+            transition.action_dim,
+            **cuda_device_cfg.as_torch_dict(),
+        )
+
+        first = transition.compute_time_scaled_dt_from_action(
+            start_state,
+            action,
+            transition.get_state_bounds(),
+            start_state_idx=start_state_idx,
+            goal_state=goal_state,
+            goal_state_idx=goal_state_idx,
+            use_implicit_goal_state=use_implicit_goal_state,
+        )
+        second = transition.compute_time_scaled_dt_from_action(
+            start_state,
+            action,
+            transition.get_state_bounds(),
+            start_state_idx=start_state_idx,
+            goal_state=goal_state,
+            goal_state_idx=goal_state_idx,
+            use_implicit_goal_state=use_implicit_goal_state,
+        )
+
+        assert first.data_ptr() == second.data_ptr()
+        transition.update_batch_size(3)
+        assert transition._rollout_step_fn._time_scaled_dt.shape == (3,)
+        assert transition._rollout_step_fn._time_scaled_dt_per_timestep.shape == (
+            3,
+            transition.horizon,
+        )
 
 
 # ============================================================================
@@ -1295,6 +1506,40 @@ class TestRobotStateTransitionGetFullDofFromSolution:
 
             result = transition.get_full_dof_from_solution(q_js)
             assert result is q_js
+
+    def test_get_full_dof_direct_mapping_matches_generic_augmentation(
+        self, teleport_transition_cfg, cuda_device_cfg
+    ):
+        """Direct mapping matches generic augmentation for batched trajectories."""
+        transition = RobotStateTransition(teleport_transition_cfg)
+        lock_joint_state = transition.robot_model.lock_jointstate
+        assert lock_joint_state is not None
+        assert (
+            transition.joint_names + lock_joint_state.joint_names
+            == transition.robot_model.all_articulated_joint_names
+        )
+        shape = (1, 2, 5, transition.num_dof)
+        q_js = JointState(
+            position=torch.randn(shape, **cuda_device_cfg.as_torch_dict()),
+            velocity=torch.randn(shape, **cuda_device_cfg.as_torch_dict()),
+            acceleration=torch.randn(shape, **cuda_device_cfg.as_torch_dict()),
+            jerk=torch.randn(shape, **cuda_device_cfg.as_torch_dict()),
+            dt=torch.rand((1, 2), **cuda_device_cfg.as_torch_dict()),
+            joint_names=transition.joint_names,
+            control_space=ControlSpace.POSITION,
+        )
+        expected = augment_joint_state(
+            q_js,
+            transition.robot_model.all_articulated_joint_names,
+            lock_joint_state,
+        )
+
+        result = transition.get_full_dof_from_solution(q_js)
+
+        assert result.joint_names == expected.joint_names
+        assert result.control_space == expected.control_space
+        for attribute in ("position", "velocity", "acceleration", "jerk", "dt"):
+            torch.testing.assert_close(getattr(result, attribute), getattr(expected, attribute))
 
 
 # ============================================================================

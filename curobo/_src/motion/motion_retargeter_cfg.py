@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.types.device_cfg import DeviceCfg
+from curobo._src.util.logging import log_and_raise
 
 
 @dataclass
@@ -200,6 +201,17 @@ class MotionRetargeterCfg:
         )
 
     def __post_init__(self):
+        """Align pose criteria with the retargeter device and validate collision settings."""
+        normalized_criteria = {}
+        for tool_frame, criteria in self.tool_pose_criteria.items():
+            if not isinstance(criteria, ToolPoseCriteria):
+                log_and_raise(
+                    f"tool_pose_criteria[{tool_frame!r}] must be a ToolPoseCriteria, "
+                    f"got {type(criteria)}"
+                )
+            normalized_criteria[tool_frame] = criteria.to(self.device_cfg)
+        self.tool_pose_criteria = normalized_criteria
+
         if not self.self_collision_check and self.scene_model is None:
             self.load_collision_spheres = False
         if self.self_collision_check:

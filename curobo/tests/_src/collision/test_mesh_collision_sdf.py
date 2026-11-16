@@ -58,3 +58,48 @@ def test_small_mesh_collision_cost_matches_cuboid(cuda_device_cfg):
     assert torch.allclose(mesh_cost, cuboid_cost)
     assert mesh_cost.flatten()[0] > 0.0
     assert torch.all(mesh_cost.flatten()[1:] == 0.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_swept_mesh_collision_cost_matches_cuboid(cuda_device_cfg):
+    """Swept mesh queries must match the equivalent analytic cuboid."""
+    cube_edge = 0.05
+    pose = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    cuboid = Cuboid(name="box", dims=[cube_edge, cube_edge, cube_edge], pose=pose)
+    trimesh_box = cuboid.get_trimesh_mesh()
+    mesh = Mesh(
+        name="mesh_box",
+        vertices=trimesh_box.vertices.tolist(),
+        faces=trimesh_box.faces.reshape(-1).tolist(),
+        pose=pose,
+    )
+
+    def swept_cost(scene_cfg: SceneCfg) -> torch.Tensor:
+        checker = SceneCollision.from_config(
+            SceneCollisionCfg(
+                device_cfg=cuda_device_cfg,
+                scene_model=scene_cfg,
+                cache={"cuboid": 4, "mesh": 4},
+            )
+        )
+        spheres = torch.tensor(
+            [[[[-0.1, 0.0, 0.0, 0.02]], [[0.0, 0.0, 0.0, 0.02]], [[0.1, 0.0, 0.0, 0.02]]]],
+            device=cuda_device_cfg.device,
+            dtype=torch.float32,
+        )
+        buffer = CollisionBuffer.from_shape(spheres.shape, cuda_device_cfg)
+        return checker.get_swept_sphere_distance_raw(
+            query_spheres=spheres,
+            collision_buffer=buffer,
+            weight=torch.tensor([1.0], device=cuda_device_cfg.device),
+            activation_distance=torch.tensor([0.01], device=cuda_device_cfg.device),
+            trajectory_dt=torch.tensor([0.1], device=cuda_device_cfg.device),
+        )
+
+    cuboid_cost = swept_cost(SceneCfg(cuboid=[cuboid]))
+    mesh_cost = swept_cost(SceneCfg(mesh=[mesh]))
+    combined_cost = swept_cost(SceneCfg(cuboid=[cuboid], mesh=[mesh]))
+
+    torch.testing.assert_close(mesh_cost, cuboid_cost, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(combined_cost, cuboid_cost + mesh_cost, rtol=1e-5, atol=1e-6)
+    assert torch.any(mesh_cost > 0.0)

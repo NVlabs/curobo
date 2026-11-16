@@ -12,8 +12,8 @@ original mesh, so you can visually compare coverage and density.
 Usage::
 
     python sphere_fit_comparison.py
-    python sphere_fit_comparison.py --urdf franka.yml
-    python sphere_fit_comparison.py --links panda_link0 panda_link7 panda_hand
+    python sphere_fit_comparison.py --robot franka.yml
+    python sphere_fit_comparison.py --robot franka.yml --links panda_link0 panda_link7 panda_hand
     python sphere_fit_comparison.py --port 8081
 
 Press Ctrl-C to stop the server.
@@ -39,7 +39,6 @@ from curobo.robot_parser import UrdfRobotParser
 from curobo.scene import Sphere
 from curobo.sphere_fit import (
     SphereFitType,
-    estimate_sphere_count,
     fit_spheres_to_mesh,
 )
 
@@ -160,11 +159,11 @@ def _add_spheres_to_viser(
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Sphere Fitting Comparison Demo")
     parser.add_argument(
         "--robot", default="unitree_g1.yml",
-        help="cuRobo robot YAML config name (default: franka.yml)",
+        help="cuRobo robot YAML config name (default: unitree_g1.yml)",
     )
     parser.add_argument(
         "--links", nargs="*", default=None,
@@ -172,8 +171,8 @@ def main():
     )
     parser.add_argument(
         "--methods", nargs="*", default=None,
-        help="Fit methods to compare (e.g. sample_surface voxel_volume morphit). "
-             "Default: all except MORPHIT (add 'morphit' explicitly to include it).",
+        help="Fit methods to compare (e.g. surface voxel morphit). "
+             "Default: surface, voxel, and morphit.",
     )
     parser.add_argument("--port", type=int, default=8080, help="Viser server port")
     parser.add_argument("--num-spheres", type=int, default=0,
@@ -244,8 +243,7 @@ def main():
             log_warn(f"Skipping {link_name}: no mesh")
             continue
 
-        n_spheres_default = args.num_spheres if args.num_spheres > 0 else estimate_sphere_count(mesh)
-        print(f"\n--- {link_name} (default {n_spheres_default} spheres) ---")
+        print(f"\n--- {link_name} ---")
 
         # Compute vertical offset so links don't overlap
         link_height = mesh.bounds[1][2] - mesh.bounds[0][2]
@@ -271,10 +269,9 @@ def main():
                 0.0,
             ])
 
-            num_spheres = n_spheres_default
-
             result = fit_spheres_to_mesh(
                 mesh,
+                num_spheres=args.num_spheres if args.num_spheres > 0 else None,
                 fit_type=fit_type,
                 iterations=args.iterations,
             )

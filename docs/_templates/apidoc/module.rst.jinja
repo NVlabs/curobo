@@ -1,0 +1,15 @@
+{# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. #}
+{# SPDX-License-Identifier: Apache-2.0 #}
+{%- if show_headings %}
+{{- [basename, "module"] | join(' ') | e | heading }}
+
+{% endif -%}
+.. automodule:: {{ qualname }}
+{%- if qualname == "curobo.batch_motion_planner" %}
+   :exclude-members: MotionPlannerCfg
+{%- elif qualname == "curobo.motion_retargeter" %}
+   :exclude-members: GoalToolPose
+{%- endif %}
+{%- for option in automodule_options %}
+   :{{ option }}:
+{%- endfor %}

@@ -8,9 +8,8 @@
 fixed TSDF geometry and truncation distance. Runtime arguments are limited
 to obstacle data, allocation state, and output tensors.
 
-The obstacle-SDF overload registration remains at module scope in
-``kernel/wp_stamp_obstacles.py``. The stamp kernels in this builder call
-those overloads via cross-module resolution.
+The obstacle-query overloads live in ``geom/data/data_obstacle_query.py``.
+The stamp kernels in this builder call them via cross-module resolution.
 """
 
 from __future__ import annotations
@@ -19,10 +18,7 @@ from typing import Any
 
 import warp as wp
 
-# Overloaded SDF funcs live at module scope in wp_stamp_obstacles.py.
-# The overload registry is initialized at that module's import time; we
-# just reference the names from this side.
-from curobo._src.perception.mapper.kernel.wp_stamp_obstacles import (
+from curobo._src.geom.data.data_obstacle_query import (
     compute_local_sdf,
     is_obs_enabled,
     load_obstacle_transform,
@@ -46,10 +42,10 @@ def make_stamp_kernels(
     color_grid_size: int,
 ) -> dict[str, object]:
     """Build obstacle-stamping kernels."""
-    suffix = (
-        f"bs{block_size}_cfg"
-        f"{warp_constant_suffix(block_size, grid_shape, origin_xyz, voxel_size, truncation_distance)}"
+    config_suffix = warp_constant_suffix(
+        block_size, grid_shape, origin_xyz, voxel_size, truncation_distance
     )
+    suffix = f"bs{block_size}_cfg{config_suffix}"
     BLOCK_SIZE = wp.constant(wp.int32(block_size))
     GRID_D = wp.constant(wp.int32(grid_shape[0]))
     GRID_H = wp.constant(wp.int32(grid_shape[1]))

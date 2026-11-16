@@ -361,6 +361,7 @@ def rnea(
     link_masses_com: np.ndarray,
     link_inertias: np.ndarray,
     gravity: float = -9.81,
+    f_ext: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute inverse dynamics using body-frame RNEA.
 
@@ -381,6 +382,7 @@ def rnea(
         link_masses_com: [num_links, 4] = [com_x, com_y, com_z, mass].
         link_inertias: [num_links, 6] = [ixx, iyy, izz, ixy, ixz, iyz].
         gravity: gravity constant (default -9.81, applied as upward acceleration on base).
+        f_ext: [num_links, 6] external spatial wrenches in each link frame.
 
     Returns:
         tau: [num_dof] joint torques.
@@ -458,6 +460,8 @@ def rnea(
         Iv = spatial_inertia_multiply(mass, com, inertia, v[k])
         Ia = spatial_inertia_multiply(mass, com, inertia, a[k])
         f[k] = Ia + spatial_force_cross(v[k], Iv)
+        if f_ext is not None:
+            f[k] -= f_ext[k]
 
     # -----------------------------------------------------------------------
     # Step 3: Backward pass, propagate forces, extract torques
@@ -786,6 +790,7 @@ def rnea_from_kinematics_params(
     qdd: Optional[np.ndarray],
     kinematics_params,
     gravity: float = -9.81,
+    f_ext: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Run RNEA using a KinematicsParams object (tensors converted to numpy).
 
@@ -795,6 +800,7 @@ def rnea_from_kinematics_params(
         qdd: [num_dof] joint accelerations.
         kinematics_params: curobo KinematicsParams instance.
         gravity: gravity constant.
+        f_ext: [num_links, 6] external spatial wrenches in each link frame.
 
     Returns:
         tau, v, a, f: see rnea().
@@ -819,4 +825,5 @@ def rnea_from_kinematics_params(
         link_masses_com=kp.link_masses_com.cpu().numpy(),
         link_inertias=kp.link_inertias.cpu().numpy(),
         gravity=gravity,
+        f_ext=f_ext,
     )

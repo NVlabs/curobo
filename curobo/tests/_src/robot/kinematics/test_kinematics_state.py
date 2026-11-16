@@ -184,6 +184,24 @@ def test_cuda_robot_model_state_partial_creation():
     assert state.tool_jacobians is None
 
 
+def test_tool_jacobian_allocation_is_opt_in(cuda_device_cfg):
+    """Disabled Jacobians should consume no rollout-sized output buffer."""
+    robot_data = load_yaml(join_path(get_robot_configs_path(), "franka.yml"))
+    cfg = KinematicsCfg.from_robot_yaml_file(robot_data, ["panda_hand"])
+    robot_model = Kinematics(cfg, compute_jacobian=False)
+    assert robot_model._buffers["batch_jacobian"].numel() == 0
+
+    joint_state = JointState.from_position(
+        torch.zeros((1, 1, 7), **cuda_device_cfg.as_torch_dict()),
+        joint_names=robot_model.joint_names,
+    )
+    state = robot_model.compute_kinematics(joint_state)
+    assert state.tool_jacobians is None
+
+    jacobian_model = Kinematics(cfg, compute_jacobian=True)
+    assert jacobian_model._buffers["batch_jacobian"].numel() > 0
+
+
 @pytest.mark.parametrize("batch_size", [1, 5, 20])
 def test_cuda_robot_model_state_different_batch_sizes(batch_size, cuda_device_cfg):
     """Test state creation with different batch sizes."""
@@ -205,4 +223,3 @@ def test_cuda_robot_model_state_different_batch_sizes(batch_size, cuda_device_cf
     if state.robot_com is not None:
         assert state.robot_com.shape[0] == batch_size
         assert state.robot_com.shape[1] == 1
-

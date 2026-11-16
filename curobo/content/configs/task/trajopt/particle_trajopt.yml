@@ -71,15 +71,6 @@ rollout:
       - 0.0
       - 0.0
     tool_pose_cfg:
-      use_lie_group: false
-      _non_terminal_pose_axes_weight_factor:
-      - 0.0
-      - 0.0
-      - 0.0
-      - 0.0
-      - 0.0
-      - 0.0
-
       weight:
       - 0.0
       - 0.0

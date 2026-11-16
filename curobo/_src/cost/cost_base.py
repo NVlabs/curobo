@@ -74,6 +74,16 @@ class BaseCost:
     def enabled(self):
         return self._cost_enabled
 
+    @property
+    def dense_temporal_support_span(self) -> int:
+        """Return the largest dense-timestep span jointly used by one cost term.
+
+        Pointwise costs use one dense state and therefore have span zero.
+        Costs that couple multiple dense states must override this property so
+        optimizers can conservatively derive action-space Hessian sparsity.
+        """
+        return 0
+
     def update_dt(self, dt: Union[float, torch.Tensor]):
         self._dt = dt
 
@@ -83,4 +93,3 @@ class BaseCost:
         **kwargs,
     ):
         pass
-

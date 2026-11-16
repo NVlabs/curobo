@@ -15,7 +15,7 @@ A rollout is consumed by any class that implements the
 :class:`curobo._src.optim.optimizer_protocol.Optimizer` Protocol to minimise costs while
 satisfying constraints.
 
-See :ref:`rollout_class_note` for a walkthrough of the Rollout Protocol and how to implement a
-custom rollout.
+See :ref:`tut_user_rollout_optimization` for a walkthrough of the Rollout Protocol and how to
+implement a custom rollout.
 """
 

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type, Union
 
 # CuRobo
+from curobo._src.graph_planner.rrt import BiRRTConfig, RRTGraphPlannerCfg
 from curobo._src.rollout.cost_manager.cost_manager_robot_cfg import RobotCostManagerCfg
 from curobo._src.solver.solver_core_cfg import (
     SolverCoreCfg,
@@ -56,7 +57,7 @@ class MPCSolverCfg:
     #: Weight scale factor applied to the tool-pose cost at non-terminal
     #: time steps. Small positive values help MPC track the path, unlike
     #: IK/TrajOpt where 0.0 is typical.
-    non_terminal_tool_pose_weight_factor: float = 0.001
+    non_terminal_tool_pose_weight_factor: float = 0.00
     #: Whether to enable self-collision checking during optimization.
     self_collision_check: bool = True
 
@@ -88,6 +89,8 @@ class MPCSolverCfg:
     #: Hard upper limit (seconds) on the deceleration duration. Prevents
     #: extremely slow stopping motions.
     max_deceleration_time: float = 2.0
+    #: Complete RRT graph-planner configuration used to seed MPC on goal changes.
+    rrt_graph_planner_config: Optional[RRTGraphPlannerCfg] = None
 
     # Convenience accessors into core_cfg
     @property
@@ -161,6 +164,17 @@ class MPCSolverCfg:
         max_batch_size: int = 1,
         multi_env: bool = False,
         max_goalset: int = 1,
+        use_graph_seed: bool = False,
+        graph_planner_resources_config: Union[str, Dict[str, Any]] = (
+            "graph_planner/resources.yml"
+        ),
+        graph_planner_rollout: Union[str, Dict[str, Any]] = "metrics_base.yml",
+        graph_planner_transition_model: Union[str, Dict[str, Any]] = (
+            "graph_planner/transition_graph_planner.yml"
+        ),
+        rrt_planner_config: Optional[
+            Union[BiRRTConfig, Dict[str, Any]]
+        ] = None,
         **kwargs,
     ) -> MPCSolverCfg:
         """Create MPCSolverCfg from flexible inputs.
@@ -206,6 +220,14 @@ class MPCSolverCfg:
             max_batch_size: Maximum batch size.
             multi_env: Whether to use multi-env collision.
             max_goalset: Maximum goalset size.
+            use_graph_seed: Create an RRT graph planner and B-spline fitter
+                for reseeding MPC when Cartesian goals change.
+            graph_planner_resources_config: Shared graph-planner runtime-resource
+                configuration used when ``use_graph_seed`` is true.
+            graph_planner_rollout: Feasibility rollout configuration for RRT.
+            graph_planner_transition_model: Transition model used for RRT
+                collision checking.
+            rrt_planner_config: Optional RRT algorithm tuning configuration.
             **kwargs: Advanced ``MPCSolverCfg`` dataclass fields not exposed
                 as explicit factory parameters. Prefer explicit parameters in
                 integration code.
@@ -219,6 +241,10 @@ class MPCSolverCfg:
                 + "incorrect behavior. To change the command rate, instead set optimization_dt to a"
                 + "different value."
             )
+        if not isinstance(use_graph_seed, bool):
+            log_and_raise("use_graph_seed must be a boolean")
+        if use_graph_seed and kwargs.get("num_seeds", 1) != 1:
+            log_and_raise("MPC graph seeding supports exactly one trajectory seed")
         # 1. Resolve YAML paths
         robot_config, optimizer_dicts, metrics_rollout_dict, transition_model_dict, scene_model_dict = (
             resolve_yaml_configs(
@@ -265,6 +291,19 @@ class MPCSolverCfg:
             cost_manager_config_instance_type=cost_manager_config_instance_type,
         )
 
+        resolved_rrt_graph_planner_config = None
+        if use_graph_seed:
+            resolved_rrt_graph_planner_config = RRTGraphPlannerCfg.create(
+                robot=robot_config,
+                planner=rrt_planner_config,
+                resources_config=graph_planner_resources_config,
+                rollout=graph_planner_rollout,
+                transition_model=graph_planner_transition_model,
+                scene_model=None,
+                device_cfg=device_cfg,
+                use_cuda_graph_for_rollout=use_cuda_graph,
+            )
+
         return MPCSolverCfg(
             core_cfg=core_cfg,
             robot_config=robot_config,
@@ -283,5 +322,6 @@ class MPCSolverCfg:
             max_deceleration_time=max_deceleration_time,
             warm_start_optimization_num_iters=warm_start_optimization_num_iters,
             cold_start_optimization_num_iters=cold_start_optimization_num_iters,
+            rrt_graph_planner_config=resolved_rrt_graph_planner_config,
             **kwargs,
         )

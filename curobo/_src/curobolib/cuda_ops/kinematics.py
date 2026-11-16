@@ -9,7 +9,6 @@ from torch.autograd import Function
 
 from curobo._src.curobolib.backends import kinematics as kinematics_cu
 from curobo._src.curobolib.cuda_ops.tensor_checks import (
-    check_bool_tensors,
     check_float32_tensors,
     check_int8_tensors,
     check_int16_tensors,
@@ -29,6 +28,7 @@ class KinematicsFusedFunction(Function):
         horizon: int,
         kinematics_config: KinematicsParams,
         device_cfg: DeviceCfg = DeviceCfg(),
+        compute_jacobian: bool = False,
     ):
         batch_link_position = torch.zeros(
             (batch, horizon, kinematics_config.num_pose_links, 3),
@@ -45,11 +45,24 @@ class KinematicsFusedFunction(Function):
             device=device_cfg.device,
             dtype=device_cfg.dtype,
         )
-        batch_jacobian = torch.zeros(
-            (batch, horizon, kinematics_config.num_pose_links, 6, kinematics_config.num_dof),
-            device=device_cfg.device,
-            dtype=device_cfg.dtype,
-        )
+        if compute_jacobian:
+            batch_jacobian = torch.zeros(
+                (
+                    batch,
+                    horizon,
+                    kinematics_config.num_pose_links,
+                    6,
+                    kinematics_config.num_dof,
+                ),
+                device=device_cfg.device,
+                dtype=device_cfg.dtype,
+            )
+        else:
+            batch_jacobian = torch.empty(
+                (0,),
+                device=device_cfg.device,
+                dtype=device_cfg.dtype,
+            )
         batch_com = torch.zeros(
             (batch, horizon, 4),
             device=device_cfg.device,
@@ -71,7 +84,6 @@ class KinematicsFusedFunction(Function):
             device=device_cfg.device,
             dtype=device_cfg.dtype,
         )
-        grad_out_q_jacobian = torch.zeros_like(grad_out_q)
 
         buffers = {
             "batch_link_position": batch_link_position,
@@ -81,7 +93,6 @@ class KinematicsFusedFunction(Function):
             "batch_jacobian": batch_jacobian,
             "batch_cumul_mat": batch_cumul_mat,
             "grad_out_q": grad_out_q,
-            "grad_out_q_jacobian": grad_out_q_jacobian,
             "grad_in_link_pos": grad_link_pos,
             "grad_in_link_quat": grad_link_quat,
             "grad_in_robot_spheres": grad_robot_spheres,
@@ -101,7 +112,6 @@ class KinematicsFusedFunction(Function):
         batch_cumul_mat: torch.Tensor,
         kinematics_config: KinematicsParams,
         grad_out: torch.Tensor,
-        grad_out_q_jacobian: torch.Tensor,
         grad_in_link_pos: torch.Tensor,
         grad_in_link_quat: torch.Tensor,
         grad_in_robot_spheres: torch.Tensor,
@@ -145,13 +155,15 @@ class KinematicsFusedFunction(Function):
             link_chain_offsets=kinematics_config.link_chain_offsets,
             joint_links_data=kinematics_config.joint_links_data,
             joint_links_offsets=kinematics_config.joint_links_offsets,
+            tool_joint_links_data=kinematics_config.tool_joint_links_data,
+            tool_joint_links_offsets=kinematics_config.tool_joint_links_offsets,
         )
         check_int8_tensors(device, joint_map_type=kinematics_config.joint_map_type)
-        check_bool_tensors(
+        check_int32_tensors(
             device,
-            joint_affects_endeffector=kinematics_config.joint_affects_endeffector,
+            env_query_idx=env_query_idx,
+            joint_link_influence_words=kinematics_config.joint_link_influence_words,
         )
-        check_int32_tensors(device, env_query_idx=env_query_idx)
         kinematics_config.validate_shapes()
         fixed_transform = kinematics_config.fixed_transforms
         if fixed_transform is None:
@@ -173,11 +185,8 @@ class KinematicsFusedFunction(Function):
                 kinematics_config.link_map,
                 kinematics_config.tool_frame_map,
                 kinematics_config.link_sphere_idx_map,
-                kinematics_config.link_chain_data,
-                kinematics_config.link_chain_offsets,
-                kinematics_config.joint_links_data,
-                kinematics_config.joint_links_offsets,
-                kinematics_config.joint_affects_endeffector,
+                kinematics_config.tool_joint_links_data,
+                kinematics_config.tool_joint_links_offsets,
                 kinematics_config.joint_offset_map,
                 env_query_idx,
                 num_envs,
@@ -185,7 +194,6 @@ class KinematicsFusedFunction(Function):
                 horizon,
                 n_joints,
                 num_spheres,
-                32,
                 write_global_cumul=True,
                 compute_com=compute_com,
             )
@@ -212,7 +220,6 @@ class KinematicsFusedFunction(Function):
                 horizon,
                 n_joints,
                 num_spheres,
-                32,
                 write_global_cumul=True,
                 compute_com=compute_com,
             )
@@ -284,6 +291,15 @@ class KinematicsFusedFunction(Function):
                 batch_com,
             ) = ctx.saved_tensors
             kinematics_config = ctx.kinematics_config
+            has_standard_cotangent = any(
+                gradient is not None
+                for gradient in (
+                    grad_in_link_pos,
+                    grad_in_link_quat,
+                    grad_in_spheres,
+                    grad_in_com,
+                )
+            )
             if grad_in_link_pos is None:
                 grad_in_link_pos = ctx.grad_in_link_pos
             if grad_in_link_quat is None:
@@ -319,45 +335,51 @@ class KinematicsFusedFunction(Function):
             )
             if fused_jacobian_backward:
                 check_float32_tensors(device, grad_in_link_jacobian=grad_in_link_jacobian)
-            grad_jacobian = (
-                grad_in_link_jacobian if fused_jacobian_backward else grad_in_link_pos
-            )
-            kinematics_cu.launch_kinematics_backward(
-                grad_out,
-                grad_in_link_pos,
-                grad_in_link_quat,
-                grad_in_spheres,
-                grad_in_com,
-                batch_com,
-                grad_jacobian,
-                batch_cumul_mat,
-                kinematics_config.link_spheres,
-                kinematics_config.link_masses_com,
-                kinematics_config.link_map,
-                kinematics_config.joint_map,
-                kinematics_config.joint_map_type,
-                kinematics_config.tool_frame_map,
-                kinematics_config.link_sphere_idx_map,
-                kinematics_config.link_chain_data,
-                kinematics_config.link_chain_offsets,
-                kinematics_config.joint_links_data,
-                kinematics_config.joint_links_offsets,
-                kinematics_config.joint_affects_endeffector,
-                kinematics_config.joint_offset_map,
-                ctx.env_query_idx,
-                kinematics_config.num_envs,
-                b_size,
-                ctx.horizon,
-                n_joints,
-                num_spheres,
-                ctx.compute_com,
-                fused_jacobian_backward,
-            )
+            if not fused_jacobian_backward or has_standard_cotangent:
+                kinematics_cu.launch_kinematics_link_wrench_backward(
+                    grad_out,
+                    grad_in_link_pos,
+                    grad_in_link_quat,
+                    grad_in_spheres,
+                    grad_in_com,
+                    batch_com,
+                    batch_cumul_mat,
+                    kinematics_config.link_spheres,
+                    kinematics_config.link_masses_com,
+                    kinematics_config.joint_map_type,
+                    kinematics_config.joint_link_influence_words,
+                    kinematics_config.joint_links_data,
+                    kinematics_config.joint_links_offsets,
+                    kinematics_config.joint_offset_map,
+                    kinematics_config.tool_frame_map,
+                    kinematics_config.link_sphere_idx_map,
+                    ctx.env_query_idx,
+                    b_size,
+                    ctx.horizon,
+                    kinematics_config.num_envs,
+                    n_joints,
+                    num_spheres,
+                    ctx.compute_com,
+                )
+            if fused_jacobian_backward:
+                kinematics_cu.launch_kinematics_jacobian_backward(
+                    grad_out,
+                    grad_in_link_jacobian,
+                    batch_cumul_mat,
+                    kinematics_config.joint_map_type,
+                    kinematics_config.tool_joint_links_data,
+                    kinematics_config.tool_joint_links_offsets,
+                    kinematics_config.joint_link_influence_words,
+                    kinematics_config.joint_offset_map,
+                    kinematics_config.tool_frame_map,
+                    b_size,
+                    n_joints,
+                    has_standard_cotangent,
+                )
             grad_joint = grad_out
 
         return (
             grad_joint,
-            None,
             None,
             None,
             None,

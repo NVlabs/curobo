@@ -5,14 +5,22 @@
 from __future__ import annotations
 
 # Standard Library
+import time
 from typing import Dict, List, Optional, Tuple
 
 # Third Party
 import torch
 
+from curobo._src.cost.criteria_tool_relative_transform import ToolRelativeTransformCriteria
+from curobo._src.cost.criteria_tool_velocity_limit import ToolVelocityLimitCriteria
+
 # CuRobo
 from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.geom.collision.collision_scene import SceneCollision
+from curobo._src.graph_planner.rrt import (
+    BiRRTPlanner,
+    RRTPlannerResources,
+)
 from curobo._src.rollout.goal_registry import GoalRegistry
 from curobo._src.rollout.metrics import RolloutMetrics
 from curobo._src.solver.solve_mode import SolveMode
@@ -23,11 +31,16 @@ from curobo._src.solver.solver_ik_cfg import IKSolverCfg
 from curobo._src.solver.solver_mpc_cfg import MPCSolverCfg
 from curobo._src.solver.solver_mpc_result import MPCSolverResult
 from curobo._src.state.state_joint import JointState
+from curobo._src.trajectory.trajectory_execution_manager import TrajectoryExecutionManager
+from curobo._src.trajectory.trajectory_interpolation import TrajInterpolationType
+from curobo._src.trajectory.trajectory_seed_fitter import (
+    BSplineTimeOptimalSeedFitter,
+)
 from curobo._src.types.control_space import ControlSpace
+from curobo._src.types.target_tool_relative_transform import ToolRelativeTransformTarget
 from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.logging import log_and_raise, log_info
-from curobo._src.util.trajectory_execution_manager import TrajectoryExecutionManager
 
 
 class MPCSolver:
@@ -62,23 +75,53 @@ class MPCSolver:
         self._debug_counter = 0
 
         # Create IKSolver for computing IK solutions when updating goal poses
+        use_graph_ik = config.rrt_graph_planner_config is not None
         ik_solver_cfg = IKSolverCfg.create(
             robot=config.robot_config,
             scene_model=None,
             num_seeds=1,
+            seed_solver_num_seeds=1,
             position_tolerance=config.position_tolerance,
             orientation_tolerance=config.orientation_tolerance,
-            use_cuda_graph=True,
+            use_cuda_graph=config.use_cuda_graph,
             random_seed=config.random_seed,
             optimizer_collision_activation_distance=config.optimizer_collision_activation_distance,
             device_cfg=config.device_cfg,
             self_collision_check=config.self_collision_check,
             store_debug=config.store_debug,
-            optimizer_configs=["ik/lbfgs_retarget_ik.yml"],
+            optimizer_configs=["ik/lbfgs_ik.yml" if use_graph_ik else "ik/lbfgs_retarget_ik.yml"],
             metrics_rollout="metrics_base.yml",
             transition_model="ik/transition_ik.yml",
         )
         self.ik_solver = IKSolver(ik_solver_cfg, self.core.scene_collision_checker)
+        self.graph_planner = None
+        self.graph_seed_fitter = None
+        self.last_graph_seed_time = 0.0
+        self.last_graph_seed_ik_time = 0.0
+        self.last_graph_seed_graph_time = 0.0
+        self.last_graph_seed_fit_time = 0.0
+        self.last_graph_seed_success = False
+        if config.rrt_graph_planner_config is not None:
+            if config.num_seeds != 1:
+                log_and_raise("MPC graph seeding supports exactly one trajectory seed")
+            planner_resources = RRTPlannerResources(
+                config.rrt_graph_planner_config.resources_config,
+                self.core.scene_collision_checker,
+            )
+            rrt_config = config.rrt_graph_planner_config.planner_config
+            required_lanes = config.max_batch_size
+            if required_lanes > rrt_config.max_batched_lanes:
+                log_and_raise(
+                    "MPC graph seeding requires max_batched_lanes >= "
+                    f"max_batch_size ({required_lanes})"
+                )
+            self.graph_planner = BiRRTPlanner(planner_resources, rrt_config)
+            self.graph_seed_fitter = BSplineTimeOptimalSeedFitter.from_transition_model(
+                self.transition_model,
+                num_lanes=required_lanes,
+                use_cuda_graph=config.use_cuda_graph,
+                trajectory_dt=config.optimization_dt,
+            )
         self.enable_tool_pose_tracking()
         self.disable_joint_position_tracking()
 
@@ -117,6 +160,14 @@ class MPCSolver:
     @property
     def action_horizon(self) -> int:
         return self.core.action_horizon
+
+    @property
+    def horizon(self) -> int:
+        return self.auxiliary_rollout.horizon
+
+    @property
+    def interpolation_steps(self) -> int:
+        return self.auxiliary_rollout.transition_model.interpolation_steps
 
     @property
     def joint_names(self):
@@ -210,8 +261,16 @@ class MPCSolver:
 
     def reset_cuda_graph(self):
         self.core.reset_cuda_graph()
+        if self.graph_planner is not None:
+            self.graph_planner.reset_cuda_graph()
+        if self.graph_seed_fitter is not None:
+            self.graph_seed_fitter.reset_cuda_graph()
 
     def destroy(self):
+        if self.graph_planner is not None:
+            self.graph_planner.reset_cuda_graph()
+        if self.graph_seed_fitter is not None:
+            self.graph_seed_fitter.destroy()
         self.core.destroy()
 
     # -------------------------------------------------------------------
@@ -221,6 +280,17 @@ class MPCSolver:
     def update_tool_pose_criteria(self, tool_pose_criteria: Dict[str, ToolPoseCriteria]):
         self.ik_solver.update_tool_pose_criteria(tool_pose_criteria)
         self.core.update_tool_pose_criteria(tool_pose_criteria)
+
+    def update_tool_relative_transform_criteria(
+        self, criteria: Dict[str, ToolRelativeTransformCriteria]
+    ) -> None:
+        self.ik_solver.update_tool_relative_transform_criteria(criteria)
+        self.core.update_tool_relative_transform_criteria(criteria)
+
+    def update_tool_velocity_limit_criteria(
+        self, criteria: Dict[str, ToolVelocityLimitCriteria]
+    ) -> None:
+        self.core.update_tool_velocity_limit_criteria(criteria)
 
     # -------------------------------------------------------------------
     # Goal buffer
@@ -234,6 +304,7 @@ class MPCSolver:
         use_implicit_goal: bool = False,
         seed_goal_state: Optional[JointState] = None,
         goal_state: Optional[JointState] = None,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
     ) -> Tuple[GoalRegistry, bool]:
         if current_state is None:
             log_and_raise("current_state is required for MPC")
@@ -244,6 +315,7 @@ class MPCSolver:
             use_implicit_goal=use_implicit_goal,
             seed_goal_state=seed_goal_state,
             goal_state=goal_state,
+            tool_relative_transform_target=tool_relative_transform_target,
         )
         return goal_buffer, update_reference
 
@@ -263,8 +335,9 @@ class MPCSolver:
         current_state: JointState,
         tool_frames: Optional[List[str]] = None,
         dt: Optional[torch.Tensor] = None,
+        tool_relative_transform_target: Optional[ToolRelativeTransformTarget] = None,
     ) -> None:
-        """Setup MPC for tracking."""
+        """Set up MPC tracking with an optional moving-frame transform target."""
         batch_size = self.config.max_batch_size
         max_goalset = self.config.max_goalset
 
@@ -308,6 +381,7 @@ class MPCSolver:
             use_implicit_goal=False,
             goal_state=goal_state,
             seed_goal_state=goal_state.clone().unsqueeze(1),
+            tool_relative_transform_target=tool_relative_transform_target,
         )
         self.optimizer.update_rollout_params(goal=goal_buffer)
         self.metrics_rollout.update_params(goal=goal_buffer)
@@ -447,11 +521,17 @@ class MPCSolver:
             current_state = self.default_joint_state.clone().unsqueeze(0)
 
         batch_size = goal_tool_poses.batch_size
+        tool_relative_transform_target = None
+        if self.core._goal_buffer is not None:
+            tool_relative_transform_target = (
+                self.core._goal_buffer.tool_relative_transform_target
+            )
         ik_result = self.ik_solver.solve_pose(
             goal_tool_poses=goal_tool_poses,
             current_state=current_state,
             seed_config=current_state.position.view(batch_size, 1, self.action_dim).clone(),
             return_seeds=1,
+            tool_relative_transform_target=tool_relative_transform_target,
         )
         return ik_result
 
@@ -471,6 +551,16 @@ class MPCSolver:
         if robot_ids is not None:
             log_and_raise("robot_ids not supported for update_goal_state")
         new_goal_buffer = self.goal_registry_manager.update_goal_state(goal_state)
+        self._update_rollout_params(new_goal_buffer)
+
+    def update_tool_relative_transform_target(
+        self,
+        target: ToolRelativeTransformTarget,
+    ) -> None:
+        """Update the moving-frame transform target without rebuilding MPC."""
+        new_goal_buffer = self.goal_registry_manager.update_tool_relative_transform_target(
+            target
+        )
         self._update_rollout_params(new_goal_buffer)
 
     def update_current_state(self, current_state: JointState):
@@ -529,6 +619,159 @@ class MPCSolver:
             seed_config=goal_config,
         )
         self.update_seed_trajectory(seed_trajectory)
+
+    def warmup_graph_seed(self, num_warmup_iterations: int = 2) -> None:
+        """Warm IK, RRT, and B-spline fitting used for goal-change reseeding."""
+        if self.graph_planner is None or self.graph_seed_fitter is None:
+            log_and_raise("Graph seeding is disabled; create MPC with use_graph_seed=True")
+        if not self._mpc_setup_complete:
+            log_and_raise("MPC problem not setup, call setup first")
+        if num_warmup_iterations < 1:
+            log_and_raise("num_warmup_iterations must be positive")
+
+        current_state = self.core._goal_buffer.current_js.clone()
+        warmup_goal = self.compute_kinematics(current_state).tool_poses.as_goal(self.tool_frames)
+        ik_current_state = current_state.clone()
+        ik_current_state.dt = None
+        self.ik_solver.solve_pose(
+            goal_tool_poses=warmup_goal,
+            current_state=ik_current_state,
+            return_seeds=1,
+        )
+        lane_count = self.config.max_batch_size
+        self.graph_planner.warmup(
+            num_warmup_iterations=num_warmup_iterations,
+            max_batch_size=lane_count,
+        )
+        self.graph_seed_fitter.warmup()
+        self.graph_planner.reset_seed()
+        self.graph_planner.reset_buffer()
+
+    def update_goal_tool_poses_with_graph_seed(
+        self,
+        goal_tool_poses: GoalToolPose,
+        current_state: Optional[JointState] = None,
+        use_joint_goal: bool = True,
+    ) -> bool:
+        """Update a Cartesian goal and install an IK + RRT + B-spline MPC seed.
+
+        The method reuses MPC's IK solver, plans one collision-free RRT route
+        per batch problem, fits that route directly into MPC's B-spline action
+        knots, and installs it through :meth:`update_seed_trajectory`. It does
+        not run TrajOpt; the next MPC call refines the seed online.
+
+        Args:
+            goal_tool_poses: New Cartesian target with one goal per problem.
+            current_state: State from which RRT should plan. When omitted, the
+                current state stored by :meth:`setup` or the previous MPC step
+                is used.
+            use_joint_goal: Also track the IK goal configuration in MPC.
+
+        Returns:
+            True when every batch problem receives an RRT seed. When IK or RRT
+            fails, the Cartesian goal is still updated but the existing MPC
+            seed is retained.
+        """
+        if self.graph_planner is None or self.graph_seed_fitter is None:
+            log_and_raise("Graph seeding is disabled; create MPC with use_graph_seed=True")
+        if not self._mpc_setup_complete:
+            log_and_raise("MPC problem not setup, call setup first")
+        if goal_tool_poses.num_goalset != 1:
+            log_and_raise("MPC graph seeding currently requires num_goalset=1")
+        if current_state is None:
+            current_state = self.core._goal_buffer.current_js.clone()
+        if current_state.shape != (self.config.max_batch_size, self.action_dim):
+            log_and_raise(
+                "current_state must have shape "
+                f"({self.config.max_batch_size}, {self.action_dim})"
+            )
+
+        wall_start = time.perf_counter()
+        self.last_graph_seed_success = False
+        self.last_graph_seed_ik_time = 0.0
+        self.last_graph_seed_graph_time = 0.0
+        self.last_graph_seed_fit_time = 0.0
+
+        batch_size = self.config.max_batch_size
+        # MPC states carry the control timestep in ``dt``. IK interprets that
+        # value as a one-step velocity bound, while this solve is selecting a
+        # global RRT goal. Remove it from the IK-only clone so distant goals
+        # remain reachable without changing the actual graph start state.
+        ik_current_state = current_state.clone()
+        ik_current_state.dt = None
+        ik_result = self.ik_solver.solve_pose(
+            goal_tool_poses=goal_tool_poses,
+            current_state=ik_current_state,
+            return_seeds=1,
+        )
+        self.last_graph_seed_ik_time = float(ik_result.total_time)
+        ik_success = ik_result.success.reshape(batch_size, -1)[:, 0]
+        if not torch.all(ik_success):
+            self.update_goal_tool_poses(goal_tool_poses, run_ik=False)
+            torch.cuda.synchronize(self.device_cfg.device)
+            self.last_graph_seed_time = time.perf_counter() - wall_start
+            return False
+
+        goal_position = ik_result.solution.reshape(batch_size, self.action_dim)
+        graph_starts = current_state.position.contiguous()
+        graph_goals = goal_position.contiguous()
+        query_mask = ik_success.clone()
+        query_group_id = torch.arange(
+            batch_size,
+            device=graph_starts.device,
+            dtype=torch.int32,
+        )
+        env_query_idx = query_group_id.clone() if self.config.multi_env else None
+        graph_result = self.graph_planner.find_path(
+            graph_starts,
+            graph_goals,
+            query_mask=query_mask,
+            query_group_id=query_group_id,
+            group_count=batch_size,
+            env_query_idx=env_query_idx,
+            interpolate_waypoints=True,
+            interpolation_steps=self.horizon,
+            interpolation_type=TrajInterpolationType.LINEAR,
+            validate_interpolated_trajectory=False,
+        )
+        self.last_graph_seed_graph_time = float(graph_result.solve_time)
+        graph_success = graph_result.success.reshape(batch_size) & query_mask
+        if graph_result.interpolated_waypoints is None or not torch.all(graph_success):
+            self.update_goal_tool_poses(goal_tool_poses, run_ik=False)
+            if use_joint_goal:
+                self.update_goal_state(
+                    JointState.from_position(goal_position, joint_names=self.joint_names)
+                )
+                self.enable_joint_position_tracking()
+            torch.cuda.synchronize(self.device_cfg.device)
+            self.last_graph_seed_time = time.perf_counter() - wall_start
+            return False
+
+        fit_target = graph_result.interpolated_waypoints.reshape(
+            batch_size,
+            self.horizon,
+            self.action_dim,
+        )
+
+        fit_timer = CudaEventTimer().start()
+        seed_trajectory = self.graph_seed_fitter.fit(
+            fit_target.contiguous(),
+            current_state,
+            graph_goals,
+        ).reshape(batch_size, self.action_horizon, self.action_dim)
+        self.last_graph_seed_fit_time = fit_timer.stop()
+
+        self.update_goal_tool_poses(goal_tool_poses, run_ik=False)
+        if use_joint_goal:
+            self.update_goal_state(
+                JointState.from_position(goal_position, joint_names=self.joint_names)
+            )
+            self.enable_joint_position_tracking()
+        self.update_seed_trajectory(seed_trajectory)
+        torch.cuda.synchronize(self.device_cfg.device)
+        self.last_graph_seed_time = time.perf_counter() - wall_start
+        self.last_graph_seed_success = True
+        return True
 
     def optimize_next_action(self, current_state: JointState) -> MPCSolverResult:
         """Return the next single-step action from the MPC action buffer.
@@ -779,18 +1022,20 @@ class MPCSolver:
             metric_values = metrics_result.convergence.values[k]
             first_step_values = metric_values[:, :1]
 
-            if "position_tolerance" in metric_name:
-                position_list.append(first_step_values)
+            if metric_name.endswith("_position_tolerance"):
                 converged = first_step_values < self.config.position_tolerance
                 converge_list.append(converged)
-            elif "orientation_tolerance" in metric_name:
-                orientation_list.append(first_step_values)
+                if metric_name == "tool_pose_position_tolerance":
+                    position_list.append(first_step_values)
+            elif metric_name.endswith("_orientation_tolerance"):
                 converged = first_step_values < self.config.orientation_tolerance
                 converge_list.append(converged)
+                if metric_name == "tool_pose_orientation_tolerance":
+                    orientation_list.append(first_step_values)
             elif "cspace_tolerance" in metric_name:
                 cspace_list.append(first_step_values)
                 converge_list.append(first_step_values < 0.01)
-            elif "goalset_index" in metric_name:
+            elif metric_name == "tool_pose_goalset_index":
                 goalset_index_list.append(first_step_values)
 
         position_error = None
@@ -819,7 +1064,11 @@ class MPCSolver:
             ),
             goalset_index=goalset_index,
             solve_time=0.0,
-            debug_info={"solver": self.optimizer.get_recorded_trace(), "seed_idx": None},
+            debug_info={
+                "solver": self.optimizer.get_recorded_trace(),
+                "seed_idx": None,
+                "converged": converged,
+            },
         )
         return result
 

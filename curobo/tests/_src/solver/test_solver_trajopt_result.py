@@ -6,10 +6,34 @@
 # Third Party
 import pytest
 import torch
+from torch.profiler import ProfilerActivity, profile
 
 # CuRobo
 from curobo._src.solver.solver_trajopt_result import TrajOptSolverResult
 from curobo._src.state.state_joint import JointState
+
+
+def test_copy_batch_rows_keeps_spline_controls_and_timing_consistent() -> None:
+    """Merging owned results must update spline metadata along with the selected solution."""
+    results = []
+    for value in (0.0, 1.0):
+        controls = torch.full((2, 1, 16, 2), value, dtype=torch.float32)
+        state = JointState.from_position(torch.full((2, 1, 81, 2), value))
+        state.knot = controls.clone()
+        state.knot_dt = torch.full((2, 1), value + 0.1, dtype=torch.float32)
+        results.append(
+            TrajOptSolverResult(
+                success=torch.ones((2, 1), dtype=torch.bool),
+                solution=controls,
+                js_solution=state,
+            )
+        )
+    results[0].copy_at_batch_indices(results[1], torch.tensor([False, True]))
+    torch.testing.assert_close(results[0].js_solution.knot, results[0].solution)
+    torch.testing.assert_close(
+        results[0].js_solution.knot_dt,
+        torch.tensor([[0.1], [1.1]], dtype=torch.float32),
+    )
 
 
 @pytest.fixture
@@ -85,6 +109,35 @@ class TestTrajOptSolverResultDataclass:
         )
         assert hasattr(result, 'maximum_trajectory_dt')
         assert hasattr(result, 'minimum_trajectory_dt')
+
+
+def test_compute_rank_uses_fixed_shape_failure_penalty() -> None:
+    """Ranking penalizes failed seeds without dynamic tensor indexing."""
+    trajectory_dt = torch.tensor([0.1, 0.05, 0.2], dtype=torch.float32)
+    acceleration = torch.zeros((3, 20, 2), dtype=torch.float32)
+    jerk = torch.zeros_like(acceleration)
+    rollout_cost = torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32)
+    success = torch.tensor([[True, False, True]])
+
+    with profile(activities=[ProfilerActivity.CPU], acc_events=True) as rank_profile:
+        seed_cost, seed_rank = TrajOptSolverResult._jit_compute_rank(
+            trajectory_dt,
+            acceleration,
+            jerk,
+            rollout_cost,
+            success,
+            batch_size=1,
+            num_seeds=3,
+        )
+
+    operator_names = {event.key for event in rank_profile.key_averages()}
+    assert "aten::where" in operator_names
+    assert "aten::index_put_" not in operator_names
+    torch.testing.assert_close(
+        seed_cost,
+        torch.tensor([[101.0, 1.0e16, 203.0]], dtype=torch.float32),
+    )
+    torch.testing.assert_close(seed_rank, torch.tensor([[0, 2, 1]]))
 
 
 class TestTrajOptSolverResultClone:
@@ -249,3 +302,32 @@ class TestTrajOptSolverResultSolutionShape:
 
         assert isinstance(result.js_solution, JointState)
 
+
+def test_get_topk_seeds_supports_relative_only_result_without_goalset_index():
+    """Relative-only convergence has no absolute goal-set index to gather."""
+    batch_size = 1
+    num_seeds = 2
+    horizon = 4
+    dof = 2
+    solution = torch.arange(
+        batch_size * num_seeds * horizon * dof,
+        dtype=torch.float32,
+    ).reshape(batch_size, num_seeds, horizon, dof)
+    result = TrajOptSolverResult(
+        success=torch.tensor([[True, True]]),
+        solution=solution,
+        optimized_seeds=solution.clone(),
+        position_error=torch.zeros((batch_size, num_seeds)),
+        rotation_error=torch.zeros((batch_size, num_seeds)),
+        goalset_index=None,
+        seed_cost=torch.tensor([[2.0, 1.0]]),
+        seed_rank=torch.tensor([[1, 0]]),
+        total_cost_reshaped=torch.tensor([[2.0, 1.0]]),
+        batch_size=batch_size,
+        num_seeds=num_seeds,
+    )
+
+    selected = result.get_topk_seeds(1)
+
+    assert selected.goalset_index is None
+    torch.testing.assert_close(selected.solution, solution[:, 1:2])

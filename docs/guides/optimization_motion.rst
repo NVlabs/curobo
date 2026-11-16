@@ -27,9 +27,8 @@ Prerequisites
 
 Before proceeding, make sure you understand:
 
-- The :py:class:`~curobo._src.rollout.rollout_protocol.Rollout` Protocol and the Rollout Flow
-  diagram from :ref:`rollout_class_note`.
-- The solver families described in :ref:`optimization_solver_note` -- in particular that every
+- The :py:class:`~curobo._src.rollout.rollout_protocol.Rollout` Protocol.
+- The optimizers in :mod:`curobo.optim` -- in particular that every
   solver composes a rollout list.
 - The basics of rollout authoring from :ref:`tut_user_rollout_optimization`.
 
@@ -144,7 +143,7 @@ dataclass. That dataclass has one optional field per cost *kind*:
 Setting any of these to ``None`` disables that cost in the manager. On construction each
 populated field is realized as a
 :py:class:`~curobo._src.cost.cost_base.BaseCost` instance registered on the manager with a
-dedicated CUDA stream/event pair (see :ref:`rollout_class_note` for the broader picture).
+dedicated CUDA stream/event pair.
 
 At evaluation time, a single call to
 :py:meth:`~curobo._src.rollout.cost_manager.cost_manager_robot.RobotCostManager.compute_costs`

@@ -27,7 +27,10 @@ def pytest_addoption(parser):
         "--full-params",
         action="store_true",
         default=False,
-        help="Use full parameter ranges for parametric tests (e.g., history=[1..31] instead of [1,10,31])",
+        help=(
+            "Use full parameter ranges for parametric tests "
+            "(e.g., history=[1..128] instead of [1,10,31,64,128])"
+        ),
     )
 
 
@@ -93,4 +96,3 @@ def cpu_cuda_device_cfg(request):
     from curobo._src.types.device_cfg import DeviceCfg
 
     return DeviceCfg(device=torch.device(request.param), dtype=torch.float32)
-

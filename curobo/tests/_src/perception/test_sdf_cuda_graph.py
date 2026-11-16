@@ -48,6 +48,20 @@ def test_points(box_mesh):
 class TestSDFCudaGraph:
     """Tests for CUDA graph support in SDFPoseDetector."""
 
+    def test_initial_statistics_do_not_alias_evaluation_scratch(self, box_mesh, test_points):
+        """Graph warmup may evaluate other poses without changing initial state."""
+        import torch
+
+        points, pose = test_points
+        detector = SDFPoseDetector(box_mesh, SDFDetectorCfg(n_points=len(points)))
+        state = detector._setup_refinement(points, pose)
+        values = (state.best_JtJ, state.best_Jtr, state.best_sum_sq, state.best_n_valid)
+        saved = tuple(value.clone() for value in values)
+        detector._evaluate_at_pose(
+            points, len(points), state.best_position + 0.01, state.best_quaternion
+        )
+        assert all(torch.equal(a, b) for a, b in zip(saved, values))
+
     def test_refine_inner_iterations_updates_state_without_graph(
         self, box_mesh, test_points
     ):

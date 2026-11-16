@@ -242,6 +242,91 @@ class TestRobotRolloutCfgCreateWithComponentTypes:
         assert config.convergence_cfg is not None
         assert isinstance(config.convergence_cfg, RobotCostManagerCfg)
 
+    def test_velocity_limit_enables_transition_jacobians(
+        self, franka_robot_cfg, cuda_device_cfg
+    ):
+        data_dict = {
+            "transition_model_cfg": {
+                "dt_traj_params": {
+                    "base_dt": 0.02,
+                    "base_ratio": 1.0,
+                    "max_dt": 0.02,
+                },
+                "control_space": "POSITION",
+                "teleport_mode": False,
+                "batch_size": 1,
+                "horizon": 2,
+                "state_filter_cfg": {"filter_coeff": {}, "enable": False},
+            },
+            "constraint_cfg": {
+                "tool_velocity_limit_cfg": {"weight": [1.0, 1.0]},
+            },
+        }
+
+        config = RobotRolloutCfg.create_with_component_types(
+            data_dict=data_dict,
+            robot_cfg=franka_robot_cfg,
+            device_cfg=cuda_device_cfg,
+        )
+
+        assert config.transition_model_cfg.compute_jacobian is True
+
+    def test_velocity_limit_rejects_teleport_transition(
+        self, franka_robot_cfg, cuda_device_cfg
+    ):
+        data_dict = {
+            "transition_model_cfg": {
+                "dt_traj_params": {
+                    "base_dt": 0.02,
+                    "base_ratio": 1.0,
+                    "max_dt": 0.02,
+                },
+                "control_space": "POSITION",
+                "teleport_mode": True,
+                "batch_size": 1,
+                "horizon": 2,
+                "state_filter_cfg": {"filter_coeff": {}, "enable": False},
+            },
+            "constraint_cfg": {
+                "tool_velocity_limit_cfg": {"weight": [1.0, 1.0]},
+            },
+        }
+
+        with pytest.raises(ValueError, match="teleport"):
+            RobotRolloutCfg.create_with_component_types(
+                data_dict=data_dict,
+                robot_cfg=franka_robot_cfg,
+                device_cfg=cuda_device_cfg,
+            )
+
+    def test_resolve_requirements_preserves_explicit_jacobian_request(
+        self, franka_robot_cfg, cuda_device_cfg
+    ):
+        data_dict = {
+            "transition_model_cfg": {
+                "dt_traj_params": {
+                    "base_dt": 0.02,
+                    "base_ratio": 1.0,
+                    "max_dt": 0.02,
+                },
+                "control_space": "POSITION",
+                "teleport_mode": False,
+                "compute_jacobian": True,
+                "batch_size": 1,
+                "horizon": 2,
+                "state_filter_cfg": {"filter_coeff": {}, "enable": False},
+            },
+        }
+
+        config = RobotRolloutCfg.create_with_component_types(
+            data_dict=data_dict,
+            robot_cfg=franka_robot_cfg,
+            device_cfg=cuda_device_cfg,
+        )
+        config.resolve_requirements()
+
+        assert config.transition_model_cfg.compute_jacobian is True
+
     def test_create_preserves_instance_types(self, cuda_device_cfg):
         """Test that create_with_component_types preserves instance type settings."""
         robot_cfg_dict = {
@@ -400,6 +485,3 @@ class TestRobotRolloutCfgWithRealRobotConfig:
         # Should contain expected fields
         assert "checker_type" in scene_cfg_dict
         assert scene_cfg_dict["checker_type"] == "PRIMITIVE"
-
-
-

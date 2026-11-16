@@ -8,13 +8,13 @@ from typing import Any
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.sampling.sample_buffer import SampleBuffer
 from curobo._src.util.sampling.sequencer_halton import HaltonSequencer
 from curobo._src.util.sampling.sequencer_random import RandomSequencer
+from curobo._src.util.torch_util import get_profiler_decorator
 
 # Local imports
 from .particle_sampler_cfg import ParticleSamplerCfg
@@ -75,7 +75,7 @@ class ParticleSampler:
         """Reset the generator and post-processor to initial state."""
         self.generator.reset()
 
-    @profiler.record_function("ParticleSampler/get_samples")
+    @get_profiler_decorator("ParticleSampler/get_samples")
     def get_samples(self, sample_shape, base_seed=None, filter_smooth=False, **kwargs):
         """Get processed samples using configured generator and post-processor.
 

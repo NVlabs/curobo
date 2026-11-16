@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Third Party
-from typing import Optional
+# Standard Library
+from functools import lru_cache
+from typing import Any, Optional
 
+# Third Party
 import torch
 import warp as wp
 
@@ -12,7 +14,11 @@ from curobo._src.cost.warp_bound_util import (
     shrink_bounds_with_activation_distance,
 )
 from curobo._src.util.logging import log_and_raise
-from curobo._src.util.warp import get_warp_device_stream
+from curobo._src.util.warp import (
+    get_warp_device_stream,
+    warp_constant_suffix,
+    warp_kernel,
+)
 
 
 class PositionCSpaceFunction(torch.autograd.Function):
@@ -39,6 +45,7 @@ class PositionCSpaceFunction(torch.autograd.Function):
         out_gp: torch.Tensor,
         out_gtau: torch.Tensor,
         use_grad_input: bool,
+        compute_effort: bool,
     ):
         """Compute the bound position cost and gradient.
 
@@ -65,6 +72,7 @@ class PositionCSpaceFunction(torch.autograd.Function):
             out_gp: Gradient w.r.t. position. Shape is (batch_size, horizon, dof).
             out_gtau: Gradient w.r.t. joint torque. Shape is (batch_size, horizon, dof).
             use_grad_input: Whether to use the gradient of the input for the backward pass.
+            compute_effort: Whether to compute effort bounds and gradients.
 
         Returns:
             out_cost: Output cost of shape (batch_size, horizon)
@@ -90,7 +98,8 @@ class PositionCSpaceFunction(torch.autograd.Function):
         wp_device, wp_stream = get_warp_device_stream(pos)
         b, h, dof = pos.shape
 
-        requires_grad = pos.requires_grad
+        write_state_grad = pos.requires_grad
+        write_effort_grad = compute_effort and joint_torque.requires_grad
 
         if joint_torque.shape != (b, h, dof):
             log_and_raise(
@@ -151,7 +160,7 @@ class PositionCSpaceFunction(torch.autograd.Function):
 
 
         wp.launch(
-            kernel=forward_cspace_position_warp,
+            kernel=_make_forward_cspace_position_kernel(compute_effort),
             dim=b * h * dof,
             inputs=[
                 wp.from_torch(pos.detach().view(-1), dtype=wp.float32),
@@ -173,7 +182,8 @@ class PositionCSpaceFunction(torch.autograd.Function):
                 wp.from_torch(out_cost.view(-1), dtype=wp.float32),
                 wp.from_torch(out_gp.view(-1), dtype=wp.float32),
                 wp.from_torch(out_gtau.view(-1), dtype=wp.float32),
-                requires_grad,
+                write_state_grad,
+                write_effort_grad,
                 b,
                 h,
                 dof,
@@ -182,6 +192,7 @@ class PositionCSpaceFunction(torch.autograd.Function):
             stream=wp_stream,
         )
         ctx.use_grad_input = use_grad_input
+        ctx.compute_effort = compute_effort
 
         ctx.save_for_backward(out_gp, out_gtau)
 
@@ -199,7 +210,7 @@ class PositionCSpaceFunction(torch.autograd.Function):
                 p_g = p_grad
                 if ctx.use_grad_input:
                     p_g = p_grad * grad_out_cost
-            if ctx.needs_input_grad[1]:
+            if ctx.compute_effort and ctx.needs_input_grad[1]:
                 e_g = tau_grad
                 if ctx.use_grad_input:
                     e_g = tau_grad * grad_out_cost
@@ -225,12 +236,13 @@ class PositionCSpaceFunction(torch.autograd.Function):
             None,
             None,
             None,
+            None,
         )
 
 
 
-@wp.kernel(enable_backward=False)
-def forward_cspace_position_warp(
+@wp.func
+def _forward_cspace_position(
     pos: wp.array(dtype=wp.float32),
     effort: wp.array(dtype=wp.float32),
     cspace_target: wp.array(dtype=wp.float32),
@@ -250,12 +262,14 @@ def forward_cspace_position_warp(
     out_cost: wp.array(dtype=wp.float32),
     out_grad_p: wp.array(dtype=wp.float32),
     out_grad_tau: wp.array(dtype=wp.float32),
-    write_grad: wp.uint8,
+    compute_effort: bool,
+    write_state_grad: wp.uint8,
+    write_effort_grad: wp.uint8,
     batch_size: wp.int32,
     horizon: wp.int32,
     dof: wp.int32,
+    tid: int,
 ):
-    tid = wp.tid()
     b_id = wp.int32(0)
     h_id = wp.int32(0)
     d_id = wp.int32(0)
@@ -275,17 +289,8 @@ def forward_cspace_position_warp(
         return
     # read weights:
     eta_p = activation_distance[0]
-    eta_tau = activation_distance[1]
     w = weight[0]
     tau_w = weight[1]
-    tau_limit_lower = effort_b[d_id]
-    tau_limit_upper = effort_b[dof + d_id]
-
-    tau_limit_lower, tau_limit_upper = shrink_bounds_with_activation_distance(
-        tau_limit_lower,
-        tau_limit_upper,
-        eta_tau,
-    )
 
     p_l = p_b[d_id]  # lower bound
     p_u = p_b[dof + d_id]  # upper bound
@@ -307,8 +312,6 @@ def forward_cspace_position_warp(
     b_addrs = b_id * horizon * dof + h_id * dof + d_id
 
     c_p = pos[b_addrs]
-    c_tau = effort[b_addrs]
-
     # bound cost:
     c_total, g_p = aggregate_bound_cost(
         c_p,
@@ -318,7 +321,16 @@ def forward_cspace_position_warp(
         c_total,
         g_p,
     )
-    if tau_w > 0.0:
+    if compute_effort and tau_w > 0.0:
+        eta_tau = activation_distance[1]
+        tau_limit_lower = effort_b[d_id]
+        tau_limit_upper = effort_b[dof + d_id]
+        tau_limit_lower, tau_limit_upper = shrink_bounds_with_activation_distance(
+            tau_limit_lower,
+            tau_limit_upper,
+            eta_tau,
+        )
+        c_tau = effort[b_addrs]
         c_total, g_tau = aggregate_bound_cost(
             c_tau,
             tau_limit_lower,
@@ -328,35 +340,108 @@ def forward_cspace_position_warp(
             g_tau,
         )
 
-    target_w = wp.float32(0.0)
     target_w = cspace_target_weight[0]
-    target_w *= cspace_target_dof_weight[d_id]
     if target_w > 0.0:
-        target_id = cspace_target_idx[b_id]
-        target_id = target_id * dof + d_id
-        target_p = cspace_target[target_id]
-        error = c_p - target_p
-        c_total += target_w * error * error
-        g_p += 2.0 * target_w * error
+        target_w *= cspace_target_dof_weight[d_id]
+        if target_w > 0.0:
+            target_id = cspace_target_idx[b_id]
+            target_id = target_id * dof + d_id
+            target_p = cspace_target[target_id]
+            error = c_p - target_p
+            c_total += target_w * error * error
+            g_p += 2.0 * target_w * error
 
     # implied velocity / acceleration regularization (active when dt > 0)
     # weights are retimed by dt^n (n=1 for velocity, n=2 for acceleration)
     # to approximate time-integral and be invariant to dt choice
-    vel_reg_w = squared_l2_reg_weight[0] * dt_val
-    acc_reg_w = squared_l2_reg_weight[1] * dt_val * dt_val
-    if dt_val > 0.0 and (vel_reg_w > 0.0 or acc_reg_w > 0.0):
-        v_implied = (c_p - cur_p) / dt_val
-        if vel_reg_w > 0.0:
-            c_total += 0.5 * vel_reg_w * v_implied * v_implied
-            g_p += vel_reg_w * v_implied / dt_val
-        if acc_reg_w > 0.0:
-            cur_v = current_velocity[cur_id * dof + d_id]
-            a_implied = (v_implied - cur_v) / dt_val
-            c_total += 0.5 * acc_reg_w * a_implied * a_implied
-            g_p += acc_reg_w * a_implied / (dt_val * dt_val)
+    if dt_val > 0.0:
+        vel_reg_w = squared_l2_reg_weight[0]
+        acc_reg_w = squared_l2_reg_weight[1]
+        if vel_reg_w > 0.0 or acc_reg_w > 0.0:
+            dt_sq = dt_val * dt_val
+            vel_reg_w *= dt_val
+            acc_reg_w *= dt_sq
+            v_implied = (c_p - cur_p) / dt_val
+            if vel_reg_w > 0.0:
+                c_total += 0.5 * vel_reg_w * v_implied * v_implied
+                g_p += vel_reg_w * v_implied / dt_val
+            if acc_reg_w > 0.0:
+                cur_v = current_velocity[cur_id * dof + d_id]
+                a_implied = (v_implied - cur_v) / dt_val
+                c_total += 0.5 * acc_reg_w * a_implied * a_implied
+                g_p += acc_reg_w * a_implied / dt_sq
 
     out_cost[b_addrs] = c_total
 
-    if write_grad == 1:
+    if write_state_grad == 1:
         out_grad_p[b_addrs] = g_p
+    if write_effort_grad == 1:
         out_grad_tau[b_addrs] = g_tau
+
+
+@lru_cache(maxsize=2)
+def _make_forward_cspace_position_kernel(compute_effort: bool) -> Any:
+    """Create an effort-specialized position-bounds kernel."""
+    compute_effort_constant = wp.constant(compute_effort)
+    suffix = warp_constant_suffix("cspace_position_v2", compute_effort)
+
+    @warp_kernel(
+        f"forward_cspace_position_warp_{suffix}",
+        enable_backward=False,
+    )
+    def forward_cspace_position_warp(
+        pos: wp.array(dtype=wp.float32),
+        effort: wp.array(dtype=wp.float32),
+        cspace_target: wp.array(dtype=wp.float32),
+        cspace_target_idx: wp.array(dtype=wp.int32),
+        p_b: wp.array(dtype=wp.float32),
+        effort_b: wp.array(dtype=wp.float32),
+        weight: wp.array(dtype=wp.float32),
+        activation_distance: wp.array(dtype=wp.float32),
+        cspace_target_weight: wp.array(dtype=wp.float32),
+        cspace_target_dof_weight: wp.array(dtype=wp.float32),
+        squared_l2_reg_weight: wp.array(dtype=wp.float32),
+        current_position: wp.array(dtype=wp.float32),
+        current_velocity: wp.array(dtype=wp.float32),
+        idxs_current_state: wp.array(dtype=wp.int32),
+        v_b: wp.array(dtype=wp.float32),
+        state_dt: wp.array(dtype=wp.float32),
+        out_cost: wp.array(dtype=wp.float32),
+        out_grad_p: wp.array(dtype=wp.float32),
+        out_grad_tau: wp.array(dtype=wp.float32),
+        write_state_grad: wp.uint8,
+        write_effort_grad: wp.uint8,
+        batch_size: wp.int32,
+        horizon: wp.int32,
+        dof: wp.int32,
+    ):
+        _forward_cspace_position(
+            pos,
+            effort,
+            cspace_target,
+            cspace_target_idx,
+            p_b,
+            effort_b,
+            weight,
+            activation_distance,
+            cspace_target_weight,
+            cspace_target_dof_weight,
+            squared_l2_reg_weight,
+            current_position,
+            current_velocity,
+            idxs_current_state,
+            v_b,
+            state_dt,
+            out_cost,
+            out_grad_p,
+            out_grad_tau,
+            compute_effort_constant,
+            write_state_grad,
+            write_effort_grad,
+            batch_size,
+            horizon,
+            dof,
+            wp.tid(),
+        )
+
+    return forward_cspace_position_warp

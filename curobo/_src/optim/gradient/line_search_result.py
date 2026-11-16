@@ -4,6 +4,8 @@
 
 from dataclasses import dataclass
 
+import torch
+
 from curobo._src.optim.gradient.line_search_state import LineSearchState
 
 
@@ -16,3 +18,12 @@ class LineSearchResult:
 
     #: The state to use for next iteration (may include noise/fallback)
     exploration_state: LineSearchState
+
+    #: Local exploration probe index, or -1 when the baseline is retained.
+    line_search_index: torch.Tensor
+
+    #: Per-problem line-search outcome code.
+    line_search_status: torch.Tensor
+
+    #: Whether the exploration transition may update quasi-Newton history.
+    curvature_update_valid: torch.Tensor

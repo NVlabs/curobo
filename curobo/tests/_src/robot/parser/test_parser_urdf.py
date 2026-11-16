@@ -6,6 +6,7 @@
 
 # Standard Library
 from pathlib import Path
+from textwrap import dedent
 
 import numpy as np
 
@@ -149,6 +150,62 @@ class TestUrdfRobotParserJointLimits:
         assert link_params.joint_limits[0] == pytest.approx(-6.28, abs=0.01)
         assert link_params.joint_limits[1] == pytest.approx(6.28, abs=0.01)
 
+    def test_continuous_joint_without_limit_element(self, tmp_path):
+        """Test continuous joint without a <limit> element uses default limits."""
+        urdf_content = dedent(
+            """\
+            <?xml version="1.0"?>
+            <robot name="test_robot">
+              <link name="base_link"/>
+              <link name="joint_link"/>
+
+              <joint name="continuous_joint" type="continuous">
+                <parent link="base_link"/>
+                <child link="joint_link"/>
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+                <axis xyz="0 0 1"/>
+              </joint>
+            </robot>
+            """
+        )
+
+        urdf_path = tmp_path / "continuous_joint_no_limit.urdf"
+        urdf_path.write_text(urdf_content)
+
+        parser = UrdfRobotParser(urdf_path=str(urdf_path))
+        link_params = parser.get_link_parameters("joint_link", base=False)
+
+        assert link_params.joint_limits is not None
+        assert link_params.joint_limits == pytest.approx([-6.28, 6.28], abs=0.01)
+        assert link_params.joint_effort_limit == pytest.approx([100.0])
+        assert link_params.joint_velocity_limits == pytest.approx([-100.0, 100.0])
+
+    def test_revolute_joint_without_limit_element_raises(self, tmp_path):
+        """Test revolute joint without a <limit> element raises a clear error."""
+        urdf_content = dedent(
+            """\
+            <?xml version="1.0"?>
+            <robot name="test_robot">
+              <link name="base_link"/>
+              <link name="joint_link"/>
+
+              <joint name="revolute_joint" type="revolute">
+                <parent link="base_link"/>
+                <child link="joint_link"/>
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+                <axis xyz="0 0 1"/>
+              </joint>
+            </robot>
+            """
+        )
+
+        urdf_path = tmp_path / "revolute_joint_no_limit.urdf"
+        urdf_path.write_text(urdf_content)
+
+        parser = UrdfRobotParser(urdf_path=str(urdf_path))
+        with pytest.raises(ValueError, match="has no <limit> element"):
+            parser.get_link_parameters("joint_link", base=False)
+
     def test_get_joint_name_method(self, franka_parser):
         """Test _get_joint_name method (lines 92-93)."""
         # Get the name of the first joint
@@ -273,6 +330,25 @@ class TestUrdfRobotParserMimicJoints:
 class TestUrdfRobotParserLinkParameters:
     """Test link parameter extraction including edge cases."""
 
+    @pytest.mark.parametrize("yaw", [0.0, np.pi / 2])
+    def test_inertial_origin_and_tensor_in_link_frame(self, tmp_path: Path, yaw: float) -> None:
+        """Translate COM once and rotate COM-centered inertia into the link frame."""
+        path = tmp_path / "inertial_frame.urdf"
+        path.write_text(f'''<robot name="inertial_frame">
+          <link name="base"/>
+          <link name="body"><inertial>
+            <origin xyz="0.1 -0.2 0.3" rpy="0 0 {yaw}"/>
+            <mass value="2"/>
+            <inertia ixx="2" iyy="3" izz="4" ixy="0.1" ixz="0.2" iyz="0.3"/>
+          </inertial></link>
+          <joint name="joint" type="revolute"><parent link="base"/><child link="body"/>
+            <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="10" velocity="1"/>
+          </joint></robot>''')
+        params = UrdfRobotParser(urdf_path=str(path)).get_link_parameters("body")
+        np.testing.assert_allclose(params.link_com, [0.1, -0.2, 0.3], atol=1e-6)
+        expected = [2, 3, 4, 0.1, 0.2, 0.3] if yaw == 0 else [3, 2, 4, -0.1, -0.3, 0.2]
+        np.testing.assert_allclose(params.link_inertia, expected, atol=1e-6)
+
     def test_get_link_parameters_with_no_com_pose(self, tmp_path):
         """Test link parameters when com_pose_matrix is None (line 155)."""
         urdf_content = """<?xml version="1.0"?>
@@ -336,6 +412,10 @@ class TestUrdfRobotParserLinkParameters:
         # Should use default inertia when all zeros (line 182)
         assert link_params is not None
         assert link_params.link_mass == pytest.approx(2.0)
+        np.testing.assert_allclose(link_params.link_com, [0.1, 0.2, 0.3], atol=1e-6)
+        np.testing.assert_allclose(
+            link_params.link_inertia, [2e-4, 2e-4, 2e-4, 0, 0, 0], atol=1e-8
+        )
 
     def test_get_link_parameters_unsupported_joint_type(self, tmp_path):
         """Test unsupported joint type triggers error (line 294)."""

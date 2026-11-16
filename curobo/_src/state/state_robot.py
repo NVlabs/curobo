@@ -89,6 +89,12 @@ class RobotState(State):
         return self.cuda_robot_model_state.tool_poses
 
     @property
+    def tool_jacobians(self) -> Optional[torch.Tensor]:
+        if self.cuda_robot_model_state is None:
+            return None
+        return self.cuda_robot_model_state.tool_jacobians
+
+    @property
     def tool_frames(self) -> List[str]:
         if self.tool_poses is not None:
             return self.tool_poses.tool_frames
@@ -116,6 +122,8 @@ class RobotState(State):
             if self.tool_poses is not None and other.tool_poses is not None:
                 self.tool_poses.position[lin] = other.tool_poses.position[lin]
                 self.tool_poses.quaternion[lin] = other.tool_poses.quaternion[lin]
+            if self.tool_jacobians is not None and other.tool_jacobians is not None:
+                self.tool_jacobians[lin] = other.tool_jacobians[lin]
         else:
             if self.robot_spheres is not None and other.robot_spheres is not None:
                 self.robot_spheres[batch_idx, seed_idx] = other.robot_spheres[batch_idx, seed_idx]
@@ -124,6 +132,10 @@ class RobotState(State):
                     batch_idx, seed_idx
                 ]
                 self.tool_poses.quaternion[batch_idx, seed_idx] = other.tool_poses.quaternion[
+                    batch_idx, seed_idx
+                ]
+            if self.tool_jacobians is not None and other.tool_jacobians is not None:
+                self.tool_jacobians[batch_idx, seed_idx] = other.tool_jacobians[
                     batch_idx, seed_idx
                 ]
         if self.joint_torque is not None:
@@ -138,6 +150,8 @@ class RobotState(State):
         if self.tool_poses is not None:
             self.tool_poses.position[index] = other.tool_poses.position[index]
             self.tool_poses.quaternion[index] = other.tool_poses.quaternion[index]
+        if self.tool_jacobians is not None and other.tool_jacobians is not None:
+            self.tool_jacobians[index] = other.tool_jacobians[index]
         if self.joint_torque is not None:
             self.joint_torque[index] = other.joint_torque[index]
         return self
@@ -165,4 +179,3 @@ class RobotState(State):
         if self.cuda_robot_model_state is not None:
             self.cuda_robot_model_state.copy_(other.cuda_robot_model_state)
         return self
-

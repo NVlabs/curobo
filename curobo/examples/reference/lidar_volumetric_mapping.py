@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Fuse Oxford Spires LiDAR clouds into a cuRobo block-sparse TSDF.
 
 The default path builds a LiDAR-only RGB TSDF. Pass ``--enable-features`` to
@@ -20,6 +23,15 @@ Dataset
 This example uses one sequence from the Oxford Spires dataset:
 
     https://huggingface.co/datasets/ori-drs/oxford_spires_dataset
+
+.. note::
+
+   Oxford Spires (Tao et al., 2025) is distributed under
+   `Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+   (CC BY-NC-SA 4.0) <https://creativecommons.org/licenses/by-nc-sa/4.0/>`_,
+   as declared in the dataset card above. Its non-commercial, attribution,
+   and ShareAlike terms apply to the dataset. The data is downloaded separately
+   and is not bundled with cuRobo or covered by cuRobo's Apache 2.0 license.
 
 Download only that sequence into ``data/`` from this cuRobo checkout:
 
@@ -59,6 +71,16 @@ Export a final UV-textured mesh from rectified timestamp-matched RGB cameras:
    python curobo/examples/reference/lidar_volumetric_mapping.py --mesh-output output_lidar.glb
 
 Run feature mapping and text queries:
+
+With ``--enable-features``, this example downloads the
+`C-RADIO v3-B model weights <https://huggingface.co/nvidia/C-RADIOv3-B>`_ through
+``torch.hub`` under the `NVIDIA Open Model License Agreement
+<https://developer.download.nvidia.com/licenses/nvidia-open-model-license-agreement-june-2024.pdf>`_.
+Torch Hub also downloads source code from ``NVlabs/RADIO`` under the separate
+`NVIDIA Source Code License for RADIO
+<https://github.com/NVlabs/RADIO/blob/main/LICENSE>`_, which has non-commercial
+use terms. The downloaded weights and RADIO code are not bundled with cuRobo
+or covered by cuRobo's Apache 2.0 license.
 
 .. code-block:: bash
 

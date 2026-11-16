@@ -48,6 +48,21 @@ def test_write_config_roundtrip(
     assert robot.dynamics is dynamics
 
 
+def test_g1_29dof_targets_only_wrists_and_ankles() -> None:
+    """The standard G1 profile changes target links without changing robot geometry."""
+    config = load_yaml(join_path(get_robot_configs_path(), "unitree_g1_29dof.yml"))
+    retarget = load_yaml(join_path(get_robot_configs_path(), "unitree_g1_29dof_retarget.yml"))
+    assert config["kinematics"]["tool_frames"] == [
+        "left_wrist_yaw_link",
+        "right_wrist_yaw_link",
+        "left_ankle_roll_link",
+        "right_ankle_roll_link",
+    ]
+    assert len(retarget["kinematics"]["tool_frames"]) == 14
+    config["kinematics"]["tool_frames"] = retarget["kinematics"]["tool_frames"]
+    assert config == retarget
+
+
 def test_cspace_config():
     cspace_config = CSpaceParams(
         ["j0", "j1", "j2", "j3"],

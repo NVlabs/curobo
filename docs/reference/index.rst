@@ -35,6 +35,7 @@ Reference Examples
 
    lidar_volumetric_mapping
    live_volumetric_mapping_mpc
+   robot_pose_calibration
 
 Implementation Details
 ----------------------

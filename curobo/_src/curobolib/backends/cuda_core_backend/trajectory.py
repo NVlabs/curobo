@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""cuda.core backend for trajectory kernels.
-Provides runtime compilation of CUDA kernels with the same interface as PyBind11 extensions.
-"""
+"""Runtime compilation and launch helpers for trajectory CUDA kernels."""
 
 # Standard Library
 
 # Third Party
+import numpy as np
 import torch
 
 # CuRobo
@@ -51,9 +50,6 @@ def launch_bspline_interpolation_forward_kernel(
     bspline_degree: int,
 ):
     """Launch B-spline interpolation forward kernel using cuda.core runtime compilation.
-
-    This function has the EXACT same signature as the PyBind11 version
-    to ensure seamless backend swapping.
 
     Args:
         All tensor arguments and parameters as expected by B-spline forward kernel
@@ -118,6 +114,83 @@ def launch_bspline_interpolation_forward_kernel(
     launch_kernel(kernel_name, stream, config, kernel, *kernel_args)
 
 
+def launch_bspline_time_scaled_dt_kernel(
+    out_dt_per_timestep: torch.Tensor,
+    u_position: torch.Tensor,
+    start_position: torch.Tensor,
+    start_velocity: torch.Tensor,
+    start_acceleration: torch.Tensor,
+    start_jerk: torch.Tensor,
+    goal_position: torch.Tensor,
+    goal_velocity: torch.Tensor,
+    goal_acceleration: torch.Tensor,
+    goal_jerk: torch.Tensor,
+    start_idx: torch.Tensor,
+    goal_idx: torch.Tensor,
+    traj_dt: torch.Tensor,
+    use_implicit_goal_state: torch.Tensor,
+    max_velocity: torch.Tensor,
+    max_acceleration: torch.Tensor,
+    max_jerk: torch.Tensor,
+    epsilon: float,
+    minimum_dt: float,
+    maximum_dt: float,
+    batch_size: int,
+    horizon: int,
+    dof: int,
+    n_knots: int,
+    bspline_degree: int,
+) -> None:
+    """Launch the direct B-spline action-to-time-scaled-dt kernel."""
+    runtime = get_runtime()
+    cache = runtime.get_cuda_core_cache()
+    kernel_config = TrajectoryKernelCfg()
+    kernel_name = (
+        "curobo::trajectory::bspline::bspline_time_scaled_dt_kernel"
+        f"<float, {bspline_degree}, (curobo::trajectory::bspline::BasisBackend)2>"
+    )
+    kernel_files = [
+        kernel_config.kernel_dir / f
+        for f in kernel_config.get_kernel_files("bspline_time_scaled_dt")
+    ]
+    kernel = cache.get_or_compile_kernel(
+        source_files=kernel_files,
+        kernel_name=kernel_name,
+        include_dirs=kernel_config.get_include_dirs(),
+        compile_flags=kernel_config.get_compile_flags(),
+    )
+    config = BSplineLaunchCfg.calculate_time_scaled_dt_config(batch_size, horizon)
+    pt_stream = torch.cuda.current_stream(out_dt_per_timestep.device)
+    stream = cache.get_stream_wrapper(pt_stream)
+    kernel_args = (
+        out_dt_per_timestep.data_ptr(),
+        u_position.data_ptr(),
+        start_position.data_ptr(),
+        start_velocity.data_ptr(),
+        start_acceleration.data_ptr(),
+        start_jerk.data_ptr(),
+        goal_position.data_ptr(),
+        goal_velocity.data_ptr(),
+        goal_acceleration.data_ptr(),
+        goal_jerk.data_ptr(),
+        start_idx.data_ptr(),
+        goal_idx.data_ptr(),
+        traj_dt.data_ptr(),
+        use_implicit_goal_state.data_ptr(),
+        max_velocity.data_ptr(),
+        max_acceleration.data_ptr(),
+        max_jerk.data_ptr(),
+        np.float32(epsilon),
+        np.float32(minimum_dt),
+        np.float32(maximum_dt),
+        batch_size,
+        horizon,
+        dof,
+        n_knots,
+    )
+    launch_kernel(kernel_name, stream, config, kernel, *kernel_args)
+
+
 def launch_bspline_interpolation_backward_kernel(
     out_grad_position: torch.Tensor,
     grad_position: torch.Tensor,
@@ -135,9 +208,6 @@ def launch_bspline_interpolation_backward_kernel(
     use_direct_polynomial: bool,
 ):
     """Launch B-spline interpolation backward kernel using cuda.core runtime compilation.
-
-    This function has the EXACT same signature as the PyBind11 version
-    to ensure seamless backend swapping.
 
     Args:
         All tensor arguments and parameters as expected by B-spline backward kernel
@@ -233,9 +303,6 @@ def launch_bspline_interpolation_single_dt_kernel(
 ):
     """Launch B-spline single dt interpolation kernel using cuda.core runtime compilation.
 
-    This function has the EXACT same signature as the PyBind11 version
-    to ensure seamless backend swapping.
-
     Args:
         All tensor arguments and parameters as expected by B-spline single dt kernel
 
@@ -329,9 +396,6 @@ def launch_differentiation_position_forward_kernel(
 ):
     """Launch differentiation position forward kernel using cuda.core runtime compilation.
 
-    This function has the EXACT same signature as the PyBind11 version
-    to ensure seamless backend swapping.
-
     Args:
         All tensor arguments and parameters as expected by differentiation forward kernel
 
@@ -408,9 +472,6 @@ def launch_differentiation_position_backward_kernel(
 ):
     """Launch differentiation position backward kernel using cuda.core runtime compilation.
 
-    This function has the EXACT same signature as the PyBind11 version
-    to ensure seamless backend swapping.
-
     Args:
         All tensor arguments and parameters as expected by differentiation backward kernel
 
@@ -482,9 +543,6 @@ def launch_integration_acceleration_kernel(
     use_rk2: bool = True,
 ):
     """Launch integration acceleration kernel using cuda.core runtime compilation.
-
-    This function has the EXACT same signature as the PyBind11 version
-    to ensure seamless backend swapping.
 
     Args:
         All tensor arguments and parameters as expected by integration kernel

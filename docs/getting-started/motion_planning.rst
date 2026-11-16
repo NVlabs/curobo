@@ -3,5 +3,6 @@
 Motion Planning
 ===============
 
-.. automodule:: curobo.examples.getting_started.motion_planning
-   :no-members:
+.. include:: ../../curobo/examples/getting_started/motion_planning.py
+   :start-after: """
+   :end-before: """

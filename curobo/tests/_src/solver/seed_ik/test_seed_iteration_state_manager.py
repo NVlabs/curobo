@@ -145,6 +145,36 @@ class TestSeedIterationStateManagerInitialization:
 class TestSeedIterationStateManagerTrustRegionRatio:
     """Test trust region ratio calculation."""
 
+    @pytest.mark.parametrize("predicted", [-1.0, 0.0, float("inf"), float("nan")])
+    def test_invalid_prediction_rejects_worsening_step(
+        self, state_manager: SeedIterationStateManager, predicted: float
+    ) -> None:
+        """A nonpositive or nonfinite prediction cannot justify a worse candidate."""
+        ratio = state_manager._calculate_trust_region_ratio(
+            torch.tensor([1.0]), torch.tensor([2.0]), torch.tensor([predicted]), 1
+        )
+        assert not state_manager._determine_step_acceptance(ratio, 1).any()
+
+    def test_rejected_step_preserves_error_for_next_acceptance(
+        self,
+        state_manager: SeedIterationStateManager,
+        sample_current_state: SeedIKState,
+    ) -> None:
+        """Repeated rejected steps must compare against the retained configuration's error."""
+        candidate = sample_current_state.clone()
+        candidate.joint_position += 1.0
+        candidate.error_norm += 10.0
+        rejected = state_manager.update_iteration_state(
+            sample_current_state, candidate, torch.ones(4), 4
+        )
+        torch.testing.assert_close(rejected.joint_position, sample_current_state.joint_position)
+        torch.testing.assert_close(rejected.error_norm, sample_current_state.error_norm)
+
+        candidate.error_norm = sample_current_state.error_norm + 1.0
+        repeated = state_manager.update_iteration_state(rejected, candidate, torch.ones(4), 4)
+        assert not repeated.improvement.any()
+        torch.testing.assert_close(repeated.joint_position, sample_current_state.joint_position)
+
     def test_calculate_trust_region_ratio_basic(self, state_manager):
         """Test trust region ratio calculation."""
         batch_size = 4

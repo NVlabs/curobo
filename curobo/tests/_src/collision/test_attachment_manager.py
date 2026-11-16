@@ -149,6 +149,7 @@ def multi_env_robot_model():
     model = Kinematics(cfg)
     kparams = model.config.kinematics_config
     kparams.link_spheres = kparams.link_spheres.repeat(2, 1, 1)
+    kparams.sphere_collision_mask = kparams.sphere_collision_mask.repeat(2, 1)
     kparams.reference_link_spheres = kparams.reference_link_spheres.repeat(2, 1, 1)
     return model
 

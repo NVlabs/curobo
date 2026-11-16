@@ -11,7 +11,7 @@ import torch
 # CuRobo
 from curobo._src.geom.transform import (
     batch_transform_points,
-    quaternion_rate_to_axis_angle_rate,
+    quaternion_cotangent_to_angular_gradient,
     transform_points,
 )
 
@@ -22,8 +22,8 @@ def device_cfg_dict():
     return {"device": torch.device("cuda"), "dtype": torch.float32}
 
 
-class TestQuaternionRateConversion:
-    """Test quaternion_rate_to_axis_angle_rate function."""
+class TestQuaternionCotangentConversion:
+    """Test quaternion_cotangent_to_angular_gradient function."""
 
     def test_basic_conversion(self, device_cfg_dict):
         """Test basic quaternion rate conversion (lines 42-65)."""
@@ -33,7 +33,7 @@ class TestQuaternionRateConversion:
         # Small rate
         quat_rate = torch.tensor([0.0, 0.1, 0.0, 0.0], **device_cfg_dict)
 
-        omega = quaternion_rate_to_axis_angle_rate(quat_rate, current_quat)
+        omega = quaternion_cotangent_to_angular_gradient(quat_rate, current_quat)
 
         assert omega.shape == (3,)
         # Should produce angular velocity
@@ -45,7 +45,7 @@ class TestQuaternionRateConversion:
         current_quat = torch.randn(10, 4, **device_cfg_dict)
         quat_rate = torch.randn(10, 4, **device_cfg_dict)
 
-        omega = quaternion_rate_to_axis_angle_rate(quat_rate, current_quat)
+        omega = quaternion_cotangent_to_angular_gradient(quat_rate, current_quat)
 
         assert omega.shape == (10, 3)
 
@@ -54,10 +54,32 @@ class TestQuaternionRateConversion:
         current_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], **device_cfg_dict)
         quat_rate = torch.zeros(4, **device_cfg_dict)
 
-        omega = quaternion_rate_to_axis_angle_rate(quat_rate, current_quat)
+        omega = quaternion_cotangent_to_angular_gradient(quat_rate, current_quat)
 
         # Zero rate should give zero angular velocity
         assert torch.allclose(omega, torch.zeros(3, **device_cfg_dict))
+
+    def test_world_frame_pullback(self, device_cfg_dict: dict[str, object]) -> None:
+        """Recover an angular gradient from its tangent-space quaternion cotangent."""
+        quaternion = torch.tensor([0.80, 0.20, -0.30, 0.45], **device_cfg_dict)
+        quaternion = quaternion / torch.linalg.vector_norm(quaternion)
+        angular_gradient = torch.tensor([0.40, -0.20, 0.70], **device_cfg_dict)
+        qw, qx, qy, qz = quaternion.unbind()
+        gx, gy, gz = angular_gradient.unbind()
+        quaternion_cotangent = 2.0 * torch.stack(
+            [
+                -gx * qx - gy * qy - gz * qz,
+                qw * gx + gy * qz - gz * qy,
+                qw * gy + gz * qx - gx * qz,
+                qw * gz + gx * qy - gy * qx,
+            ]
+        )
+
+        actual = quaternion_cotangent_to_angular_gradient(
+            quaternion_cotangent, quaternion
+        )
+
+        torch.testing.assert_close(actual, angular_gradient)
 
 
 class TestTransformPoints:
@@ -206,4 +228,3 @@ class TestTransformEdgeCases:
         transformed = batch_transform_points(position, quaternion, points)
 
         assert transformed.shape == (batch_size, 1, 3)
-

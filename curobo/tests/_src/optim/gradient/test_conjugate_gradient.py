@@ -20,7 +20,12 @@ from curobo._src.optim.gradient.conjugate_gradient import (
     jit_cg_compute_step_direction,
     jit_cg_shift_buffers,
 )
-from curobo._src.rollout.metrics import CostCollection, CostsAndConstraints, RolloutMetrics, RolloutResult
+from curobo._src.rollout.metrics import (
+    CostCollection,
+    CostsAndConstraints,
+    RolloutMetrics,
+    RolloutResult,
+)
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.sampling.sample_buffer import SampleBuffer
 
@@ -53,8 +58,10 @@ class MockRollout:
         self._action_bound_highs = torch.ones(num_dof, device=device, dtype=dtype) * 1.0
         self.start_state = None
         self.act_sample_gen = SampleBuffer.create_halton_sample_buffer(
-            ndims=num_dof, device_cfg=self.device_cfg,
-            up_bounds=self._action_bound_highs, low_bounds=self._action_bound_lows,
+            ndims=num_dof,
+            device_cfg=self.device_cfg,
+            up_bounds=self._action_bound_highs,
+            low_bounds=self._action_bound_lows,
             seed=self.sampler_seed,
         )
 
@@ -109,7 +116,12 @@ class MockRollout:
     def compute_metrics_from_state(self, state, **kwargs):
         cc = self._compute_costs_and_constraints_impl(state, **kwargs)
         convergence = cc.get_sum_cost(sum_horizon=False)
-        return RolloutMetrics(costs_and_constraints=cc, feasible=cc.get_feasible(), state=state, convergence=convergence)
+        return RolloutMetrics(
+            costs_and_constraints=cc,
+            feasible=cc.get_feasible(),
+            state=state,
+            convergence=convergence,
+        )
 
     def compute_metrics_from_action(self, act_seq, **kwargs):
         batch_size = act_seq.shape[0]
@@ -151,10 +163,14 @@ class MockRollout:
             init_action = self.sample_random_actions(n=n_samples, bounded=True)
         elif use_zero:
             init_action = torch.zeros(
-                (num_samples, self._action_horizon, self._action_dim), **self.device_cfg.as_torch_dict())
+                (num_samples, self._action_horizon, self._action_dim),
+                **self.device_cfg.as_torch_dict(),
+            )
         else:
             init_action = torch.zeros(
-                (num_samples, self._action_horizon, self._action_dim), **self.device_cfg.as_torch_dict())
+                (num_samples, self._action_horizon, self._action_dim),
+                **self.device_cfg.as_torch_dict(),
+            )
         return init_action.view(num_samples, self._action_horizon, self._action_dim)
 
     def get_all_cost_components(self):
@@ -227,7 +243,7 @@ def create_optimizer(
 ):
     """Create a Conjugate Gradient optimizer with the specified configuration."""
     if line_search_scale is None:
-        line_search_scale = [0, 0.1, 0.5, 1.0]
+        line_search_scale = [0.01, 0.1, 0.5, 1.0]
 
     config = ConjugateGradientOptCfg(
         num_problems=batch_size,
@@ -633,4 +649,3 @@ class TestCGMethodComparison:
         # Both should reduce cost significantly
         assert cost1 < initial_cost * 0.5
         assert cost2 < initial_cost * 0.5
-

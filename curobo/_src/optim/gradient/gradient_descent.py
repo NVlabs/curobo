@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import math
 from copy import deepcopy
-from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, fields
+from typing import Any, Dict, List, Optional
 
 import torch
-import torch.autograd.profiler as profiler
 
-import curobo._src.runtime as curobo_runtime
 from curobo._src.optim.components.action_bounds import ActionBounds
 from curobo._src.optim.components.best_tracker import BestTracker
 from curobo._src.optim.components.debug_recorder import DebugRecorder
@@ -28,6 +26,7 @@ from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import check_nan_last_dimension
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 @dataclass
@@ -107,7 +106,7 @@ class GradientDescentOpt:
 
     _graphable_methods: set = {"_opt_iters"}
 
-    @profiler.record_function("gradient_descent/init")
+    @get_profiler_decorator("gradient_descent/init")
     def __init__(
         self,
         config: GradientDescentOptCfg,
@@ -126,6 +125,7 @@ class GradientDescentOpt:
         self.use_cuda_graph = use_cuda_graph
         self._enabled = True
         self._iteration_state: Optional[OptimizationIterationState] = None
+        self._continuation_state: Optional[OptimizationIterationState] = None
         self._og_num_iters = config.num_iters
 
         self.rollout_fn = rollout_list[0]
@@ -232,6 +232,7 @@ class GradientDescentOpt:
                 ):
                     break
 
+        self._continuation_state = iteration_state
         q = iteration_state.action.view(self.config.num_problems, self.opt_dim)
         best_q = iteration_state.best_action.view(self.config.num_problems, self.opt_dim)
 
@@ -241,6 +242,13 @@ class GradientDescentOpt:
         else:
             q_best = best_q.clone()
         return q_best.view(self.config.num_problems, self.action_horizon, self.action_dim)
+
+    def continue_optimization(self) -> torch.Tensor:
+        """Continue the last solve without resetting its iterate or best-solution tracker."""
+        if self._continuation_state is None:
+            log_and_raise("Run optimize before continuing optimization")
+        self._iteration_state = self._continuation_state
+        return self.optimize(self._continuation_state.action)
 
     def _dispatch(self, method_name, *args):
         executor = self._executors.get(method_name)
@@ -254,7 +262,7 @@ class GradientDescentOpt:
             self._record_iteration_state(iteration_state)
         return iteration_state
 
-    @profiler.record_function("gradient_descent/opt_step")
+    @get_profiler_decorator("gradient_descent/opt_step")
     def _opt_step(self, iteration_state):
         action_next = iteration_state.action + iteration_state.step_direction
         cost_next, gradient_next = self._compute_cost_and_gradient(action_next)
@@ -302,7 +310,7 @@ class GradientDescentOpt:
             converged=self._best.converged,
         )
 
-    @profiler.record_function("gradient_descent/cost_and_gradient")
+    @get_profiler_decorator("gradient_descent/cost_and_gradient")
     def _compute_cost_and_gradient(self, x):
         x_n = x.detach().requires_grad_(True)
         x_in = x_n.view(
@@ -320,6 +328,7 @@ class GradientDescentOpt:
     # -- Lifecycle --
 
     def reinitialize(self, action, mask=None, clear_optimizer_state=True, reset_num_iters=False):
+        self._continuation_state = None
         action = action.view(self.config.num_problems, self.action_horizon, self.action_dim)
         if mask is None and self._debug:
             self._debug.clear()
@@ -342,6 +351,8 @@ class GradientDescentOpt:
         return True
 
     def update_num_problems(self, num_problems):
+        self._continuation_state = None
+        self._iteration_state = None
         assert num_problems > 0
         self.config.num_problems = num_problems
         self._best.resize(num_problems, self.action_horizon, self.action_dim)
@@ -367,6 +378,8 @@ class GradientDescentOpt:
         return self.rollout_fn.compute_metrics_from_action(action)
 
     def reset_shape(self):
+        self._continuation_state = None
+        self._iteration_state = None
         for rollout in self._rollout_list:
             rollout.reset_shape()
 
@@ -374,6 +387,8 @@ class GradientDescentOpt:
         return True
 
     def reset_cuda_graph(self):
+        self._continuation_state = None
+        self._iteration_state = None
         for executor in self._executors.values():
             if executor is not None:
                 executor.reset()

@@ -20,6 +20,7 @@ from typing import Optional, Tuple
 import torch
 import warp as wp
 
+from curobo._src.perception.mapper.kernel.warp_types import PreparedSemanticFilterWarp
 from curobo._src.perception.mapper.storage import BlockDataView, OccupiedVoxels
 from curobo._src.util.warp import get_warp_device_stream, init_warp
 
@@ -39,6 +40,8 @@ def _build_block_data_view(tsdf, num_alloc: int) -> BlockDataView:
         features=tsdf.data.block_features,
         feature_weight=tsdf.data.block_feature_weight,
         feature_dim=tsdf.data.feature_dim,
+        instance_state=tsdf.data.block_instance_state,
+        instance_grid_size=tsdf.data.instance_grid_size,
     )
 
 
@@ -135,6 +138,7 @@ def extract_occupied_voxels_block_sparse(
     sdf_threshold: float = None,
     minimum_tsdf_weight: float = 0.1,
     grid_shape: Tuple[int, int, int] = None,
+    semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
 ) -> OccupiedVoxels:
     """Extract occupied voxels from block-sparse TSDF (combined SDF).
 
@@ -146,6 +150,7 @@ def extract_occupied_voxels_block_sparse(
         sdf_threshold: Threshold for surface_only=True. Defaults to voxel_size.
         minimum_tsdf_weight: Minimum weight for valid voxels.
         grid_shape: Ignored; present for API compatibility.
+        semantic_filter: Optional prepared fused-feature mask.
 
     Returns:
         :class:`OccupiedVoxels` with ``centers``, ``block_idx_per_voxel``,
@@ -177,16 +182,21 @@ def extract_occupied_voxels_block_sparse(
     _, stream = get_warp_device_stream(tsdf.data.static_block_data)
 
     voxel_count = torch.zeros(1, dtype=torch.int32, device=device)
+    count_inputs = [
+        warp_data,
+        minimum_tsdf_weight,
+        surface_only_int,
+        sdf_threshold,
+        wp.from_torch(voxel_count, dtype=wp.int32),
+    ]
+    count_kernel = kernels.count_occupied_voxels_kernel
+    if semantic_filter is not None:
+        count_kernel = kernels.count_occupied_voxels_semantic_kernel
+        count_inputs.insert(1, semantic_filter)
     wp.launch(
-        kernels.count_occupied_voxels_kernel,
+        count_kernel,
         dim=(num_alloc, n_voxels_per_block),
-        inputs=[
-            warp_data,
-            minimum_tsdf_weight,
-            surface_only_int,
-            sdf_threshold,
-            wp.from_torch(voxel_count, dtype=wp.int32),
-        ],
+        inputs=count_inputs,
         stream=stream,
     )
 
@@ -203,19 +213,24 @@ def extract_occupied_voxels_block_sparse(
     out_pool_idx = torch.zeros(max_voxels, dtype=torch.int32, device=device)
     out_count = torch.zeros(1, dtype=torch.int32, device=device)
 
+    extract_inputs = [
+        warp_data,
+        minimum_tsdf_weight,
+        surface_only_int,
+        sdf_threshold,
+        wp.from_torch(out_centers, dtype=wp.float32),
+        wp.from_torch(out_pool_idx, dtype=wp.int32),
+        wp.from_torch(out_count, dtype=wp.int32),
+        max_voxels,
+    ]
+    extract_kernel = kernels.extract_occupied_voxels_kernel
+    if semantic_filter is not None:
+        extract_kernel = kernels.extract_occupied_voxels_semantic_kernel
+        extract_inputs.insert(1, semantic_filter)
     wp.launch(
-        kernels.extract_occupied_voxels_kernel,
+        extract_kernel,
         dim=(num_alloc, n_voxels_per_block),
-        inputs=[
-            warp_data,
-            minimum_tsdf_weight,
-            surface_only_int,
-            sdf_threshold,
-            wp.from_torch(out_centers, dtype=wp.float32),
-            wp.from_torch(out_pool_idx, dtype=wp.int32),
-            wp.from_torch(out_count, dtype=wp.int32),
-            max_voxels,
-        ],
+        inputs=extract_inputs,
         stream=stream,
     )
 

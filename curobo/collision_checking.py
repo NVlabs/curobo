@@ -10,39 +10,39 @@ Use this module when building custom collision-aware pipelines outside the
 main solvers.
 
 Example:
-    ```python
-    from curobo.collision_checking import RobotCollisionChecker, RobotCollisionCheckerCfg
-    from curobo.scene import Scene
-    import torch
+    .. code-block:: python
 
-    # Create collision checker for custom pipeline
-    config = RobotCollisionCheckerCfg.load_from_config(
-        robot_config="franka.yml",
-        scene_model="scene.yml",
-        collision_activation_distance=0.01,
-    )
-    checker = RobotCollisionChecker(config)
+        from curobo.collision_checking import RobotCollisionChecker, RobotCollisionCheckerCfg
+        import torch
 
-    # Query collision at joint configurations
-    joint_positions = torch.rand((10, 1, 7))  # 10 configurations, horizon 1
-    scene_distance, self_distance = checker.get_scene_self_collision_distance_from_joints(
-        joint_positions
-    )
+        # Create collision checker for custom pipeline
+        config = RobotCollisionCheckerCfg.load_from_config(
+            robot_config="franka.yml",
+            scene_model="scene.yml",
+            collision_activation_distance=0.01,
+        )
+        checker = RobotCollisionChecker(config)
 
-    # Sample collision-free configurations
-    valid_configs = checker.sample(num_samples=100, mask_valid=True)
+        # Query collision at joint configurations
+        joint_positions = torch.rand((10, 1, 7), device="cuda:0")
+        scene_distance, self_distance = checker.get_scene_self_collision_distance_from_joints(
+            joint_positions
+        )
 
-    # Validate configurations
-    is_valid = checker.validate(joint_positions)
+        # Sample collision-free configurations
+        valid_configs = checker.sample(num_samples=100, mask_valid=True)
 
-    # Use in custom optimization (differentiable)
-    joint_positions.requires_grad = True
-    scene_dist, self_dist = checker.get_scene_self_collision_distance_from_joints(
-        joint_positions
-    )
-    cost = scene_dist.sum() + self_dist.sum()
-    cost.backward()  # Gradients flow through
-    ```
+        # Validate configurations
+        is_valid = checker.validate(joint_positions)
+
+        # Use in custom optimization (differentiable)
+        joint_positions.requires_grad = True
+        scene_dist, self_dist = checker.get_scene_self_collision_distance_from_joints(
+            joint_positions
+        )
+        cost = scene_dist.sum() + self_dist.sum()
+        cost.backward()  # Gradients flow through
+
 """
 
 from curobo._src.collision.collision_robot_scene import (

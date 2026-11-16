@@ -108,6 +108,7 @@ class TestMPCSolverCfgCreate:
             device_cfg=cuda_device_cfg,
         )
         assert isinstance(config, MPCSolverCfg)
+        assert all(opt.line_search_backtracking for opt in config.optimizer_configs)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_create_with_dict_robot(self, cuda_device_cfg, franka_robot_cfg_dict):
@@ -197,6 +198,53 @@ class TestMPCSolverCfgCreate:
             use_cuda_graph=False,
         )
         assert config.use_cuda_graph is False
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_joint_goal_tracking_is_terminal_only(self, cuda_device_cfg):
+        """Test MPC has no non-terminal attraction to the IK joint goal."""
+        config = MPCSolverCfg.create(
+            robot="franka.yml",
+            device_cfg=cuda_device_cfg,
+        )
+        factor = (
+            config.optimizer_rollout_configs[0]
+            .cost_cfg.cspace_cfg.cspace_non_terminal_weight_factor
+        )
+
+        assert factor.item() == 0.0
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_graph_seed_config(self, cuda_device_cfg):
+        """Test graph seeding creates RRT planner resources for one MPC seed."""
+        config = MPCSolverCfg.create(
+            robot="franka.yml",
+            device_cfg=cuda_device_cfg,
+            use_graph_seed=True,
+        )
+
+        assert config.rrt_graph_planner_config is not None
+        assert config.num_seeds == 1
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_rejects_non_boolean_graph_seed(self, cuda_device_cfg):
+        """Test graph seeding requires an explicit boolean toggle."""
+        with pytest.raises(ValueError, match="use_graph_seed must be a boolean"):
+            MPCSolverCfg.create(
+                robot="franka.yml",
+                device_cfg=cuda_device_cfg,
+                use_graph_seed=1,
+            )
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+    def test_create_rejects_multiple_graph_seeds(self, cuda_device_cfg):
+        """Test graph seeding stays on one IK, RRT, and MPC seed lane."""
+        with pytest.raises(ValueError, match="exactly one trajectory seed"):
+            MPCSolverCfg.create(
+                robot="franka.yml",
+                device_cfg=cuda_device_cfg,
+                use_graph_seed=True,
+                num_seeds=2,
+            )
 
 
 class TestMPCSolverCfgCreateWithDicts:
@@ -326,4 +374,3 @@ class TestMPCSolverCfgCommonFields:
             orientation_tolerance=0.1,
         )
         assert config.orientation_tolerance == 0.1
-

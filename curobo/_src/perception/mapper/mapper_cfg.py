@@ -24,11 +24,13 @@ import torch
 
 from curobo._src.perception.mapper.block_allocation import calculate_tsdf_max_blocks
 from curobo._src.perception.mapper.constants import (
+    DEFAULT_HASH_LAYOUT,
     _validate_color_grid_size,
     _validate_feature_block_grid_size,
     _validate_feature_channels_per_thread,
     _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
+    _validate_instance_grid_size,
     _validate_lidar_config,
 )
 from curobo.logging import log_and_raise
@@ -178,6 +180,10 @@ class MapperCfg:
     #: Number of feature control points per block edge. This is independent
     #: from the incoming 2D feature image dimensions below.
     feature_block_grid_size: int = 1
+    #: Number of categorical instance cells per block edge. ``0`` disables
+    #: packed instance ownership storage. Deployment uses ``4`` for 1 cm cells
+    #: with the default 5 mm voxel and 8-voxel block.
+    instance_grid_size: int = 0
     #: Compile-time feature-grid height. Required when ``feature_dim > 0``;
     #: must be ``None`` when features are disabled.
     feature_grid_height: Optional[int] = None
@@ -217,9 +223,21 @@ class MapperCfg:
 
     # === Device ===
     device: str = "cuda:0"
+    #: Explicit block-pool capacity; None keeps the surface-area heuristic.
+    max_blocks_override: Optional[int] = None
 
     def __post_init__(self):
         """Validate configuration parameters."""
+        if self.max_blocks_override is not None:
+            if (
+                isinstance(self.max_blocks_override, bool)
+                or not isinstance(self.max_blocks_override, int)
+                or not 0 < self.max_blocks_override <= DEFAULT_HASH_LAYOUT.max_pool_idx
+            ):
+                log_and_raise(
+                    "max_blocks_override must be a positive integer within the hash pool limit"
+                )
+
         # Validate extent
         if not all(e > 0 for e in self.extent_meters_xyz):
             raise ValueError(f"extent_meters_xyz must be positive: {self.extent_meters_xyz}")
@@ -243,7 +261,9 @@ class MapperCfg:
         if not (0.0 <= self.decay_factor <= 1.0):
             raise ValueError(f"decay_factor must be in (0, 1]: {self.decay_factor}")
         if not (0.0 <= self.frustum_decay_factor <= 1.0):
-            raise ValueError(f"frustum_decay_factor must be in (0, 1]: {self.frustum_decay_factor}")
+            raise ValueError(
+                f"frustum_decay_factor must be in (0, 1]: {self.frustum_decay_factor}"
+            )
 
         # Validate hash_load_factor
         if not (0.0 < self.hash_load_factor <= 1.0):
@@ -262,9 +282,7 @@ class MapperCfg:
             )
         if self.num_cameras <= 0:
             log_and_raise(f"num_cameras must be positive, got num_cameras={self.num_cameras}.")
-        if (
-            self.texture_camera_image_height is None
-        ) != (self.texture_camera_image_width is None):
+        if (self.texture_camera_image_height is None) != (self.texture_camera_image_width is None):
             log_and_raise(
                 "texture_camera_image_height and texture_camera_image_width must be "
                 "specified together."
@@ -279,10 +297,7 @@ class MapperCfg:
                 "texture_num_cameras must be positive, got "
                 f"texture_num_cameras={self.texture_num_cameras}."
             )
-        if (
-            self.texture_camera_image_height <= 0
-            or self.texture_camera_image_width <= 0
-        ):
+        if self.texture_camera_image_height <= 0 or self.texture_camera_image_width <= 0:
             log_and_raise(
                 "texture_camera_image_height and texture_camera_image_width must be "
                 "positive, got "
@@ -299,6 +314,7 @@ class MapperCfg:
             self.feature_block_grid_size,
             self.block_size,
         )
+        _validate_instance_grid_size(self.instance_grid_size, self.block_size)
         _validate_lidar_config(
             self.lidar_num_sensors,
             self.lidar_image_height,
@@ -352,8 +368,7 @@ class MapperCfg:
                 )
         elif self.max_visible_blocks_per_lidar_integration is not None:
             log_and_raise(
-                "max_visible_blocks_per_lidar_integration requires "
-                "lidar_num_sensors > 0."
+                "max_visible_blocks_per_lidar_integration requires lidar_num_sensors > 0."
             )
 
         # Set default grid_center
@@ -373,7 +388,7 @@ class MapperCfg:
 
     @property
     def max_blocks(self) -> int:
-        """Compute max allocated blocks using surface area × thickness heuristic.
+        """Return explicit capacity, or use the surface area × thickness heuristic.
 
         TSDF only allocates blocks near surfaces, not throughout the volume.
         The surface is a volumetric band with thickness = 2 × truncation_distance.
@@ -383,6 +398,8 @@ class MapperCfg:
 
         This scales O(N²) with grid size, not O(N³), matching actual TSDF usage.
         """
+        if self.max_blocks_override is not None:
+            return self.max_blocks_override
         return calculate_tsdf_max_blocks(
             grid_shape=self.grid_shape,
             voxel_size=self.voxel_size,
@@ -401,9 +418,7 @@ class MapperCfg:
         nz, ny, nx = self.grid_shape
         return (nx * self.voxel_size, ny * self.voxel_size, nz * self.voxel_size)
 
-    def voxel_to_world(
-        self, iz: int, iy: int, ix: int
-    ) -> Tuple[float, float, float]:
+    def voxel_to_world(self, iz: int, iy: int, ix: int) -> Tuple[float, float, float]:
         """Convert voxel index to world coordinate at voxel center.
 
         Args:

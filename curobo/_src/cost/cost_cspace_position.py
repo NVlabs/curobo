@@ -168,5 +168,6 @@ class PositionCSpaceCost(BaseCSpaceCost):
             self._out_gp_buffer,
             self._out_gtau_buffer,
             self.config.use_grad_input,
+            self.config.compute_effort,
         )
         return cost

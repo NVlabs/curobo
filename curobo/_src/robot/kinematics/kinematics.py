@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import List, Optional, Union
 
 import torch
-import torch.autograd.profiler as profiler
 
 # Third Party
 import trimesh
@@ -33,6 +32,7 @@ from curobo._src.state.state_joint_ops import augment_joint_state
 from curobo._src.types.pose import Pose
 from curobo._src.types.tool_pose import ToolPose
 from curobo._src.util.logging import log_and_raise
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 class Kinematics:
@@ -71,7 +71,7 @@ class Kinematics:
     def tool_frames(self) -> List[str]:
         return self.config.tool_frames
 
-    @profiler.record_function("cuda_robot_model/update_batch_size")
+    @get_profiler_decorator("cuda_robot_model/update_batch_size")
     def update_batch_size(
         self, batch: int, horizon: int, force_update: bool = False, reset_buffers: bool = False
     ):
@@ -93,12 +93,13 @@ class Kinematics:
                 horizon,
                 self.config.kinematics_config,
                 self.device_cfg,
+                compute_jacobian=self.compute_jacobian,
             )
             self._buffers["idxs_env"] = torch.zeros(
                 (batch,), dtype=torch.int32, device=self.device_cfg.device
             )
 
-    @profiler.record_function("cuda_robot_model/forward_kinematics")
+    @get_profiler_decorator("cuda_robot_model/forward_kinematics")
     def _forward(
         self,
         joint_position: torch.Tensor,
@@ -144,7 +145,6 @@ class Kinematics:
                 self._buffers["batch_cumul_mat"],
                 self.config.kinematics_config,
                 self._buffers["grad_out_q"],
-                self._buffers["grad_out_q_jacobian"],
                 self._buffers["grad_in_link_pos"],
                 self._buffers["grad_in_link_quat"],
                 self._buffers["grad_in_robot_spheres"],
@@ -164,7 +164,7 @@ class Kinematics:
         return KinematicsState(
             robot_spheres=robot_spheres,
             tool_poses=link_poses,
-            tool_jacobians=link_jacobian,
+            tool_jacobians=link_jacobian if self.compute_jacobian else None,
             robot_com=robot_com,
             robot_collision_geometry=self.config.kinematics_config.get_robot_collision_geometry(),
         )

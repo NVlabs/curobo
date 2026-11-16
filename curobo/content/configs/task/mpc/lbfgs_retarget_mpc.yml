@@ -30,14 +30,9 @@ rollout:
 
 
     tool_pose_cfg:
-      use_lie_group: false
-
       weight:
       - 10000.0
       - 200.0
-      _terminal_pose_convergence_tolerance:
-      - 0.0
-      - 0.0
 
 
 
@@ -53,6 +48,7 @@ rollout:
 
 
 optimizer:
+  line_search_backtracking: true
   solver_type: "lbfgs"
   solver_name: "lbfgs"
   cost_convergence: 1.0e-11
@@ -66,7 +62,7 @@ optimizer:
   inner_iters: 25
   last_best: 10
   line_search_scale:
-  - 0.0
+  - 0.01
   - 0.1
   - 0.5
   - 1.0

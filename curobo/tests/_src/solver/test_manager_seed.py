@@ -319,6 +319,49 @@ class TestSeedManagerPrepareTrajectorySeeds:
         )
 
         assert seeds.shape == (batch_size * num_seeds, horizon, dof)
+        assert seeds.data_ptr() == seed_traj.data_ptr()
+        torch.testing.assert_close(seeds, seed_traj.view(batch_size * num_seeds, horizon, dof))
+
+    def test_prepare_trajectory_seeds_combines_seed_sources(
+        self, seed_manager_trajopt, cpu_device_cfg
+    ):
+        """Test concatenating provided trajectories with interpolated configurations."""
+        num_seeds = 4
+        batch_size = 2
+        dof = 7
+        horizon = 32
+        provided_seed_count = 1
+
+        current_position = torch.randn(batch_size, dof, **cpu_device_cfg.as_torch_dict())
+        current_state = JointState.from_position(current_position)
+        seed_traj = torch.randn(
+            batch_size,
+            provided_seed_count,
+            horizon,
+            dof,
+            **cpu_device_cfg.as_torch_dict(),
+        )
+        seed_config = torch.randn(
+            batch_size,
+            num_seeds - provided_seed_count,
+            dof,
+            **cpu_device_cfg.as_torch_dict(),
+        )
+
+        seeds = seed_manager_trajopt.prepare_trajectory_seeds(
+            batch_size,
+            num_seeds,
+            current_state,
+            seed_config=seed_config,
+            seed_traj=seed_traj,
+        ).view(batch_size, num_seeds, horizon, dof)
+
+        torch.testing.assert_close(seeds[:, :provided_seed_count], seed_traj)
+        torch.testing.assert_close(
+            seeds[:, provided_seed_count:, 0],
+            current_position.unsqueeze(1).expand(-1, num_seeds - provided_seed_count, -1),
+        )
+        torch.testing.assert_close(seeds[:, provided_seed_count:, -1], seed_config)
 
     def test_prepare_trajectory_seeds_errors_without_generator(self, seed_manager_ik, cpu_device_cfg):
         """Test error when trajectory generator not initialized."""
@@ -328,4 +371,3 @@ class TestSeedManagerPrepareTrajectorySeeds:
 
         with pytest.raises(ValueError):
             seed_manager_ik.prepare_trajectory_seeds(2, 4, current_state)
-

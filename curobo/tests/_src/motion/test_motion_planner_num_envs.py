@@ -53,6 +53,54 @@ class TestNumEnvsSingleEnv:
 class TestNumEnvsMultiEnv:
     """multi_env=True with max_batch_size=N should produce link_spheres [N, _, 4]."""
 
+    def test_motion_planner_cfg_allocates_single_scene_for_every_env(self, device_cfg):
+        """A single initial world is replicated to the configured environment capacity."""
+        num_envs = 3
+        config = MotionPlannerCfg.create(
+            robot="franka.yml",
+            scene_model="collision_test.yml",
+            device_cfg=device_cfg,
+            num_ik_seeds=4,
+            num_trajopt_seeds=2,
+            use_cuda_graph=False,
+            multi_env=True,
+            max_batch_size=num_envs,
+        )
+
+        assert config.scene_collision_cfg is not None
+        assert config.scene_collision_cfg.num_envs == num_envs
+
+    def test_motion_planner_cfg_allocates_empty_cache_for_every_env(self, device_cfg):
+        """Cache-only worlds retain enough slots for per-problem updates."""
+        num_envs = 3
+        config = MotionPlannerCfg.create(
+            robot="franka.yml",
+            collision_cache={"primitive": 2},
+            device_cfg=device_cfg,
+            num_ik_seeds=4,
+            num_trajopt_seeds=2,
+            use_cuda_graph=False,
+            multi_env=True,
+            max_batch_size=num_envs,
+        )
+
+        assert config.scene_collision_cfg is not None
+        assert config.scene_collision_cfg.num_envs == num_envs
+
+    def test_motion_planner_cfg_rejects_short_multi_env_scene_list(self, device_cfg):
+        """Every fixed batch row must have an allocated obstacle environment."""
+        with pytest.raises(ValueError, match="scene list length"):
+            MotionPlannerCfg.create(
+                robot="franka.yml",
+                scene_model=[{}, {}],
+                device_cfg=device_cfg,
+                num_ik_seeds=4,
+                num_trajopt_seeds=2,
+                use_cuda_graph=False,
+                multi_env=True,
+                max_batch_size=3,
+            )
+
     def test_motion_planner_multi_env(self, device_cfg):
         num_envs = 4
         config = MotionPlannerCfg.create(
@@ -68,6 +116,8 @@ class TestNumEnvsMultiEnv:
         kparams = planner.kinematics.config.kinematics_config
         assert kparams.num_envs == num_envs
         assert kparams.link_spheres.shape[0] == num_envs
+        assert planner.scene_collision_checker is not None
+        assert planner.scene_collision_checker.num_envs == num_envs
 
     def test_ik_solver_multi_env(self, device_cfg):
         num_envs = 3

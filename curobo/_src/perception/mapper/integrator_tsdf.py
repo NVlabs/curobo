@@ -41,23 +41,34 @@ from curobo._src.perception.mapper.constants import (
     _validate_feature_channels_per_thread,
     _validate_feature_grid_shape,
     _validate_feature_integration_kernel,
+    _validate_instance_grid_size,
     _validate_lidar_config,
     resolve_feature_integration_kernel,
     validate_grid_shape_for_hash_layout,
+)
+from curobo._src.perception.mapper.extractor_points import (
+    OccupiedPoints,
+    SurfacePointWorkspace,
+    validate_point_query,
+)
+from curobo._src.perception.mapper.filter_semantic import (
+    SemanticFilter,
+    _SemanticFilterWorkspace,
 )
 from curobo._src.perception.mapper.kernel.builder.builder_block_sparse_kernel import (
     BlockSparseKernels,
     make_block_sparse_kernels,
 )
+from curobo._src.perception.mapper.kernel.warp_types import PreparedSemanticFilterWarp
 from curobo._src.perception.mapper.kernel.wp_decay import (
     decay_and_recycle,
     decay_frustum_aware_multi_sensor,
 )
-from curobo._src.perception.mapper.kernel.wp_integrate_lidar_project import (
-    LidarProjectIntegrator,
-)
 from curobo._src.perception.mapper.kernel.wp_integrate_camera_project import (
     CameraProjectIntegrator,
+)
+from curobo._src.perception.mapper.kernel.wp_integrate_lidar_project import (
+    LidarProjectIntegrator,
 )
 from curobo._src.perception.mapper.kernel.wp_stamp_obstacles import (
     clear_static_channel,
@@ -185,6 +196,9 @@ class BlockSparseTSDFIntegratorCfg:
     #: kernel specialization value. Total controls per block are
     #: ``color_grid_size ** 3``.
     color_grid_size: int = 1
+    #: Number of categorical instance cells per block edge. ``0`` disables
+    #: packed instance ownership storage.
+    instance_grid_size: int = 0
     #: Feature integration launch policy: ``"auto"``, ``"grouped"``, or
     #: ``"tiled"``. Resolved to a low-level tiled bool at construction time.
     feature_integration_kernel: str = "auto"
@@ -269,8 +283,7 @@ class BlockSparseTSDFIntegratorCfg:
                 )
         elif self.max_visible_blocks_per_lidar_integration is not None:
             log_and_raise(
-                "max_visible_blocks_per_lidar_integration requires "
-                "lidar_num_sensors > 0."
+                "max_visible_blocks_per_lidar_integration requires lidar_num_sensors > 0."
             )
 
         if self.image_height is None or self.image_width is None:
@@ -287,9 +300,7 @@ class BlockSparseTSDFIntegratorCfg:
             )
         if self.num_cameras <= 0:
             log_and_raise(f"num_cameras must be positive, got num_cameras={self.num_cameras}.")
-        if (
-            self.texture_camera_image_height is None
-        ) != (self.texture_camera_image_width is None):
+        if (self.texture_camera_image_height is None) != (self.texture_camera_image_width is None):
             log_and_raise(
                 "texture_camera_image_height and texture_camera_image_width must be "
                 "specified together."
@@ -304,10 +315,7 @@ class BlockSparseTSDFIntegratorCfg:
                 "texture_num_cameras must be positive, got "
                 f"texture_num_cameras={self.texture_num_cameras}."
             )
-        if (
-            self.texture_camera_image_height <= 0
-            or self.texture_camera_image_width <= 0
-        ):
+        if self.texture_camera_image_height <= 0 or self.texture_camera_image_width <= 0:
             log_and_raise(
                 "texture_camera_image_height and texture_camera_image_width must be "
                 "positive, got "
@@ -335,6 +343,7 @@ class BlockSparseTSDFIntegratorCfg:
             self.feature_block_grid_size,
             self.block_size,
         )
+        _validate_instance_grid_size(self.instance_grid_size, self.block_size)
         _validate_feature_integration_kernel(self.feature_integration_kernel)
         if not isinstance(self.profile_integration_kernel_timings, bool):
             log_and_raise(
@@ -417,6 +426,7 @@ class BlockSparseTSDFIntegrator:
             max_feature_tile_channels=config.max_feature_tile_channels,
             max_support_pixels_per_block_camera=config.max_support_pixels_per_block_camera,
             color_grid_size=config.color_grid_size,
+            instance_grid_size=config.instance_grid_size,
             accumulator_w_max=config.accumulator_w_max,
         )
         if kernels is None:
@@ -471,9 +481,7 @@ class BlockSparseTSDFIntegrator:
                 max_visible_blocks_per_lidar_integration=(
                     config.max_visible_blocks_per_lidar_integration
                 ),
-                max_support_pixels_per_block_lidar=(
-                    config.max_support_pixels_per_block_lidar
-                ),
+                max_support_pixels_per_block_lidar=(config.max_support_pixels_per_block_lidar),
                 device=config.device,
                 feature_channels_per_thread=config.feature_channels_per_thread,
                 use_tiled_feature_kernel=use_tiled_lidar_feature_kernel,
@@ -492,16 +500,39 @@ class BlockSparseTSDFIntegrator:
             )
         else:
             self._lidar_integrator = None
+        self._semantic_revision = 0
+        self._semantic_filter_workspace = _SemanticFilterWorkspace()
+        self._point_workspace: Optional[SurfacePointWorkspace] = None
 
     @property
     def tsdf(self) -> BlockSparseTSDF:
         """Get the underlying BlockSparseTSDF instance."""
         return self._tsdf
 
+    def _mark_semantic_data_changed(self) -> None:
+        """Invalidate prepared semantic masks after a successful map mutation."""
+        self._semantic_revision += 1
+
+    def _prepare_semantic_filter(
+        self,
+        semantic_filter: SemanticFilter,
+    ) -> PreparedSemanticFilterWarp:
+        """Compile ``semantic_filter`` against the current fused feature grid."""
+        return self._semantic_filter_workspace.prepare(
+            semantic_filter,
+            self._tsdf,
+            self._semantic_revision,
+        )
+
     def reset(self):
         """Reset the integrator to initial state."""
         self._tsdf.reset()
         self._frame_count = 0
+        self._mark_semantic_data_changed()
+
+    def clear_instance_slot(self, instance_slot: int) -> None:
+        """Clear one retired compact instance slot from all allocated blocks."""
+        self._tsdf.clear_instance_slot(instance_slot)
 
     def import_blocks(self, blocks: Dict[str, torch.Tensor]) -> int:
         """Import compact block payloads into the underlying TSDF storage.
@@ -512,6 +543,7 @@ class BlockSparseTSDFIntegrator:
         self._tsdf.import_blocks(blocks)
         num_blocks = int(self._tsdf.data.num_allocated.item())
         self._frame_count = 1 if num_blocks > 0 else 0
+        self._mark_semantic_data_changed()
         return num_blocks
 
     def integrate(
@@ -540,8 +572,7 @@ class BlockSparseTSDFIntegrator:
 
         if camera_observation is None and lidar_observation is None:
             log_and_raise(
-                "integrate() requires camera_observation, lidar_observation, "
-                "or observation."
+                "integrate() requires camera_observation, lidar_observation, or observation."
             )
 
         has_lidar = lidar_observation is not None
@@ -576,6 +607,7 @@ class BlockSparseTSDFIntegrator:
         - ``pose.quaternion``: ``(num_cameras, 4)``
         - ``feature_grid``: optional ``(num_cameras, feature_H, feature_W, feature_dim)``
           float16 tensor when features are enabled
+        - ``instance_image``: optional ``(num_cameras, H, W)`` uint8 compact slots
 
         Args:
             observation: Batched camera observation.
@@ -669,7 +701,9 @@ class BlockSparseTSDFIntegrator:
             depth_max=self.config.depth_maximum_distance,
             grid_size=self.config.grid_shape,
             feature_grid=feature_grid,
+            instance_image=observation.instance_image,
         )
+        self._mark_semantic_data_changed()
 
         if advance_frame:
             self._frame_count += 1
@@ -769,6 +803,7 @@ class BlockSparseTSDFIntegrator:
             observation.elevation_range_rad,
             feature_grid=observation.feature_grid,
         )
+        self._mark_semantic_data_changed()
         if advance_frame:
             self._frame_count += 1
 
@@ -778,8 +813,7 @@ class BlockSparseTSDFIntegrator:
             log_and_raise("LidarObservation.range_image is required.")
         if range_image.ndim != 3:
             log_and_raise(
-                "range_image must be (num_lidars, H, W), got "
-                f"shape {tuple(range_image.shape)}."
+                f"range_image must be (num_lidars, H, W), got shape {tuple(range_image.shape)}."
             )
         n_lidars = int(range_image.shape[0])
         if n_lidars != self.config.lidar_num_sensors:
@@ -829,13 +863,10 @@ class BlockSparseTSDFIntegrator:
             log_and_raise("LidarObservation.valid_range_m is required.")
         if tuple(valid_range_m.shape) != (n_lidars, 2):
             log_and_raise(
-                "valid_range_m must be (num_lidars, 2), got "
-                f"shape {tuple(valid_range_m.shape)}."
+                f"valid_range_m must be (num_lidars, 2), got shape {tuple(valid_range_m.shape)}."
             )
         if valid_range_m.dtype != torch.float32:
-            log_and_raise(
-                f"valid_range_m dtype must be torch.float32, got {valid_range_m.dtype}."
-            )
+            log_and_raise(f"valid_range_m dtype must be torch.float32, got {valid_range_m.dtype}.")
         if valid_range_m.device != range_image.device:
             log_and_raise(
                 f"valid_range_m device {valid_range_m.device} does not match "
@@ -909,7 +940,9 @@ class BlockSparseTSDFIntegrator:
         Returns:
             Number of blocks recycled.
         """
-        return decay_and_recycle(self._tsdf, 1.0)  # No additional decay
+        recycled = decay_and_recycle(self._tsdf, 1.0)  # No additional decay
+        self._mark_semantic_data_changed()
+        return recycled
 
     def clear_region(self, bounds_min, bounds_max) -> int:
         """Clear dynamic map contents for allocated blocks intersecting an AABB.
@@ -922,7 +955,9 @@ class BlockSparseTSDFIntegrator:
             Number of allocated blocks cleared. Blocks remain allocated; only
             dynamic TSDF/RGB, block sums, and per-block features are reset.
         """
-        return self._camera_integrator.clear_region(self._tsdf, bounds_min, bounds_max)
+        cleared = self._camera_integrator.clear_region(self._tsdf, bounds_min, bounds_max)
+        self._mark_semantic_data_changed()
+        return cleared
 
     def clear_blocks(self, pool_indices) -> int:
         """Clear dynamic map contents for explicit block-pool indices.
@@ -934,13 +969,16 @@ class BlockSparseTSDFIntegrator:
             Number of blocks cleared. Blocks remain allocated; only dynamic
             TSDF/RGB, block sums, and per-block features are reset.
         """
-        return self._camera_integrator.clear_blocks(self._tsdf, pool_indices)
+        cleared = self._camera_integrator.clear_blocks(self._tsdf, pool_indices)
+        self._mark_semantic_data_changed()
+        return cleared
 
     def extract_mesh(
         self,
         refine_iterations: int = 0,
         surface_only: bool = False,
         level: float = 0.0,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Mesh:
         """Extract a triangle-soup mesh from the TSDF using marching cubes.
 
@@ -952,16 +990,21 @@ class BlockSparseTSDFIntegrator:
                 Excludes triangles from regions deep inside the object where TSDF
                 is clamped to -truncation_distance.
             level: Isosurface level (typically 0.0).
+            semantic_filter: Optional fused-feature filter applied before mesh generation.
 
         Returns:
             Mesh object with one unique vertex for each triangle corner.
         """
+        prepared_semantic_filter = (
+            self._prepare_semantic_filter(semantic_filter) if semantic_filter is not None else None
+        )
         vertices, normals, colors = extract_mesh_block_sparse(
             self._tsdf,
             level=level,
             surface_only=surface_only,
             refine_iterations=refine_iterations,
             minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+            semantic_filter=prepared_semantic_filter,
         )
         triangles = torch.arange(
             vertices.shape[0], dtype=torch.int32, device=vertices.device
@@ -982,6 +1025,7 @@ class BlockSparseTSDFIntegrator:
         level: float = 0.0,
         surface_only: bool = False,
         refine_iterations: int = 0,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Extract a triangle-soup mesh as raw tensors.
 
@@ -993,6 +1037,7 @@ class BlockSparseTSDFIntegrator:
             refine_iterations: Number of Newton-Raphson iterations for vertex refinement.
                 0 = no refinement (linear interpolation only). Higher values (2-5)
                 produce smoother meshes at the cost of more computation.
+            semantic_filter: Optional fused-feature filter applied before mesh generation.
 
         Returns:
             Tuple of (vertices, triangles, normals, colors):
@@ -1001,12 +1046,16 @@ class BlockSparseTSDFIntegrator:
                 - normals: (N, 3) float32
                 - colors: (N, 3) uint8
         """
+        prepared_semantic_filter = (
+            self._prepare_semantic_filter(semantic_filter) if semantic_filter is not None else None
+        )
         vertices, normals, colors = extract_mesh_block_sparse(
             self._tsdf,
             level=level,
             surface_only=surface_only,
             refine_iterations=refine_iterations,
             minimum_tsdf_weight=self.config.minimum_tsdf_weight,
+            semantic_filter=prepared_semantic_filter,
         )
         triangles = torch.arange(
             vertices.shape[0], dtype=torch.int32, device=vertices.device
@@ -1022,6 +1071,7 @@ class BlockSparseTSDFIntegrator:
         camera_min_distance: Optional[float] = None,
         camera_max_distance: Optional[float] = None,
         texture_depth_tolerance_m: Optional[float] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> Mesh:
         """Extract a mesh with visibility-tested RGB texture.
 
@@ -1043,6 +1093,7 @@ class BlockSparseTSDFIntegrator:
                 projection. Defaults to the mapper depth maximum.
             texture_depth_tolerance_m: Absolute visibility-depth tolerance. If
                 None, each sample uses ``max(2 * voxel_size, 0.01 * projected_z)``.
+            semantic_filter: Optional fused-feature filter applied to mesh geometry.
 
         Returns:
             Mesh with triangle-soup geometry, vertex colors, per-vertex UVs,
@@ -1058,6 +1109,7 @@ class BlockSparseTSDFIntegrator:
             level=level,
             surface_only=surface_only,
             refine_iterations=refine_iterations,
+            semantic_filter=semantic_filter,
         )
         return self._texture_projector.project_mesh(
             vertices,
@@ -1075,13 +1127,9 @@ class BlockSparseTSDFIntegrator:
         try:
             factor = int(subvoxel_factor)
         except (TypeError, ValueError):
-            log_and_raise(
-                f"subvoxel_factor must be a positive integer, got {subvoxel_factor}."
-            )
+            log_and_raise(f"subvoxel_factor must be a positive integer, got {subvoxel_factor}.")
         if isinstance(subvoxel_factor, bool) or factor != subvoxel_factor:
-            log_and_raise(
-                f"subvoxel_factor must be a positive integer, got {subvoxel_factor}."
-            )
+            log_and_raise(f"subvoxel_factor must be a positive integer, got {subvoxel_factor}.")
         if factor <= 0:
             log_and_raise(f"subvoxel_factor must be positive, got {subvoxel_factor}.")
         return factor
@@ -1094,13 +1142,9 @@ class BlockSparseTSDFIntegrator:
         try:
             point_cap = int(max_points)
         except (TypeError, ValueError):
-            log_and_raise(
-                f"max_points must be a positive integer or None, got {max_points}."
-            )
+            log_and_raise(f"max_points must be a positive integer or None, got {max_points}.")
         if isinstance(max_points, bool) or point_cap != max_points:
-            log_and_raise(
-                f"max_points must be a positive integer or None, got {max_points}."
-            )
+            log_and_raise(f"max_points must be a positive integer or None, got {max_points}.")
         if point_cap <= 0:
             log_and_raise(f"max_points must be positive, got {max_points}.")
         return point_cap
@@ -1128,13 +1172,17 @@ class BlockSparseTSDFIntegrator:
                 block_data=voxels.block_data,
             )
 
-        indices = torch.linspace(
-            0,
-            len(voxels) - 1,
-            steps=source_count,
-            device=voxels.centers.device,
-            dtype=torch.float32,
-        ).round().to(torch.long)
+        indices = (
+            torch.linspace(
+                0,
+                len(voxels) - 1,
+                steps=source_count,
+                device=voxels.centers.device,
+                dtype=torch.float32,
+            )
+            .round()
+            .to(torch.long)
+        )
         return OccupiedVoxels(
             centers=voxels.centers[indices].contiguous(),
             block_idx_per_voxel=voxels.block_idx_per_voxel[indices].contiguous(),
@@ -1168,9 +1216,7 @@ class BlockSparseTSDFIntegrator:
             dim=-1,
         ).reshape(-1, 3)
         centers = (voxels.centers[:, None, :] + offset_grid[None, :, :]).reshape(-1, 3)
-        block_idx_per_voxel = voxels.block_idx_per_voxel.repeat_interleave(
-            subvoxel_factor**3
-        )
+        block_idx_per_voxel = voxels.block_idx_per_voxel.repeat_interleave(subvoxel_factor**3)
         return OccupiedVoxels(
             centers=centers.contiguous(),
             block_idx_per_voxel=block_idx_per_voxel.contiguous(),
@@ -1270,6 +1316,37 @@ class BlockSparseTSDFIntegrator:
             grid_shape=self.config.grid_shape,
         )
 
+    def extract_occupied_points(
+        self,
+        sample_budget: int = 2000,
+        *,
+        instance_slot: Optional[int] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
+        voxel_selection: Optional[torch.Tensor] = None,
+        seed: int = 0,
+    ) -> OccupiedPoints:
+        """Sample observed TSDF zero-crossing faces, pruning abs(SDF) >= 0.5 voxel.
+
+        Returns fixed-capacity CUDA buffers and a GPU valid count. Unknown
+        interpolation corners are omitted and weights renormalized. Crossing
+        endpoints must both be observed. Filters select the nearest endpoint;
+        interpolation still uses the full field. No refill or CPU count reads.
+        Warm up once for each budget before graph capture. Calls sharing this
+        mapper must be serialized; results are reused by the next same-budget call.
+        """
+        validate_point_query(sample_budget, instance_slot, seed)
+        if self._point_workspace is None:
+            self._point_workspace = SurfacePointWorkspace(self._tsdf)
+        return self._point_workspace.extract(
+            self._tsdf,
+            sample_budget,
+            self.config.minimum_tsdf_weight,
+            instance_slot,
+            semantic_filter,
+            voxel_selection,
+            seed,
+        )
+
     def extract_occupied_voxels(
         self,
         surface_only: bool = False,
@@ -1281,6 +1358,7 @@ class BlockSparseTSDFIntegrator:
         camera_min_distance: Optional[float] = None,
         camera_max_distance: Optional[float] = None,
         texture_depth_tolerance_m: Optional[float] = None,
+        semantic_filter: Optional[SemanticFilter] = None,
     ) -> OccupiedVoxels:
         """Extract occupied voxel centers and per-voxel block indices.
 
@@ -1302,6 +1380,7 @@ class BlockSparseTSDFIntegrator:
             camera_max_distance: Maximum camera-frame z used for texture projection.
             texture_depth_tolerance_m: Absolute visibility-depth tolerance. If
                 None, each sample uses ``max(2 * voxel_size, 0.01 * projected_z)``.
+            semantic_filter: Optional fused-feature filter applied before extraction.
 
         Returns:
             :class:`OccupiedVoxels` — ``.centers`` for voxel positions,
@@ -1309,19 +1388,21 @@ class BlockSparseTSDFIntegrator:
             ``.block_data`` as a read-only view over per-block storage.
             Use ``.colors_uint8()`` to gather per-voxel RGB.
         """
-        subvoxel_factor = BlockSparseTSDFIntegrator._validate_subvoxel_factor(
-            subvoxel_factor
-        )
+        subvoxel_factor = BlockSparseTSDFIntegrator._validate_subvoxel_factor(subvoxel_factor)
         # Default threshold to voxel_size (matches dense behavior)
         if sdf_threshold is None:
             sdf_threshold = self.config.voxel_size
 
+        prepared_semantic_filter = (
+            self._prepare_semantic_filter(semantic_filter) if semantic_filter is not None else None
+        )
         voxels = extract_occupied_voxels_block_sparse(
             self._tsdf,
             surface_only=surface_only,
             sdf_threshold=sdf_threshold,
             minimum_tsdf_weight=self.config.minimum_tsdf_weight,
             grid_shape=self.config.grid_shape,
+            semantic_filter=prepared_semantic_filter,
         )
         voxels = self._limit_voxels_for_point_cap(
             voxels,
@@ -1559,3 +1640,4 @@ class BlockSparseTSDFIntegrator:
 
         # Step 3: Stamp all obstacle types (cuboids, meshes, voxels) generically
         stamp_scene_obstacles(tsdf, scene, env_idx, self.config.static_obstacle_color, debug=debug)
+        self._mark_semantic_data_changed()

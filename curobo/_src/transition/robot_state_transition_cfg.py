@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard Library
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Type, Union
 
 # Third Party
@@ -13,6 +13,7 @@ from curobo._src.transition.robot_state_transition import RobotStateTransition
 from curobo._src.types.control_space import ControlSpace
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
+from curobo._src.types.spline_layout import SplineLayout
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.state_filter import FilterCfg
 
@@ -72,12 +73,28 @@ class RobotStateTransitionCfg:
     state_finite_difference_mode: str = "BACKWARD"
     filter_robot_command: bool = False
     interpolation_steps: int = 1
+    compute_jacobian: bool = False
+    _compute_jacobian_requested: bool = field(init=False, repr=False)
     class_type: Type[RobotStateTransition] = RobotStateTransition
+    #: Compute torques when robot dynamics are available, without copying robot parameters.
+    compute_inverse_dynamics: bool = True
+
+    @property
+    def spline_layout(self) -> SplineLayout:
+        """Shared layout of the configured B-spline and its native samples."""
+        return SplineLayout(self.n_knots, self.control_space, self.interpolation_steps)
+
+    @property
+    def native_horizon(self) -> int:
+        """Number of states produced by the configured transition model."""
+        return (
+            self.spline_layout.native_horizon
+            if self.control_space in ControlSpace.bspline_types()
+            else self.horizon
+        )
 
     @staticmethod
-    def create(
-        data_dict_in, robot_cfg: Union[Dict, RobotCfg], device_cfg=DeviceCfg()
-    ):
+    def create(data_dict_in, robot_cfg: Union[Dict, RobotCfg], device_cfg=DeviceCfg()):
         data_dict = deepcopy(data_dict_in)
         if isinstance(robot_cfg, dict):
             robot_cfg = RobotCfg.create(robot_cfg, device_cfg)
@@ -96,6 +113,7 @@ class RobotStateTransitionCfg:
         return RobotStateTransitionCfg(**data_dict, device_cfg=device_cfg)
 
     def __post_init__(self):
+        self._compute_jacobian_requested = self.compute_jacobian
         if self.control_space in ControlSpace.bspline_types():
             if self.interpolation_steps < 1:
                 log_and_raise("interpolation_steps needs to be greater than 0")
@@ -106,6 +124,4 @@ class RobotStateTransitionCfg:
             if self.control_space in ControlSpace.bspline_types():
                 if self.teleport_mode:
                     log_and_raise("Teleport mode is not supported for bspline control spaces")
-                self.horizon = ControlSpace.spline_total_interpolation_steps(
-                    self.control_space, self.n_knots, self.interpolation_steps
-                )
+                self.horizon = self.spline_layout.native_horizon

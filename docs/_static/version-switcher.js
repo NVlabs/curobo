@@ -1,5 +1,10 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 /**
- * Version switcher for Furo theme.
+ * cuRobo documentation version switcher for the Furo theme.
  *
  * Detects the site base path from the current URL (handles GitLab Pages
  * subpath deployments like /project-name/) and fetches versions.json

@@ -12,7 +12,6 @@ from typing import Dict, Optional, Tuple, Union
 
 # Third Party
 import torch
-from torch.profiler import record_function
 
 from curobo._src.curobolib.cuda_ops.tensor_checks import (
     check_float16_tensors,
@@ -28,7 +27,11 @@ from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.robot import RobotCfg
 from curobo._src.util.cuda_graph_util import GraphExecutor
 from curobo._src.util.logging import log_and_raise
-from curobo._src.util.torch_util import get_torch_jit_decorator, is_torch_compile_available
+from curobo._src.util.torch_util import (
+    get_profiler_decorator,
+    get_torch_jit_decorator,
+    is_torch_compile_available,
+)
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
 
 
@@ -39,12 +42,13 @@ class RobotSegmenter:
     distances between depth points and robot collision spheres.
 
     Example:
-        ```python
-        from curobo._src.perception.robot_segmenter import RobotSegmenter
 
-        segmenter = RobotSegmenter.from_robot_file("franka.yml")
-        mask, filtered_image = segmenter.get_robot_mask(camera_obs, joint_state)
-        ```
+        .. code-block:: python
+
+            from curobo.perception import RobotSegmenter
+
+            segmenter = RobotSegmenter.from_robot_file("franka.yml")
+            mask, filtered_image = segmenter.get_robot_mask(camera_obs, joint_state)
     """
 
     def __init__(
@@ -159,7 +163,7 @@ class RobotSegmenter:
         self._projection_rays.copy_(project_rays)
         self.ready = True
 
-    @record_function("robot_segmenter/get_robot_mask")
+    @get_profiler_decorator("robot_segmenter/get_robot_mask")
     def get_robot_mask(
         self,
         camera_obs: CameraObservation,
@@ -212,7 +216,7 @@ class RobotSegmenter:
         #return self._mask_op(cam_obs, q)
         return self._graph_executor(cam_obs, q)
 
-    @record_function("robot_segmenter/_mask_op")
+    @get_profiler_decorator("robot_segmenter/_mask_op")
     def _mask_op(
         self, camera_obs: CameraObservation, q: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:

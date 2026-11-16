@@ -244,6 +244,5 @@ subclass field and plug that subclass into
 See Also
 --------
 
-- :ref:`rollout_class_note` -- how the cost manager fits inside the rollout.
 - :ref:`tut_motion_optimization` -- the production rollout the manager plugs into.
-- :ref:`optimization_solver_note` -- the optimizers that consume the combined cost.
+- :mod:`curobo.optim` -- the optimizers that consume the combined cost.

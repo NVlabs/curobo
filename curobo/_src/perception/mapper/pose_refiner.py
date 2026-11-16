@@ -24,13 +24,14 @@ from typing import TYPE_CHECKING, Optional, Tuple
 import torch
 import warp as wp
 
+from curobo._src.curobolib.backends.cuda_core_backend.pose_refiner import (
+    launch_pose_refiner_accept_candidate,
+    launch_pose_refiner_count_valid_depth,
+    launch_pose_refiner_initialize_state,
+    launch_pose_refiner_solve_candidate,
+)
 from curobo._src.perception.mapper.kernel.wp_raycast_pose_refine import (
     create_ray_sdf_alignment_block_sparse_tiled_kernel,
-)
-from curobo._src.perception.optim_pose_lm import (
-    compute_predicted_reduction,
-    solve_lm_step,
-    trust_region_update,
 )
 from curobo._src.types.pose import Pose
 from curobo._src.util.cuda_graph_util import GraphExecutor
@@ -73,6 +74,8 @@ class BlockSparseRefinementState:
         best_JtJ: [6, 6] J^T @ J at current accepted pose.
         best_Jtr: [6] J^T @ r at current accepted pose.
         lambda_damping: LM damping parameter.
+        result_float: [2] final error and damping result storage.
+        result_int: [4] iteration, valid-count, accepted-step, and status storage.
     """
 
     # Input data
@@ -107,8 +110,10 @@ class BlockSparseRefinementState:
 
     # LM damping parameter
     lambda_damping: torch.Tensor
+    result_float: torch.Tensor
+    result_int: torch.Tensor
 
-    def clone(self):
+    def clone(self) -> BlockSparseRefinementState:
         """Create a deep copy of this state."""
         return BlockSparseRefinementState(
             depth=self.depth.clone(),
@@ -134,9 +139,11 @@ class BlockSparseRefinementState:
             best_JtJ=self.best_JtJ.clone(),
             best_Jtr=self.best_Jtr.clone(),
             lambda_damping=self.lambda_damping.clone(),
+            result_float=self.result_float.clone(),
+            result_int=self.result_int.clone(),
         )
 
-    def copy_(self, other: BlockSparseRefinementState):
+    def copy_(self, other: BlockSparseRefinementState) -> BlockSparseRefinementState:
         """Copy values from another state in-place."""
         self.depth.copy_(other.depth)
         self.intrinsics.copy_(other.intrinsics)
@@ -161,6 +168,8 @@ class BlockSparseRefinementState:
         self.best_JtJ.copy_(other.best_JtJ)
         self.best_Jtr.copy_(other.best_Jtr)
         self.lambda_damping.copy_(other.lambda_damping)
+        self.result_float.copy_(other.result_float)
+        self.result_int.copy_(other.result_int)
         return self
 
 
@@ -236,7 +245,7 @@ class BlockSparseRaycastPoseRefiner:
         self,
         integrator: "BlockSparseESDFIntegrator | BlockSparseTSDFIntegrator",
         config: Optional[BlockSparseRaycastRefinerCfg] = None,
-    ):
+    ) -> None:
         """Initialize BlockSparseRaycastPoseRefiner.
 
         Args:
@@ -267,12 +276,8 @@ class BlockSparseRaycastPoseRefiner:
             clone_outputs=False,
         )
 
-    def _allocate_buffers(self):
+    def _allocate_buffers(self) -> None:
         """Pre-allocate GPU buffers for reuse."""
-        # Fixed-size buffers
-        self._eye6 = torch.eye(6, device=self.device, dtype=torch.float32)
-        self._inf_tensor = torch.tensor(float("inf"), device=self.device, dtype=torch.float32)
-
         # Tiled kernel output buffers
         self._JtJ_flat = torch.zeros(36, dtype=torch.float32, device=self.device)
         self._Jtr = torch.zeros(6, dtype=torch.float32, device=self.device)
@@ -282,6 +287,20 @@ class BlockSparseRaycastPoseRefiner:
         # State buffers
         self._state_JtJ = torch.zeros((6, 6), dtype=torch.float32, device=self.device)
         self._state_Jtr = torch.zeros(6, dtype=torch.float32, device=self.device)
+        self._state_position = torch.zeros((1, 3), dtype=torch.float32, device=self.device)
+        self._state_quaternion = torch.zeros((1, 4), dtype=torch.float32, device=self.device)
+        self._state_error = torch.zeros(1, dtype=torch.float32, device=self.device)
+        self._state_sum_sq = torch.zeros(1, dtype=torch.float32, device=self.device)
+        self._state_valid_count = torch.zeros(1, dtype=torch.int32, device=self.device)
+        self._state_lambda = torch.zeros(1, dtype=torch.float32, device=self.device)
+        self._state_result_float = torch.zeros(2, dtype=torch.float32, device=self.device)
+        self._state_result_int = torch.zeros(4, dtype=torch.int32, device=self.device)
+
+        # Candidate and setup buffers remain fixed across CUDA graph capture.
+        self._candidate_position = torch.zeros((1, 3), dtype=torch.float32, device=self.device)
+        self._candidate_quaternion = torch.zeros((1, 4), dtype=torch.float32, device=self.device)
+        self._predicted_reduction = torch.zeros(1, dtype=torch.float32, device=self.device)
+        self._valid_depth_count = torch.zeros(1, dtype=torch.int32, device=self.device)
 
         # Cached state
         self._cached_state: Optional[BlockSparseRefinementState] = None
@@ -328,13 +347,15 @@ class BlockSparseRaycastPoseRefiner:
         tsdf = self.integrator.tsdf
 
         # Calculate valid depth pixels
-        depth_on_device = depth.to(self.device)
-        valid_depth_mask = torch.logical_and(
-            depth_on_device > self.config.depth_minimum_distance,
-            depth_on_device < self.config.depth_maximum_distance,
+        depth_on_device = depth.to(self.device, dtype=torch.float32).contiguous()
+        self._valid_depth_count.zero_()
+        launch_pose_refiner_count_valid_depth(
+            depth_on_device,
+            self.config.depth_minimum_distance,
+            self.config.depth_maximum_distance,
+            self._valid_depth_count,
         )
-        n_valid_depth_pixels = valid_depth_mask.sum()
-        if n_valid_depth_pixels.item() < self.config.minimum_valid_depth_pixels:
+        if self._valid_depth_count.item() < self.config.minimum_valid_depth_pixels:
             return None
 
         # Compute sampling grid params
@@ -345,7 +366,7 @@ class BlockSparseRaycastPoseRefiner:
         n_pixels = out_H * out_W
 
         # Prepare pose tensors
-        intrinsics_on_device = intrinsics.to(self.device, dtype=torch.float32)
+        intrinsics_on_device = intrinsics.to(self.device, dtype=torch.float32).contiguous()
         position = (
             estimated_pose.position.squeeze(0).to(self.device, dtype=torch.float32).view(1, 3)
         )
@@ -401,23 +422,34 @@ class BlockSparseRaycastPoseRefiner:
             adjoint=False,
         )
 
-        # Extract initial error
-        n_valid = self._valid_count
-        initial_error = torch.where(
-            n_valid > 0,
-            torch.sqrt(self._sum_sq_residuals[0] / (n_valid + 1e-8)),
-            torch.tensor(float("inf"), device=self.device),
+        launch_pose_refiner_initialize_state(
+            position,
+            quaternion,
+            self._JtJ_flat,
+            self._Jtr,
+            self._sum_sq_residuals,
+            self._valid_count,
+            self._valid_depth_count,
+            self.config.minimum_valid_depth_pixels,
+            self.config.minimum_valid_depth_pixels,
+            self.config.lambda_initial,
+            self._state_position,
+            self._state_quaternion,
+            self._state_JtJ,
+            self._state_Jtr,
+            self._state_sum_sq,
+            self._state_error,
+            self._state_valid_count,
+            self._state_lambda,
+            self._state_result_float,
+            self._state_result_int,
         )
-
-        # Store JtJ/Jtr
-        self._state_JtJ.copy_(self._JtJ_flat.view(6, 6))
-        self._state_Jtr.copy_(self._Jtr)
 
         # Create state
         self._cached_state = BlockSparseRefinementState(
             depth=depth_on_device.clone(),
             intrinsics=intrinsics_on_device.clone(),
-            n_valid_depth_pixels=n_valid_depth_pixels.clone(),
+            n_valid_depth_pixels=self._valid_depth_count.clone(),
             stride=stride,
             out_W=out_W,
             n_pixels=n_pixels,
@@ -430,14 +462,16 @@ class BlockSparseRaycastPoseRefiner:
             grid_W=grid_W_dim,
             grid_H=grid_H_dim,
             grid_D=grid_D,
-            best_position=position.clone(),
-            best_quaternion=quaternion.clone(),
-            best_error=initial_error.clone(),
-            best_sum_sq=self._sum_sq_residuals.clone(),
-            best_n_valid=n_valid.clone(),
+            best_position=self._state_position.clone(),
+            best_quaternion=self._state_quaternion.clone(),
+            best_error=self._state_error.clone(),
+            best_sum_sq=self._state_sum_sq.clone(),
+            best_n_valid=self._state_valid_count.clone(),
             best_JtJ=self._state_JtJ.clone(),
             best_Jtr=self._state_Jtr.clone(),
-            lambda_damping=torch.tensor([self.config.lambda_initial], device=self.device),
+            lambda_damping=self._state_lambda.clone(),
+            result_float=self._state_result_float.clone(),
+            result_int=self._state_result_int.clone(),
         )
 
         return self._cached_state
@@ -454,26 +488,18 @@ class BlockSparseRaycastPoseRefiner:
         Returns:
             Updated refinement state.
         """
-        # Step 1: Solve for delta
-        delta = solve_lm_step(
+        # Step 1 and 2: Solve for the LM step and compose the candidate pose.
+        launch_pose_refiner_solve_candidate(
+            state.best_position,
+            state.best_quaternion,
             state.best_JtJ,
             state.best_Jtr,
             state.lambda_damping,
-            self._eye6,
+            self._candidate_position,
+            self._candidate_quaternion,
+            self._predicted_reduction,
+            state.result_int,
         )
-        # print("BEST JtJ:", torch.sum(state.best_JtJ), "BEST Jtr:", torch.sum(state.best_Jtr), "DELTA:", (delta))
-
-        pred_reduction = compute_predicted_reduction(delta, state.best_Jtr, state.best_JtJ)
-
-        # Step 2: Compute candidate pose
-        delta_pose = Pose.from_euler_xyz(delta[3:], delta[:3])
-        current_pose = Pose(
-            position=state.best_position,
-            quaternion=state.best_quaternion,
-        )
-        cand_pose = delta_pose.multiply(current_pose)
-        cand_position = cand_pose.position.clone()
-        cand_quaternion = cand_pose.quaternion.clone()
 
         # Step 3: Evaluate candidate
         n_total_samples = state.n_pixels * self.config.n_samples_per_ray
@@ -491,8 +517,8 @@ class BlockSparseRaycastPoseRefiner:
             inputs=[
                 wp.from_torch(state.depth, dtype=wp.float32),
                 wp.from_torch(state.intrinsics, dtype=wp.float32),
-                wp.from_torch(cand_position.view(3), dtype=wp.float32),
-                wp.from_torch(cand_quaternion.view(4), dtype=wp.float32),
+                wp.from_torch(self._candidate_position.view(3), dtype=wp.float32),
+                wp.from_torch(self._candidate_quaternion.view(4), dtype=wp.float32),
                 state.warp_data,
                 self.config.minimum_tsdf_weight,
                 self.config.depth_minimum_distance,
@@ -512,67 +538,31 @@ class BlockSparseRaycastPoseRefiner:
             adjoint=False,
         )
 
-        # Step 4 & 5: Trust region update
-        (
-            new_best_position,
-            new_best_quaternion,
-            new_best_error,
-            new_best_sum_sq,
-            new_best_n_valid,
-            new_best_JtJ,
-            new_best_Jtr,
-            new_lambda,
-        ) = trust_region_update(
-            cand_n_valid=self._valid_count,
-            sum_sq_residuals=self._sum_sq_residuals,
-            cand_JtJ=self._JtJ_flat.view(6, 6),
-            cand_Jtr=self._Jtr,
-            cand_position=cand_position,
-            cand_quaternion=cand_quaternion,
-            best_error=state.best_error,
-            best_sum_sq=state.best_sum_sq,
-            best_n_valid=state.best_n_valid,
-            best_JtJ=state.best_JtJ,
-            best_Jtr=state.best_Jtr,
-            best_position=state.best_position,
-            best_quaternion=state.best_quaternion,
-            pred_reduction=pred_reduction,
-            lambda_damping=state.lambda_damping,
-            n_total_valid=state.n_valid_depth_pixels,
-            min_valid_ratio=self.config.min_valid_ratio,
-            rho_min=self.config.rho_min,
-            lambda_factor=self.config.lambda_factor,
-            lambda_min=self.config.lambda_min,
-            lambda_max=self.config.lambda_max,
-            inf_tensor=self._inf_tensor,
-            minimum_valid_count=self.config.minimum_valid_depth_pixels,
+        # Step 4 and 5: Update the trust region and accepted state in-place.
+        launch_pose_refiner_accept_candidate(
+            self._candidate_position,
+            self._candidate_quaternion,
+            self._JtJ_flat,
+            self._Jtr,
+            self._sum_sq_residuals,
+            self._valid_count,
+            state.best_position,
+            state.best_quaternion,
+            state.best_JtJ,
+            state.best_Jtr,
+            state.best_sum_sq,
+            state.best_error,
+            state.best_n_valid,
+            state.lambda_damping,
+            self._predicted_reduction,
+            self.config.minimum_valid_depth_pixels,
+            self.config.lambda_factor,
+            self.config.lambda_min,
+            self.config.lambda_max,
+            state.result_float,
+            state.result_int,
         )
-
-        return BlockSparseRefinementState(
-            depth=state.depth,
-            intrinsics=state.intrinsics,
-            n_valid_depth_pixels=state.n_valid_depth_pixels,
-            stride=state.stride,
-            out_W=state.out_W,
-            n_pixels=state.n_pixels,
-            origin=state.origin,
-            voxel_size=state.voxel_size,
-            block_size=state.block_size,
-            hash_capacity=state.hash_capacity,
-            truncation_distance=state.truncation_distance,
-            warp_data=state.warp_data,
-            grid_W=state.grid_W,
-            grid_H=state.grid_H,
-            grid_D=state.grid_D,
-            best_position=new_best_position,
-            best_quaternion=new_best_quaternion,
-            best_error=new_best_error,
-            best_sum_sq=new_best_sum_sq,
-            best_n_valid=new_best_n_valid,
-            best_JtJ=new_best_JtJ,
-            best_Jtr=new_best_Jtr,
-            lambda_damping=new_lambda,
-        )
+        return state
 
     @get_profiler_decorator("block_sparse_pose_refiner/_refine_inner_iterations")
     def _refine_inner_iterations(

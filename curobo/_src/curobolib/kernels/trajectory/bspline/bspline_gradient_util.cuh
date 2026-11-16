@@ -87,16 +87,18 @@ namespace curobo{
 
           unsigned int mask = __ballot_sync(0xFFFFFFFF, true);
 
-          int shift = (knots_per_warp * interpolation_steps + 1) / 2; // Ensure correct rounding
+          // The caller reduces only when interpolation_steps > 1. Start at
+          // the largest power of two below the sample count, including odd counts.
+          const int shift = 1 << (31 - __clz(static_cast<unsigned int>(interpolation_steps - 1)));
           const int lane_idx = threadIdx.x % 32;
+          const int interpolation_idx = lane_idx / knots_per_warp;
 
 
-          for (int offset = shift; offset >= knots_per_warp; offset = (offset + 1) / 2) {
-            // Ensure correct rounding in the loop
-            float other_val = __shfl_down_sync(mask, val, offset);
+          for (int offset = shift; offset > 0; offset /= 2) {
+            float other_val = __shfl_down_sync(mask, val, offset * knots_per_warp);
             // only add if it's with the correct lane index:
 
-            bool condition = (lane_idx + offset) < 32; // This will always be true?
+            bool condition = interpolation_idx + offset < interpolation_steps;
             float to_sum_value = condition ? other_val : 0;
             val += to_sum_value;
 
@@ -119,7 +121,10 @@ namespace curobo{
      * velocity, acceleration, and jerk gradients simultaneously.
      *
      * @tparam Degree B-spline degree, determines support window size (Degree + 1)
-     * @tparam ScalarType Floating point type (float or double)
+     * @tparam PositionGradient Pointer or provider with device-side operator[]
+     * @tparam VelocityGradient Pointer or provider with device-side operator[]
+     * @tparam AccelerationGradient Pointer or provider with device-side operator[]
+     * @tparam JerkGradient Pointer or provider with device-side operator[]
      *
      * @param gradients Output structure to store loaded gradient values
      * @param indices Thread indices structure containing computed addressing information
@@ -137,14 +142,15 @@ namespace curobo{
      * @note Gradient loading is optimized for coalesced memory access when called by
      *       threads processing consecutive DOF indices.
      */
-    template<int Degree, typename ScalarType>
+    template<int Degree, typename PositionGradient, typename VelocityGradient,
+             typename AccelerationGradient, typename JerkGradient>
     __device__ void load_gradients(
         GradientArrays<Degree> &gradients,
         const BSplineBackwardThreadInfo &thread_info,
-        const ScalarType *grad_position,
-        const ScalarType *grad_velocity,
-        const ScalarType *grad_acceleration,
-        const ScalarType *grad_jerk)
+        PositionGradient grad_position,
+        VelocityGradient grad_velocity,
+        AccelerationGradient grad_acceleration,
+        JerkGradient grad_jerk)
     {
         constexpr int splineSupportSize = get_spline_support_size<Degree>();
         gradients.initialize();

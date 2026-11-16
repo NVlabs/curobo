@@ -4,7 +4,7 @@
 """Scene collision combining data and operations.
 
 This module provides SceneCollision, a container that bundles:
-- SceneData: GPU tensor storage for obstacles (cuboids, meshes, voxels)
+- SceneData: GPU tensor storage for analytic primitives, meshes, and voxels
 - CollisionChecker: Stateless collision operations using generic Warp kernels
 
 The design separates:
@@ -42,7 +42,7 @@ class SceneCollisionCfg:
         scene_model: Scene configuration or list of scene configurations.
         num_envs: Number of parallel environments.
         max_distance: Maximum distance for mesh collision queries.
-        cache: Cache sizes {"cuboid": N, "mesh": M, "voxel": L}.
+        cache: Cache sizes for ``cuboid``, ``capsule``, ``cylinder``, ``mesh``, and ``voxel``.
     """
 
     device_cfg: DeviceCfg = field(default_factory=DeviceCfg)
@@ -96,6 +96,8 @@ class SceneCollision:
         # Determine cache sizes
         cache = config.cache or {}
         cuboid_cache = cache.get("cuboid", cache.get("primitive", cache.get("obb", None)))
+        capsule_cache = cache.get("capsule", None)
+        cylinder_cache = cache.get("cylinder", None)
         mesh_cache = cache.get("mesh", None)
         voxel_cache = cache.get("voxel", None)
 
@@ -106,6 +108,8 @@ class SceneCollision:
                     config.scene_model,
                     config.device_cfg,
                     cuboid_cache=cuboid_cache,
+                    capsule_cache=capsule_cache,
+                    cylinder_cache=cylinder_cache,
                     mesh_cache=mesh_cache,
                     voxel_cache=voxel_cache,
                 )
@@ -115,6 +119,8 @@ class SceneCollision:
                     config.device_cfg,
                     num_envs=config.num_envs,
                     cuboid_cache=cuboid_cache,
+                    capsule_cache=capsule_cache,
+                    cylinder_cache=cylinder_cache,
                     mesh_cache=mesh_cache,
                     voxel_cache=voxel_cache,
                 )
@@ -124,6 +130,8 @@ class SceneCollision:
                 num_envs=config.num_envs,
                 device_cfg=config.device_cfg,
                 cuboid_cache=cuboid_cache,
+                capsule_cache=capsule_cache,
+                cylinder_cache=cylinder_cache,
                 mesh_cache=mesh_cache,
                 voxel_cache=voxel_cache,
             )
@@ -146,6 +154,8 @@ class SceneCollision:
         """Get active collision types."""
         return {
             "cuboid": self.data.has_cuboids(),
+            "capsule": self.data.has_capsules(),
+            "cylinder": self.data.has_cylinders(),
             "mesh": self.data.has_meshes(),
             "voxel": self.data.has_voxels(),
         }
@@ -167,6 +177,7 @@ class SceneCollision:
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_distance: bool = False,
     ) -> torch.Tensor:
         """Compute signed distance between query spheres and scene obstacles.
 
@@ -177,18 +188,26 @@ class SceneCollision:
             activation_distance: Distance outside obstacles to start computing cost.
             env_query_idx: Environment index for each batch.
             return_loss: True if result will be scaled before backward pass.
+            sum_distance: Sum collision costs across robot spheres.
 
         Returns:
-            Collision distance tensor [batch, horizon, num_spheres].
+            Collision cost tensor with shape ``[batch, horizon, 1]`` when
+            ``sum_distance`` is True, otherwise
+            ``[batch, horizon, num_spheres]``.
         """
         return self.checker.get_sphere_distance(
             scene=self.data,
+            sphere_collision_mask=(
+                state.robot_collision_geometry.sphere_collision_mask
+                if state.robot_collision_geometry is not None else None
+            ),
             query_sphere=state.robot_spheres,
             collision_buffer=collision_buffer,
             weight=weight,
             activation_distance=activation_distance,
             env_query_idx=env_query_idx,
             return_loss=return_loss,
+            sum_distance=sum_distance,
         )
 
     def get_sphere_collision(
@@ -199,6 +218,7 @@ class SceneCollision:
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_distance: bool = False,
     ) -> torch.Tensor:
         """Compute binary collision between query spheres and scene obstacles.
 
@@ -209,18 +229,26 @@ class SceneCollision:
             activation_distance: Distance outside obstacles to start computing cost.
             env_query_idx: Environment index for each batch.
             return_loss: True if result will be scaled before backward pass.
+            sum_distance: Sum collision costs across robot spheres.
 
         Returns:
-            Collision cost tensor [batch, horizon, num_spheres].
+            Collision cost tensor with shape ``[batch, horizon, 1]`` when
+            ``sum_distance`` is True, otherwise
+            ``[batch, horizon, num_spheres]``.
         """
         return self.checker.get_sphere_collision(
             scene=self.data,
+            sphere_collision_mask=(
+                state.robot_collision_geometry.sphere_collision_mask
+                if state.robot_collision_geometry is not None else None
+            ),
             query_sphere=state.robot_spheres,
             collision_buffer=collision_buffer,
             weight=weight,
             activation_distance=activation_distance,
             env_query_idx=env_query_idx,
             return_loss=return_loss,
+            sum_distance=sum_distance,
         )
 
     def get_swept_sphere_distance(
@@ -233,6 +261,7 @@ class SceneCollision:
         enable_speed_metric: bool = False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_distance: bool = False,
     ) -> torch.Tensor:
         """Compute signed distance between trajectory of spheres and obstacles.
 
@@ -245,12 +274,19 @@ class SceneCollision:
             enable_speed_metric: Scale collision cost by sphere speed.
             env_query_idx: Environment index for each batch.
             return_loss: True if result will be scaled before backward pass.
+            sum_distance: Sum collision costs across robot spheres.
 
         Returns:
-            Collision distance tensor [batch, horizon, num_spheres].
+            Collision cost tensor with shape ``[batch, horizon, 1]`` when
+            ``sum_distance`` is True, otherwise
+            ``[batch, horizon, num_spheres]``.
         """
         return self.checker.get_swept_sphere_distance(
             scene=self.data,
+            sphere_collision_mask=(
+                state.robot_collision_geometry.sphere_collision_mask
+                if state.robot_collision_geometry is not None else None
+            ),
             query_sphere=state.robot_spheres,
             collision_buffer=collision_buffer,
             weight=weight,
@@ -259,6 +295,7 @@ class SceneCollision:
             enable_speed_metric=enable_speed_metric,
             env_query_idx=env_query_idx,
             return_loss=return_loss,
+            sum_distance=sum_distance,
         )
 
     def get_swept_sphere_collision(
@@ -271,6 +308,7 @@ class SceneCollision:
         enable_speed_metric: bool = False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_distance: bool = False,
     ) -> torch.Tensor:
         """Compute binary collision between trajectory of spheres and obstacles.
 
@@ -283,12 +321,19 @@ class SceneCollision:
             enable_speed_metric: Scale collision cost by sphere speed.
             env_query_idx: Environment index for each batch.
             return_loss: True if result will be scaled before backward pass.
+            sum_distance: Sum collision costs across robot spheres.
 
         Returns:
-            Collision cost tensor [batch, horizon, num_spheres].
+            Collision cost tensor with shape ``[batch, horizon, 1]`` when
+            ``sum_distance`` is True, otherwise
+            ``[batch, horizon, num_spheres]``.
         """
         return self.checker.get_swept_sphere_collision(
             scene=self.data,
+            sphere_collision_mask=(
+                state.robot_collision_geometry.sphere_collision_mask
+                if state.robot_collision_geometry is not None else None
+            ),
             query_sphere=state.robot_spheres,
             collision_buffer=collision_buffer,
             weight=weight,
@@ -297,6 +342,7 @@ class SceneCollision:
             enable_speed_metric=enable_speed_metric,
             env_query_idx=env_query_idx,
             return_loss=return_loss,
+            sum_distance=sum_distance,
         )
 
     # -------------------------------------------------------------------------
@@ -311,6 +357,8 @@ class SceneCollision:
         activation_distance: torch.Tensor,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_distance: bool = False,
+        sphere_collision_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Compute collision distance using raw sphere tensor.
 
@@ -321,18 +369,23 @@ class SceneCollision:
             activation_distance: Distance outside obstacles to start computing cost.
             env_query_idx: Environment index for each batch.
             return_loss: True if result will be scaled before backward pass.
+            sum_distance: Sum collision costs across robot spheres.
 
         Returns:
-            Collision distance tensor [batch, horizon, num_spheres].
+            Collision cost tensor with shape ``[batch, horizon, 1]`` when
+            ``sum_distance`` is True, otherwise
+            ``[batch, horizon, num_spheres]``.
         """
         return self.checker.get_sphere_distance(
             scene=self.data,
+            sphere_collision_mask=sphere_collision_mask,
             query_sphere=query_spheres,
             collision_buffer=collision_buffer,
             weight=weight,
             activation_distance=activation_distance,
             env_query_idx=env_query_idx,
             return_loss=return_loss,
+            sum_distance=sum_distance,
         )
 
     def get_swept_sphere_distance_raw(
@@ -345,6 +398,8 @@ class SceneCollision:
         enable_speed_metric: bool = False,
         env_query_idx: Optional[torch.Tensor] = None,
         return_loss: bool = False,
+        sum_distance: bool = False,
+        sphere_collision_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Compute swept collision distance using raw sphere tensor.
 
@@ -357,12 +412,16 @@ class SceneCollision:
             enable_speed_metric: Scale collision cost by sphere speed.
             env_query_idx: Environment index for each batch.
             return_loss: True if result will be scaled before backward pass.
+            sum_distance: Sum collision costs across robot spheres.
 
         Returns:
-            Collision distance tensor [batch, horizon, num_spheres].
+            Collision cost tensor with shape ``[batch, horizon, 1]`` when
+            ``sum_distance`` is True, otherwise
+            ``[batch, horizon, num_spheres]``.
         """
         return self.checker.get_swept_sphere_distance(
             scene=self.data,
+            sphere_collision_mask=sphere_collision_mask,
             query_sphere=query_spheres,
             collision_buffer=collision_buffer,
             weight=weight,
@@ -371,6 +430,7 @@ class SceneCollision:
             enable_speed_metric=enable_speed_metric,
             env_query_idx=env_query_idx,
             return_loss=return_loss,
+            sum_distance=sum_distance,
         )
 
     # -------------------------------------------------------------------------

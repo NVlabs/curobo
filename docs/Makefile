@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2007-2026 by the Sphinx team (see AUTHORS file).
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Generated from Sphinx's quickstart Makefile template.
+# See THIRD_PARTY_NOTICES.md for the upstream license.
+#
 # Minimal makefile for Sphinx documentation
 #
 

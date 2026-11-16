@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+from unittest.mock import Mock
+
 import pytest
 import torch
 
@@ -7,6 +9,8 @@ from curobo._src.cost.tool_pose_criteria import ToolPoseCriteria
 from curobo._src.motion.motion_retargeter import MotionRetargeter
 from curobo._src.motion.motion_retargeter_cfg import MotionRetargeterCfg
 from curobo._src.motion.motion_retargeter_result import RetargetResult
+from curobo._src.solver.solver_ik_result import IKSolverResult
+from curobo._src.state.state_joint import JointState
 from curobo._src.types.sequence_tool_pose import SequenceGoalToolPose
 
 ROBOT_CFG = "unitree_g1_29dof_retarget.yml"
@@ -31,7 +35,7 @@ TOOL_FRAMES = [
 
 def _criteria():
     return {
-        name: ToolPoseCriteria.track_position_and_orientation(
+        name: ToolPoseCriteria.track_pose(
             xyz=[1.0, 1.0, 1.0], rpy=[0.5, 0.5, 0.5],
         )
         for name in TOOL_FRAMES
@@ -67,6 +71,109 @@ def retargeter_ik():
 
 
 class TestMotionRetargeterIK:
+
+    def test_solve_sequence_tracks_reachable_motion(
+        self, retargeter_ik: MotionRetargeter
+    ) -> None:
+        """Retargeting follows FK-generated moving targets instead of returning zero poses."""
+        reference = retargeter_ik.default_joint_state.position.view(1, -1).repeat(3, 1)
+        reference[:, retargeter_ik.joint_names.index("base_j_z")] = torch.tensor(
+            [0.8, 0.81, 0.82], device=reference.device, dtype=reference.dtype
+        )
+        targets = retargeter_ik.kinematics.compute_kinematics(
+            JointState.from_position(reference, joint_names=retargeter_ik.joint_names)
+        ).tool_poses
+        sequence = SequenceGoalToolPose(
+            tool_frames=targets.tool_frames,
+            position=targets.position.unsqueeze(-2).clone(),
+            quaternion=targets.quaternion.unsqueeze(-2).clone(),
+        )
+        result = retargeter_ik.solve_sequence(sequence)
+        achieved = retargeter_ik.kinematics.compute_kinematics(result.joint_state).tool_poses
+        error = (achieved.position - targets.position.transpose(0, 1)).norm(dim=-1)
+        assert error.max() < 0.01
+        assert torch.isfinite(result.joint_state.position).all()
+        limits = retargeter_ik.kinematics.get_joint_limits().position
+        assert (result.joint_state.position >= limits[0] - 1e-3).all()
+        assert (result.joint_state.position <= limits[1] + 1e-3).all()
+
+    def test_infeasible_initial_ik_raises(
+        self, retargeter_ik: MotionRetargeter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An infeasible initial solve cannot initialize a sequence or reach export."""
+        retargeter_ik.reset()
+        feasible = torch.zeros((1, 1), device="cuda:0", dtype=torch.bool)
+        monkeypatch.setattr(
+            retargeter_ik._global_ik_solver,
+            "solve_pose",
+            Mock(return_value=IKSolverResult(success=feasible, feasible=feasible)),
+        )
+        target = _make_sequence(1, 1, len(TOOL_FRAMES), "cuda:0").get_frame(0)
+        with pytest.raises(ValueError, match="initial IK failed"):
+            retargeter_ik.solve_frame(target)
+        assert retargeter_ik._prev_solution is None
+
+    def test_infeasible_local_ik_holds_only_failed_environments(
+        self, retargeter_ik: MotionRetargeter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed environment holds its previous pose and zero velocity independently."""
+        previous = retargeter_ik.default_joint_state.position.view(1, -1).repeat(2, 1)
+        candidate = previous.clone()
+        candidate[0, 0] += 0.01
+        candidate[1] += 1000.0
+        feasible = torch.tensor([[True], [False]], device=previous.device)
+        joint_state = JointState.from_position(
+            candidate.unsqueeze(1), joint_names=retargeter_ik.joint_names
+        )
+        joint_state.velocity = torch.ones_like(joint_state.position)
+        monkeypatch.setattr(retargeter_ik, "_num_envs", 2)
+        monkeypatch.setattr(retargeter_ik, "_prev_solution", previous.clone())
+        monkeypatch.setattr(
+            retargeter_ik._local_ik_solver,
+            "solve_pose",
+            Mock(return_value=IKSolverResult(
+                success=feasible, feasible=feasible, js_solution=joint_state
+            )),
+        )
+        target = _make_sequence(1, 2, len(TOOL_FRAMES), "cuda:0").get_frame(0)
+        result = retargeter_ik.solve_frame(target)
+        torch.testing.assert_close(result.joint_state.position[0], candidate[0])
+        torch.testing.assert_close(result.joint_state.position[1], previous[1])
+        torch.testing.assert_close(retargeter_ik._prev_velocity[0], torch.ones_like(previous[0]))
+        torch.testing.assert_close(retargeter_ik._prev_velocity[1], torch.zeros_like(previous[1]))
+
+    def test_local_ik_validates_bounded_candidate(
+        self, retargeter_ik: MotionRetargeter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Repairing a bound violation still requires a second collision/constraint check."""
+        retargeter_ik.reset()
+        previous = retargeter_ik.default_joint_state.position.view(1, -1).clone()
+        monkeypatch.setattr(retargeter_ik, "_prev_solution", previous.clone())
+        candidate = previous.clone()
+        candidate[:, 0] = 1000.0
+        invalid_js = JointState.from_position(
+            candidate.unsqueeze(1), joint_names=retargeter_ik.joint_names
+        )
+        repaired_js = JointState.from_position(
+            previous.unsqueeze(1), joint_names=retargeter_ik.joint_names
+        )
+        feasible = torch.ones((1, 1), device=previous.device, dtype=torch.bool)
+        solve = Mock(side_effect=[
+            IKSolverResult(success=~feasible, feasible=~feasible, js_solution=invalid_js),
+            IKSolverResult(success=feasible, feasible=feasible, js_solution=repaired_js),
+        ])
+        monkeypatch.setattr(retargeter_ik._local_ik_solver, "solve_pose", solve)
+        target = _make_sequence(1, 1, len(TOOL_FRAMES), "cuda:0").get_frame(0)
+        result = retargeter_ik.solve_frame(target)
+        assert solve.call_count == 2
+        validation = solve.call_args.kwargs
+        assert validation["run_optimizer"] is False
+        bounded = validation["seed_config"].view_as(previous)
+        limits = retargeter_ik.kinematics.get_joint_limits()
+        assert (bounded >= limits.position[0]).all()
+        assert (bounded <= limits.position[1]).all()
+        assert (bounded - previous <= limits.velocity[1] * retargeter_ik.config.optimization_dt).all()
+        torch.testing.assert_close(result.joint_state.position, previous)
 
     def test_joint_names(self, retargeter_ik):
         assert isinstance(retargeter_ik.joint_names, list)

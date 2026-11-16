@@ -73,6 +73,10 @@ class KinematicsState:
         )
 
     def copy_(self, other: KinematicsState):
+        if self.robot_collision_geometry is not None:
+            self.robot_collision_geometry.copy_(other.robot_collision_geometry)
+        else:
+            self.robot_collision_geometry = other.robot_collision_geometry
         if self.robot_spheres is not None:
             self.robot_spheres.copy_(other.robot_spheres)
         if self.tool_jacobians is not None:

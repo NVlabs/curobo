@@ -150,6 +150,7 @@ class RobotSceneCollisionCfg:
                 device_cfg=device_cfg,
                 use_grad_input=False,
                 activation_distance=collision_activation_distance,
+                sum_distance=False,
                 num_spheres=kinematics.total_spheres,
                 _scene_collision_checker=scene_collision_checker,
             )
@@ -159,6 +160,7 @@ class RobotSceneCollisionCfg:
                 device_cfg=device_cfg,
                 use_grad_input=True,
                 activation_distance=0.0,
+                sum_distance=False,
                 num_spheres=kinematics.total_spheres,
             )
             collision_constraint_config.scene_collision_checker = scene_collision_checker

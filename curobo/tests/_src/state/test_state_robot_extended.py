@@ -175,6 +175,7 @@ class TestRobotStateWithCudaModel:
 
         assert torch.allclose(rs1.robot_spheres[0, 0], rs2.robot_spheres[0, 0])
         assert torch.allclose(rs1.tool_poses.position[0, 0], rs2.tool_poses.position[0, 0])
+        assert torch.allclose(rs1.tool_jacobians[0, 0], rs2.tool_jacobians[0, 0])
 
     def test_copy_at_batch_seed_indices_with_link_poses(self, robot_model, device_cfg):
         """Test copy_at_batch_seed_indices specifically for link_poses branch."""
@@ -231,6 +232,7 @@ class TestRobotStateWithCudaModel:
 
         # Verify spheres were copied
         assert torch.allclose(rs1.robot_spheres[0], rs2.robot_spheres[0])
+        assert torch.allclose(rs1.tool_jacobians[0], rs2.tool_jacobians[0])
 
     def test_copy_only_index_with_link_poses(self, robot_model, device_cfg):
         """Test copy_only_index specifically for link_poses branch."""
@@ -336,4 +338,3 @@ class TestRobotStateWithCudaModel:
 
         # Verify joint torque was copied
         assert torch.allclose(rs1.joint_torque[3], torque2[3])
-

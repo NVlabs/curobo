@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from curobo._src.robot.kinematics.kinematics import Kinematics, KinematicsCfg
+from curobo._src.robot.kinematics.kinematics_state import KinematicsState
 from curobo._src.state.state_joint import JointState
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util_file import get_robot_configs_path, join_path, load_yaml
@@ -27,6 +28,57 @@ def franka_cfg():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 class TestMultiEnvSpheres:
+
+    def test_collision_mask_row_updates(self, franka_cfg):
+        """Link policy changes preserve geometry and other environment rows."""
+        params = franka_cfg.kinematics_config.clone()
+        params.link_spheres = params.link_spheres[:1].repeat(2, 1, 1)
+        params.sphere_collision_mask = torch.ones(
+            params.link_spheres.shape[:2], device=params.link_spheres.device,
+            dtype=torch.uint32,
+        )
+        geometry = params.link_spheres.clone()
+        pointer = params.sphere_collision_mask.data_ptr()
+        params.set_link_collision_mask("attached_object", 1 << 31, config_idx=1)
+        slots = params.get_sphere_index_from_link_name("attached_object")
+        masks = params.sphere_collision_mask.view(torch.int32)
+        assert torch.all(masks[0] == 1)
+        assert torch.all(masks[1, slots] == -(1 << 31))
+        params.set_link_collision_mask("attached_object", 5)
+        assert torch.all(masks[:, slots] == 5)
+        assert params.sphere_collision_mask.data_ptr() == pointer
+        torch.testing.assert_close(params.link_spheres, geometry)
+        with pytest.raises(ValueError, match="environment index"):
+            params.set_link_collision_mask("attached_object", 1, config_idx=2)
+
+    def test_collision_mask_ownership(self, franka_cfg):
+        """Per-query copies share model masks; explicit model clones are independent."""
+        model = Kinematics(franka_cfg)
+        params = model.kinematics_config
+        masks = params.sphere_collision_mask
+        original = masks.clone()
+        params.set_link_collision_mask("attached_object", 1 << 31)
+        slots = params.get_sphere_index_from_link_name("attached_object")
+        assert torch.all(masks.view(torch.int32)[:, slots] == -(1 << 31))
+        descriptor = params.get_robot_collision_geometry()
+        state = KinematicsState(robot_spheres=torch.zeros(
+            (1, 1, params.num_spheres, 4), device=masks.device),
+            robot_collision_geometry=descriptor)
+        for other in (state.clone(), state.detach(), state[:1],
+                      KinematicsState().copy_(state)):
+            assert other.robot_collision_geometry.sphere_collision_mask is masks
+        state.clone().copy_(state)
+        clone = params.clone()
+        assert clone.sphere_collision_mask.data_ptr() != masks.data_ptr()
+        clone.set_link_collision_mask("attached_object", 4)
+        assert torch.all(masks.view(torch.int32)[:, slots] == -(1 << 31))
+        with pytest.raises(ValueError, match="different collision geometry owners"):
+            descriptor.copy_(clone.get_robot_collision_geometry())
+        ptr = masks.data_ptr()
+        params.copy_(clone)
+        assert masks.data_ptr() == ptr
+        assert torch.all(masks.view(torch.int32)[:, slots] == 4)
+        masks.copy_(original)
 
     def test_single_config_default(self, franka_cfg):
         """With K=1 and idxs_env=None, FK works as before."""
@@ -51,7 +103,6 @@ class TestMultiEnvSpheres:
         kin_cfg = robot_model.kinematics_config
 
         sph_idx = kin_cfg.get_sphere_index_from_link_name("attached_object")
-        n_attach = len(sph_idx)
 
         # Expand link_spheres from [1, N, 4] to [2, N, 4]
         config0 = kin_cfg.link_spheres[0].clone()
@@ -69,6 +120,9 @@ class TestMultiEnvSpheres:
 
         kin_cfg.link_spheres = torch.stack([config0, config1], dim=0)
         kin_cfg.reference_link_spheres = kin_cfg.link_spheres.clone()
+        kin_cfg.sphere_collision_mask = torch.ones(
+            kin_cfg.link_spheres.shape[:2], dtype=torch.uint32, device=device_cfg.device
+        )
 
         assert kin_cfg.num_envs == 2
         assert kin_cfg.link_spheres.shape == (2, config0.shape[0], 4)
@@ -110,6 +164,9 @@ class TestMultiEnvSpheres:
 
         kin_cfg.link_spheres = torch.stack([config0, config1], dim=0)
         kin_cfg.reference_link_spheres = kin_cfg.link_spheres.clone()
+        kin_cfg.sphere_collision_mask = torch.ones(
+            kin_cfg.link_spheres.shape[:2], dtype=torch.uint32, device=device_cfg.device
+        )
 
         q = torch.zeros((2, robot_model.get_dof()), **device_cfg.as_torch_dict())
         idxs_env = torch.tensor([0, 0], dtype=torch.int32, device=device_cfg.device)
@@ -139,6 +196,9 @@ class TestMultiEnvSpheres:
 
         kin_cfg.link_spheres = torch.stack([config0, config1], dim=0)
         kin_cfg.reference_link_spheres = kin_cfg.link_spheres.clone()
+        kin_cfg.sphere_collision_mask = torch.ones(
+            kin_cfg.link_spheres.shape[:2], dtype=torch.uint32, device=device_cfg.device
+        )
 
         q = torch.zeros((2, robot_model.get_dof()), **device_cfg.as_torch_dict())
         idxs_env = torch.tensor([0, 1], dtype=torch.int32, device=device_cfg.device)
@@ -169,6 +229,9 @@ class TestMultiEnvSpheres:
 
         kin_cfg.link_spheres = torch.stack([config0, config1], dim=0)
         kin_cfg.reference_link_spheres = kin_cfg.link_spheres.clone()
+        kin_cfg.sphere_collision_mask = torch.ones(
+            kin_cfg.link_spheres.shape[:2], dtype=torch.uint32, device=device_cfg.device
+        )
 
         q = torch.zeros(
             (2, robot_model.get_dof()), **device_cfg.as_torch_dict()

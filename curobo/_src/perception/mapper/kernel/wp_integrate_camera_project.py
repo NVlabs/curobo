@@ -105,9 +105,7 @@ class CameraProjectIntegrator:
         safe_step = block_edge / 1.42
         self.safe_step = safe_step
         self.num_samples = math.ceil(2.0 * truncation_distance / safe_step) + 1
-        self.num_block_key_candidates = (
-            num_cameras * image_height * image_width * self.num_samples
-        )
+        self.num_block_key_candidates = num_cameras * image_height * image_width * self.num_samples
 
         self.block_keys = torch.empty(
             self.num_block_key_candidates,
@@ -297,6 +295,21 @@ class CameraProjectIntegrator:
                 stream=stream,
             )
             self._timer_stop("clear_new_block_features_kernel")
+        if tsdf.data.has_instances:
+            self._timer_start()
+            wp.launch(
+                kernels.clear_new_block_instances_kernel,
+                dim=(max_clearable, kernels.instance_grid_voxels),
+                inputs=[
+                    data.block_instance_state,
+                    data.new_blocks,
+                    data.new_block_count,
+                    tsdf.config.max_blocks,
+                ],
+                device=device,
+                stream=stream,
+            )
+            self._timer_stop("clear_new_block_instances_kernel")
 
     def _world_aabb_to_block_bounds(self, tsdf, bounds_min, bounds_max) -> tuple:
         """Convert a world-space AABB to conservative inclusive block bounds."""
@@ -480,6 +493,20 @@ class CameraProjectIntegrator:
                 stream=stream,
             )
 
+        if tsdf.data.has_instances:
+            wp.launch(
+                kernels.clear_block_instances_by_pool_kernel,
+                dim=(n_clear, kernels.instance_grid_voxels),
+                inputs=[
+                    wp.from_torch(pool_indices),
+                    wp.from_torch(self.clear_count),
+                    data.block_instance_state,
+                    tsdf.config.max_blocks,
+                ],
+                device=device,
+                stream=stream,
+            )
+
         return n_clear
 
     def clear_region(self, tsdf, bounds_min, bounds_max) -> int:
@@ -543,6 +570,7 @@ class CameraProjectIntegrator:
         depth_max: float = 5.0,
         grid_size: tuple = None,
         feature_grid: "torch.Tensor | None" = None,
+        instance_image: "torch.Tensor | None" = None,
     ):
         """Integrate depth from one or more cameras using batched kernels.
 
@@ -561,12 +589,15 @@ class CameraProjectIntegrator:
                 use ``feature_H == H`` and ``feature_W == W``. Launched as the
                 per-block feature integration kernel when
                 ``tsdf.data.has_features`` and this tensor is provided.
+            instance_image: Optional compact categorical slots with shape
+                ``(num_cameras, H, W)`` uint8. Slot 0 is background.
 
         Raises:
             ValueError: If ``depth_images`` shape does not match the
                 ``(num_cameras, image_height, image_width)`` values this
                 integrator was constructed with, or if ``rgb_images`` /
-                ``feature_grid`` has mismatched shape/layout/dtype.
+                ``feature_grid`` / ``instance_image`` has mismatched
+                shape/layout/dtype.
         """
         tsdf.prepare_frame()
         self._prepare_frame_scratch()
@@ -644,10 +675,7 @@ class CameraProjectIntegrator:
                 "tsdf.config.max_support_pixels_per_block_camera="
                 f"{tsdf.config.max_support_pixels_per_block_camera}."
             )
-        if (
-            self.max_support_pixels_per_block_camera
-            != kernels.max_support_pixels_per_block_camera
-        ):
+        if self.max_support_pixels_per_block_camera != kernels.max_support_pixels_per_block_camera:
             log_and_raise(
                 "CameraProjectIntegrator.max_support_pixels_per_block_camera="
                 f"{self.max_support_pixels_per_block_camera} does not match "
@@ -666,6 +694,34 @@ class CameraProjectIntegrator:
                 "rgb_images shape mismatch: expected "
                 f"{expected_rgb_shape}, got {tuple(rgb_images.shape)}."
             )
+        if instance_image is not None and not tsdf.data.has_instances:
+            log_and_raise(
+                "instance_image was provided but instance_grid_size == 0; enable "
+                "categorical storage via MapperCfg.instance_grid_size or "
+                "BlockSparseTSDFIntegratorCfg.instance_grid_size."
+            )
+        if instance_image is not None:
+            expected_instance_shape = (
+                self.num_cameras,
+                self.image_height,
+                self.image_width,
+            )
+            if tuple(instance_image.shape) != expected_instance_shape:
+                log_and_raise(
+                    "instance_image shape mismatch: expected "
+                    f"{expected_instance_shape}, got {tuple(instance_image.shape)}."
+                )
+            if instance_image.dtype != torch.uint8:
+                log_and_raise(
+                    f"instance_image dtype must be torch.uint8, got {instance_image.dtype}."
+                )
+            if instance_image.device != depth_images.device:
+                log_and_raise(
+                    f"instance_image device {instance_image.device} does not match "
+                    f"depth_images device {depth_images.device}."
+                )
+            if instance_image.stride(-1) != 1:
+                log_and_raise("instance_image must be contiguous along the image width.")
 
         n_cameras = self.num_cameras
         image_height = self.image_height
@@ -727,7 +783,6 @@ class CameraProjectIntegrator:
                 "feature_grid was provided but feature_dim == 0; enable features via "
                 "MapperCfg.feature_dim or BlockSparseTSDFIntegratorCfg.feature_dim."
             )
-
         self._build_support_pixels(
             tsdf,
             kernels,
@@ -785,6 +840,29 @@ class CameraProjectIntegrator:
             stream=stream,
         )
         self._timer_stop("integrate_block_grid_rgb_kernel")
+
+        if tsdf.data.has_instances and instance_image is not None:
+            self._timer_start()
+            wp.launch(
+                kernels.integrate_instance_grid_kernel,
+                dim=(num_visible_blocks, kernels.instance_grid_voxels),
+                inputs=[
+                    wp.from_torch(self.pool_indices),
+                    num_visible_blocks,
+                    wp.from_torch(intrinsics, dtype=wp.float32),
+                    wp.from_torch(cam_positions, dtype=wp.float32),
+                    wp.from_torch(cam_quaternions, dtype=wp.float32),
+                    wp.from_torch(depth_images, dtype=wp.float32),
+                    wp.from_torch(instance_image, dtype=wp.uint8),
+                    depth_min,
+                    depth_max,
+                    data.block_coords,
+                    data.block_instance_state,
+                ],
+                device=device,
+                stream=stream,
+            )
+            self._timer_stop("integrate_instance_grid_kernel")
 
         if tsdf.data.has_features and feature_grid is not None:
             self._timer_start()

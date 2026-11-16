@@ -36,6 +36,9 @@ class Statistic:
     percent_98: float
     min: float
     max: float
+    # Appended to preserve compatibility with callers that construct the
+    # original eight-field statistic positionally.
+    percent_95: float = 0.0
 
     @classmethod
     def from_list(cls, lst: Sequence[float]) -> "Statistic":
@@ -65,6 +68,7 @@ class Statistic:
             percent_98=float(np.percentile(filtered, 98)),
             min=float(np.min(filtered)),
             max=float(np.max(filtered)),
+            percent_95=float(np.percentile(filtered, 95)),
         )
 
     def __str__(self) -> str:
@@ -72,7 +76,9 @@ class Statistic:
             f"mean: {self.mean:2.3f} \u00b1 {self.std:2.3f}"
             f"  median: {self.median:2.3f}"
             f"  75%: {self.percent_75:2.3f}"
+            f"  95%: {self.percent_95:2.3f}"
             f"  98%: {self.percent_98:2.3f}"
+            f"  max: {self.max:2.3f}"
         )
 
 
@@ -107,6 +113,9 @@ class CuroboMetrics:
     solve_time: float = np.inf
     time: float = np.inf
     perception_time: float = 0.0
+    graph_time: float = 0.0
+    graph_calls: int = 0
+    graph_success: bool = False
 
     # Dynamics
     jerk: float = np.inf
@@ -132,6 +141,9 @@ class CuroboGroupMetrics:
     payload_success: float = 0.0
     perception_success: float = 0.0
     perception_interpolated_success: float = 0.0
+    graph_invoked_problems: int = 0
+    graph_successful_problems: int = 0
+    graph_calls: int = 0
 
     # Accuracy rates
     within_one_cm_rate: float = 0.0
@@ -151,6 +163,8 @@ class CuroboGroupMetrics:
     solve_time_per_step: Optional[Statistic] = None
     time: Optional[Statistic] = None
     perception_time: Optional[Statistic] = None
+    graph_time: Optional[Statistic] = None
+    graph_time_per_call: Optional[Statistic] = None
     jerk: Optional[Statistic] = None
     energy: Optional[Statistic] = None
     torque: Optional[Statistic] = None
@@ -184,6 +198,11 @@ class CuroboGroupMetrics:
             perception_interpolated_success=percent_true(
                 [m.perception_interpolated_success for m in group]
             ),
+            graph_invoked_problems=len([m for m in group if m.graph_calls > 0]),
+            graph_successful_problems=len(
+                [m for m in group if m.graph_calls > 0 and m.graph_success]
+            ),
+            graph_calls=sum(m.graph_calls for m in group),
             # Accuracy rates
             within_one_cm_rate=percent_true(
                 [m.position_error < 1 for m in unskipped]
@@ -222,6 +241,10 @@ class CuroboGroupMetrics:
             time=Statistic.from_list([m.time for m in successes]),
             perception_time=Statistic.from_list(
                 [m.perception_time for m in successes]
+            ),
+            graph_time=Statistic.from_list([m.graph_time for m in group if m.graph_calls > 0]),
+            graph_time_per_call=Statistic.from_list(
+                [m.graph_time / m.graph_calls for m in group if m.graph_calls > 0]
             ),
             jerk=Statistic.from_list([m.jerk for m in successes]),
             energy=Statistic.from_list([m.energy for m in successes]),

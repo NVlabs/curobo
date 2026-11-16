@@ -60,7 +60,7 @@ class SeedIKSolverCfg:
     #: Number of random seeds to try
     num_seeds: int = 1
 
-    #: Weight for joint limit penalty
+    #: Residual scale for joint limits; the objective adds half the squared residual norm.
     joint_limit_weight: float = 1.0
 
     use_cuda_graph: bool = True

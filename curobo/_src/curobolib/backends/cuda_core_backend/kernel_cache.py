@@ -9,10 +9,9 @@ at runtime, following the pattern from cuda-python examples.
 """
 
 # Standard Library
-import hashlib
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from cuda import pathfinder
@@ -31,6 +30,20 @@ def get_cuda_home() -> Optional[str]:
     return cuda_home
 
 
+class _PyTorchStreamAdapter:
+    """Expose an existing PyTorch CUDA stream through the CUDA stream protocol."""
+
+    def __init__(self, stream_handle: int) -> None:
+        self._stream_handle = stream_handle
+
+    def __cuda_stream__(self) -> Tuple[int, int]:
+        return (0, self._stream_handle)
+
+
+PreparedKernelKey = Tuple[str, Tuple[str, ...], Optional[str]]
+KernelContentKey = Tuple[Tuple[Tuple[str, Optional[bytes]], ...], str, Tuple[str, ...], Optional[str]]
+StreamKey = Tuple[Optional[int], int]
+
 
 class CudaCoreKernelCache:
     """Cache for compiled CUDA kernels using cuda.core.
@@ -42,13 +55,16 @@ class CudaCoreKernelCache:
     - Stream wrapper creation for PyTorch integration
     """
 
-    def __init__(self):
-        self.compiled_kernels: Dict[str, any] = {}
-        self.device: Optional[any] = None
+    def __init__(self) -> None:
+        """Initialize empty compiled-kernel, prepared-kernel, and stream caches."""
+        self.compiled_kernels: Dict[KernelContentKey, Any] = {}
+        self._prepared_kernels: Dict[PreparedKernelKey, Any] = {}
+        self._stream_wrappers: Dict[StreamKey, Any] = {}
+        self.device: Optional[Any] = None
         self.arch: Optional[str] = None
 
-    def initialize(self):
-        """Initialize CUDA device and get architecture"""
+    def initialize(self) -> None:
+        """Initialize the CUDA device and get its architecture."""
         if self.device is None:
             try:
                 from cuda.core import Device
@@ -60,8 +76,8 @@ class CudaCoreKernelCache:
             except ImportError:
                 log_and_raise("cuda.core not available, cannot initialize CudaCoreKernelCache")
 
-    def get_stream_wrapper(self, torch_stream):
-        """Create cuda.core compatible stream from PyTorch stream.
+    def get_stream_wrapper(self, torch_stream: torch.cuda.Stream) -> Any:
+        """Return a cached cuda.core wrapper for an existing PyTorch CUDA stream.
 
         Args:
             torch_stream: PyTorch CUDA stream
@@ -69,27 +85,31 @@ class CudaCoreKernelCache:
         Returns:
             cuda.core Stream object
         """
-
-        class PyTorchStreamWrapper:
-            def __init__(self, pt_stream):
-                self.pt_stream = pt_stream
-
-            def __cuda_stream__(self):
-                stream_id = self.pt_stream.cuda_stream
-                return (0, stream_id)
-
         if self.device is None:
             self.initialize()
 
-        # This doesn't create a new stream, it just wraps the PyTorch stream in a cuda.core
-        # Stream object
-        cuda_core_stream = self.device.create_stream(PyTorchStreamWrapper(torch_stream))
+        stream_handle = torch_stream.cuda_stream
+        stream_key = (torch_stream.device.index, stream_handle)
+        cuda_core_stream = self._stream_wrappers.get(stream_key)
+        if cuda_core_stream is not None:
+            return cuda_core_stream
+
+        # This doesn't create a new native stream. It wraps the PyTorch stream in a
+        # cuda.core Stream object so launches remain ordered on the active stream.
+        cuda_core_stream = self.device.create_stream(_PyTorchStreamAdapter(stream_handle))
+        self._stream_wrappers[stream_key] = cuda_core_stream
         return cuda_core_stream
 
-    def get_kernel_hash(
+    def clear(self) -> None:
+        """Clear compiled kernels, prepared lookups, and CUDA stream wrappers."""
+        self.compiled_kernels.clear()
+        self._prepared_kernels.clear()
+        self._stream_wrappers.clear()
+
+    def get_kernel_key(
         self, source_files: List[Path], kernel_name: str, compile_flags: List[str]
-    ) -> str:
-        """Generate cache key based on file contents and compilation options.
+    ) -> KernelContentKey:
+        """Create an exact cache key from source contents and compilation options.
 
         Args:
             source_files: List of kernel source files
@@ -97,26 +117,16 @@ class CudaCoreKernelCache:
             compile_flags: Compilation flags
 
         Returns:
-            SHA256 hash string for cache key
+            Source paths and bytes, kernel name, flags, and GPU architecture.
         """
-        content_hash = hashlib.sha256()
-
-        # Hash file contents
+        sources: List[Tuple[str, Optional[bytes]]] = []
         for f in source_files:
             if f.exists():
-                content_hash.update(f.read_bytes())
+                sources.append((str(f), f.read_bytes()))
             else:
                 log_warn(f"Source file not found: {f}")
-
-        # Hash kernel name and compile flags
-        content_hash.update(kernel_name.encode())
-        content_hash.update("_".join(compile_flags).encode())
-
-        # Include GPU architecture in hash
-        if self.arch:
-            content_hash.update(self.arch.encode())
-
-        return content_hash.hexdigest()
+                sources.append((str(f), None))
+        return (tuple(sources), kernel_name, tuple(compile_flags), self.arch)
 
     def get_or_compile_kernel(
         self,
@@ -124,7 +134,7 @@ class CudaCoreKernelCache:
         kernel_name: str,
         include_dirs: List[Path],
         compile_flags: List[str],
-    ):
+    ) -> Any:
         """Get cached kernel or compile if not present.
 
         Args:
@@ -138,16 +148,29 @@ class CudaCoreKernelCache:
         """
         self.initialize()
 
-        cache_key = self.get_kernel_hash(source_files, kernel_name, compile_flags)
+        prepared_key = (
+            kernel_name,
+            tuple(compile_flags),
+            self.arch,
+        )
+        if not cuda_debug_compile:
+            prepared_kernel = self._prepared_kernels.get(prepared_key)
+            if prepared_kernel is not None:
+                return prepared_kernel
+
+        cache_key = self.get_kernel_key(source_files, kernel_name, compile_flags)
 
         if cache_key in self.compiled_kernels:
             log_debug(f"Cache hit: {kernel_name}")
-            return self.compiled_kernels[cache_key]
+            kernel = self.compiled_kernels[cache_key]
+            self._prepared_kernels[prepared_key] = kernel
+            return kernel
 
         log_info(f"Compiling kernel: {kernel_name}")
         kernel = self._compile_kernel(source_files, kernel_name, include_dirs, compile_flags)
 
         self.compiled_kernels[cache_key] = kernel
+        self._prepared_kernels[prepared_key] = kernel
 
         # Sync after get_kernel() to ensure the cubin is fully loaded into the
         # GPU context before returning. get_kernel() internally calls
@@ -258,7 +281,6 @@ typedef unsigned char      uint8_t;
 typedef unsigned short     uint16_t;
 typedef unsigned int       uint32_t;
 typedef unsigned long long uint64_t;
-#define CUDA_CORE_COMPILE true
 """
 
         for f in source_files:

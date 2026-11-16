@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.optim.components.gaussian_distribution import CovType
 from curobo._src.optim.components.particle_opt_core import ParticleOptCore
@@ -37,7 +36,11 @@ from curobo._src.rollout.rollout_protocol import Rollout
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import stable_topk
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import (
+    get_profiler_context,
+    get_profiler_decorator,
+    get_torch_jit_decorator,
+)
 
 
 from curobo._src.optim.components.particle_opt_core import SampleMode  # canonical location
@@ -179,7 +182,7 @@ class MPPI:
     over the cost-ranked samples.
     """
 
-    @profiler.record_function("mppi/init")
+    @get_profiler_decorator("mppi/init")
     def __init__(
         self,
         config: MPPICfg,
@@ -211,13 +214,13 @@ class MPPI:
             c.action_dim,
         )
 
-        with profiler.record_function("mppi/get_best"):
+        with get_profiler_context("mppi/get_best"):
             if c.config.sample_mode == SampleMode.BEST:
                 w = self._exp_util_from_costs(costs)
                 best_idx = torch.argmax(w, dim=-1)
                 c._dist.best_traj.copy_(actions[c.problem_col, best_idx])
 
-        with profiler.record_function("mppi/store_rollouts"):
+        with get_profiler_context("mppi/store_rollouts"):
             if c.config.store_rollouts and c.visual_traj is not None:
                 total_costs = self._compute_total_cost(costs)
                 vis_seq = getattr(trajectories.state, c.visual_traj)
