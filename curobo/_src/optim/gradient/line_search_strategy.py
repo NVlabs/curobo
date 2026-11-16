@@ -80,7 +80,6 @@ from enum import Enum, IntEnum
 from typing import Callable, Tuple
 
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.curobolib.cuda_ops.optimization import wolfe_line_search
@@ -92,7 +91,7 @@ from curobo._src.optim.gradient.line_search_state import LineSearchState
 from curobo._src.optim.gradient.update_best_solution import update_best_solution
 from curobo._src.optim.optimization_iteration_state import OptimizationIterationState
 from curobo._src.util.logging import log_and_raise, log_info
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 __all__ = [
     "LineSearchType",
@@ -155,7 +154,7 @@ class LineSearchStrategy(ABC):
         """Return fixed scales with shape ``(n_linesearch,)``."""
         return context.get_line_search_scale()
 
-    @profiler.record_function("LineSearchStrategy/prepare_search_points")
+    @get_profiler_decorator("LineSearchStrategy/prepare_search_points")
     @get_torch_jit_decorator(only_valid_for_compile=True)
     def _prepare_search_points(
         self,
@@ -227,7 +226,7 @@ class LineSearchStrategy(ABC):
 
         return x_set, step_direction
 
-    @profiler.record_function("LineSearchStrategy/_post_search_processing")
+    @get_profiler_decorator("LineSearchStrategy/_post_search_processing")
     def _post_search_processing(
         self,
         line_search_result: LineSearchResult,
@@ -407,7 +406,7 @@ class GreedyLineSearchStrategy(LineSearchStrategy):
     Select the minimum-cost positive probe when it improves the cached baseline.
     """
 
-    @profiler.record_function("GreedyLineSearchStrategy/search")
+    @get_profiler_decorator("GreedyLineSearchStrategy/search")
     def search(
         self,
         iteration_state: OptimizationIterationState,
@@ -468,7 +467,7 @@ class ArmijoLineSearchStrategy(LineSearchStrategy):
         c(x + l p) <= c(x) + c_1 l g(x)^T p
     """
 
-    @profiler.record_function("ArmijoLineSearchStrategy/search")
+    @get_profiler_decorator("ArmijoLineSearchStrategy/search")
     def search(
         self,
         iteration_state: OptimizationIterationState,
@@ -541,7 +540,7 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
         self._output_buffers = None
         super().__init__()
 
-    @profiler.record_function("BaseWolfeLineSearchStrategy/search")
+    @get_profiler_decorator("BaseWolfeLineSearchStrategy/search")
     def search(
         self,
         iteration_state: OptimizationIterationState,
@@ -696,7 +695,7 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
 
         return super().update_num_problems(num_problems, context)
 
-    @profiler.record_function("BaseWolfeLineSearchStrategy/_torch_wolfe_search")
+    @get_profiler_decorator("BaseWolfeLineSearchStrategy/_torch_wolfe_search")
     # @staticmethod
     def _torch_wolfe_search(
         self,
@@ -796,7 +795,7 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
                 curvature_update_valid=choose_exploration,
             )
 
-    @profiler.record_function("BaseWolfeLineSearchStrategy/_cuda_kernel_wolfe_search")
+    @get_profiler_decorator("BaseWolfeLineSearchStrategy/_cuda_kernel_wolfe_search")
     def _cuda_kernel_wolfe_search(
         self,
         search_action: torch.Tensor,
@@ -886,7 +885,7 @@ class BaseWolfeLineSearchStrategy(LineSearchStrategy):
             curvature_update_valid=new_iteration_state.curvature_update_valid,
         )
 
-    @profiler.record_function("BaseWolfeLineSearchStrategy/_get_cuda_kernel_output_buffers")
+    @get_profiler_decorator("BaseWolfeLineSearchStrategy/_get_cuda_kernel_output_buffers")
     def _get_cuda_kernel_output_buffers(
         self, context: LineSearchContext
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:

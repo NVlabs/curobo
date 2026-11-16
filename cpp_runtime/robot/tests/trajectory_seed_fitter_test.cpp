@@ -226,6 +226,30 @@ int main(int argc, char** argv) {
             "moving-state seed fitter returned an invalid timestep");
       }
     }
+    // Physical derivatives over a short tracking horizon must not be treated
+    // as derivatives over the artifact's normalized one-second sample grid.
+    auto tracking_config = config;
+    tracking_config.reference_dt = .005F;
+    curobo::robot::TrajectorySeedFitter tracking_fitter(argv[1], tracking_config);
+    auto tracking_request = request;
+    tracking_request.start_velocity = nullptr;
+    tracking_request.start_acceleration = nullptr;
+    tracking_request.start_jerk = nullptr;
+    tracking_fitter.fit(tracking_request);
+    check_cuda(cudaStreamSynchronize(stream));
+    const auto tracking_static = knots_device.download();
+    tracking_fitter.fit(request);
+    check_cuda(cudaStreamSynchronize(stream));
+    const auto tracking_moving = knots_device.download();
+    float tracking_change = 0.F;
+    for (size_t i = 0; i < tracking_static.size(); ++i)
+      tracking_change = std::max(tracking_change, std::abs(tracking_static[i] - tracking_moving[i]));
+    if (!(tracking_change < .1F * maximum_change))
+      throw std::runtime_error("physical timestep did not bound moving-state seed deformation");
+    tracking_fitter.fit(request);
+    check_cuda(cudaStreamSynchronize(stream));
+    if (knots_device.download() != tracking_moving)
+      throw std::runtime_error("tracking seed changed under graph replay");
     if (argc == 3) {
       std::ofstream output(argv[2], std::ios::binary);
       output.write(reinterpret_cast<const char*>(target.data()),

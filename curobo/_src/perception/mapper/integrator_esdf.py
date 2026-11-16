@@ -14,18 +14,20 @@ Architecture:
     │  ├── BlockSparseTSDF (sparse, ~200MB for 100K blocks)           │
     │  ├── EDT (dense, for PBA propagation on site_index)             │
     │  ├── site_index (dense, ≤1024³)                                 │
-    │  ├── min_tsdf (dense, conservative sign buffer)                 │
+    │  ├── static_site_mask (one packed source bit per ESDF voxel)    │
     │  └── dist_field (dense ESDF output)                             │
     └─────────────────────────────────────────────────────────────────┘
 
 ESDF Pipeline:
-    1. Seed: Iterate allocated blocks, mark surface voxels in dense site_index
-       - Also writes atomic_min to min_tsdf for ALL observed voxels
-       - Guarantees conservative collision detection even with coarse ESDF
+    1. Seed: Mark static surfaces and sensor surface/truncation sites.
+       Record static ownership in one packed bit per ESDF voxel; static wins
+       coincident sites. Gather seeding samples neighboring positions.
     2. Propagate: Run PBA on dense site_index
-    3. Distance: Compute signed distances using pre-aggregated min_tsdf
-       - No hash lookups required (faster than sampling TSDF directly)
-       - Conservative: if ANY TSDF voxel in ESDF cell is inside, cell is inside
+    3. Distance: Measure distance to the propagated site. Recover sign
+       from query-local TSDF. Only static-owned sites permit the short static
+       seed-line search within TSDF coverage; queries outside coverage and
+       unobserved sensor queries retain unsigned distance.
+       Sensor sites are assumed not to lie inside stamped solids.
 
 Usage:
     integrator = BlockSparseESDFIntegrator(
@@ -175,8 +177,9 @@ class BlockSparseESDFIntegratorCfg:
     static_obstacle_color: Tuple[int, int, int] = (20, 20, 20)  # RGB for static obstacles
     device: str = "cuda:0"
     dtype: torch.dtype = torch.float16
-    # Adjacent skip steps for ESDF sign determination.
-    # Looks N voxels from site towards query for sign. Set to 0.0 to disable.
+    # Minimum local sign-search reach, in ESDF voxels, also covering seed
+    # quantization uncertainty. A half-truncation-band probe may run first.
+    # Applies only to static-owned sites. Set to 0.0 for query-local sign only.
     adjacent_skip_steps: float = 1.0
     seeding_method: str = "gather"  # "gather" (CUDA graph safe) or "scatter" (accurate, no graph)
     edt_solver: str = "pba"  # "jfa" (Jump Flooding) or "pba" (Parallel Banding, exact)
@@ -466,6 +469,11 @@ class BlockSparseESDFIntegrator:
         self._site_index = torch.full(
             config.esdf_grid_shape, -1, dtype=torch.int32, device=self.device
         )
+        # One bit per ESDF voxel; PBA/JFA propagate coordinates only.
+        num_source_words = (nx * ny * nz + 31) // 32
+        self._static_site_mask = torch.zeros(
+            num_source_words, dtype=torch.int32, device=self.device
+        )
         self._dist_field = torch.zeros(
             config.esdf_grid_shape, dtype=config.dtype, device=self.device
         )
@@ -486,15 +494,6 @@ class BlockSparseESDFIntegrator:
 
         # Blending configuration
         self._blend_esdf = config.blend_esdf
-
-        # Ray parity test for inside inference: voxels with no TSDF observation
-        # but close to surface are tested via 6 axis-aligned rays.
-        # Set to 0 to disable. Default: 0 (disabled).
-        self._ray_parity_max_distance_voxels = 0
-
-        # Plane test for inside inference: uses TSDF gradient at nearest site
-        # to determine inside/outside. More accurate than ray parity for convex regions.
-        self._use_plane_test = False
 
         # Track last-used ESDF origin for get_voxel_grid()
         self._last_esdf_origin = self._origin.clone()
@@ -753,6 +752,7 @@ class BlockSparseESDFIntegrator:
             seed_esdf_sites_from_block_sparse_warp(
                 self._tsdf_integrator.tsdf,
                 self._site_index,
+                self._static_site_mask,
                 esdf_origin,
                 esdf_voxel_size,
                 self._esdf_grid_shape,
@@ -764,6 +764,7 @@ class BlockSparseESDFIntegrator:
             seed_esdf_sites_gather_warp(
                 self._tsdf_integrator.tsdf,
                 self._site_index,
+                self._static_site_mask,
                 esdf_origin,
                 esdf_voxel_size,
                 self._esdf_grid_shape,
@@ -786,6 +787,7 @@ class BlockSparseESDFIntegrator:
 
         compute_esdf_from_min_tsdf_warp(
             self._site_index,
+            self._static_site_mask,
             self._tsdf_integrator.tsdf,
             esdf_voxel_size,
             self._esdf_grid_shape,
@@ -1034,16 +1036,22 @@ class BlockSparseESDFIntegrator:
         stats["frame_count"] = self._frame_count
         stats["tsdf_frame_count"] = tsdf_frame_count
         stats["tsdf_memory_mb"] = tsdf_memory_mb
-        stats["esdf_memory_mb"] = (self._site_index.numel() * 4 + self._dist_field.numel() * 2) / (
-            1024 * 1024
-        )
+        stats["esdf_memory_mb"] = (
+            self._site_index.numel() * 4
+            + self._dist_field.numel() * 2
+            + self._static_site_mask.numel() * 4
+        ) / (1024 * 1024)
         stats["total_memory_mb"] = stats["tsdf_memory_mb"] + stats["esdf_memory_mb"]
         return stats
 
     def memory_usage_mb(self) -> float:
         """Get total GPU memory usage in megabytes."""
         tsdf_mem = self._tsdf_integrator.tsdf.memory_usage_mb()
-        esdf_mem = (self._site_index.numel() * 4 + self._dist_field.numel() * 2) / (1024 * 1024)
+        esdf_mem = (
+            self._site_index.numel() * 4
+            + self._dist_field.numel() * 2
+            + self._static_site_mask.numel() * 4
+        ) / (1024 * 1024)
         return tsdf_mem + esdf_mem
 
     # =========================================================================

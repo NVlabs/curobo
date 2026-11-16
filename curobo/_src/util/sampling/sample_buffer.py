@@ -10,13 +10,12 @@ from typing import List, Optional
 # Third Party
 import numpy as np
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.sampling.sequencer_base import BaseSequencer
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 
 class SampleBuffer:
@@ -97,7 +96,7 @@ class SampleBuffer:
                 self.sequencer.random(store_buffer),
                 device=self.device_cfg.device,
                 dtype=self.device_cfg.dtype,
-            )
+            ).contiguous()
             self._int_gen = torch.Generator(device=self.device_cfg.device)
             self._int_gen = self._int_gen.manual_seed(getattr(sequencer, "seed", 123))
             self._generator_initial_state = self._int_gen.get_state().clone()
@@ -171,7 +170,7 @@ class SampleBuffer:
             ).contiguous()
         return samples
 
-    @profiler.record_function("generator/samples")
+    @get_profiler_decorator("generator/samples")
     def get_samples(self, num_samples: int, bounded: bool = False) -> torch.Tensor:
         """Get uniform samples, optionally bounded to specified range.
 
@@ -187,7 +186,7 @@ class SampleBuffer:
             samples = self.bound_samples(samples, self.range_b, self.low_bounds)
         return samples
 
-    @profiler.record_function("generator/gaussian_samples")
+    @get_profiler_decorator("generator/gaussian_samples")
     def get_gaussian_samples(self, num_samples: int, variance: float = 1.0) -> torch.Tensor:
         """Get Gaussian-distributed samples.
 

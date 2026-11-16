@@ -197,6 +197,25 @@ int main(int argc, char** argv) {
                    start_acceleration.at(static_cast<size_t>(joint)), 1.0E-4F,
                    "trajectory start acceleration");
     }
+    // Complete uniform controls must retain a moving start and the entire native path.
+    trajectory_dt.download(&trajectory_dt_value);
+    const auto spline = optimizer.trajectory();
+    const auto interpolated = spline.interpolate(trajectory_dt_value * 1.00001F);
+    if (interpolated.sample_count != info.trajectory_steps)
+      throw std::runtime_error("uniform spline changed the native time horizon");
+    const float *expected_buffers[]{position.get(), velocity.get(), acceleration.get(), jerk.get()};
+    const float *actual_buffers[]{interpolated.position, interpolated.velocity,
+                                  interpolated.acceleration, interpolated.jerk};
+    for (int derivative = 0; derivative < 4; ++derivative) {
+      std::vector<float> expected(trajectory_values), actual(trajectory_values);
+      check_cuda(cudaMemcpy(expected.data(), expected_buffers[derivative],
+                            trajectory_values * sizeof(float), cudaMemcpyDeviceToHost));
+      check_cuda(cudaMemcpy(actual.data(), actual_buffers[derivative],
+                            trajectory_values * sizeof(float), cudaMemcpyDeviceToHost));
+      for (size_t i = 0; i < trajectory_values; ++i)
+        require_near(actual[i], expected[i], derivative < 2 ? 3e-4F : 1e-2F,
+                     "uniform spline derivative parity");
+    }
     request.start_velocity = nullptr;
     request.start_acceleration = nullptr;
 
@@ -455,6 +474,18 @@ int main(int argc, char** argv) {
         throw std::runtime_error("timeopt graph output failed validation");
       }
       require_near(dt * (count - 1), graph_duration, 1.0E-5F, "timeopt duration");
+      const auto complete = timeopt_optimizer.trajectory();
+      const auto resampled = complete.interpolate(dt * 1.00001F);
+      if (resampled.sample_count != count)
+        throw std::runtime_error("TimeOpt spline changed the selected time horizon");
+      std::vector<float> evaluated(static_cast<size_t>(count) * info.num_dof);
+      std::vector<float> expected(evaluated.size());
+      check_cuda(cudaMemcpy(evaluated.data(), resampled.position, evaluated.size() * sizeof(float),
+                            cudaMemcpyDeviceToHost));
+      check_cuda(cudaMemcpy(expected.data(), executable.position, expected.size() * sizeof(float),
+                            cudaMemcpyDeviceToHost));
+      for (size_t i = 0; i < expected.size(); ++i)
+        require_near(evaluated[i], expected[i], 2e-4F, "TimeOpt spline position parity");
       std::vector<float> samples(static_cast<size_t>(count) * info.num_dof);
       check_cuda(cudaMemcpy(samples.data(), executable.position, samples.size() * sizeof(float),
                             cudaMemcpyDeviceToHost));

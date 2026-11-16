@@ -252,11 +252,50 @@ void test_planning(const char *artifact, int num_knots) {
   // The first normal solve initializes all graph-unsafe dependencies.
   planner.plan_pose(pose);
   require(status.read()[0] == 1, "normal pose warmup must succeed");
+  const auto previous_output = outputs.read();
+  const std::vector<float> previous_knots(previous_output.begin(),
+                                          previous_output.begin() + num_knots * 7);
+  Buffer<float> warm_knots(num_knots * 7);
+  warm_knots.upload(previous_knots);
+  pose.warm_start_knots = warm_knots.get();
+  planner.plan_pose(pose);
+  require(status.read()[0] == 1, "pose planning with a previous trajectory must succeed");
+  require(warm_knots.read() == previous_knots, "warm-start input must not be modified");
+  // The previous output may be reused directly, even with graph replay.
+  pose.warm_start_knots = pose.optimized_knots;
+  planner.plan_pose(pose);
+  require(status.read()[0] == 1, "warm-start input may alias optimized output");
+
+  MotionPlanningRequest joint;
+  joint.start_position = start.get();
+  joint.goal_position = goal.get();
+  joint.optimized_knots = pose.optimized_knots;
+  joint.trajectory_position = pose.trajectory_position;
+  joint.trajectory_velocity = pose.trajectory_velocity;
+  joint.trajectory_acceleration = pose.trajectory_acceleration;
+  joint.trajectory_jerk = pose.trajectory_jerk;
+  joint.success = pose.success;
+  joint.cost = pose.cost;
+  joint.collision_cost = pose.collision_cost;
+  joint.trajectory_dt = pose.trajectory_dt;
+  joint.used_rrt = pose.used_rrt;
+  joint.rrt_iterations = pose.rrt_iterations;
+  joint.warm_start_knots = pose.optimized_knots;
+  planner.plan(joint);
+  require(status.read()[0] == 1, "joint planning must accept a previous trajectory");
+  joint.warm_start_knots = nullptr;
+  planner.plan(joint);
+  require(status.read()[0] == 1, "joint planning must allow warm starts to be disabled");
+
+  pose.warm_start_knots = warm_knots.get();
   pose.enable_graph_attempt = 0;
   planner.plan_pose(pose);
   require(status.read()[0] == 1 && status.read()[1] == 1 && planner.last_rrt_calls() > 0,
           "configured RRT seed fitting and refinement must succeed");
   pose.enable_graph_attempt = 1;
+  pose.warm_start_knots = nullptr;
+  planner.plan_pose(pose);
+  require(status.read()[0] == 1, "pose planning must allow warm starts to be disabled");
   WaypointMotionPlanningRequest request;
   require(request.outer_iterations == 4, "waypoints must default to four solve/check passes");
   request.motion = pose;
@@ -354,17 +393,29 @@ void test_planning(const char *artifact, int num_knots) {
   q.upload(quaternions);
   planner.plan_pose(pose);
   require(status.read()[0] == 1, "normal pose after waypoints must succeed");
-  Buffer<float> moving(7);
+  Buffer<float> moving(7), moving_acceleration(7);
   moving.upload({.01F, 0, 0, 0, 0, 0, 0});
+  moving_acceleration.upload({.02F, 0, 0, 0, 0, 0, 0});
   request.motion.current_velocity = moving.get();
-  bool moving_rejected = false;
-  try {
-    planner.plan_pose_waypoints(request);
-  } catch (const std::invalid_argument &) {
-    moving_rejected = true;
-  }
-  require(moving_rejected, "waypoints must reject nonstationary starts");
+  request.motion.current_acceleration = moving_acceleration.get();
+  request.motion.warm_start_knots = warm_knots.get();
+  request.track_orientation = true;
+  p.upload(reachable_positions);
+  planner.plan_pose_waypoints(request);
+  require(status.read()[0] == 1, "waypoints must support finite moving starts");
+  const auto moving_execution = planner.timeopt_trajectory();
+  float moving_first_velocity = 0, moving_first_acceleration = 0;
+  check(cudaMemcpy(&moving_first_velocity, moving_execution.velocity, sizeof(float),
+                   cudaMemcpyDeviceToHost));
+  check(cudaMemcpy(&moving_first_acceleration, moving_execution.acceleration, sizeof(float),
+                   cudaMemcpyDeviceToHost));
+  require(std::abs(moving_first_velocity - .01F) < 1E-3F,
+          "waypoint TimeOpt must preserve start velocity");
+  require(std::abs(moving_first_acceleration - .02F) < 1E-3F,
+          "waypoint finetuning and TimeOpt must preserve start acceleration");
   request.motion.current_velocity = nullptr;
+  request.motion.current_acceleration = nullptr;
+  request.motion.warm_start_knots = nullptr;
   request.final_orientation_tolerance = 4.0F;
   bool tolerance_rejected = false;
   try {

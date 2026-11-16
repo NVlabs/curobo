@@ -10,7 +10,6 @@ from typing import Optional, Sequence
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 import warp as wp
 
 # CuRobo
@@ -24,6 +23,7 @@ from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.tool_pose import ToolPose
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise
+from curobo._src.util.torch_util import get_profiler_decorator
 from curobo._src.util.warp import get_warp_device_stream, init_warp
 
 IK_FAILURE_PENALTY = wp.constant(1.0e16)
@@ -343,7 +343,7 @@ class WarpIKResultProcessor:
         """Return whether the result-processing CUDA graph has been captured."""
         return self._result_graph is not None and self._result_graph.is_initialized
 
-    @profiler.record_function("ik_result_processor/reset_shape")
+    @get_profiler_decorator("ik_result_processor/reset_shape")
     def reset_shape(self) -> None:
         """Invalidate every shape-dependent output tensor and Warp view."""
         self.reset_cuda_graph()
@@ -376,7 +376,7 @@ class WarpIKResultProcessor:
         self._js_solution = None
         self._wp_outputs = {}
 
-    @profiler.record_function("ik_result_processor/reset_cuda_graph")
+    @get_profiler_decorator("ik_result_processor/reset_cuda_graph")
     def reset_cuda_graph(self) -> None:
         """Invalidate the captured result graph and its bound metric tensors."""
         if self._result_graph is not None:
@@ -389,7 +389,7 @@ class WarpIKResultProcessor:
         self._cspace_count = 0
         self._wp_inputs = {}
 
-    @profiler.record_function("ik_result_processor/update_batch_size")
+    @get_profiler_decorator("ik_result_processor/update_batch_size")
     def update_batch_size(
         self,
         batch_size: int,
@@ -817,7 +817,7 @@ class WarpIKResultProcessor:
         )
         return self._solution
 
-    @profiler.record_function("ik_result_processor/process")
+    @get_profiler_decorator("ik_result_processor/process")
     def process(
         self,
         opt_result: torch.Tensor,

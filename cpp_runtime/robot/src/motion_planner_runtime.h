@@ -48,6 +48,8 @@ class MotionPlannerRuntime final {
   void plan_pose_waypoints(const WaypointMotionPlanningRequest &request) const;
   TrajectoryOptimizationCandidates candidates() const;
   TimeOptTrajectory timeopt_trajectory() const;
+  SplineTrajectory trajectory() const;
+  std::optional<SplineTrajectory> grasp_trajectory(int phase) const;
   void set_execution_speed_scale(float scale);
   const int32_t *validate(const TrajectoryValidationRequest &request) const;
   std::unique_ptr<InverseKinematics> create_inverse_kinematics(
@@ -55,6 +57,10 @@ class MotionPlannerRuntime final {
   GraspPlanningStatus plan_grasp(const GraspPlanningRequest& request) const;
 
  private:
+  mutable std::array<std::optional<SplineTrajectory>, 3> grasp_splines_{};
+  mutable std::array<bool, 3> grasp_attempted_{};
+  mutable std::optional<MotionPlanningRequest> trajectory_request_;
+
   friend class MpcRuntime;
   struct TrajoptGraph final {
     cudaGraph_t graph{nullptr};
@@ -153,6 +159,7 @@ class MotionPlannerRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer staged_tool_goal_positions_;
   mutable curobo_robot_runtime::DeviceBuffer staged_tool_goal_quaternions_;
   mutable curobo_robot_runtime::DeviceBuffer staged_ik_seed_positions_;
+  mutable curobo_robot_runtime::DeviceBuffer staged_warm_start_knots_;
   mutable curobo_robot_runtime::DeviceBuffer staged_selected_goal_position_;
   mutable curobo_robot_runtime::DeviceBuffer staged_position_error_;
   mutable curobo_robot_runtime::DeviceBuffer staged_orientation_error_;

@@ -130,6 +130,34 @@ class TestSampleBuffer:
         assert torch.all(samples >= -1.0)
         assert torch.all(samples <= 2.0)
 
+    def test_get_samples_returns_contiguous(self, halton_sequencer, device_cfg, ndims):
+        """Buffered requests must be contiguous, including the slice fast path.
+
+        For ``num_samples <= store_buffer // 2``, ``_get_samples`` returns
+        ``sample_buffer[cursor:end]`` as a zero-copy view. The pre-generated
+        buffer must therefore be contiguous; a Fortran-ordered buffer makes
+        the slice a transposed view and breaks consumers that require
+        contiguous CUDA inputs.
+        """
+        buffer = SampleBuffer(
+            sequencer=halton_sequencer,
+            ndims=ndims,
+            device_cfg=device_cfg,
+            up_bounds=[2.0],
+            low_bounds=[-1.0],
+            store_buffer=1000,
+        )
+
+        for num_samples in (4, 30, 100):
+            unbounded = buffer.get_samples(num_samples, bounded=False)
+            bounded = buffer.get_samples(num_samples, bounded=True)
+            assert unbounded.is_contiguous(), (
+                f"unbounded samples n={num_samples} strides={unbounded.stride()}"
+            )
+            assert bounded.is_contiguous(), (
+                f"bounded samples n={num_samples} strides={bounded.stride()}"
+            )
+
     def test_get_gaussian_samples(self, roberts_sequencer, device_cfg, ndims):
         """Test getting Gaussian-distributed samples."""
         buffer = SampleBuffer(

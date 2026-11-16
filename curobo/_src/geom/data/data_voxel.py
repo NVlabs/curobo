@@ -25,6 +25,7 @@ import torch
 import warp as wp
 
 # CuRobo
+from curobo._src.geom.data.data_obstacle_bounds import is_swept_sphere_outside_box
 from curobo._src.geom.data.helper_pose import (
     get_obs_idx,
     load_transform_from_inv_pose,
@@ -1230,9 +1231,9 @@ def compute_local_sdf(
     """
     flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
 
-    dims_x = wp.int32(obs_set.params[flat_idx, 0])
-    dims_y = wp.int32(obs_set.params[flat_idx, 1])
-    dims_z = wp.int32(obs_set.params[flat_idx, 2])
+    dims_x = wp.int32(wp.round(obs_set.params[flat_idx, 0]))
+    dims_y = wp.int32(wp.round(obs_set.params[flat_idx, 1]))
+    dims_z = wp.int32(wp.round(obs_set.params[flat_idx, 2]))
     voxel_size = obs_set.params[flat_idx, 3]
     grid_dims = wp.vec3i(dims_x, dims_y, dims_z)
 
@@ -1265,9 +1266,9 @@ def compute_swept_sphere_clearance_lower_bound(
     inv_t = load_transform_from_inv_pose(obs_set.inv_pose, flat_idx)
     local_current = wp.transform_point(inv_t, current_world)
     grid_dims = wp.vec3i(
-        wp.int32(obs_set.params[flat_idx, 0]),
-        wp.int32(obs_set.params[flat_idx, 1]),
-        wp.int32(obs_set.params[flat_idx, 2]),
+        wp.int32(wp.round(obs_set.params[flat_idx, 0])),
+        wp.int32(wp.round(obs_set.params[flat_idx, 1])),
+        wp.int32(wp.round(obs_set.params[flat_idx, 2])),
     )
     voxel_size = obs_set.params[flat_idx, 3]
     layer_start_idx = flat_idx * obs_set.n_voxels_per_layer
@@ -1313,9 +1314,9 @@ def compute_local_sdf_with_grad(
     """
     flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
 
-    dims_x = wp.int32(obs_set.params[flat_idx, 0])
-    dims_y = wp.int32(obs_set.params[flat_idx, 1])
-    dims_z = wp.int32(obs_set.params[flat_idx, 2])
+    dims_x = wp.int32(wp.round(obs_set.params[flat_idx, 0]))
+    dims_y = wp.int32(wp.round(obs_set.params[flat_idx, 1]))
+    dims_z = wp.int32(wp.round(obs_set.params[flat_idx, 2]))
     voxel_size = obs_set.params[flat_idx, 3]
     grid_dims = wp.vec3i(dims_x, dims_y, dims_z)
 
@@ -1337,3 +1338,33 @@ def compute_local_sdf_with_grad(
         grad_local = wp.vec3(0.0, 0.0, 0.0)
 
     return wp.vec4(sdf, grad_local[0], grad_local[1], grad_local[2])
+
+
+def is_swept_sphere_outside_obb(
+    obs_set: VoxelDataWarp,
+    env_idx: wp.int32,
+    local_idx: wp.int32,
+    inv_t: wp.transform,
+    local_current: wp.vec3,
+    local_previous: wp.vec3,
+    local_following: wp.vec3,
+    radius_adjusted: wp.float32,
+) -> wp.bool:
+    """Reject sweeps outside the field domain when its outside sentinel is noncolliding."""
+    if radius_adjusted >= obs_set.max_dist:
+        return False
+    index = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+    # Partial interpolation and nearest fallback can sample beyond the nominal grid box.
+    half_extents = obs_set.params[index, 3] * wp.vec3(
+        0.5 * wp.round(obs_set.params[index, 0]) + 1.0,
+        0.5 * wp.round(obs_set.params[index, 1]) + 1.0,
+        0.5 * wp.round(obs_set.params[index, 2]) + 1.0,
+    )
+    return is_swept_sphere_outside_box(
+        local_current,
+        local_previous,
+        local_following,
+        wp.vec3(0.0),
+        half_extents,
+        radius_adjusted,
+    )

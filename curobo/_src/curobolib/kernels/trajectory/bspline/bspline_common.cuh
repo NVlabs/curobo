@@ -158,7 +158,7 @@ namespace curobo{
 
          const int batch_thread_idx = tid - (thread_info.b_idx * dof * thread_info.layout.threads_for_n_knots + thread_info.d_idx * thread_info.layout.threads_for_n_knots);
          const int knots_offset = (batch_thread_idx / curobo::common::warpSize) * thread_info.layout.knots_per_warp;
-         const int warp_thread_idx = batch_thread_idx - (knots_offset * thread_info.layout.interpolation_steps);
+         const int warp_thread_idx = batch_thread_idx % curobo::common::warpSize;
 
          thread_info.interpolation_idx = warp_thread_idx / thread_info.layout.knots_per_warp;
          const int local_knot_idx = warp_thread_idx % thread_info.layout.knots_per_warp;

@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
-import torch.autograd.profiler as profiler
 
 import curobo._src.runtime as curobo_runtime
 from curobo._src.optim.components.action_bounds import ActionBounds
@@ -32,7 +31,7 @@ from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import check_nan_last_dimension
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 
 @get_torch_jit_decorator(only_valid_for_compile=True)
@@ -400,7 +399,7 @@ class GradientOptCore:
             self._record_iteration_state(iteration_state)
         return iteration_state
 
-    @profiler.record_function("gradient_opt_core/opt_step")
+    @get_profiler_decorator("gradient_opt_core/opt_step")
     def _opt_step(self, iteration_state: OptimizationIterationState) -> OptimizationIterationState:
         """Execute a single line-search step followed by a step-direction update.
 
@@ -527,7 +526,7 @@ class GradientOptCore:
 
     # -- Cost/gradient evaluation --
 
-    @profiler.record_function("gradient_opt_core/cost_and_gradient")
+    @get_profiler_decorator("gradient_opt_core/cost_and_gradient")
     def _compute_cost_constraint_and_gradient(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -561,7 +560,7 @@ class GradientOptCore:
         g_x = x_n.grad.detach()
         return cost, g_x
 
-    @profiler.record_function("gradient_opt_core/cost_and_gradient_initial")
+    @get_profiler_decorator("gradient_opt_core/cost_and_gradient_initial")
     def _compute_cost_constraint_and_gradient_initial(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:

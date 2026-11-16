@@ -25,6 +25,7 @@ from curobo.logging import log_and_raise
 
 def compute_esdf_from_min_tsdf_warp(
     esdf_site_index: torch.Tensor,
+    static_site_mask: torch.Tensor,
     tsdf: BlockSparseTSDF,
     esdf_voxel_size_tensor: torch.Tensor,
     esdf_grid_shape: Tuple[int, int, int],
@@ -61,6 +62,7 @@ def compute_esdf_from_min_tsdf_warp(
     kernel = kernels.compute_esdf_from_min_tsdf_kernel
     inputs = [
         wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
+        wp.from_torch(static_site_mask, dtype=wp.int32),
         wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
         wp.from_torch(esdf_dist_field.view(-1), dtype=wp.float16),
         warp_data,
@@ -70,7 +72,7 @@ def compute_esdf_from_min_tsdf_warp(
     ]
     if semantic_filter is not None:
         kernel = kernels.compute_esdf_from_min_tsdf_semantic_kernel
-        inputs.insert(4, semantic_filter)
+        inputs.insert(5, semantic_filter)
     wp.launch(
         kernel=kernel,
         dim=n_esdf_voxels,

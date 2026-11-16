@@ -19,6 +19,7 @@ from curobo._src.curobolib.backends.cuda_core_backend.launch_helper import launc
 from curobo._src.curobolib.backends.cuda_core_backend.optimization_config import (
     LBFGSCompactLaunchCfg,
     LBFGSLaunchCfg,
+    LBFGSVectorFreeLaunchCfg,
     LineSearchLaunchCfg,
     OptimizationKernelCfg,
 )
@@ -330,6 +331,96 @@ def launch_lbfgs_step(
     # Launch kernel
     launch_kernel(kernel_name, stream, config, kernel, *kernel_args)
 
+    return [step_vec, rho_buffer, y_buffer, s_buffer, x_0, grad_0]
+
+
+def launch_lbfgs_vector_free_step(
+    cross_products: torch.Tensor,
+    step_vec: torch.Tensor,
+    candidates: torch.Tensor,
+    candidate_scales: torch.Tensor,
+    candidate_beta: torch.Tensor,
+    rho_buffer: torch.Tensor,
+    y_buffer: torch.Tensor,
+    s_buffer: torch.Tensor,
+    q: torch.Tensor,
+    grad_q: torch.Tensor,
+    x_0: torch.Tensor,
+    grad_0: torch.Tensor,
+    history_head: torch.Tensor,
+    history_count: torch.Tensor,
+    epsilon: float,
+    batch_size: int,
+    history_m: int,
+    v_dim: int,
+    stable_mode: bool,
+    use_shared_buffers: bool,
+    use_geometric_scaling: bool,
+    optimization_step_max: torch.Tensor,
+    scale_step: bool,
+    curvature_update_valid: torch.Tensor,
+    line_search_status: torch.Tensor,
+) -> List[torch.Tensor]:
+    """Launch the bounded vector-free operator using persistent physical-ring products."""
+    if not LBFGSVectorFreeLaunchCfg.supports(v_dim, history_m):
+        log_and_raise("Vector-free L-BFGS requires opt_dim 1-256 and history 1-30")
+    if cross_products.shape != (batch_size, history_m, history_m):
+        log_and_raise("Vector-free cross-product buffer has an invalid shape")
+    if not cross_products.is_contiguous():
+        log_and_raise("Vector-free cross-product buffer must be contiguous")
+    if (
+        max(
+            batch_size * history_m * v_dim,
+            batch_size * history_m * history_m,
+            batch_size * candidate_scales.numel() * v_dim,
+        )
+        > np.iinfo(np.int32).max
+    ):
+        log_and_raise("Vector-free L-BFGS buffers must contain at most INT_MAX elements")
+    properties = torch.cuda.get_device_properties(step_vec.device)
+    arch = f"sm_{properties.major}{properties.minor}"
+    items, shared = LBFGSVectorFreeLaunchCfg.specialization(v_dim, history_m, arch)
+    name = (
+        "curobo::optimization::vector_free::kernel_lbfgs_step_vector_free"
+        f"<{history_m},{items},{str(use_geometric_scaling).lower()},{str(shared).lower()}>"
+    )
+    cfg = OptimizationKernelCfg()
+    cache = get_runtime().get_cuda_core_cache()
+    kernel = cache.get_or_compile_kernel(
+        source_files=[cfg.kernel_dir / f for f in cfg.get_kernel_files("lbfgs_vector_free")],
+        kernel_name=name,
+        include_dirs=cfg.get_include_dirs(),
+        compile_flags=cfg.get_compile_flags(),
+    )
+    stream = cache.get_stream_wrapper(torch.cuda.current_stream(step_vec.device))
+    arguments = (
+        step_vec.data_ptr(),
+        rho_buffer.data_ptr(),
+        y_buffer.data_ptr(),
+        s_buffer.data_ptr(),
+        q.data_ptr(),
+        x_0.data_ptr(),
+        grad_0.data_ptr(),
+        grad_q.data_ptr(),
+        optimization_step_max.data_ptr(),
+        batch_size,
+        v_dim,
+        history_head.data_ptr(),
+        history_count.data_ptr(),
+        scale_step,
+        curvature_update_valid.data_ptr(),
+        line_search_status.data_ptr(),
+        candidate_scales.data_ptr(),
+        candidate_beta.data_ptr(),
+        candidates.data_ptr(),
+        cross_products.data_ptr(),
+        np.float32(epsilon),
+        candidate_scales.numel(),
+        stable_mode,
+    )
+    launch_kernel(
+        name, stream, LaunchConfig(grid=batch_size, block=128, shmem_size=0), kernel, *arguments
+    )
     return [step_vec, rho_buffer, y_buffer, s_buffer, x_0, grad_0]
 
 

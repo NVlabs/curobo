@@ -10,7 +10,6 @@ from typing import Callable, Dict, Optional, Protocol, Sequence
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo import runtime as curobo_runtime
@@ -21,6 +20,7 @@ from curobo._src.state.state_joint_trajectory_ops import copy_joint_state_at_bat
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.cuda_graph_util import GraphExecutor, create_graph_executor
 from curobo._src.util.logging import log_and_raise
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 @dataclass(frozen=True)
@@ -283,7 +283,7 @@ class TorchTrajOptResultProcessor:
         self._require_shape_initialized()
         return self._best_dt
 
-    @profiler.record_function("trajopt_result_processor/reset_shape")
+    @get_profiler_decorator("trajopt_result_processor/reset_shape")
     def reset_shape(self) -> None:
         """Invalidate all shape-dependent workspaces and accumulated state."""
         self.reset_cuda_graph()
@@ -303,7 +303,7 @@ class TorchTrajOptResultProcessor:
         self._any_success = False
         self._is_ranked = False
 
-    @profiler.record_function("trajopt_result_processor/reset_cuda_graph")
+    @get_profiler_decorator("trajopt_result_processor/reset_cuda_graph")
     def reset_cuda_graph(self) -> None:
         """Invalidate captured work and its statically bound input objects."""
         for executor in (
@@ -320,7 +320,7 @@ class TorchTrajOptResultProcessor:
         self._bound_interpolated_trajectory = None
         self._final_result = None
 
-    @profiler.record_function("trajopt_result_processor/update_batch_size")
+    @get_profiler_decorator("trajopt_result_processor/update_batch_size")
     def update_batch_size(
         self,
         batch_size: int,
@@ -403,7 +403,7 @@ class TorchTrajOptResultProcessor:
             dtype=torch.long,
         )
 
-    @profiler.record_function("trajopt_result_processor/reset")
+    @get_profiler_decorator("trajopt_result_processor/reset")
     def reset(self, initial_dt: torch.Tensor) -> None:
         """Reset accumulated candidates without changing workspace shapes."""
         self._require_shape_initialized()
@@ -419,7 +419,7 @@ class TorchTrajOptResultProcessor:
         self._any_success = False
         self._is_ranked = False
 
-    @profiler.record_function("trajopt_result_processor/update")
+    @get_profiler_decorator("trajopt_result_processor/update")
     def update(self, candidate: TrajOptResultCandidate) -> TrajOptResultUpdate:
         """Accumulate a candidate, retaining earlier valid seeds whenever it fails."""
         self._require_shape_initialized()
@@ -634,7 +634,7 @@ class TorchTrajOptResultProcessor:
                 update_mask,
             )
 
-    @profiler.record_function("trajopt_result_processor/get_interpolation_input")
+    @get_profiler_decorator("trajopt_result_processor/get_interpolation_input")
     def get_interpolation_input(self) -> JointState:
         """Return a borrowed flattened state for one external all-seed interpolation."""
         self._require_result()
@@ -660,7 +660,7 @@ class TorchTrajOptResultProcessor:
             control_space=snapshot.js_solution.control_space,
         )
 
-    @profiler.record_function("trajopt_result_processor/finalize")
+    @get_profiler_decorator("trajopt_result_processor/finalize")
     def finalize(
         self,
         return_seeds: int,
@@ -1018,7 +1018,7 @@ class TorchTrajOptResultProcessor:
         if copy_debug:
             snapshot.debug_info = self._clone_debug_info(candidate_result.debug_info)
 
-    @profiler.record_function("trajopt_result_processor/process_candidate_metrics")
+    @get_profiler_decorator("trajopt_result_processor/process_candidate_metrics")
     def _process_candidate_metrics(
         self,
         candidate: TrajOptResultCandidate,

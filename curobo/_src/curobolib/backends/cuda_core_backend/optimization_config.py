@@ -33,6 +33,7 @@ class OptimizationKernelCfg(CudaCoreKernelCfg):
         kernel_files = {
             "line_search": ["line_search/line_search_kernel.cuh"],
             "lbfgs": ["lbfgs/lbfgs_candidates.cuh", "lbfgs/lbfgs_step_kernel.cuh"],
+            "lbfgs_vector_free": ["lbfgs/lbfgs_vector_free_step_kernel.cuh"],
             "lbfgs_compact": ["lbfgs/lbfgs_candidates.cuh", "lbfgs/lbfgs_compact_step_kernel.cuh"],
             "pose_refiner_lm": ["pose_refiner/pose_refiner_lm_kernel.cuh"],
         }
@@ -145,6 +146,26 @@ class LBFGSLaunchCfg:
         )
 
         return config, use_shared_buffers_actual, shared_mem_size
+
+
+class LBFGSVectorFreeLaunchCfg:
+    """Bounded vector-free operator with a fixed four-warp reduction layout."""
+
+    @staticmethod
+    def supports(v_dim: int, history_m: int) -> bool:
+        """Return whether one or two register components cover the shape."""
+        return 1 <= v_dim <= 256 and 1 <= history_m <= 30
+
+    @staticmethod
+    def specialization(v_dim: int, history_m: int, arch: Optional[str] = None) -> Tuple[int, bool]:
+        """Return shape-based storage using one measured schedule across devices."""
+        items = 1 if v_dim <= 128 else 2
+        if items == 1:
+            shared = 16 <= history_m <= 17 or 25 <= history_m <= 28
+        else:
+            # Shared staging at history 30 avoids local memory in the larger variant.
+            shared = 19 <= history_m <= 20 or history_m == 30
+        return items, shared
 
 
 class LBFGSCompactLaunchCfg:

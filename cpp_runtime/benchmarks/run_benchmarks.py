@@ -117,10 +117,10 @@ def scene_boxes(obstacles: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def motion_interpolation_buffer_size(num_knots: int) -> int:
-    """Retain the 1,000-sample benchmark floor and fit the default native timestep range."""
+    """Retain the 1,024-sample benchmark floor and fit the default native timestep range."""
     from curobo._src.types.spline_layout import SplineLayout
 
-    return max(1000, SplineLayout(num_knots).dense_horizon(0.2, 0.025))
+    return max(1024, SplineLayout(num_knots).dense_horizon(0.2, 0.025))
 
 
 def export_artifact(
@@ -424,18 +424,46 @@ def aggregate_ik(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def trajectory_metrics(states: np.ndarray, dt: float, model: Any, data: Any) -> dict[str, float]:
-    """Measure executable [q,v,a,jerk] states with shape [4,T,D] outside native timing."""
+def trajectory_metrics(
+    states: np.ndarray, dt: float, model: Any, data: Any, *, inverse_dynamics: bool = True
+) -> dict[str, float | None]:
+    """Score executable [4,T,D] states; leave torque and energy unset when dynamics are off."""
     import pinocchio as pin
 
     q, v, a, jerk = states
-    torques = np.asarray([pin.rnea(model, data, qi, vi, ai).copy() for qi, vi, ai in zip(q, v, a)])
-    return {
+    metrics = {
         "path_length_rad": float(np.linalg.norm(np.diff(q, axis=0), axis=-1).sum()),
         "jerk_rad_s3": float(np.max(np.abs(jerk))),
-        "energy_j": float(np.sum(np.abs(torques * v)) * dt),
-        "torque_nm": float(np.max(np.abs(torques))),
+        "energy_j": None,
+        "torque_nm": None,
     }
+    if inverse_dynamics:
+        torques = np.asarray(
+            [pin.rnea(model, data, qi, vi, ai).copy() for qi, vi, ai in zip(q, v, a)]
+        )
+        metrics["energy_j"] = float(np.sum(np.abs(torques * v)) * dt)
+        metrics["torque_nm"] = float(np.max(np.abs(torques)))
+    return metrics
+
+
+def read_spline_samples(raw: np.ndarray, row: dict[str, Any], dof: int) -> np.ndarray:
+    """Read required native spline samples [4,T,D], without reconstructing joint chords."""
+    if row.get("trajectory_sampling") != "spline":
+        raise ValueError("Spline samples are required; rebuild and rerun the benchmark")
+    offset, steps, dt = row["state_offset"], row["steps"], row["dt"]
+    end = offset + 4 * steps * dof
+    if (
+        offset < 0
+        or steps < 2
+        or end > raw.size
+        or not np.isfinite(dt)
+        or not 0 < dt <= 0.025 + 1e-7
+    ):
+        raise ValueError("Invalid native spline samples")
+    samples = raw[offset:end].reshape(4, steps, dof)
+    if not np.isfinite(samples).all():
+        raise ValueError("Nonfinite native spline samples")
+    return samples
 
 
 def aggregate_motion(output: Path, datasets: dict[str, Any], has_payload: bool) -> dict[str, Any]:
@@ -468,11 +496,16 @@ def aggregate_motion(output: Path, datasets: dict[str, Any], has_payload: bool) 
                 raise ValueError("native motion output is out of order")
             row.update({key: identities[index][key] for key in ("dataset", "scene", "problem")})
             if row["success"]:
-                offset, steps = row["state_offset"], row["steps"]
-                trajectory = states[offset : offset + 4 * steps * model.nq].reshape(
-                    4, steps, model.nq
+                trajectory = read_spline_samples(states, row, model.nq)
+                row.update(
+                    trajectory_metrics(
+                        trajectory,
+                        row["dt"],
+                        model,
+                        data,
+                        inverse_dynamics=row["inverse_dynamics"],
+                    )
                 )
-                row.update(trajectory_metrics(trajectory, row["dt"], model, data))
                 row["position_error_mm"] = row["position_error_m"] * 1000
             rows.append(row)
     save_json(output / f"motion_{'3kg' if has_payload else '0kg'}_metrics.json", rows)
@@ -491,7 +524,10 @@ def aggregate_motion(output: Path, datasets: dict[str, Any], has_payload: bool) 
         "successes": len(success),
         "success_percent": 100 * len(success) / len(rows),
         "excluded": sum(d["excluded"] for d in datasets.values()),
-        "statistics": {key: statistics([row[key] for row in success]) for key in metrics},
+        "statistics": {
+            key: statistics([row[key] for row in success if row[key] is not None])
+            for key in metrics
+        },
         "all_attempt_plan_time_s": statistics([row["plan_time_s"] for row in rows]),
         "failures": [
             {key: row[key] for key in ("dataset", "scene", "problem", "attempts")}
@@ -521,9 +557,18 @@ def render_tables(summary: dict[str, Any]) -> str:
             if name == "0kg"
             else f"With torque limits at full payload of {name.removesuffix('kg')} kg:"
         )
+        kinematic = not summary.get("motion_inverse_dynamics", True)
+        if kinematic:
+            caption = f"Payload {name.removesuffix('kg')} kg, inverse dynamics disabled:"
         rows = [
-            ["Successful problems", f"{result['successes']} / {result['problems']}"],
-            ["Success %", f"{result['success_percent']:.2f}"],
+            [
+                "Kinematic successes" if kinematic else "Successful problems",
+                f"{result['successes']} / {result['problems']}",
+            ],
+            [
+                "Kinematic success %" if kinematic else "Success %",
+                f"{result['success_percent']:.2f}",
+            ],
         ]
         for key, label in labels:
             value = result["statistics"].get(key)
@@ -602,7 +647,7 @@ def main() -> None:
     parser.add_argument(
         "--disable-inverse-dynamics",
         action="store_true",
-        help="disable motion IK/RRT/TrajOpt effort checks; retiming still uses inverse dynamics",
+        help="disable motion inverse dynamics, including retiming, validation, and torque scoring",
     )
     parser.add_argument(
         "--target-device", type=Path,

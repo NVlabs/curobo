@@ -5,16 +5,19 @@
 """Unit tests for UsdSceneParser class."""
 
 # Standard Library
+from pathlib import Path
 
 # Third Party
+import numpy as np
 import pytest
 
 # CuRobo
 from curobo._src.geom.types import Cuboid, Cylinder, SceneCfg, Sphere
+from curobo._src.types.pose import Pose
 
 try:
     # Third Party
-    from pxr import Usd, UsdGeom
+    from pxr import Gf, Usd, UsdGeom
 
     from curobo._src.util.usd_scene_parser import (
         UsdSceneParser,
@@ -268,6 +271,155 @@ class TestGeometryExtractors:
         assert extracted is not None
         assert len(extracted.faces) == 2
         assert extracted.faces == [[1, 3, 0], [1, 2, 3]]
+
+    @pytest.mark.parametrize("reader_type", [UsdSceneParser, UsdWriter])
+    def test_get_mesh_attrs_bakes_reflected_transform_and_reference_frame(
+        self, tmp_path: Path, reader_type: type
+    ) -> None:
+        """Test mesh extraction preserves reflected world transforms."""
+        stage = create_stage(str(tmp_path / "reflected_mesh.usd"))
+        reference_path = "/world/reference"
+        reference_prim = UsdGeom.Xform.Define(stage, reference_path).GetPrim()
+        set_prim_transform(reference_prim, [0.5, -0.25, 0.75, 1, 0, 0, 0])
+
+        mesh_path = "/world/reflected_mesh"
+        mesh_geom = UsdGeom.Mesh.Define(stage, mesh_path)
+        mesh_geom.CreatePointsAttr([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+        mesh_geom.CreateFaceVertexCountsAttr([3])
+        mesh_geom.CreateFaceVertexIndicesAttr([0, 1, 2])
+        mesh_prim = stage.GetPrimAtPath(mesh_path)
+        set_prim_transform(
+            mesh_prim,
+            [1.25, 0.5, 0.25, 1, 0, 0, 0],
+            scale=[-1.0, 2.0, 1.0],
+        )
+
+        reader = reader_type()
+        reader.load_stage(stage)
+        scene = reader.get_obstacles_from_stage(
+            only_paths=[mesh_path], reference_prim_path=reference_path
+        )
+
+        extracted = scene.mesh[0]
+        cache = UsdGeom.XformCache()
+        world_transform = cache.GetLocalToWorldTransform(mesh_prim)
+        expected_world_points = np.asarray(
+            [
+                world_transform.Transform(Gf.Vec3d(*point))
+                for point in mesh_geom.GetPointsAttr().Get()
+            ],
+            dtype=np.float32,
+        )
+        expected_reference_points = expected_world_points - np.asarray(
+            [0.5, -0.25, 0.75], dtype=np.float32
+        )
+
+        np.testing.assert_allclose(extracted.pose[:3], [0.75, 0.75, -0.5], atol=1e-6)
+        # USD's rigid decomposition assigns the reflection to all three scales.
+        np.testing.assert_allclose(extracted.pose[3:], [0.0, 1.0, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(
+            extracted.vertices,
+            [[0.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, -2.0, 0.0]],
+            atol=1e-6,
+        )
+
+        matrix = Pose.from_list(extracted.pose).get_matrix().view(4, 4).cpu().numpy()
+        vertices = np.asarray(extracted.vertices, dtype=np.float32)
+        transformed_vertices = vertices @ matrix[:3, :3].T + matrix[:3, 3]
+        np.testing.assert_allclose(transformed_vertices, expected_reference_points, atol=1e-6)
+
+        triangle = transformed_vertices[np.asarray(extracted.faces[0])]
+        assert np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])[2] > 0.0
+
+    @pytest.mark.parametrize("reader_type", [UsdSceneParser, UsdWriter])
+    @pytest.mark.parametrize(
+        "scale,parent_scale",
+        [
+            ([-1.0, 2.0, 1.0], [1.0, 1.0, 1.0]),
+            ([-1.0, -2.0, 1.0], [1.0, 1.0, 1.0]),
+            ([1.0, 2.0, 1.0], [1.0, 1.0, 1.0]),
+            ([-1.0, 2.0, 1.0], [1.0, 3.0, 0.5]),
+        ],
+        ids=["reflection", "two-negative-axes", "positive-scale", "nested-shear"],
+    )
+    def test_mesh_transform_preserves_rigid_pose_and_geometry(
+        self, tmp_path: Path, reader_type: type, scale: list[float], parent_scale: list[float]
+    ) -> None:
+        """Preserve geometry, rigid pose, and winding in a rotated reference frame."""
+        stage = create_stage(str(tmp_path / "transformed_mesh.usd"))
+        reference = UsdGeom.Xform.Define(stage, "/world/reference").GetPrim()
+        set_prim_transform(reference, [0.5, -0.25, 0.75, 0.9238795, 0.3826834, 0, 0])
+        parent = UsdGeom.Xform.Define(stage, "/world/parent").GetPrim()
+        set_prim_transform(parent, [1, 2, 3, 0.9238795, 0, 0.3826834, 0], scale=parent_scale)
+        mesh = UsdGeom.Mesh.Define(stage, "/world/parent/mesh")
+        mesh.CreatePointsAttr([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+        mesh.CreateFaceVertexCountsAttr([3])
+        mesh.CreateFaceVertexIndicesAttr([0, 1, 2])
+        set_prim_transform(
+            mesh.GetPrim(), [0.25, 0.5, 0.75, 0.9238795, 0, 0, 0.3826834], scale=scale
+        )
+        reader = reader_type()
+        reader.load_stage(stage)
+        extracted = reader.get_obstacles_from_stage(
+            only_paths=[str(mesh.GetPath())], reference_prim_path=str(reference.GetPath())
+        ).mesh[0]
+
+        cache = UsdGeom.XformCache()
+        world = cache.GetLocalToWorldTransform(mesh.GetPrim())
+        reference_inverse = cache.GetLocalToWorldTransform(reference).GetInverse()
+        relative = world * reference_inverse
+        expected = np.asarray(
+            [relative.Transform(Gf.Vec3d(*point)) for point in mesh.GetPointsAttr().Get()],
+            dtype=np.float32,
+        )
+        matrix = Pose.from_list(extracted.pose).get_matrix().view(4, 4).cpu().numpy()
+        vertices = np.asarray(extracted.vertices, dtype=np.float32)
+        actual = vertices @ matrix[:3, :3].T + matrix[:3, 3]
+        np.testing.assert_allclose(actual, expected, atol=2e-6)
+        np.testing.assert_allclose(
+            matrix[:3, :3].T @ matrix[:3, :3], np.eye(3, dtype=np.float32), atol=1e-6
+        )
+        assert np.linalg.det(matrix[:3, :3]) == pytest.approx(1.0, abs=1e-6)
+
+        # Match the existing USD rigid-pose convention, including under reflection.
+        rigid_world = Gf.Matrix4d(1)
+        rigid_world.SetRotate(Gf.Transform(world).GetRotation())
+        rigid_world.SetTranslateOnly(world.ExtractTranslation())
+        expected_pose = np.asarray(rigid_world * reference_inverse, dtype=np.float32).T
+        np.testing.assert_allclose(matrix, expected_pose, atol=2e-6)
+        triangle = actual[np.asarray(extracted.faces[0])]
+        actual_normal = np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])
+        expected_normal = np.cross(expected[1] - expected[0], expected[2] - expected[0])
+        if relative.GetDeterminant3() < 0:
+            expected_normal = -expected_normal
+        assert np.dot(actual_normal, expected_normal) > 0
+
+    @pytest.mark.parametrize("reader_type", [UsdSceneParser, UsdWriter])
+    @pytest.mark.parametrize("scale_x", [1.0, -1.0])
+    def test_mesh_preserves_small_geometry_near_translated_reference(
+        self, tmp_path: Path, reader_type: type, scale_x: float
+    ) -> None:
+        """Cancel a common world translation before rounding vertices to float32."""
+        stage = create_stage(str(tmp_path / "small_mesh.usd"))
+        reference = UsdGeom.Xform.Define(stage, "/world/reference").GetPrim()
+        set_prim_transform(reference, [1000, 0, 0, 1, 0, 0, 0])
+        mesh = UsdGeom.Mesh.Define(stage, "/world/mesh")
+        mesh.CreatePointsAttr([[0, 0, 0], [1e-5, 0, 0], [0, 1e-5, 0]])
+        mesh.CreateFaceVertexCountsAttr([3])
+        mesh.CreateFaceVertexIndicesAttr([0, 1, 2])
+        set_prim_transform(mesh.GetPrim(), [1000, 0, 0, 1, 0, 0, 0], scale=[scale_x, 1, 1])
+        reader = reader_type()
+        reader.load_stage(stage)
+        extracted = reader.get_obstacles_from_stage(
+            only_paths=[str(mesh.GetPath())], reference_prim_path=str(reference.GetPath())
+        ).mesh[0]
+        matrix = Pose.from_list(extracted.pose).get_matrix().view(4, 4).cpu().numpy()
+        vertices = np.asarray(extracted.vertices, dtype=np.float32)
+        actual = vertices @ matrix[:3, :3].T + matrix[:3, 3]
+        expected = np.asarray(
+            [[0, 0, 0], [scale_x * 1e-5, 0, 0], [0, 1e-5, 0]], dtype=np.float32
+        )
+        np.testing.assert_allclose(actual, expected, atol=1e-10)
 
     def test_get_cube_attrs_with_zero_dimension_raises(self, tmp_path):
         """Test that zero cube dimension raises ValueError."""

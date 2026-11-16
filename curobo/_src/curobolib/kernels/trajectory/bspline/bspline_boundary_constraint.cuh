@@ -211,17 +211,17 @@ namespace curobo{
 
                 // Degree == 3, n_knots = 16
                 // knot_idx | local_support
-                // 16       | knots[0], knots[1], knots[2], fixed_knots[0]
-                // 17       | knots[1], knots[2], fixed_knots[0], fixed_knots[1]
-                // 18       | knots[2], fixed_knots[0], fixed_knots[1], fixed_knots[2]
-                // 19       | fixed_knots[0], fixed_knots[1], fixed_knots[2], fixed_knots[3]
+                // 16       | knots[0], knots[1], knots[2], fixed_knots[3]
+                // 17       | knots[1], knots[2], fixed_knots[3], fixed_knots[2]
+                // 18       | knots[2], fixed_knots[3], fixed_knots[2], fixed_knots[1]
+                // 19       | fixed_knots[3], fixed_knots[2], fixed_knots[1], fixed_knots[0]
 
 
                 const int loop_size = knot_idx - n_knots + 1;
                 const int start_target_index = supportSize - loop_size;
 
                 for (int i = 0; i < loop_size; ++i) {
-                    knots[start_target_index + i] = fixed_knots[i];
+                    knots[start_target_index + i] = fixed_knots[supportSize - i - 1];
                 }
 
 

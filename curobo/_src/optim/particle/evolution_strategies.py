@@ -15,7 +15,6 @@ from dataclasses import dataclass, fields
 from typing import Any, Dict, List, Optional
 
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.optim.components.gaussian_distribution import CovType
 from curobo._src.optim.components.particle_opt_core import ParticleOptCore
@@ -37,7 +36,7 @@ from curobo._src.rollout.rollout_protocol import Rollout
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import stable_topk
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 
 @dataclass
@@ -58,7 +57,7 @@ class EvolutionStrategies:
     sample statistics with a configurable learning rate.
     """
 
-    @profiler.record_function("es/init")
+    @get_profiler_decorator("es/init")
     def __init__(
         self,
         config: EvolutionStrategiesCfg,

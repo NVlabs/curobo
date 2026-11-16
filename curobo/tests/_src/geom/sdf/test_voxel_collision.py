@@ -459,6 +459,141 @@ def _make_box_esdf(
     )
 
 
+@pytest.fixture(
+    params=[
+        ((120, 20, 24), 0.01),
+        ((20, 120, 24), 0.01),
+        ((20, 24, 120), 0.01),
+        ((120, 120, 100), 0.01),
+        ((120, 120, 100), 0.02),
+        ((16, 20, 24), 0.015625),
+    ],
+    ids=["x", "y", "z", "xy", "xy-2cm", "exact-control"],
+)
+def fractional_grid_dimensions(
+    request: pytest.FixtureRequest, device_cfg: DeviceCfg
+) -> tuple[VoxelData, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build a float32-authored grid with an exactly representable affine field.
+
+    Return voxel data, query points (5, 3), expected values (5,) and the
+    normalized negative field gradient (3,). Integer and fractional voxel
+    coordinates cover interior samples and the last layer's voxel centers.
+    """
+    shape, spacing = request.param
+    # Match ESDFIntegrator.get_voxel_grid: the Python scalar originates in float32.
+    voxel_size = torch.tensor(spacing, dtype=torch.float32).item()
+    dims = [n * voxel_size for n in shape]
+    axes = [torch.arange(n, dtype=torch.float32, device=device_cfg.device) for n in shape]
+    indices = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
+    center = (torch.tensor(shape, dtype=torch.float32, device=device_cfg.device) - 1) / 2
+    coefficients = torch.tensor([1, 2, 4], dtype=torch.float32, device=device_cfg.device)
+    # Binary fractions keep all stored features exact in float16 for these shapes.
+    features = ((indices - center) * coefficients).sum(dim=-1) / 512
+    grid = VoxelGrid(
+        name="float32_dimensions",
+        pose=[0, 0, 0, 1, 0, 0, 0],
+        dims=dims,
+        voxel_size=voxel_size,
+        feature_tensor=features.to(torch.float16),
+        feature_dtype=torch.float16,
+    )
+    data = VoxelData.create_from_voxel_grids([grid], device_cfg)
+    counts = torch.tensor(shape, dtype=torch.float32, device=device_cfg.device)
+    # Establish the regression trigger through the real metadata construction.
+    if spacing == 0.015625:
+        torch.testing.assert_close(data.params[0, 0, :3], counts, rtol=0, atol=0)
+    else:
+        assert torch.any(data.params[0, 0, :3] < counts)
+    torch.testing.assert_close(data.params[0, 0, :3].round(), counts, rtol=0, atol=0)
+    torch.testing.assert_close(grid.feature_tensor.float(), features, rtol=0, atol=0)
+
+    coordinates = torch.stack(
+        [center * 0.5, center + 0.25, center * 1.5, counts - 2, counts - 1]
+    )
+    points = (coordinates - center) * voxel_size
+    # This oracle uses the known field, independent of flattened indexing and params.
+    expected = ((coordinates - center) * coefficients).sum(dim=-1) / 512
+    gradient = -coefficients / torch.linalg.vector_norm(coefficients)
+    return data, points, expected, gradient
+
+
+class TestFloat32VoxelDimensions:
+    """Preserve samples and collision gradients for float32-authored voxel grids."""
+
+    @pytest.mark.parametrize("with_grad", [False, True], ids=["distance", "with-gradient"])
+    def test_samples_match_stored_field(
+        self,
+        fractional_grid_dimensions: tuple[VoxelData, torch.Tensor, torch.Tensor, torch.Tensor],
+        with_grad: bool,
+    ) -> None:
+        """Both SDF entry points must recover integer dimensions before sampling."""
+        data, points, expected, _ = fractional_grid_dimensions
+        device, stream = get_warp_device_stream(points)
+        actual = torch.zeros_like(expected)
+        wp.launch(
+            kernel=_test_sdf_with_grad_kernel if with_grad else _test_sdf_only_kernel,
+            dim=points.shape[0],
+            inputs=[
+                data.to_warp(), wp.from_torch(points, dtype=wp.vec3), 0, 0, wp.from_torch(actual)
+            ],
+            stream=stream,
+            device=device,
+        )
+        wp.synchronize_device(device)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=2e-6)
+
+    @pytest.mark.parametrize("swept", [False, True], ids=["static", "swept"])
+    def test_collision_cost_and_gradient(
+        self,
+        fractional_grid_dimensions: tuple[VoxelData, torch.Tensor, torch.Tensor, torch.Tensor],
+        swept: bool,
+    ) -> None:
+        """The production collision path must retain known costs and gradient directions."""
+        data, points, expected, gradient = fractional_grid_dimensions
+        # Use two interior queries; one collides, the distant positive sample is free.
+        points = points[[0, 2]]
+        expected = expected[[0, 2]]
+        spheres = torch.cat([points, torch.full_like(points[:, :1], 0.01)], dim=-1)
+        spheres = spheres.reshape(1, 1, -1, 4).repeat(1, 2 if swept else 1, 1, 1)
+        launch = _launch_swept_collision if swept else _launch_collision
+        cost, actual_gradient = launch(data, spheres, activation_distance=0.02)
+        assert expected[0] < 0 and expected[1] > 0.03
+        expected_cost = torch.stack([0.02 - expected[0], torch.zeros_like(expected[1])])
+        torch.testing.assert_close(cost.flatten(), expected_cost.repeat(spheres.shape[1]), rtol=0, atol=2e-6)
+        expected_gradient = torch.zeros_like(actual_gradient)
+        expected_gradient[0, :, 0, :3] = gradient
+        torch.testing.assert_close(actual_gradient, expected_gradient, rtol=0, atol=2e-5)
+
+    @pytest.mark.parametrize(
+        "fractional_grid_dimensions", [((120, 20, 24), 0.01)], indirect=True, ids=["x"]
+    )
+    @pytest.mark.parametrize("swept", [False, True], ids=["static", "swept"])
+    @pytest.mark.parametrize("polarity", [1, -1], ids=["free", "collision"])
+    def test_collision_classification_near_surface(
+        self,
+        fractional_grid_dimensions: tuple[VoxelData, torch.Tensor, torch.Tensor, torch.Tensor],
+        swept: bool,
+        polarity: int,
+    ) -> None:
+        """Dimension rounding must preserve both free and colliding query classifications."""
+        data, points, expected, _ = fractional_grid_dimensions
+        data.features.mul_(polarity)
+        # This point is close enough to the zero surface for the half-cell shift
+        # from truncating 120 to 119 to reverse the sampled field's sign.
+        point = points[1:2] / 8
+        expected_sdf = polarity * expected[1] / 8
+        spheres = torch.cat([point, torch.zeros_like(point[:, :1])], dim=-1)
+        spheres = spheres.reshape(1, 1, 1, 4).repeat(1, 2 if swept else 1, 1, 1)
+        launch = _launch_swept_collision if swept else _launch_collision
+        cost, _ = launch(data, spheres, activation_distance=0.0)
+        assert (cost.flatten()[0].item() > 0) == (expected_sdf.item() < 0), (
+            f"Collision cost {cost.flatten()[0].item()} disagrees with expected SDF {expected_sdf.item()}"
+        )
+        torch.testing.assert_close(
+            cost.flatten(), (-expected_sdf).clamp(min=0).expand(cost.numel()), rtol=0, atol=2e-6
+        )
+
+
 def _launch_collision(
     voxel_data: VoxelData,
     spheres: torch.Tensor,

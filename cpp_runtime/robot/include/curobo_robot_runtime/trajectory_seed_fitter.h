@@ -20,6 +20,8 @@ struct TrajectorySeedFitterConfig {
   int device_ordinal{0};
   int num_seeds{4};
   bool use_cuda_graph{true};
+  /** Physical native sample interval for moving boundary fitting; zero uses the artifact. */
+  float reference_dt{0.F};
 };
 
 /** Fixed B-spline dimensions and production IRLS iteration count. */

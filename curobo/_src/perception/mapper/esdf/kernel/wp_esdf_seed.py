@@ -47,18 +47,20 @@ def _validate_esdf_launch_shapes(
 def seed_esdf_sites_from_block_sparse_warp(
     tsdf: BlockSparseTSDF,
     esdf_site_index: torch.Tensor,
+    static_site_mask: torch.Tensor,
     esdf_origin: torch.Tensor,
     esdf_voxel_size_tensor: torch.Tensor,
     esdf_grid_shape: Tuple[int, int, int],
     minimum_tsdf_weight: float = 0.1,
     semantic_filter: Optional[PreparedSemanticFilterWarp] = None,
 ) -> None:
-    """Seed ESDF sites from block-sparse TSDF (surface + truncation boundary).
+    """Seed static surfaces and sensor surface/truncation sites with packed ownership.
 
     Uses the ``scatter`` specialization: variable launch dim,
     NOT CUDA-graph safe.
     """
     esdf_site_index.fill_(-1)
+    static_site_mask.zero_()
     warp_data = tsdf.get_warp_data()
     data = tsdf.data
 
@@ -78,6 +80,7 @@ def seed_esdf_sites_from_block_sparse_warp(
     inputs = [
         warp_data,
         wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
+        wp.from_torch(static_site_mask, dtype=wp.int32),
         wp.from_torch(esdf_origin, dtype=wp.float32),
         wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
         wp.float32(minimum_tsdf_weight),
@@ -97,6 +100,7 @@ def seed_esdf_sites_from_block_sparse_warp(
 def seed_esdf_sites_gather_warp(
     tsdf: BlockSparseTSDF,
     esdf_site_index: torch.Tensor,
+    static_site_mask: torch.Tensor,
     esdf_origin: torch.Tensor,
     esdf_voxel_size_tensor: torch.Tensor,
     esdf_grid_shape: Tuple[int, int, int],
@@ -108,6 +112,7 @@ def seed_esdf_sites_gather_warp(
     Uses the ``gather`` specialization.
     """
     esdf_site_index.fill_(-1)
+    static_site_mask.zero_()
 
     esdf_D, esdf_H, esdf_W = esdf_grid_shape
     n_esdf_voxels = esdf_D * esdf_H * esdf_W
@@ -126,6 +131,7 @@ def seed_esdf_sites_gather_warp(
     inputs = [
         warp_data,
         wp.from_torch(esdf_site_index.view(-1), dtype=wp.int32),
+        wp.from_torch(static_site_mask, dtype=wp.int32),
         wp.from_torch(esdf_origin, dtype=wp.float32),
         wp.from_torch(esdf_voxel_size_tensor, dtype=wp.float32),
         wp.float32(minimum_tsdf_weight),

@@ -18,6 +18,46 @@ import torch
 # CuRobo
 from curobo._src.collision.collision_robot_scene import RobotSceneCollision
 from curobo._src.collision.collision_robot_scene_cfg import RobotSceneCollisionCfg
+from curobo._src.types.device_cfg import DeviceCfg
+from curobo.collision_checking import RobotCollisionChecker, RobotCollisionCheckerCfg
+
+
+@pytest.mark.parametrize("batch_size,horizon", [(2, 3), (2, 1)])
+def test_self_collision_backward_matches_single_queries(
+    cuda_device_cfg: DeviceCfg, batch_size: int, horizon: int
+) -> None:
+    """Match public batched joint gradients to independently evaluated singleton queries."""
+    config = RobotCollisionCheckerCfg.load_from_config(
+        robot_config="franka.yml", device_cfg=cuda_device_cfg
+    )
+    checker = RobotCollisionChecker(config)
+    dof = checker.kinematics.get_dof()
+    # Fixed colliding configurations keep the joint-gradient comparison nontrivial.
+    poses = cuda_device_cfg.to_device(
+        [
+            [-2.3646, 1.7039, 0.2800, -2.9531, 0.8616, 2.7549, -0.9232],
+            [1.1863, -0.5772, 1.1552, -2.8181, -0.1267, 1.1968, 0.4732],
+        ]
+    )
+    indices = torch.arange(batch_size * horizon, device=cuda_device_cfg.device) % len(poses)
+    q = poses[indices].reshape(batch_size, horizon, dof)
+    q.requires_grad_(True)
+    weights = torch.arange(
+        1, batch_size * horizon + 1, **cuda_device_cfg.as_torch_dict()
+    ).reshape(batch_size, horizon, 1)
+    _, distance = checker.get_scene_self_collision_distance_from_joints(q)
+    assert (distance > 0).all()
+    gradient = torch.autograd.grad(distance, q, grad_outputs=weights)[0].clone()
+    assert torch.isfinite(gradient).all()
+    assert (gradient.abs().sum(dim=-1) > 0).all()
+    for batch in range(batch_size):
+        for time in range(horizon):
+            single_q = q[batch : batch + 1, time : time + 1].detach().clone()
+            single_q.requires_grad_(True)
+            _, single_distance = checker.get_scene_self_collision_distance_from_joints(single_q)
+            single_gradient = torch.autograd.grad(single_distance.sum(), single_q)[0]
+            expected = single_gradient[0, 0] * weights[batch, time, 0]
+            torch.testing.assert_close(gradient[batch, time], expected, atol=1e-5, rtol=1e-5)
 
 
 class TestRobotSceneCollisionCfg:

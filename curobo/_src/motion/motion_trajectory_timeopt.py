@@ -15,6 +15,7 @@ from curobo._src.motion.motion_trajectory_timeopt_result import TrajectoryTimeOp
 from curobo._src.robot.dynamics.dynamics import Dynamics
 from curobo._src.robot.dynamics.dynamics_cfg import DynamicsCfg
 from curobo._src.state.state_joint import JointState
+from curobo._src.trajectory.trajectory_spline import SplineTrajectory, TimeOptTiming
 from curobo._src.trajectory.timeopt.timeopt_basis import CubicTimingBasis, TimeOptProblem
 from curobo._src.trajectory.timeopt.timeopt_solver import CudaTimeOptSolver
 from curobo._src.types.spline_layout import MAX_SPLINE_KNOTS
@@ -394,6 +395,18 @@ class TrajectoryTimeOpt:
             int(not self._reference),
         )
         return output, progress
+
+    def _spline_trajectory(self) -> SplineTrajectory:
+        """Retain the complete current path and time law before another solve."""
+        boundary = self._start_boundary if self._reference else self._start_boundary[:, 1:]
+        points = torch.cat(
+            (boundary, self._controls[:, :-1], self._goal[:, None].expand(-1, 3, -1)), dim=1
+        )
+        return SplineTrajectory(
+            points.contiguous(),
+            self._result.joint_state.joint_names,
+            TimeOptTiming(self._timing.clone(), self._times.clone()),
+        )
 
     def reset_cuda_graph(self) -> None:
         """Reset captured graphs, retaining fixed model and solver buffers."""

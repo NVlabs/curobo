@@ -42,10 +42,8 @@ def create_trajopt_runtime_kernels(
     fixed_dof = wp.constant(dof)
     fixed_knots = wp.constant(n_knots)
     fixed_horizon = wp.constant(horizon)
-    fixed_validation_horizon = wp.constant(validation_horizon)
     opt_dim = wp.constant(dof * n_knots)
     combine_block = wp.constant(128)
-    combine_chunks = wp.constant((dof * horizon + 127) // 128)
 
     def _prepare_pose_criteria_template(
         position_metric: wp.array(dtype=wp.mat33),
@@ -217,7 +215,8 @@ def create_trajopt_runtime_kernels(
         value_idx = wp.tid()
         joint_idx = value_idx % fixed_dof
         state_flat_idx = value_idx / fixed_dof
-        seed_idx = state_flat_idx / fixed_validation_horizon
+        validation_samples = position.shape[0] / (fixed_dof * violation.shape[0])
+        seed_idx = state_flat_idx / validation_samples
         p = position[value_idx]
         v = velocity[value_idx]
         a = acceleration[value_idx]
@@ -261,46 +260,6 @@ def create_trajopt_runtime_kernels(
         num_line_search,
         "trajopt",
     )
-
-    def _reduce_rollout_cost_template(
-        cspace_cost: wp.array(dtype=wp.float32),
-        world_collision_cost: wp.array(dtype=wp.float32),
-        self_collision_cost: wp.array(dtype=wp.float32),
-        pose_cost: wp.array(dtype=wp.float32),
-        num_tool_frames: wp.int32,
-        pose_constraint_active: wp.uint8,
-        trajectory_cost: wp.array(dtype=wp.float32),
-    ):
-        trajectory_idx, lane = wp.tid()
-        state_width = fixed_horizon * fixed_dof
-        trajectory_offset = trajectory_idx * state_width
-        local_cost = wp.float32(0.0)
-        for chunk_idx in range(combine_chunks):
-            relative_index = lane + chunk_idx * combine_block
-            if relative_index < state_width:
-                index = trajectory_offset + relative_index
-                joint_idx = relative_index % fixed_dof
-                state_idx = relative_index / fixed_dof
-                collision_idx = trajectory_idx * fixed_horizon + state_idx
-                value_cost = cspace_cost[index]
-                if joint_idx == 0:
-                    value_cost += (
-                        world_collision_cost[collision_idx] + self_collision_cost[collision_idx]
-                    )
-                    if pose_constraint_active == wp.uint8(1):
-                        pose_offset = collision_idx * num_tool_frames * 2
-                        for pose_idx in range(2 * num_tool_frames):
-                            value_cost += pose_cost[pose_offset + pose_idx]
-                local_cost += value_cost
-
-        block_cost = wp.tile_sum(wp.tile(local_cost))
-        if lane == 0:
-            trajectory_cost[trajectory_idx] = block_cost[0]
-
-    reduce_rollout_cost = warp_kernel(
-        f"trajopt_reduce_rollout_cost_{dof}_{horizon}",
-        enable_backward=False,
-    )(_reduce_rollout_cost_template)
 
     def _accumulate_template(
         candidate_knots: wp.array2d(dtype=wp.float32),
@@ -553,7 +512,6 @@ def create_trajopt_runtime_kernels(
         "calculate_interpolation_horizon": calculate_interpolation_horizon,
         "validate_interpolated": validate_interpolated,
         **lbfgs_kernels,
-        "reduce_rollout_cost": reduce_rollout_cost,
         "accumulate": accumulate,
         "finalize": finalize,
     }

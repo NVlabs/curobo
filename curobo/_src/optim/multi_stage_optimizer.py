@@ -13,12 +13,12 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.optim.optimization_iteration_state import OptimizationIterationState
 from curobo._src.rollout.rollout_protocol import Rollout
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.logging import log_and_raise, log_info
+from curobo._src.util.torch_util import get_profiler_context
 
 
 class MultiStageOptimizer:
@@ -170,7 +170,7 @@ class MultiStageOptimizer:
                 )
                 continue
 
-            with profiler.record_function(f"MultiStageOptimizer/stage_{i}"):
+            with get_profiler_context(f"MultiStageOptimizer/stage_{i}"):
                 action = current_state.action
                 if (
                     hasattr(current_state, "best_action")

@@ -4,6 +4,7 @@
 #include "cuda_check.h"
 #include "robot_runtime.h"
 #include "rollout_runtime.h"
+#include "spline_trajectory_internal.h"
 #include "trajectory_timeopt_cuda.h"
 
 #include <algorithm>
@@ -97,6 +98,7 @@ class TrajectoryTimeOptRuntime {
     load("local", &w_.local, w_.points);
     load("polynomial", &w_.polynomial, 29 * 4 * 32);
     load("nodes", &w_.nodes, 6);
+    joint_names_ = curobo_robot_runtime::load_manifest(directory).joint_names;
     const auto trajopt = curobo_robot_runtime::load_trajectory_optimization_manifest(directory);
     w_.enable_inverse_dynamics = config.enable_inverse_dynamics;
     if (trajopt.num_dof != w_.dof) {
@@ -194,6 +196,25 @@ class TrajectoryTimeOptRuntime {
     const size_t plane = static_cast<size_t>(w_.batch) * w_.samples * w_.dof;
     return {w_.sample_joints, w_.sample_joints + plane, w_.sample_joints + 2 * plane,
             w_.sample_joints + 3 * plane};
+  }
+
+  SplineTrajectory trajectory(int seed, cudaStream_t stream) const {
+    CRR_CUDA_CHECK(cudaSetDevice(config_.device_ordinal));
+    cudaStreamCaptureStatus capture;
+    CRR_CUDA_CHECK(cudaStreamIsCapturing(stream, &capture));
+    if (capture != cudaStreamCaptureStatusNone)
+      throw std::invalid_argument("Select a trajectory outside capture");
+    if (!has_result_ || seed < 0 || seed >= w_.batch)
+      throw std::invalid_argument("No selected TimeOpt result");
+    CRR_CUDA_CHECK(cudaDeviceSynchronize());
+    uint8_t success = 0;
+    CRR_CUDA_CHECK(cudaMemcpyAsync(&success, w_.success + seed, 1, cudaMemcpyDeviceToHost, stream));
+    CRR_CUDA_CHECK(cudaStreamSynchronize(stream));
+    if (!success) throw std::invalid_argument("TimeOpt seed failed");
+    return timeopt_spline(w_.controls + seed * w_.knots * w_.dof, w_.start + seed * 4 * w_.dof,
+                          w_.goal + seed * w_.dof, w_.output_timing + seed * 32,
+                          w_.output_time + seed * (w_.intervals + 1), w_.knots, w_.intervals + 1,
+                          config_.reference_timing, joint_names_, config_.device_ordinal, stream);
   }
 
   const float *sample_progress() const { return w_.sample_progress; }
@@ -332,6 +353,7 @@ class TrajectoryTimeOptRuntime {
     CRR_CUDA_CHECK(cudaGraphLaunch(executable, stream));
   }
 
+  std::vector<std::string> joint_names_;
   TrajectoryTimeOptConfig config_;
   TimeOptWorkspace w_{};
   std::vector<DeviceBuffer> buffers_;
@@ -362,6 +384,9 @@ TrajectoryTimeOptResult TrajectoryTimeOpt::timeopt(const TrajectoryTimeOptReques
 }
 TrajectoryTimeOptSamples TrajectoryTimeOpt::sample(const float *times, cudaStream_t stream) const {
   return runtime_->sample(times, stream);
+}
+SplineTrajectory TrajectoryTimeOpt::trajectory(int seed, cudaStream_t stream) const {
+  return runtime_->trajectory(seed, stream);
 }
 const float *TrajectoryTimeOpt::sample_progress() const { return runtime_->sample_progress(); }
 void TrajectoryTimeOpt::update_links_inertial(const LinkInertialUpdates &updates) {

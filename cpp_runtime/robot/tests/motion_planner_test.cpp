@@ -230,6 +230,25 @@ int main(int argc, char** argv) {
       throw std::runtime_error("direct motion-planning attempt failed");
     }
 
+    const auto retained_spline = direct_planner.trajectory().clone();
+    const auto retained_states = retained_spline.interpolate(0.01F);
+    std::vector<float> retained_positions(retained_states.sample_count * info.num_dof);
+    check_cuda(cudaMemcpy(retained_positions.data(), retained_states.position,
+                          retained_positions.size() * sizeof(float), cudaMemcpyDeviceToHost));
+    // The selected spline is available even without optional seed metadata.
+    request.selected_seed = nullptr;
+    direct_planner.plan(request);
+    const auto without_seed = direct_planner.trajectory();
+    if (!(without_seed.duration() > 0))
+      throw std::runtime_error("spline export requires optional selected_seed output");
+    request.selected_seed = selected_seed.get();
+    const auto retained_again = retained_spline.interpolate(0.01F);
+    std::vector<float> retained_after(retained_positions.size());
+    check_cuda(cudaMemcpy(retained_after.data(), retained_again.position,
+                          retained_after.size() * sizeof(float), cudaMemcpyDeviceToHost));
+    if (retained_after != retained_positions)
+      throw std::runtime_error("retained spline changed after planner reuse");
+
     // The composed planner must forward the selected seed's timing controls.
     auto timeopt_config = config;
     timeopt_config.trajectory_optimization.enable_timeopt = true;
@@ -586,6 +605,14 @@ int main(int argc, char** argv) {
         curobo::robot::GraspPlanningStatus::GOALSET_UNREACHABLE) {
       throw std::runtime_error("unreachable grasp goalset was not rejected");
     }
+    bool stale_rejected = false;
+    try {
+      direct_planner.trajectory();
+    } catch (const std::invalid_argument&) {
+      stale_rejected = true;
+    }
+    if (!stale_rejected || direct_planner.get_approach_trajectory())
+      throw std::runtime_error("failed grasp exposed a stale motion spline");
     grasp_request.num_grasps = 2;
     const auto grasp_status = direct_planner.plan_grasp(grasp_request);
 
@@ -607,6 +634,16 @@ int main(int argc, char** argv) {
       throw std::runtime_error(
           "grasp planning did not complete goalset, approach, insertion, and lift");
     }
+    if (!direct_planner.get_approach_trajectory() || !direct_planner.get_grasp_trajectory() ||
+        !direct_planner.get_lift_trajectory())
+      throw std::runtime_error("grasp phases did not retain complete splines");
+    const auto approach_spline = direct_planner.get_approach_trajectory()->interpolate(0.01F);
+    std::vector<float> approach_start(info.num_dof);
+    check_cuda(cudaMemcpy(approach_start.data(), approach_spline.velocity,
+                          info.num_dof * sizeof(float), cudaMemcpyDeviceToHost));
+    for (int joint = 0; joint < info.num_dof; ++joint)
+      require_near(approach_start[joint], start_velocity[joint], 1e-4F,
+                   "retained approach start velocity");
     approach_phase.velocity.download(velocity_host.data());
     approach_phase.acceleration.download(acceleration_host.data());
     for (int joint = 0; joint < info.num_dof; ++joint) {

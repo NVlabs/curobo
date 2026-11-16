@@ -15,7 +15,6 @@ from dataclasses import dataclass, field, fields
 from typing import Any, List, Optional
 
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.optim.components.gradient_opt_core import GradientOptCore
 from curobo._src.optim.gradient.line_search_strategy import LineSearchStatus, LineSearchType
@@ -24,7 +23,7 @@ from curobo._src.rollout.rollout_protocol import Rollout
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util.logging import log_and_raise
 from curobo._src.util.tensor_util import shift_buffer
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 
 @get_torch_jit_decorator()
@@ -216,7 +215,7 @@ class ConjugateGradientOpt:
     search, best-solution tracking, and CUDA graph lifecycle.
     """
 
-    @profiler.record_function("conjugate_gradient/init")
+    @get_profiler_decorator("conjugate_gradient/init")
     def __init__(
         self,
         config: ConjugateGradientOptCfg,

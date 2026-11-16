@@ -10,8 +10,6 @@ from typing import List, Optional, Sequence, Union
 # Third Party
 import numpy as np
 import torch
-import torch.autograd.profiler as profiler
-from torch.profiler import record_function
 
 # CuRobo
 from curobo._src.geom.quaternion import (
@@ -38,6 +36,7 @@ from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.tensor import T_BPosition, T_BQuaternion, T_BRotation
 from curobo._src.util.logging import deprecated, log_and_raise
 from curobo._src.util.tensor_util import clone_if_not_none, copy_tensor
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 def _check_pose_optional_float_tensors(
@@ -486,7 +485,7 @@ class Pose(Sequence):
             self.rotation = self.rotation.to(**t_type)
         return self
 
-    @profiler.record_function("pose/get_matrix")
+    @get_profiler_decorator("pose/get_matrix")
     def get_matrix(self, out_matrix: Optional[torch.Tensor] = None):
         full_mat = pose_to_matrix(self.position, self.quaternion, out_matrix)
         return full_mat
@@ -501,7 +500,7 @@ class Pose(Sequence):
     def get_numpy_matrix(self):
         return self.get_matrix().cpu().numpy()
 
-    @profiler.record_function("pose/inverse")
+    @get_profiler_decorator("pose/inverse")
     def inverse(self):
         """Inverse of pose
 
@@ -570,7 +569,7 @@ class Pose(Sequence):
         p_distance = torch.linalg.norm(self.position - other_pose.position, dim=-1)
         return p_distance
 
-    @profiler.record_function("pose/multiply")
+    @get_profiler_decorator("pose/multiply")
     def multiply(self, other_pose: Pose, out_position: Optional[torch.Tensor] = None, out_quaternion: Optional[torch.Tensor] = None):
         if self.shape == other_pose.shape or (
             (self.shape[0] == 1 and other_pose.shape[0] > 1) and len(other_pose.shape) == 2
@@ -618,7 +617,7 @@ class Pose(Sequence):
             gpt_out,
         )
 
-    @record_function("math/pose/transform_points")
+    @get_profiler_decorator("math/pose/transform_points")
     def batch_transform_points(
         self,
         points: torch.Tensor,

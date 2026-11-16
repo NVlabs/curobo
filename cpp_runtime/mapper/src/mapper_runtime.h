@@ -161,6 +161,7 @@ struct MapperBuffers {
   DeviceBuffer instance_removal_block_mask;
 
   DeviceBuffer esdf_site_index;
+  DeviceBuffer esdf_static_site_mask;
   DeviceBuffer esdf_pba_buffer;
   DeviceBuffer esdf_dist_field;
   DeviceBuffer esdf_origin;

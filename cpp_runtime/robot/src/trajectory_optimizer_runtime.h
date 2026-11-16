@@ -22,10 +22,13 @@ enum class OptimizationCondition;
 
 class TrajectoryOptimizerRuntime final {
  public:
+  // Nonzero validation_capacity selects an MPC-owned fixed-timing layout.
+  // Ordinary planning uses the artifact's interpolation capacity and dt.
   TrajectoryOptimizerRuntime(
       std::string artifact_directory,
       const TrajectoryOptimizationConfig& config, const Scene* scene,
-      std::shared_ptr<RobotCollisionModel> collision = nullptr);
+      std::shared_ptr<RobotCollisionModel> collision = nullptr,
+      int validation_capacity = 0, float validation_dt = 0.0F);
   ~TrajectoryOptimizerRuntime();
 
   TrajectoryOptimizerRuntime(const TrajectoryOptimizerRuntime&) = delete;
@@ -44,6 +47,8 @@ class TrajectoryOptimizerRuntime final {
   void optimize(const TrajectoryOptimizationRequest& request) const;
   TrajectoryOptimizationCandidates candidates() const;
   TimeOptTrajectory timeopt_trajectory() const;
+  SplineTrajectory trajectory() const;
+  SplineTrajectory trajectory(const TrajectoryOptimizationRequest &request) const;
   void set_execution_speed_scale(float scale);
   const int32_t *validate(const TrajectoryValidationRequest &request,
                           bool timeopt = false) const;
@@ -150,6 +155,8 @@ class TrajectoryOptimizerRuntime final {
   std::shared_ptr<RobotCollisionModel> collision_;
   std::unique_ptr<RolloutRuntime> rollout_;
   std::unique_ptr<TrajectoryTimeOpt> timeopt_;
+  mutable TrajectoryOptimizationRequest last_trajectory_request_{};
+  mutable bool has_trajectory_result_{false};
   mutable curobo_robot_runtime::DeviceBuffer timeopt_boundaries_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_knot_dt_;
   mutable curobo_robot_runtime::DeviceBuffer timeopt_times_;
@@ -229,6 +236,7 @@ class TrajectoryOptimizerRuntime final {
   mutable curobo_robot_runtime::DeviceBuffer history_rho_;
   mutable curobo_robot_runtime::DeviceBuffer history_y_;
   mutable curobo_robot_runtime::DeviceBuffer history_s_;
+  mutable curobo_robot_runtime::DeviceBuffer history_cross_products_;
   mutable curobo_robot_runtime::DeviceBuffer history_head_;
   mutable curobo_robot_runtime::DeviceBuffer history_count_;
   mutable curobo_robot_runtime::DeviceBuffer curvature_update_valid_;
@@ -347,6 +355,9 @@ class TrajectoryOptimizerRuntime final {
   curobo_robot_runtime::KernelModule prepare_initial_state_kernel_;
   curobo_robot_runtime::KernelModule prepare_search_actions_kernel_;
   curobo_robot_runtime::KernelModule reduce_rollout_cost_kernel_;
+  curobo_robot_runtime::KernelModule reduce_rollout_cost_no_pose_kernel_;
+  std::vector<const curobo_robot_runtime::DeviceBuffer*> cost_reduction_buffers_;
+  std::vector<const curobo_robot_runtime::DeviceBuffer*> cost_reduction_no_pose_buffers_;
   curobo_robot_runtime::KernelModule accumulate_kernel_;
   curobo_robot_runtime::KernelModule finalize_kernel_;
   curobo_robot_runtime::KernelModule line_search_kernel_;

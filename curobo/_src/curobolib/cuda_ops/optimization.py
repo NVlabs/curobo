@@ -246,6 +246,7 @@ class LBFGScu(Function):
         scale_step=False,
         curvature_update_valid=None,
         line_search_status=None,
+        cross_products: torch.Tensor | None = None,
     ):
         if optimization_step_max is None:
             optimization_step_max = step_vec
@@ -281,7 +282,7 @@ class LBFGScu(Function):
                 "optimization_step_max must contain one value per optimization variable: "
                 + f"expected {v_dim}, got {optimization_step_max.numel()}"
             )
-        R = optimization_cu.launch_lbfgs_step(
+        launch_args = (
             step_vec,  # .view(-1),
             candidates,
             candidate_scales,
@@ -307,6 +308,11 @@ class LBFGScu(Function):
             curvature_update_valid,
             line_search_status,
         )
+        if cross_products is None:
+            R = optimization_cu.launch_lbfgs_step(*launch_args)
+        else:
+            check_float32_tensors(device, cross_products=cross_products)
+            R = optimization_cu.launch_lbfgs_vector_free_step(cross_products, *launch_args)
         step_v = R[0].view(step_vec.shape)
 
         # ctx.save_for_backward(batch_spheres, robot_spheres, link_mats, link_sphere_map)

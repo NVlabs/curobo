@@ -9,6 +9,8 @@
 
 #include "curobo_robot_runtime/inertial.h"
 
+#include "curobo_robot_runtime/spline_trajectory.h"
+
 namespace curobo::robot {
 namespace detail {
 class TrajectoryTimeOptRuntime;
@@ -93,6 +95,8 @@ class TrajectoryTimeOpt final {
   int num_dof() const;
   TrajectoryTimeOptResult timeopt(const TrajectoryTimeOptRequest &request) const;
   /** Sample seconds [B,sample_count]; out-of-range times hold the endpoint. */
+  /** Retain one successful seed as a standalone timed spline; checked outside capture. */
+  SplineTrajectory trajectory(int seed = 0, cudaStream_t stream = nullptr) const;
   TrajectoryTimeOptSamples sample(const float *times, cudaStream_t stream = nullptr) const;
   void update_links_inertial(const LinkInertialUpdates &updates);
 

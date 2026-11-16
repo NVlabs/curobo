@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Optional, Union
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 from curobo._src.curobolib.cuda_ops.tensor_checks import (
@@ -35,6 +34,7 @@ from curobo._src.util.cuda_stream_util import (
 )
 from curobo._src.util.logging import log_and_raise, log_info
 from curobo._src.util.state_filter import JointStateFilter
+from curobo._src.util.torch_util import get_profiler_context, get_profiler_decorator
 
 if TYPE_CHECKING:
     # CuRobo
@@ -362,7 +362,7 @@ class RobotStateTransition:
         if state_seq.jerk is not None:
             tensors_to_check["jerk"] = state_seq.jerk
         check_fn(state_seq.position.device, **tensors_to_check)
-        with profiler.record_function("tensor_step"):
+        with get_profiler_context("tensor_step"):
             # forward step with step matrix:
             state_seq = self.tensor_step(
                 start_state_shaped,
@@ -376,7 +376,7 @@ class RobotStateTransition:
         return self.compute_augmented_state(state_seq, idxs_env=idxs_env)
 
     @torch.no_grad()
-    @profiler.record_function("RobotStateTransition/compute_time_scaled_dt_from_action")
+    @get_profiler_decorator("RobotStateTransition/compute_time_scaled_dt_from_action")
     def compute_time_scaled_dt_from_action(
         self,
         start_state: JointState,
@@ -828,7 +828,7 @@ class RobotStateTransition:
         full_position = self._append_locked_dof(position, lock_joint_state.position)
         return JointState.from_position(full_position, joint_names=list(full_joint_names))
 
-    @profiler.record_function("RobotStateTransition/get_full_dof_from_solution")
+    @get_profiler_decorator("RobotStateTransition/get_full_dof_from_solution")
     def get_full_dof_from_solution(self, q_js: JointState) -> JointState:
         """Add degrees of freedom that are locked during optimization.
 

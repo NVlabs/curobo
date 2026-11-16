@@ -15,7 +15,6 @@ from typing import Dict, Optional
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 from curobo._src.cost.criteria_tool_relative_transform import ToolRelativeTransformCriteria
 from curobo._src.cost.criteria_tool_velocity_limit import ToolVelocityLimitCriteria
@@ -46,6 +45,7 @@ from curobo._src.types.tool_pose import GoalToolPose, ToolPose
 from curobo._src.util.cuda_event_timer import CudaEventTimer
 from curobo._src.util.logging import log_and_raise, log_warn
 from curobo._src.util.tensor_util import stable_topk
+from curobo._src.util.torch_util import get_profiler_decorator
 
 
 def _pad_batch_inputs(
@@ -415,7 +415,7 @@ class IKSolver:
     # Goal buffer
     # -------------------------------------------------------------------
 
-    @profiler.record_function("ik_solver/prepare_goal_buffer")
+    @get_profiler_decorator("ik_solver/prepare_goal_buffer")
     def _prepare_goal_buffer(
         self,
         solve_state: SolveState,
@@ -474,7 +474,7 @@ class IKSolver:
             )
         return current_state
 
-    @profiler.record_function("ik_solver/solve_impl")
+    @get_profiler_decorator("ik_solver/solve_impl")
     def _solve_impl(
         self,
         solve_state: SolveState,
@@ -581,7 +581,7 @@ class IKSolver:
         sol = in_solution[i[: s.shape[0]]]
         return sol
 
-    @profiler.record_function("ik_solver/_get_result")
+    @get_profiler_decorator("ik_solver/_get_result")
     def _get_result(
         self,
         opt_result: torch.Tensor,
@@ -603,7 +603,7 @@ class IKSolver:
                 return result
         return self._get_result_torch(opt_result, metrics_result, num_seeds, return_seeds)
 
-    @profiler.record_function("ik_solver/_get_result_torch")
+    @get_profiler_decorator("ik_solver/_get_result_torch")
     def _get_result_torch(
         self,
         opt_result: torch.Tensor,
@@ -846,7 +846,7 @@ class IKSolver:
     # Public solve methods
     # -------------------------------------------------------------------
 
-    @profiler.record_function("ik_solver/solve_pose")
+    @get_profiler_decorator("ik_solver/solve_pose")
     def solve_pose(
         self,
         goal_tool_poses: GoalToolPose,
@@ -867,7 +867,7 @@ class IKSolver:
             use_specialized_result_processor=True,
         )
 
-    @profiler.record_function("ik_solver/solve_goalset")
+    @get_profiler_decorator("ik_solver/solve_goalset")
     def solve_goalset(
         self,
         goal_tool_poses: GoalToolPose,
@@ -1037,7 +1037,7 @@ class IKSolver:
             result = _slice_batch_result(result, actual_batch_size)
         return result
 
-    @profiler.record_function("ik_solver/update_world")
+    @get_profiler_decorator("ik_solver/update_world")
     def update_world(self, scene_cfg: SceneCfg) -> None:
         """Reload the collision model from a new scene configuration."""
         self.scene_collision_checker.load_collision_model(scene_cfg)

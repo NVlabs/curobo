@@ -20,6 +20,10 @@
 #         sweep_reach,
 #     ) -> float32
 #
+#   - is_swept_sphere_outside_obb(obs_set, env_idx, local_idx, inv_t,
+#         local_current, local_previous, local_following, radius_adjusted) -> bool
+#     Return False when conservative local bounds are unavailable.
+#
 # To add a new obstacle type, add its module path here.
 OBSTACLE_SDF_MODULES = [
     "curobo._src.geom.data.data_cuboid",

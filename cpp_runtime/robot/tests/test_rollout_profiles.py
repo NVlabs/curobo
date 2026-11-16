@@ -13,11 +13,13 @@ from curobo._src.robot.dynamics.dynamics import _compute_runtime_threads_per_bat
 
 @pytest.mark.parametrize("topology", [(1, 7, 1), (2, 12, 1), (3, 29, 2)])
 @pytest.mark.parametrize("sm_count", [16, 32, 170])
+@pytest.mark.parametrize("sm_capacity", [100 * 1024, 164 * 1024, 228 * 1024])
 def test_forward_profiles_match_python_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     topology: tuple[int, int, int],
     sm_count: int,
+    sm_capacity: int,
 ) -> None:
     """Dispatch preserves the Python width and packing at batch-policy boundaries."""
     def compile_stub(
@@ -29,7 +31,7 @@ def test_forward_profiles_match_python_policy(
     monkeypatch.setattr(exporter, "_compile_cuda_specializations", compile_stub)
     width, links, levels = topology
     metadata = exporter.build_rollout_forward_profiles(
-        tmp_path, "sm_120", links, links, width, levels, True, True, sm_count
+        tmp_path, "sm_120", links, links, width, levels, True, True, sm_count, sm_capacity
     )
     profiles = [metadata[f"profile_{i}"] for i in range(metadata["count"])]
     assert profiles[-1]["max_states"] == 2**31 - 1
@@ -44,7 +46,8 @@ def test_forward_profiles_match_python_policy(
             width, links, levels, states, sm_count
         )
         config = DynamicsLaunchCfg.calculate_forward_config(
-            states, links, expected_width, policy_sm_count=sm_count
+            states, links, expected_width, policy_sm_count=sm_count,
+            sm_shared_mem_capacity=sm_capacity,
         )
         assert selected["threads_per_batch"] == expected_width
         assert selected["kernel"]["block_dim"] == config.block[0]

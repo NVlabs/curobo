@@ -39,6 +39,11 @@ from curobo._src.state.state_joint import JointState
 from curobo._src.state.state_robot import RobotState
 from curobo._src.types.camera import CameraObservation
 from curobo._src.types.content_path import ContentPath
+from curobo._src.trajectory.trajectory_spline import (
+    SplineTrajectory,
+    TimeOptTiming,
+    UniformTiming,
+)
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.lidar import LidarObservation
 from curobo._src.types.pose import Pose
@@ -62,4 +67,7 @@ __all__ = [
     "ContentPath",
     "DeviceCfg",
     "SplineLayout",
+    "SplineTrajectory",
+    "UniformTiming",
+    "TimeOptTiming",
 ]

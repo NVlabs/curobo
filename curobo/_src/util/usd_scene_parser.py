@@ -29,7 +29,7 @@ from curobo._src.util.usd_util import get_prim_world_pose
 
 try:
     # Third Party
-    from pxr import Usd, UsdGeom
+    from pxr import Gf, Usd, UsdGeom
 except ImportError:
     raise ImportError(
         "usd-core failed to import, install with pip install usd-core"
@@ -161,7 +161,11 @@ def get_sphere_attrs(prim, cache=None, transform=None) -> Sphere:
     return Sphere(name=str(prim.GetPath()), pose=pose, radius=radius, position=pose[:3])
 
 
-def get_mesh_attrs(prim, cache=None, transform=None) -> Optional[Mesh]:
+def get_mesh_attrs(
+    prim: Usd.Prim,
+    cache: Optional[UsdGeom.XformCache] = None,
+    transform: Optional[np.ndarray] = None,
+) -> Optional[Mesh]:
     """Extract Mesh obstacle from a USD Mesh prim.
 
     Args:
@@ -173,37 +177,41 @@ def get_mesh_attrs(prim, cache=None, transform=None) -> Optional[Mesh]:
         Mesh obstacle instance, or None if mesh data is invalid.
     """
     points = list(prim.GetAttribute("points").Get())
-    points = [np.ravel(x) for x in points]
 
     faces = list(prim.GetAttribute("faceVertexIndices").Get())
 
-    face_count = list(prim.GetAttribute("faceVertexCounts").Get())
-    if prim.GetAttribute("xformOp:scale").IsValid():
-        scale = list(prim.GetAttribute("xformOp:scale").Get())
-    else:
-        scale = [1.0, 1.0, 1.0]
-    size = prim.GetAttribute("size").Get()
-    if size is None:
-        size = 1
-    scale = [s * size for s in scale]
-
-    mat, t_scale = get_prim_world_pose(cache, prim)
-    # also get any world scale:
-    scale = t_scale
-
+    face_counts = list(prim.GetAttribute("faceVertexCounts").Get())
+    world_transform = cache.GetLocalToWorldTransform(prim)
+    mat, _ = get_prim_world_pose(cache, prim)
     if transform is not None:
+        # Gf uses row vectors, whereas cuRobo pose matrices use column vectors.
+        world_transform = world_transform * Gf.Matrix4d(transform.T.tolist())
         mat = transform @ mat
-    # compute position and orientation on cuda:
+
+    # Preserve the USD rigid pose and bake only the residual transform. Compose
+    # before converting vertices to float32 so common world translations cancel.
+    residual_transform = world_transform * Gf.Matrix4d(mat.T.tolist()).GetInverse()
+    vertices = np.asarray(
+        [residual_transform.Transform(Gf.Vec3d(*point)) for point in points], dtype=np.float32
+    )
+
+    if world_transform.GetDeterminant3() < 0.0:
+        flipped_faces = []
+        face_start = 0
+        for face_count in face_counts:
+            face_end = face_start + face_count
+            flipped_faces.extend(reversed(faces[face_start:face_end]))
+            face_start = face_end
+        faces = flipped_faces
+
     tensor_mat = torch.as_tensor(mat, device=torch.device("cuda", 0))
     pose = Pose.from_matrix(tensor_mat).tolist()
-
     m = Mesh.from_polygon_faces(
         name=str(prim.GetPath()),
         pose=pose,
-        vertices=points,
+        vertices=vertices.tolist(),
         faces=faces,
-        face_counts=face_count,
-        scale=scale,
+        face_counts=face_counts,
     )
 
     return m

@@ -47,14 +47,21 @@ std::vector<uint8_t> read_binary(const std::filesystem::path& path) {
 }
 
 size_t value_position(const std::string& json, const std::string& key) {
-  const auto key_position = json.find('"' + key + '"');
-  if (key_position == std::string::npos) {
+  const auto quoted_key = '"' + key + '"';
+  auto key_position = json.find(quoted_key);
+  size_t colon = std::string::npos;
+  while (key_position != std::string::npos) {
+    auto candidate = key_position + quoted_key.size();
+    while (candidate < json.size() && std::isspace(static_cast<unsigned char>(json[candidate])))
+      ++candidate;
+    if (candidate < json.size() && json[candidate] == ':') {
+      colon = candidate;
+      break;
+    }
+    key_position = json.find(quoted_key, candidate);
+  }
+  if (colon == std::string::npos)
     throw std::runtime_error("manifest is missing key: " + key);
-  }
-  const auto colon = json.find(':', key_position + key.size() + 2);
-  if (colon == std::string::npos) {
-    throw std::runtime_error("manifest key has no value: " + key);
-  }
   auto position = colon + 1;
   while (position < json.size() && std::isspace(static_cast<unsigned char>(json[position]))) {
     ++position;
@@ -222,7 +229,19 @@ IkKernelManifest extract_ik_kernel(const std::string& kernels,
   if (has_key(object, "max_obstacles")) {
     kernel.max_obstacles = extract_int(object, "max_obstacles");
   }
+  if (has_key(object, "cost_terms")) {
+    kernel.cost_terms = extract_string_array(object, "cost_terms");
+  }
   return kernel;
+}
+
+void validate_lbfgs_kernel(const IkKernelManifest& kernel, int history, size_t dimension) {
+  const bool vector_free = kernel.source == "curobo_lbfgs_vector_free_kernel";
+  if ((!vector_free && kernel.source != "curobo_lbfgs_kernel") || history < 1 || history > 128 ||
+      (vector_free && (history > 30 || dimension < 1 || dimension > 256 ||
+                       kernel.block_dim != 128 || kernel.shared_memory != 0))) {
+    throw std::runtime_error("artifact has invalid L-BFGS operator metadata");
+  }
 }
 
 KernelManifest extract_kinematics_kernel(const std::string& kernels,
@@ -518,6 +537,7 @@ IkManifest load_ik_manifest(const std::string& artifact_dir) {
   manifest.line_search = extract_ik_kernel(kernels, "line_search");
   manifest.line_search_backtracking = extract_ik_kernel(kernels, "line_search_backtracking");
   manifest.lbfgs = extract_ik_kernel(kernels, "lbfgs");
+  validate_lbfgs_kernel(manifest.lbfgs, manifest.history, static_cast<size_t>(manifest.num_dof));
   manifest.collision_cuboid = extract_ik_kernel(kernels, "collision_cuboid");
   manifest.collision_capsule = extract_ik_kernel(kernels, "collision_capsule");
   manifest.collision_cylinder = extract_ik_kernel(kernels, "collision_cylinder");
@@ -627,7 +647,8 @@ IkManifest load_ik_manifest(const std::string& artifact_dir) {
     throw std::runtime_error("robot IK artifact has invalid backward kinematics metadata");
   }
   if (manifest.lbfgs.cubin.empty() || manifest.lbfgs.symbol.empty() ||
-      manifest.lbfgs.source != "curobo_lbfgs_kernel" ||
+      (manifest.lbfgs.source != "curobo_lbfgs_kernel" &&
+       manifest.lbfgs.source != "curobo_lbfgs_vector_free_kernel") ||
       manifest.lbfgs.shared_memory < 0 || manifest.lbfgs.block_dim <= 0 ||
       manifest.line_search.cubin.empty() || manifest.line_search.symbol.empty() ||
       manifest.line_search.source != "curobo_line_search_kernel" ||
@@ -658,7 +679,7 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
 
   TrajectoryOptimizationManifest manifest;
   manifest.schema_version = extract_int(json, "schema_version");
-  if (manifest.schema_version != 23) {
+  if (manifest.schema_version != 25) {
     throw std::runtime_error("unsupported TrajOpt artifact schema; re-export the robot artifact");
   }
 
@@ -749,6 +770,7 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
   manifest.bspline_backward_effort =
       extract_ik_kernel(kernels, "bspline_backward_effort");
   manifest.reduce_rollout_cost = extract_ik_kernel(kernels, "reduce_rollout_cost");
+  manifest.reduce_rollout_cost_no_pose = extract_ik_kernel(kernels, "reduce_rollout_cost_no_pose");
   manifest.time_scaled_dt = extract_ik_kernel(kernels, "time_scaled_dt");
   manifest.cspace = extract_ik_kernel(kernels, "cspace");
   manifest.pose = extract_ik_kernel(kernels, "pose");
@@ -800,6 +822,8 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
   manifest.line_search = extract_ik_kernel(kernels, "line_search");
   manifest.line_search_backtracking = extract_ik_kernel(kernels, "line_search_backtracking");
   manifest.lbfgs = extract_ik_kernel(kernels, "lbfgs");
+  validate_lbfgs_kernel(manifest.lbfgs, manifest.history,
+                        static_cast<size_t>(manifest.num_dof) * static_cast<size_t>(manifest.num_knots));
 
   const auto layout = extract_object(json, "spline_layout");
   manifest.spline_layout = {extract_int(layout, "num_knots"),
@@ -911,6 +935,7 @@ TrajectoryOptimizationManifest load_trajectory_optimization_manifest(
            &manifest.prepare_search_actions,
            &manifest.prepare_search_actions_backtracking,
            &manifest.reduce_rollout_cost,
+           &manifest.reduce_rollout_cost_no_pose,
            &manifest.accumulate,
            &manifest.finalize,
            &manifest.line_search,

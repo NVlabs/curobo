@@ -289,6 +289,10 @@ def launch_rnea_forward(
         num_links,
         threads_per_batch,
         policy_sm_count=policy_sm_count,
+        sm_shared_mem_capacity=int(
+            getattr(device_properties, "shared_memory_per_multiprocessor", 0)
+            or DynamicsLaunchCfg.DEFAULT_SM_SHARED_MEM_CAPACITY
+        ),
     )
 
     # Template on N_LINKS, N_DOF, TPB, and HAS_EXTERNAL_FORCES
@@ -452,6 +456,10 @@ def launch_rnea_backward(
         num_links,
         threads_per_batch,
         policy_sm_count=policy_sm_count,
+        sm_shared_mem_capacity=int(
+            getattr(device_properties, "shared_memory_per_multiprocessor", 0)
+            or DynamicsLaunchCfg.DEFAULT_SM_SHARED_MEM_CAPACITY
+        ),
     )
 
     # Template on N_LINKS, N_DOF, TPB, and HAS_EXTERNAL_FORCES

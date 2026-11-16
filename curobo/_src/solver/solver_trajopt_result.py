@@ -8,7 +8,6 @@ from typing import Optional
 
 # Third Party
 import torch
-import torch.autograd.profiler as profiler
 
 # CuRobo
 import curobo._src.runtime as curobo_runtime
@@ -16,13 +15,14 @@ from curobo._src.rollout.metrics import CostCollection, RolloutMetrics
 from curobo._src.runtime import debug as debug_mode
 from curobo._src.solver.solver_base_result import BaseSolverResult
 from curobo._src.state.state_joint import JointState
+from curobo._src.trajectory.trajectory_spline import SplineTrajectory
 from curobo._src.state.state_joint_trajectory_ops import (
     copy_joint_state_at_batch_seed_indices,
     gather_joint_state_by_seed,
     trim_joint_state_trajectory,
 )
 from curobo._src.util.logging import log_and_raise
-from curobo._src.util.torch_util import get_torch_jit_decorator
+from curobo._src.util.torch_util import get_profiler_decorator, get_torch_jit_decorator
 
 
 @dataclass
@@ -141,9 +141,49 @@ class TrajOptSolverResult(BaseSolverResult):
     #: Native target indices corresponding to user waypoints, excluding the prepended start.
     waypoint_indices: Optional[torch.Tensor] = None
 
+    #: Complete selected cubic paths and matching timing, flattened [batch*seeds].
+    spline_trajectory: Optional[SplineTrajectory] = None
+
+    def get_trajectory(
+        self, batch_index: Optional[int] = None, seed_index: Optional[int] = None
+    ) -> SplineTrajectory:
+        """Return one successful complete spline; ambiguous selection is rejected."""
+        if self.spline_trajectory is None:
+            log_and_raise("No complete cubic spline is available for this result")
+        if self.success is None:
+            log_and_raise("No success mask is available")
+        shape = self.success.shape
+        if len(shape) != 2:
+            log_and_raise("Expected success shape [batch,seeds]")
+        if batch_index is None:
+            if shape[0] != 1:
+                log_and_raise("batch_index is required for a batched result")
+            batch_index = 0
+        if seed_index is None:
+            if shape[1] != 1:
+                log_and_raise("seed_index is required for multiple retained seeds")
+            seed_index = 0
+        if type(batch_index) is not int or type(seed_index) is not int:
+            log_and_raise("Trajectory indices must be integers")
+        if not (0 <= batch_index < shape[0] and 0 <= seed_index < shape[1]):
+            log_and_raise("Trajectory index is out of range")
+        if not bool(self.success[batch_index, seed_index]):
+            log_and_raise("Cannot retrieve an unsuccessful trajectory")
+        index = batch_index * shape[1] + seed_index
+        indices = torch.tensor([index], device=self.success.device, dtype=torch.long)
+        return self.spline_trajectory._select(indices)
+
     def copy_at_batch_indices(self, other: "TrajOptSolverResult", mask: torch.Tensor) -> None:
         """Extend base method to also copy interpolated trajectory fields."""
         super().copy_at_batch_indices(other, mask)
+        if other.spline_trajectory is not None:
+            if self.spline_trajectory is None:
+                self.spline_trajectory = other.spline_trajectory.clone()
+            else:
+                self.spline_trajectory._copy_lanes(
+                    other.spline_trajectory,
+                    mask.reshape(-1).repeat_interleave(self.success.shape[1]),
+                )
         if self.js_solution is not None and other.js_solution is not None:
             for name in ("knot", "knot_dt"):
                 destination = getattr(self.js_solution, name)
@@ -184,7 +224,7 @@ class TrajOptSolverResult(BaseSolverResult):
         motion_time = (horizon - 1) * dt
         return motion_time
 
-    @profiler.record_function("trajopt_solver_result/clone")
+    @get_profiler_decorator("trajopt_solver_result/clone")
     @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def clone(self) -> TrajOptSolverResult:
         if curobo_runtime.debug:
@@ -209,6 +249,9 @@ class TrajOptSolverResult(BaseSolverResult):
                         f"base_clone.seed_rank: {base_clone.seed_rank} >= self.num_seeds: {self.num_seeds}"
                     )
         return TrajOptSolverResult(
+            spline_trajectory=(
+                self.spline_trajectory.clone() if self.spline_trajectory is not None else None
+            ),
             success=base_clone.success,
             solution=base_clone.solution,
             js_solution=base_clone.js_solution,
@@ -263,7 +306,7 @@ class TrajOptSolverResult(BaseSolverResult):
             ),
         )
 
-    @profiler.record_function("trajopt_solver_result/get_interpolated_plan")
+    @get_profiler_decorator("trajopt_solver_result/get_interpolated_plan")
     def get_interpolated_plan(self) -> JointState:
         if self.interpolated_last_tstep is None:
             return self.interpolated_trajectory
@@ -273,12 +316,12 @@ class TrajOptSolverResult(BaseSolverResult):
             self.interpolated_trajectory, 0, self.interpolated_last_tstep[0]
         )
 
-    @profiler.record_function("trajopt_solver_result/process_metrics_and_rank_seeds")
+    @get_profiler_decorator("trajopt_solver_result/process_metrics_and_rank_seeds")
     def process_metrics_and_rank_seeds(self):
         self._process_metrics()
         self._compute_rank()
 
-    @profiler.record_function("trajopt_solver_result/_process_metrics")
+    @get_profiler_decorator("trajopt_solver_result/_process_metrics")
     def _process_metrics(self):
         # get batch size and num seeds:
         batch_size = self.batch_size
@@ -361,7 +404,7 @@ class TrajOptSolverResult(BaseSolverResult):
         self.goalset_index = goalset_index
         self.seed_cost = cost_sum.view(self.batch_size, self.num_seeds)
 
-    @profiler.record_function("trajopt_solver_result/_compute_rank")
+    @get_profiler_decorator("trajopt_solver_result/_compute_rank")
     def _compute_rank(self):
         if self.metrics is None:
             log_and_raise("metrics is not set")
@@ -432,7 +475,7 @@ class TrajOptSolverResult(BaseSolverResult):
 
         return total_cost_reshaped, seed_rank
 
-    @profiler.record_function("trajopt_solver_result/get_topk_seeds")
+    @get_profiler_decorator("trajopt_solver_result/get_topk_seeds")
     @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def get_topk_seeds(self, topk: int) -> TrajOptSolverResult:
         """Get the topk best seeds per problem from the result.
@@ -509,6 +552,8 @@ class TrajOptSolverResult(BaseSolverResult):
         offset = torch.arange(batch_size, device=topk_seeds.device) * self.num_seeds
         offset = offset.view(-1, 1)
         flat_indices = (topk_seeds + offset).view(-1)
+        if self.spline_trajectory is not None:
+            new_result.spline_trajectory = self.spline_trajectory._select(flat_indices)
 
         # Select using flat indices
         selected_flat = solution_flat[flat_indices]
@@ -541,7 +586,7 @@ class TrajOptSolverResult(BaseSolverResult):
 
         return new_result
 
-    @profiler.record_function("trajopt_solver_result/copy_successful_solutions")
+    @get_profiler_decorator("trajopt_solver_result/copy_successful_solutions")
     @get_torch_jit_decorator(only_valid_for_compile=True, slow_to_compile=True)
     def copy_successful_solutions(self, other: TrajOptSolverResult):
         """Copy successful solutions from other result to self.
@@ -552,6 +597,14 @@ class TrajOptSolverResult(BaseSolverResult):
             log_and_raise("success is not set")
         if other.success is None:
             log_and_raise("other.success is not set")
+
+        if other.spline_trajectory is not None:
+            if self.spline_trajectory is None:
+                self.spline_trajectory = other.spline_trajectory.clone()
+            else:
+                self.spline_trajectory._copy_lanes(
+                    other.spline_trajectory, other.success.reshape(-1)
+                )
 
         # get batch indices and seed indices of successful solutions:
         batch_idx, seed_idx = other.success.nonzero(as_tuple=True)  # shape: (num_success, 2)
