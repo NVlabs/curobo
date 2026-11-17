@@ -14,6 +14,8 @@
 
 ### Bug Fixes & Misc.
 
+- Fix mimic-joint offsets on negative axes so active and locked joints match URDF
+  forward kinematics. Re-export affected models for the C++ runtime.
 - Apply joint-limit scales once during robot loading and preserve scaled limits
   when cloning the model.
 - Avoid planner cleanup during interpreter shutdown and safely release initialized

@@ -619,6 +619,68 @@ class TestUrdfRobotParserNegativeAxisJoints:
         assert link_params is not None
         assert link_params.joint_type == JointType.Z_ROT
 
+    @pytest.mark.parametrize(
+        "joint_type, axis, expected_type, multiplier, offset",
+        [
+            ("revolute", "0 0 -1", JointType.Z_ROT, -0.676, 0.149),
+            ("prismatic", "0 -1 0", JointType.Y_PRISM, -0.676, 0.149),
+            # Mimic tag without multiplier/offset uses the URDF defaults (1, 0).
+            ("revolute", "0 -1 0", JointType.Y_ROT, None, None),
+        ],
+    )
+    def test_negative_axis_mimic_joint_offset(
+        self, tmp_path, joint_type, axis, expected_type, multiplier, offset
+    ):
+        """A mimic offset on a negative-axis joint must flip sign together with the multiplier.
+
+        URDF: the mimic joint moves by ``multiplier * q + offset`` along ``axis``. cuRobo stores
+        the positive axis and evaluates ``joint_offset[0] * q + joint_offset[1]``, so both terms
+        must be negated to describe the same motion.
+        """
+        mimic_attrs = ""
+        if multiplier is None:
+            multiplier, offset = 1.0, 0.0
+        else:
+            mimic_attrs = f'multiplier="{multiplier}" offset="{offset}"'
+        urdf_content = f"""<?xml version="1.0"?>
+<robot name="test_robot">
+  <link name="base_link"/>
+  <link name="active_link"/>
+  <link name="mimic_link"/>
+
+  <joint name="active_joint" type="{joint_type}">
+    <parent link="base_link"/>
+    <child link="active_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="100" lower="-1.0" upper="1.0" velocity="2.0"/>
+  </joint>
+
+  <joint name="mimic_joint" type="{joint_type}">
+    <parent link="active_link"/>
+    <child link="mimic_link"/>
+    <origin xyz="0.05 0 0" rpy="0 0 0"/>
+    <axis xyz="{axis}"/>
+    <limit effort="100" lower="-3.0" upper="3.0" velocity="10.0"/>
+    <mimic joint="active_joint" {mimic_attrs}/>
+  </joint>
+</robot>"""
+
+        urdf_path = tmp_path / "neg_axis_mimic.urdf"
+        urdf_path.write_text(urdf_content)
+
+        parser = UrdfRobotParser(urdf_path=str(urdf_path))
+        link_params = parser.get_link_parameters("mimic_link", base=False)
+
+        assert link_params.joint_type == expected_type
+        assert link_params.joint_name == "active_joint"
+        assert link_params.mimic_joint_name == "mimic_joint"
+        scale, stored_offset = link_params.joint_offset
+        for q in [-0.8, 0.0, 0.5]:
+            # Displacement along the positive axis that matches the URDF mimic joint.
+            expected = -(multiplier * q + offset)
+            assert scale * q + stored_offset == pytest.approx(expected)
+
 
 class TestUrdfRobotParserJointTypes:
     """Test different joint type conversions."""
