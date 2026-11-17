@@ -25,12 +25,9 @@ import warp as wp
 import curobo._src.runtime as curobo_runtime
 from curobo._src.geom.collision.wp_collision_kernel import get_tiled_collision_kernel
 from curobo._src.geom.collision.wp_sweep_collision_kernel import (
-    _mesh_obstacle_swept_collision,
-    _mesh_reduce_obstacle_contributions,
-    get_tiled_swept_collision_kernel,
+    launch_swept_collision,
 )
 from curobo._src.geom.data.data_collision_layers import collision_layers_to_warp
-from curobo._src.geom.data.data_mesh import MeshData
 from curobo._src.util.warp import get_warp_device_stream
 
 if TYPE_CHECKING:
@@ -268,94 +265,11 @@ class SweptSphereObstacleCollision(torch.autograd.Function):
             num_sms = curobo_runtime.resolve_kernel_launch_sm_count(actual_sms)
             block_dim = select_collision_block_dim(b * h, n, num_sms, True)
             for data_idx, data in enumerate(valid_data):
-                if isinstance(data, MeshData):
-                    # Full generated mesh implementation for every native mesh shape.
-                    obs = data.to_warp()
-                    layers = collision_layers_to_warp(data.obstacle_layers)
-                    overwrite = wp.uint8(data_idx == 0)
-                    if b * h <= 4 * actual_sms:
-                        kernel = get_tiled_swept_collision_kernel(
-                            data.max_n, enable_speed_metric, h, n, 64, mesh=True
-                        )
-                        wp.launch_tiled(
-                            kernel,
-                            dim=(b * h,),
-                            inputs=[
-                                obs,
-                                spheres_wp,
-                                weight_wp,
-                                eta_wp,
-                                speed_dt_wp,
-                                env_idx_wp,
-                                out_cost_wp,
-                                out_grad_wp,
-                                use_multi_env_wp,
-                                overwrite,
-                                sum_distance_wp,
-                                layers,
-                                mask_wp,
-                            ],
-                            stream=stream,
-                            device=device,
-                            block_dim=64,
-                        )
-                    else:
-                        scratch = torch.empty(
-                            (b * h * data.max_n * n, 4),
-                            dtype=torch.float32,
-                            device=query_spheres.device,
-                        )
-                        scratch_wp = wp.from_torch(scratch, dtype=wp.vec4)
-                        wp.launch_tiled(
-                            _mesh_obstacle_swept_collision,
-                            dim=(b * h * data.max_n,),
-                            inputs=[
-                                obs,
-                                spheres_wp,
-                                eta_wp,
-                                env_idx_wp,
-                                scratch_wp,
-                                use_multi_env_wp,
-                                layers,
-                                mask_wp,
-                                h,
-                                n,
-                            ],
-                            stream=stream,
-                            device=device,
-                            block_dim=64,
-                        )
-                        wp.launch_tiled(
-                            _mesh_reduce_obstacle_contributions,
-                            dim=(b * h,),
-                            inputs=[
-                                obs,
-                                spheres_wp,
-                                weight_wp,
-                                speed_dt_wp,
-                                env_idx_wp,
-                                scratch_wp,
-                                out_cost_wp,
-                                out_grad_wp,
-                                use_multi_env_wp,
-                                overwrite,
-                                sum_distance_wp,
-                                mask_wp,
-                                wp.uint8(bool(enable_speed_metric)),
-                                h,
-                                n,
-                            ],
-                            stream=stream,
-                            device=device,
-                            block_dim=64,
-                        )
-                    continue
-                kernel = get_tiled_swept_collision_kernel(
-                    data.max_n, enable_speed_metric, h, n, block_dim
-                )
-                wp.launch_tiled(
-                    kernel,
-                    dim=(b * h,),
+                launch_swept_collision(
+                    data,
+                    query_spheres=query_spheres,
+                    enable_speed_metric=enable_speed_metric,
+                    actual_sms=actual_sms,
                     inputs=[
                         data.to_warp(),
                         spheres_wp,

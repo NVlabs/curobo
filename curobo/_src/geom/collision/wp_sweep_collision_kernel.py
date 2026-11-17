@@ -13,9 +13,10 @@ from functools import lru_cache
 from typing import Any
 
 # Third Party
+import torch
 import warp as wp
 
-from curobo._src.geom.data.data_mesh import MeshDataWarp
+from curobo._src.geom.data.data_mesh import MeshData, MeshDataWarp
 from curobo._src.geom.data.data_obstacle_query import (
     compute_local_sdf_with_grad,
     compute_swept_sphere_clearance_lower_bound,
@@ -878,3 +879,112 @@ def get_tiled_swept_collision_kernel(
                     distance[state_idx] += state_cost
 
     return tiled_swept_collision_kernel
+
+
+def launch_swept_collision(
+    data: Any,
+    *,
+    query_spheres: torch.Tensor,
+    inputs: list[Any],
+    enable_speed_metric: bool,
+    actual_sms: int,
+    block_dim: int,
+    stream: wp.Stream,
+    device: Any,
+) -> None:
+    """Launch swept collision for one obstacle set using its execution strategy.
+
+    ``inputs`` follows the existing tiled kernel's argument order. Mesh calls
+    own their fixed-width scheduling and temporary contributions here; callers
+    only provide the common collision inputs and accumulation mode.
+    """
+    b, h, n, _ = query_spheres.shape
+    if isinstance(data, MeshData):
+        if b * h <= 4 * actual_sms:
+            kernel = get_tiled_swept_collision_kernel(
+                data.max_n, enable_speed_metric, h, n, 64, mesh=True
+            )
+            wp.launch_tiled(
+                kernel,
+                dim=(b * h,),
+                inputs=inputs,
+                stream=stream,
+                device=device,
+                block_dim=64,
+            )
+        else:
+            (
+                obs,
+                spheres_wp,
+                weight_wp,
+                eta_wp,
+                speed_dt_wp,
+                env_idx_wp,
+                out_cost_wp,
+                out_grad_wp,
+                use_multi_env_wp,
+                overwrite,
+                sum_distance_wp,
+                layers,
+                mask_wp,
+            ) = inputs
+            scratch = torch.empty(
+                (b * h * data.max_n * n, 4),
+                dtype=torch.float32,
+                device=query_spheres.device,
+            )
+            scratch_wp = wp.from_torch(scratch, dtype=wp.vec4)
+            wp.launch_tiled(
+                _mesh_obstacle_swept_collision,
+                dim=(b * h * data.max_n,),
+                inputs=[
+                    obs,
+                    spheres_wp,
+                    eta_wp,
+                    env_idx_wp,
+                    scratch_wp,
+                    use_multi_env_wp,
+                    layers,
+                    mask_wp,
+                    h,
+                    n,
+                ],
+                stream=stream,
+                device=device,
+                block_dim=64,
+            )
+            wp.launch_tiled(
+                _mesh_reduce_obstacle_contributions,
+                dim=(b * h,),
+                inputs=[
+                    obs,
+                    spheres_wp,
+                    weight_wp,
+                    speed_dt_wp,
+                    env_idx_wp,
+                    scratch_wp,
+                    out_cost_wp,
+                    out_grad_wp,
+                    use_multi_env_wp,
+                    overwrite,
+                    sum_distance_wp,
+                    mask_wp,
+                    wp.uint8(bool(enable_speed_metric)),
+                    h,
+                    n,
+                ],
+                stream=stream,
+                device=device,
+                block_dim=64,
+            )
+        return
+
+    kernel = get_tiled_swept_collision_kernel(data.max_n, enable_speed_metric, h, n, block_dim)
+    wp.launch_tiled(
+        kernel,
+        dim=(b * h,),
+        inputs=inputs,
+        stream=stream,
+        device=device,
+        block_dim=block_dim,
+    )
