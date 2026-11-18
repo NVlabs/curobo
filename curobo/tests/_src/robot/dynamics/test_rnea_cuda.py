@@ -269,6 +269,27 @@ def test_prismatic_gradients_match_numpy(
         np.testing.assert_allclose(gradient, reference, atol=1e-4, rtol=1e-4)
 
 
+def test_link_inertials_outside_the_tree_match_the_closed_form(lumped_inertial_robot) -> None:
+    """Mass the loader folds in from links outside the tree reaches the RNEA torque."""
+    from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
+
+    robot = lumped_inertial_robot
+    device_cfg = DeviceCfg()
+    kp = KinematicsCfg.from_data_dict(
+        {"urdf_path": str(robot.urdf_path), "base_link": "base_link", "tool_frames": ["arm_link"]},
+        device_cfg=device_cfg,
+    ).kinematics_config
+    q = np.linspace(-2.5, 2.5, 11, dtype=np.float32)[:, None]
+    qdd = np.linspace(-8.0, 8.0, 11, dtype=np.float32)[:, None]
+    tau = _run_cuda_rnea(kp, device_cfg, q, np.zeros_like(q), qdd)[:, 0]
+
+    gravity, com, qs, qdds = 9.81, robot.com, q[:, 0].astype(np.float64), qdd[:, 0]
+    # about y, COM c rotated by Ry(q): height z = -c_x sin q + c_z cos q, V = m g z
+    d_potential = robot.mass * gravity * (-com[0] * np.cos(qs) - com[2] * np.sin(qs))
+    inertia_yy = robot.inertia[1, 1] + robot.mass * (com[0] ** 2 + com[2] ** 2)
+    np.testing.assert_allclose(tau, inertia_yy * qdds + d_potential, atol=2e-4, rtol=1e-5)
+
+
 
 # ---------------------------------------------------------------------------
 # CUDA forward vs NumPy reference

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+import numpy as np
 import pytest
 import torch
 
@@ -251,3 +252,32 @@ def test_cspace_lock_updates_non_fixed_names_when_tree_lock_exists(monkeypatch):
         "active_joint_2",
     ]
     assert "active_joint_2" not in robot_generator.joint_names
+
+
+def test_link_inertials_outside_the_tree_are_lumped_into_their_tree_link(lumped_inertial_robot):
+    """Links the tree leaves out keep their mass: it is folded into the nearest tree link."""
+    robot = lumped_inertial_robot
+    kp = KinematicsLoader(
+        _cpu_loader_cfg(
+            {
+                "urdf_path": str(robot.urdf_path),
+                "base_link": "base_link",
+                "tool_frames": ["arm_link"],
+            }
+        )
+    ).kinematics_config
+    names = kp.link_name_to_idx_map
+    assert not {"camera_link", "mount_link", "bar_link"} & set(names)  # outside the tree
+    mc = kp.link_masses_com[names["arm_link"]].double().numpy()
+    six = kp.link_inertias[names["arm_link"], :6].double().numpy()
+    assert mc[3] == pytest.approx(robot.mass, rel=1e-6)
+    np.testing.assert_allclose(mc[:3], robot.com, atol=1e-6, err_msg="center of mass (link frame)")
+    np.testing.assert_allclose(
+        six,
+        robot.inertia[[0, 1, 2, 0, 0, 1], [0, 1, 2, 1, 2, 2]],
+        atol=1e-6,
+        err_msg="inertia about the COM, link axes [ixx, iyy, izz, ixy, ixz, iyz]",
+    )
+    # a tree link with nothing fixed to it keeps its own URDF values
+    base = kp.link_masses_com[names["base_link"]].double().numpy()
+    np.testing.assert_allclose(base, [0.0, 0.0, 0.0, 5.0], atol=1e-6)
