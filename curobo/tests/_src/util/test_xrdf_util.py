@@ -195,6 +195,24 @@ class TestConvertXrdfToCurobo:
         assert "lock_joints" in kin
         assert "joint3" in kin["lock_joints"]
 
+    def test_convert_xrdf_cspace_order_differs_from_urdf(
+        self, sample_xrdf_dict, mock_content_path, mock_kinematics_parser
+    ):
+        """Default positions stay with their joints when cspace order differs from URDF order."""
+        sample_xrdf_dict["cspace"]["joint_names"] = ["joint2", "joint1"]
+        sample_xrdf_dict["cspace"]["acceleration_limits"] = [1.5, 1.0]
+        sample_xrdf_dict["cspace"]["jerk_limits"] = [15.0, 10.0]
+        sample_xrdf_dict["default_joint_positions"] = {"joint1": 0.25, "joint2": 0.5}
+        with patch(
+            "curobo._src.util.xrdf_util.UrdfRobotParser", return_value=mock_kinematics_parser
+        ):
+            result = convert_xrdf_to_curobo(mock_content_path, sample_xrdf_dict)
+
+        cspace = result["robot_cfg"]["kinematics"]["cspace"]
+        assert cspace["joint_names"] == ["joint2", "joint1", "joint3"]
+        assert cspace["default_joint_position"] == [0.5, 0.25, 0.0]
+        assert cspace["max_acceleration"][:2] == [1.5, 1.0]
+
     def test_convert_xrdf_format_version_warning(self, sample_xrdf_dict, mock_content_path, mock_kinematics_parser):
         """Test warning when format_version > 1.0."""
         sample_xrdf_dict["format_version"] = 2.0
