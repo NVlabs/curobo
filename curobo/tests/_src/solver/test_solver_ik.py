@@ -9,6 +9,7 @@ import torch
 
 # CuRobo
 import curobo._src.solver.solver_ik as solver_ik_module
+from curobo._src.geom.types import Cuboid, SceneCfg
 from curobo._src.robot.kinematics.kinematics import KinematicsState
 from curobo._src.rollout.metrics import CostCollection, CostsAndConstraints, RolloutMetrics
 from curobo._src.solver.solver_ik import IKSolver
@@ -646,6 +647,62 @@ class TestIKSolverSolvePose:
 
 class TestIKSolverSolvePoseBatch:
     """Test IKSolver.solve_pose with batch_size > 1."""
+
+    @pytest.mark.parametrize(
+        ("self_collision_check", "blocked_scene", "run_optimizer", "expected_success"),
+        [
+            (False, False, False, True),
+            (False, False, True, True),
+            (True, False, False, False),
+            (False, True, False, False),
+        ],
+        ids=["disabled", "disabled_with_optimizer", "enabled", "world_collision"],
+    )
+    def test_self_collision_setting_controls_own_fk_goal_validation(
+        self,
+        cuda_device_cfg: DeviceCfg,
+        self_collision_check: bool,
+        blocked_scene: bool,
+        run_optimizer: bool,
+        expected_success: bool,
+    ) -> None:
+        """Exact self-colliding IK seeds succeed only when permitted, including graph replay."""
+        scene = SceneCfg(cuboid=[Cuboid(
+            name="obstacle",
+            dims=[5.0, 5.0, 5.0] if blocked_scene else [0.1, 0.1, 0.1],
+            pose=[0.0 if blocked_scene else 3.0, 0, 0, 1, 0, 0, 0],
+        )])
+        q = cuda_device_cfg.to_device([
+            [1.19, 1.19, -0.28, -2.91, -2.14, 3.41, -2.17],
+            [-1.6, -0.89, 2.88, -2.88, 0.43, 1.7, -0.82],
+            [1.1, 1.29, -0.52, -2.89, -0.91, 3.04, 0.65],
+            [1.33, 1.68, 0.15, -2.57, -0.99, 1.84, 0.63],
+            [0.14, 0.77, 1.71, -3.07, -0.43, 1.37, -2.49],
+            [-2.07, 1.52, 0.22, -2.92, 0.79, 0.1, -0.36],
+            [1.39, -0.01, -1.52, -2.96, 0.38, 1.23, -2.59],
+            [1.23, -1.1, 2.75, -2.69, -1.28, 3.37, -2.19],
+        ])
+        solver = IKSolver(IKSolverCfg.create(
+            robot="franka.yml",
+            scene_model=scene,
+            device_cfg=cuda_device_cfg,
+            self_collision_check=self_collision_check,
+            num_seeds=4,
+            max_batch_size=q.shape[0],
+            use_cuda_graph=True,
+        ))
+        try:
+            state = JointState.from_position(q, joint_names=solver.joint_names)
+            tool = solver.tool_frames[0]
+            pose = solver.kinematics.compute_kinematics(state).tool_poses.get_link_pose(tool)
+            goal = GoalToolPose.from_poses({tool: pose}, num_goalset=1)
+            seeds = q.unsqueeze(1).repeat(1, 4, 1)
+            for _ in range(2):
+                result = solver.solve_pose(goal, seed_config=seeds, run_optimizer=run_optimizer)
+                assert torch.all(result.success == expected_success)
+                assert torch.all(result.position_error < 1e-5)
+        finally:
+            solver.destroy()
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_solve_pose_batch(self, cuda_device_cfg):

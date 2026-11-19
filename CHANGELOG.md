@@ -14,6 +14,7 @@
 
 ### Bug Fixes & Misc.
 
+- Honor `self_collision_check=False` during solver validation as well as optimization.
 - Preserve omitted URDF link inertials at configured locked positions and retain
   moving mimic branches in the dynamics model. Re-export affected C++ models.
 - Fix mimic-joint offsets on negative axes so active and locked joints match URDF
