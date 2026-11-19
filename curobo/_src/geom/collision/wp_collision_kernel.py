@@ -14,6 +14,9 @@ from typing import Any
 
 # Third Party
 import warp as wp
+from packaging.version import Version
+
+from curobo._src.geom.collision.wp_collision_cuboid import get_cuboid_collision_kernel
 
 from curobo._src.geom.collision.wp_collision_common import (
     evaluate_collision_sample,
@@ -35,6 +38,8 @@ def get_tiled_collision_kernel(
     horizon: int,
     num_spheres: int,
     block_dim: int,
+    *,
+    cuboid: bool = False,
 ) -> Any:
     """Return the tiled collision kernel for any sphere count.
 
@@ -51,6 +56,10 @@ def get_tiled_collision_kernel(
         raise ValueError("num_spheres must be positive")
     if block_dim not in _SUPPORTED_STATE_BLOCK_DIMS:
         raise ValueError("block_dim must be one of 32, 64, 128, 256, 512, or 1024")
+
+    # The cuboid path uses masked tile scatter, qualified with Warp 1.18.
+    if cuboid and block_dim <= 128 and Version(wp.__version__) >= Version("1.18.0"):
+        return get_cuboid_collision_kernel(max_n_obs, horizon, num_spheres, block_dim)
 
     max_obstacles = wp.constant(wp.int32(max_n_obs))
     fixed_horizon = wp.constant(wp.int32(horizon))

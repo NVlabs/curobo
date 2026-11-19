@@ -667,10 +667,18 @@ def compute_local_sdf_with_grad(
     """
     flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
 
-    # Load half-extents as scalars (avoid vec3 construction)
-    hx = obs_set.dims[flat_idx, 0] * 0.5
-    hy = obs_set.dims[flat_idx, 1] * 0.5
-    hz = obs_set.dims[flat_idx, 2] * 0.5
+    dims = wp.vec3(obs_set.dims[flat_idx, 0], obs_set.dims[flat_idx, 1], obs_set.dims[flat_idx, 2])
+    return cuboid_distance_gradient(dims, local_pt, query_distance, False)
+
+
+@wp.func
+def cuboid_distance_gradient(
+    full_dims: wp.vec3, local_pt: wp.vec3, query_distance: wp.float32, active_only: wp.bool
+) -> wp.vec4:
+    """Evaluate box distance and local gradient, optionally omitting inactive gradients."""
+    hx = full_dims[0] * 0.5
+    hy = full_dims[1] * 0.5
+    hz = full_dims[2] * 0.5
 
     # Signed distance components along each axis
     qx = wp.abs(local_pt[0]) - hx
@@ -684,6 +692,9 @@ def compute_local_sdf_with_grad(
 
     outside_dist = wp.sqrt(cx * cx + cy * cy + cz * cz)
     sdf = outside_dist + wp.min(wp.max(qx, wp.max(qy, qz)), 0.0)
+
+    if active_only and not (query_distance - sdf > 0.0):
+        return wp.vec4(sdf, 0.0, 0.0, 0.0)
 
     # Gradient computation using scalars (single vec4 construction at end)
     gx = wp.float32(0.0)
