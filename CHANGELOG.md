@@ -14,6 +14,8 @@
 
 ### Bug Fixes & Misc.
 
+- Preserve omitted URDF link inertials at configured locked positions and retain
+  moving mimic branches in the dynamics model. Re-export affected C++ models.
 - Fix mimic-joint offsets on negative axes so active and locked joints match URDF
   forward kinematics. Re-export affected models for the C++ runtime.
 - Apply joint-limit scales once during robot loading and preserve scaled limits

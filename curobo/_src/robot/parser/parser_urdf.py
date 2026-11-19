@@ -346,14 +346,15 @@ class UrdfRobotParser(RobotParser):
             and link_data.inertial.mass > 0.0
         )
 
-    def get_parent_at_zero(self, link_name: str) -> Optional[Tuple[str, np.ndarray]]:
-        """Parent of a link, and the link's pose in it with its joint at zero.
-
-        Zero is the joint's own zero position; a mimic joint sits at its offset (its active
-        joint at zero).
+    def get_parent_transform(
+        self, link_name: str, joint_positions: Dict[str, float]
+    ) -> Optional[Tuple[str, np.ndarray]]:
+        """Return the parent and relative pose at the supplied URDF joint positions.
 
         Args:
             link_name: Name of the link.
+            joint_positions: Independent joint positions; unspecified joints use zero.
+                Mimic positions include their multiplier and offset.
 
         Returns:
             Optional[Tuple[str, np.ndarray]]: The parent link's name and the link's pose in it
@@ -364,7 +365,12 @@ class UrdfRobotParser(RobotParser):
             return None
         joint = self._robot.joint_map[parent_data["joint_name"]]
         pose = np.array(joint.origin if joint.origin is not None else np.eye(4), dtype=np.float64)
-        value = joint.mimic.offset if joint.mimic is not None and joint.mimic.offset else 0.0
+        value = joint_positions.get(joint.name, 0.0)
+        if joint.mimic is not None:
+            value = (
+                joint.mimic.multiplier * joint_positions.get(joint.mimic.joint, 0.0)
+                + joint.mimic.offset
+            )
         if value != 0.0 and joint.axis is not None:
             axis = np.asarray(joint.axis, dtype=np.float64)
             motion = np.eye(4)

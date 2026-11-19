@@ -6,7 +6,10 @@
 Validates the CUDA kernel output against the NumPy reference and Pinocchio.
 """
 
+import copy
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -283,11 +286,101 @@ def test_link_inertials_outside_the_tree_match_the_closed_form(lumped_inertial_r
     qdd = np.linspace(-8.0, 8.0, 11, dtype=np.float32)[:, None]
     tau = _run_cuda_rnea(kp, device_cfg, q, np.zeros_like(q), qdd)[:, 0]
 
-    gravity, com, qs, qdds = 9.81, robot.com, q[:, 0].astype(np.float64), qdd[:, 0]
+    gravity, com, qs, qdds = 9.81, robot.com, q[:, 0], qdd[:, 0]
     # about y, COM c rotated by Ry(q): height z = -c_x sin q + c_z cos q, V = m g z
     d_potential = robot.mass * gravity * (-com[0] * np.cos(qs) - com[2] * np.sin(qs))
     inertia_yy = robot.inertia[1, 1] + robot.mass * (com[0] ** 2 + com[2] ** 2)
     np.testing.assert_allclose(tau, inertia_yy * qdds + d_potential, atol=2e-4, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("branch_mode", "axis"),
+    [
+        ("fixed", "0 0 1"),
+        ("locked", "0 0 1"),
+        ("default_locked", "0 0 1"),
+        ("mimic", "0 1 0"),
+        ("mimic", "0 -1 0"),
+        ("locked_prismatic", "0 -1 0"),
+        ("mimic_locked_source", "0 -1 0"),
+        ("mimic_locked_parent", "0 1 0"),
+    ],
+    ids=[
+        "fixed", "locked", "default_locked", "mimic_positive", "mimic_negative",
+        "locked_prismatic", "mimic_locked_source", "mimic_locked_parent",
+    ],
+)
+def test_inertial_branch_dynamics_do_not_depend_on_tool_frames(
+    lumped_inertial_robot: Any, branch_mode: str, axis: str
+) -> None:
+    """Omitting a branch's tool frame preserves its locked or mimic dynamics."""
+    from curobo._src.robot.kinematics.kinematics_cfg import KinematicsCfg
+
+    tree = ET.parse(lumped_inertial_robot.urdf_path)
+    root = tree.getroot()
+    bar = root.find("joint[@name='bar']")
+    bar.find("axis").set("xyz", axis)
+    if branch_mode == "fixed":
+        bar.set("type", "fixed")
+    elif branch_mode.startswith("mimic"):
+        driver = "source" if branch_mode == "mimic_locked_source" else "swing"
+        ET.SubElement(bar, "mimic", joint=driver, multiplier="2", offset="0.2")
+    elif branch_mode == "locked_prismatic":
+        bar.set("type", "prismatic")
+
+    joint_names, default_position, locks = ["swing"], [0.0], {}
+    locked = branch_mode in ("locked", "default_locked", "locked_prismatic")
+    if locked:
+        joint_names.append("bar")
+        default_position.append(0.7)
+        if branch_mode != "default_locked":
+            locks["bar"] = 0.7
+    if branch_mode in ("mimic_locked_source", "mimic_locked_parent"):
+        joint_names.append("source")
+        default_position.append(0.7)
+        locks["source"] = 0.7
+        ET.SubElement(root, "link", name="source_link")
+        source = ET.SubElement(root, "joint", name="source", type="revolute")
+        parent = "base_link" if branch_mode == "mimic_locked_source" else "arm_link"
+        ET.SubElement(source, "parent", link=parent)
+        ET.SubElement(source, "child", link="source_link")
+        ET.SubElement(source, "axis", xyz="0 0 1")
+        ET.SubElement(source, "limit", lower="-1", upper="1", velocity="1", effort="10")
+        if branch_mode == "mimic_locked_parent":
+            bar.find("parent").set("link", "source_link")
+    tree.write(lumped_inertial_robot.urdf_path)
+
+    config = {
+        "urdf_path": str(lumped_inertial_robot.urdf_path),
+        "base_link": "base_link",
+        "tool_frames": ["arm_link"],
+        "load_collision_spheres": False,
+        "cspace": {
+            "joint_names": joint_names,
+            "default_joint_position": default_position,
+            "max_acceleration": 10.0,
+            "max_jerk": 500.0,
+        },
+    }
+    if locks:
+        config["lock_joints"] = locks
+    reference_config = copy.deepcopy(config)
+    reference_config["tool_frames"].append("bar_link")
+    if locked:
+        reference_config["lock_joints"] = {"bar": 0.7}
+
+    device_cfg = DeviceCfg()
+    params = KinematicsCfg.from_data_dict(config, device_cfg=device_cfg).kinematics_config
+    reference = KinematicsCfg.from_data_dict(
+        reference_config, device_cfg=device_cfg
+    ).kinematics_config
+    assert params.joint_names == reference.joint_names == ["swing"]
+    q = np.linspace(-0.8, 0.8, 11, dtype=np.float32)[:, None]
+    qd = np.linspace(-0.5, 0.5, 11, dtype=np.float32)[:, None]
+    qdd = np.linspace(-2.0, 2.0, 11, dtype=np.float32)[:, None]
+    actual = _run_cuda_rnea(params, device_cfg, q, qd, qdd)
+    expected = _run_cuda_rnea(reference, device_cfg, q, qd, qdd)
+    np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=1e-5)
 
 
 

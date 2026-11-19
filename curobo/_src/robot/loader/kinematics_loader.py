@@ -260,12 +260,60 @@ class KinematicsLoader(KinematicsLoaderCfg):
             if i not in chain_link_names:
                 self._add_body_to_tree(i, base=False)
                 chain_link_names.append(i)
-        self._lump_links_outside_tree()
+        joint_positions: Dict[str, float] = {}
+        if (
+            not self.load_collision_spheres
+            and self.cspace is not None
+            and self.cspace.default_joint_position is not None
+        ):
+            joint_positions.update(
+                zip(
+                    self.cspace.joint_names,
+                    self.cspace.default_joint_position.view(-1).tolist(),
+                    strict=True,
+                )
+            )
+        joint_positions.update(self.lock_joints or {})
+        self._retain_inertial_mimic_branches(chain_link_names, joint_positions)
+        self._lump_links_outside_tree(joint_positions)
 
         self.non_fixed_joint_names = self.joint_names.copy()
         return chain_link_names
 
-    def _lump_links_outside_tree(self):
+    def _retain_inertial_mimic_branches(
+        self, chain_link_names: List[str], joint_positions: Dict[str, float]
+    ) -> None:
+        """Keep physical mimic motion driven by modeled joints without adding active DOFs."""
+        parser = self._kinematics_parser
+        modeled_joints = set(self.joint_names)
+        for link_name in parser._parent_map:
+            if link_name in self._name_to_idx_map or not parser.has_link_mass(link_name):
+                continue
+            path = []
+            name = link_name
+            while name not in self._name_to_idx_map and name in parser._parent_map:
+                body = parser.get_link_parameters(name)
+                path.append(body)
+                name = body.parent_link_name
+            if name not in self._name_to_idx_map:
+                continue
+            moving = [
+                i
+                for i, body in enumerate(path)
+                if body.joint_type != JointType.FIXED and body.joint_name in modeled_joints
+            ]
+            if not moving:
+                continue
+            for body in reversed(path[min(moving) :]):
+                if body.joint_type != JointType.FIXED and body.joint_name not in modeled_joints:
+                    _, transform = parser.get_parent_transform(body.link_name, joint_positions)
+                    body = dataclasses.replace(
+                        body, joint_type=JointType.FIXED, fixed_transform=transform[:3, :4]
+                    )
+                self._add_body_to_tree(body.link_name, link_params=body)
+                chain_link_names.append(body.link_name)
+
+    def _lump_links_outside_tree(self, joint_positions: Dict[str, float]) -> None:
         """Fold the mass of links left out of the tree into the tree link they hang from.
 
         The tree holds only the links on a chain to a tool frame, a collision link or an extra
@@ -274,11 +322,9 @@ class KinematicsLoader(KinematicsLoaderCfg):
         to the nearest tree link above it: mass sum, combined center of mass, and the inertia
         about it (parallel-axis theorem, rotated into the tree link's frame).
 
-        Joints between the link and the tree are taken at zero (a mimic joint at its offset):
-        exact through fixed joints, and through movable joints the tree does not model when the
-        mechanism sits at its zero pose (a passive linkage whose driving joint is locked at
-        zero). Where it moves with the tree's joints, its mass is kept at its zero-pose position
-        on the tree link, which is the approximation this makes.
+        Fixed and configured locked joints use their resolved transforms. Moving mimic
+        branches driven by modeled joints have already been retained in the tree.
+        Other unmodeled movable joints still use the zero-pose approximation.
         """
 
         def matrix(i: np.ndarray) -> np.ndarray:  # [ixx, iyy, izz, ixy, ixz, iyz] -> 3x3
@@ -289,11 +335,11 @@ class KinematicsLoader(KinematicsLoaderCfg):
         for link_name in parser._parent_map:
             if link_name in self._name_to_idx_map or not parser.has_link_mass(link_name):
                 continue
-            # walk up to the tree with every joint on the way at zero, composing tree_T_link
+            # Compose tree_T_link using the resolved locked/default joint positions.
             transform = np.eye(4)
             name = link_name
             while name not in self._name_to_idx_map:
-                parent = parser.get_parent_at_zero(name)
+                parent = parser.get_parent_transform(name, joint_positions)
                 if parent is None:
                     break  # the URDF root, above the tree's base link
                 name, parent_t_link = parent
@@ -951,16 +997,21 @@ class KinematicsLoader(KinematicsLoaderCfg):
         )
 
     @get_profiler_decorator("robot_generator/add_body_to_tree")
-    def _add_body_to_tree(self, link_name: str, base=False):
+    def _add_body_to_tree(
+        self, link_name: str, base: bool = False, link_params: Optional[LinkParams] = None
+    ) -> None:
         """Add link to kinematic tree.
 
         Args:
             link_name: Name of the link to add.
             base: Is this the base link of the kinematic tree?
+            link_params: Prepared parameters for a dynamics-only branch, when supplied.
         """
         body_idx = len(self._bodies)
 
-        rigid_body_params = self._kinematics_parser.get_link_parameters(link_name, base=base)
+        rigid_body_params = link_params
+        if rigid_body_params is None:
+            rigid_body_params = self._kinematics_parser.get_link_parameters(link_name, base=base)
         self._bodies.append(rigid_body_params)
         if rigid_body_params.joint_type != JointType.FIXED:
             self._controlled_links.append(body_idx)
@@ -1008,6 +1059,8 @@ class KinematicsLoader(KinematicsLoaderCfg):
 
         for j in joint_names:
             for bi, b in enumerate(self._bodies):
+                if b.joint_type == JointType.FIXED:
+                    continue
                 if b.joint_name == j:
                     if j not in j_data:
                         j_data[j] = {}
