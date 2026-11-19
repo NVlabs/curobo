@@ -892,7 +892,9 @@ def export_ik_kernels(
         capacity = scene_capacities[name]
         if capacity <= 0:
             continue
-        collision_kernel = get_tiled_collision_kernel(capacity, 1, num_spheres, block_dim)
+        collision_kernel = get_tiled_collision_kernel(
+            capacity, 1, num_spheres, block_dim, cuboid=name == "cuboid"
+        )
         overload = wp.overload(
             collision_kernel,
             [
@@ -1959,7 +1961,7 @@ def export_trajopt_kernels(
             kernels[f"collision_{name}"] = metadata
 
             metrics_collision_kernel = get_tiled_collision_kernel(
-                capacity, horizon, num_spheres, block_dim
+                capacity, horizon, num_spheres, block_dim, cuboid=name == "cuboid"
             )
             metrics_overload = wp.overload(
                 metrics_collision_kernel,
@@ -1997,6 +1999,7 @@ def export_trajopt_kernels(
                 1,
                 num_spheres,
                 block_dim,
+                cuboid=name == "cuboid",
             )
             validation_overload = wp.overload(
                 validation_collision_kernel,
