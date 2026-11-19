@@ -10,6 +10,8 @@ import torch
 # CuRobo
 from curobo._src.solver.solver_core_cfg import create_scene_collision_cfg
 from curobo._src.solver.solver_ik_cfg import IKSolverCfg
+from curobo._src.solver.solver_mpc_cfg import MPCSolverCfg
+from curobo._src.solver.solver_trajopt_cfg import TrajOptSolverCfg
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.util_file import join_path, load_yaml
 
@@ -20,6 +22,44 @@ def cuda_device_cfg():
     if torch.cuda.is_available():
         return DeviceCfg(device=torch.device("cuda:0"), dtype=torch.float32)
     pytest.skip("CUDA not available")
+
+
+@pytest.mark.parametrize("solver_cfg_type", [IKSolverCfg, TrajOptSolverCfg, MPCSolverCfg])
+@pytest.mark.parametrize("self_collision_check", [True, False])
+def test_self_collision_setting_reaches_all_rollouts(
+    solver_cfg_type: type[IKSolverCfg | TrajOptSolverCfg | MPCSolverCfg],
+    self_collision_check: bool,
+    cuda_device_cfg: DeviceCfg,
+) -> None:
+    """Optimization and validation honor self-collision settings without disabling the scene."""
+    options = {} if self_collision_check else {"self_collision_check": False}
+    config = solver_cfg_type.create(
+        robot="franka.yml",
+        scene_model="collision_test.yml",
+        device_cfg=cuda_device_cfg,
+        **options,
+    )
+    core = config.core_cfg
+    for rollout in [*core.optimizer_rollout_configs, core.metrics_rollout_config]:
+        managers = rollout.get_cost_manager_configs()
+        self_weights = [
+            manager.self_collision_cfg.weight
+            for manager in managers
+            if manager.self_collision_cfg is not None
+        ]
+        scene_weights = [
+            manager.scene_collision_cfg.weight
+            for manager in managers
+            if manager.scene_collision_cfg is not None
+        ]
+        assert self_weights and scene_weights
+        for weight in self_weights:
+            if self_collision_check:
+                assert torch.all(weight > 0)
+            else:
+                assert torch.all(weight == 0)
+        for weight in scene_weights:
+            assert torch.all(weight > 0)
 
 
 class TestSolverCfgDataclass:
