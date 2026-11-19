@@ -17,6 +17,7 @@ import pytest
 import torch
 
 # CuRobo
+from curobo._src.curobolib.backends.cuda_core_backend.geometry import get_device_max_shared_memory
 from curobo._src.curobolib.backends.cuda_core_backend.optimization_config import (
     LBFGSCompactLaunchCfg,
 )
@@ -49,9 +50,8 @@ def test_backtracking_preserves_direction_and_history_in_graph(compact: bool) ->
     """Rejected problems retain every quasi-Newton buffer during graph replay."""
     device_cfg = DeviceCfg()
     batch, dimension, history = 2, 64, 16
-    properties = torch.cuda.get_device_properties(device_cfg.device)
     layout = LBFGSCompactLaunchCfg.calculate_config(
-        batch, dimension, history, properties.shared_memory_per_block_optin
+        batch, dimension, history, get_device_max_shared_memory(device_cfg.device)
     )
     assert layout is not None
     _, shared_matrices, workspace = layout
@@ -924,11 +924,7 @@ def test_compact_pair_eligibility_and_fallback_scale_guard() -> None:
     history = 32
     batch_size = 4
     opt_dim = 112
-    properties = torch.cuda.get_device_properties(device)
-    shared_memory = int(
-        getattr(properties, "shared_memory_per_block_optin", 0)
-        or properties.shared_memory_per_block
-    )
+    shared_memory = get_device_max_shared_memory(device)
     compact_config = LBFGSCompactLaunchCfg.calculate_config(
         batch_size,
         opt_dim,
@@ -1031,11 +1027,7 @@ def test_compact_step_matches_two_loop_during_history_startup(
 
     torch.manual_seed(9012)
     batch_size = 4
-    properties = torch.cuda.get_device_properties(device)
-    shared_memory = int(
-        getattr(properties, "shared_memory_per_block_optin", 0)
-        or properties.shared_memory_per_block
-    )
+    shared_memory = get_device_max_shared_memory(device)
     compact_config = LBFGSCompactLaunchCfg.calculate_config(
         batch_size,
         opt_dim,
