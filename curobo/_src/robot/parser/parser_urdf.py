@@ -154,40 +154,7 @@ class UrdfRobotParser(RobotParser):
             return link_params
         body_params = {}
         body_params["link_name"] = link_name
-        mass = 0.01  # small mass
-        com = np.array([0.0, 0.0, 0.0])
-        inertia = np.array([1e-2, 1e-2, 1e-2, 0.0, 0.0, 0.0]) * mass
-        # read link mass, com, and inertia:
-        link_data = self._robot.link_map[link_name]
-        if link_data.inertial is not None:
-            mass_value = link_data.inertial.mass
-            mass = mass_value if mass_value > 0.0 else 0.01
-            com_pose_matrix = link_data.inertial.origin
-            if com_pose_matrix is None:
-                com_pose_matrix = np.eye(4)
-            # URDF origin already locates the COM in the link frame. Inertia is
-            # about that COM, expressed in the rotated inertial frame; only
-            # rotate the tensor here (no parallel-axis shift).
-            com = np.array(com_pose_matrix[:3, 3], copy=True)
-            rotation = com_pose_matrix[:3, :3]
-            inertia_matrix = rotation @ link_data.inertial.inertia @ rotation.T
-            inertia = np.array(
-                [
-                    inertia_matrix[0, 0],
-                    inertia_matrix[1, 1],
-                    inertia_matrix[2, 2],
-                    inertia_matrix[0, 1],
-                    inertia_matrix[0, 2],
-                    inertia_matrix[1, 2],
-                ]
-            )
-            # if all are zero:
-            if np.all(inertia == 0.0):
-                inertia = np.array([1e-4, 1e-4, 1e-4, 0.0, 0.0, 0.0]) * mass
-            if com.shape != (3,):
-                log_and_raise(f"com read from urdf shape does not match: {com.shape} != (3,)")
-            if inertia.shape != (6,):
-                log_and_raise(f"inertia read from urdf shape does not match: {inertia.shape} != (6,)")
+        mass, com, inertia = self.get_link_inertial(link_name)
 
         mimic_joint_name = None
         if base:
@@ -316,6 +283,105 @@ class UrdfRobotParser(RobotParser):
         link_params = LinkParams(**body_params)
 
         return link_params
+
+    def get_link_inertial(self, link_name: str) -> Tuple[float, np.ndarray, np.ndarray]:
+        """Mass, center of mass and inertia of a URDF link, in the link frame.
+
+        Args:
+            link_name: Name of the link.
+
+        Returns:
+            Tuple[float, np.ndarray, np.ndarray]: Mass (kg), center of mass (3), and inertia about
+                the center of mass in link-frame axes, [ixx, iyy, izz, ixy, ixz, iyz] (kg m^2).
+        """
+        mass = 0.01  # small mass
+        com = np.array([0.0, 0.0, 0.0])
+        inertia = np.array([1e-2, 1e-2, 1e-2, 0.0, 0.0, 0.0]) * mass
+        link_data = self._robot.link_map[link_name]
+        if link_data.inertial is not None:
+            mass_value = link_data.inertial.mass
+            mass = mass_value if mass_value > 0.0 else 0.01
+            com_pose_matrix = link_data.inertial.origin
+            if com_pose_matrix is None:
+                com_pose_matrix = np.eye(4)
+            # URDF origin already locates the COM in the link frame. Inertia is
+            # about that COM, expressed in the rotated inertial frame; only
+            # rotate the tensor here (no parallel-axis shift).
+            com = np.array(com_pose_matrix[:3, 3], copy=True)
+            rotation = com_pose_matrix[:3, :3]
+            inertia_matrix = rotation @ link_data.inertial.inertia @ rotation.T
+            inertia = np.array(
+                [
+                    inertia_matrix[0, 0],
+                    inertia_matrix[1, 1],
+                    inertia_matrix[2, 2],
+                    inertia_matrix[0, 1],
+                    inertia_matrix[0, 2],
+                    inertia_matrix[1, 2],
+                ]
+            )
+            # if all are zero:
+            if np.all(inertia == 0.0):
+                inertia = np.array([1e-4, 1e-4, 1e-4, 0.0, 0.0, 0.0]) * mass
+            if com.shape != (3,):
+                log_and_raise(f"com read from urdf shape does not match: {com.shape} != (3,)")
+            if inertia.shape != (6,):
+                log_and_raise(f"inertia read from urdf shape does not match: {inertia.shape} != (6,)")
+        return mass, com, inertia
+
+    def has_link_mass(self, link_name: str) -> bool:
+        """Whether the URDF gives a link a positive mass (else its parameters are placeholders).
+
+        Args:
+            link_name: Name of the link.
+
+        Returns:
+            bool: True when the link has an ``<inertial>`` block with a positive mass.
+        """
+        link_data = self._robot.link_map.get(link_name)
+        return (
+            link_data is not None
+            and link_data.inertial is not None
+            and link_data.inertial.mass is not None
+            and link_data.inertial.mass > 0.0
+        )
+
+    def get_parent_transform(
+        self, link_name: str, joint_positions: Dict[str, float]
+    ) -> Optional[Tuple[str, np.ndarray]]:
+        """Return the parent and relative pose at the supplied URDF joint positions.
+
+        Args:
+            link_name: Name of the link.
+            joint_positions: Independent joint positions; unspecified joints use zero.
+                Mimic positions include their multiplier and offset.
+
+        Returns:
+            Optional[Tuple[str, np.ndarray]]: The parent link's name and the link's pose in it
+                (4x4), or None when the link has no parent in the URDF.
+        """
+        parent_data = self._parent_map.get(link_name)
+        if parent_data is None or "joint_name" not in parent_data:
+            return None
+        joint = self._robot.joint_map[parent_data["joint_name"]]
+        pose = np.array(joint.origin if joint.origin is not None else np.eye(4), dtype=np.float64)
+        value = joint_positions.get(joint.name, 0.0)
+        if joint.mimic is not None:
+            value = (
+                joint.mimic.multiplier * joint_positions.get(joint.mimic.joint, 0.0)
+                + joint.mimic.offset
+            )
+        if value != 0.0 and joint.axis is not None:
+            axis = np.asarray(joint.axis, dtype=np.float64)
+            motion = np.eye(4)
+            if joint.type in ("revolute", "continuous"):
+                x, y, z = axis
+                k = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
+                motion[:3, :3] = np.eye(3) + np.sin(value) * k + (1.0 - np.cos(value)) * (k @ k)
+            elif joint.type == "prismatic":
+                motion[:3, 3] = axis * value
+            pose = pose @ motion
+        return parent_data["parent"], pose
 
     def add_absolute_path_to_link_meshes(self, mesh_dir: str = ""):
         """Add absolute path to link meshes.
