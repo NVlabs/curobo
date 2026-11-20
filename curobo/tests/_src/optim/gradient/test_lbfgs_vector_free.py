@@ -16,13 +16,28 @@ from curobo._src.types.device_cfg import DeviceCfg
 
 
 @pytest.mark.parametrize(
-    "history,dimension",
-    [(1, 1), (3, 32), (8, 7), (15, 112), (16, 129), (26, 128), (26, 129), (30, 256)],
+    "history,dimension,candidate_count",
+    [
+        (1, 1, 5),
+        (3, 32, 5),
+        (8, 7, 5),
+        (15, 112, 5),
+        (16, 129, 5),
+        (26, 128, 5),
+        (26, 129, 5),
+        (30, 256, 5),
+        (26, 112, 35),  # Exercise both the shared weight tile and its scalar tail.
+    ],
 )
 @pytest.mark.parametrize("geometric", [False, True])
 @pytest.mark.parametrize("shared", [False, True])
 def test_vector_free_history_and_candidates(
-    history: int, dimension: int, geometric: bool, shared: bool, monkeypatch: pytest.MonkeyPatch
+    history: int,
+    dimension: int,
+    candidate_count: int,
+    geometric: bool,
+    shared: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Preserve history, retry behavior, scaling and arbitrary candidate counts."""
     monkeypatch.setattr(
@@ -37,8 +52,11 @@ def test_vector_free_history_and_candidates(
     reference.resize(batch, dimension)
     actual.resize(batch, dimension, use_vector_free_operator=True)
     steps = [torch.zeros(batch, dimension, device="cuda") for _ in range(2)]
-    candidates = [torch.zeros(batch, 5, dimension, device="cuda") for _ in range(2)]
+    candidates = [torch.zeros(batch, candidate_count, dimension, device="cuda") for _ in range(2)]
     scales = torch.tensor([0.01, 0.1, 0.3, 0.5, 1.0], device="cuda")
+    if candidate_count > scales.numel():
+        extra_scales = torch.linspace(0.02, 0.99, candidate_count - scales.numel(), device="cuda")
+        scales = torch.cat((scales, extra_scales))
     beta = torch.tensor([1.0, 0.98, 0.5, 0.1], device="cuda")
     maximum = torch.full((dimension,), 0.25, device="cuda")
     position = torch.zeros(batch, dimension, device="cuda")
