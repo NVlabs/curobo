@@ -9,14 +9,27 @@ from importlib import import_module
 # Third Party
 import warp as wp
 
+from curobo._src.geom.data.data_cuboid import cuboid_sdf_with_grad
 from curobo._src.geom.data.registry import OBSTACLE_SDF_MODULES
 
 is_swept_sphere_outside_obb = None
 is_obs_enabled = None
 load_obstacle_transform = None
 compute_local_sdf = None
-compute_local_sdf_with_grad = None
 compute_swept_sphere_clearance_lower_bound = None
+
+
+@wp.func
+def compute_local_sdf_with_grad(
+    dims: wp.vec3,
+    env_idx: wp.int32,
+    local_idx: wp.int32,
+    local_pt: wp.vec3,
+    query_distance: wp.float32,
+) -> wp.vec4:
+    """Use the cuboid dimensions staged for this pair in the shared sweep evaluator."""
+    return cuboid_sdf_with_grad(dims, local_pt)
+
 
 for _module_path in OBSTACLE_SDF_MODULES:
     _data_module = import_module(_module_path)

@@ -78,6 +78,20 @@ def _unfiltered_sweep(
 def _make_scene(kind: str, device: DeviceCfg) -> SceneCollision:
     """Create rotated, offset, or field-backed geometry with the same query interface."""
     pose = [0.3, -0.2, 0.1, 0.9238795, 0.0, 0.0, 0.3826834]
+    if kind == "cuboid_team":
+        # A 64-lane block shares 40 spheres. Nine nearby boxes trigger cooperative
+        # evaluation, and the final nearby box is in a second obstacle chunk.
+        boxes = [
+            Cuboid(
+                name="target" if i == 0 else f"box_{i}",
+                pose=[pose[0] + (0.02 * i if i < 9 or i == 64 else 100.0), *pose[1:]],
+                dims=[0.4, 0.8, 0.3],
+            )
+            for i in range(65)
+        ]
+        return SceneCollision.from_config(
+            SceneCollisionCfg(device_cfg=device, scene_model=SceneCfg(cuboid=boxes))
+        )
     if kind == "cuboid":
         obstacle = Cuboid(name="target", pose=pose, dims=[0.4, 0.8, 0.3])
     elif kind == "capsule":
@@ -128,6 +142,7 @@ def _make_scene(kind: str, device: DeviceCfg) -> SceneCollision:
     "kind",
     [
         "cuboid",
+        "cuboid_team",
         "capsule",
         "capsule_point",
         "cylinder",
@@ -147,12 +162,13 @@ def test_local_sweep_bounds_preserve_leaf_queries(
     init_warp(quiet=True, device_cfg=cuda_device_cfg)
     torch.manual_seed(73)
     scene = _make_scene(kind, cuda_device_cfg)
-    query = torch.randn((2, 5, 129, 4), device=cuda_device_cfg.device)
+    num_spheres = 40 if kind == "cuboid_team" else 129
+    query = torch.randn((2, 5, num_spheres, 4), device=cuda_device_cfg.device)
     query[..., :3].mul_(0.8)
     query[..., 3] = 0.12
     query[:, :, ::11, 3] = -1.0
     query.requires_grad_()
-    mask = torch.ones((1, 129), device=query.device, dtype=torch.uint32)
+    mask = torch.ones((1, num_spheres), device=query.device, dtype=torch.uint32)
     mask[:, 1::7] = 0
     dt = torch.full((2,), 0.1, device=query.device)
     args = dict(
@@ -192,7 +208,7 @@ def test_local_sweep_bounds_preserve_leaf_queries(
                 wp.from_torch(obs.obstacle_layers.view(torch.int32).reshape(-1), dtype=wp.uint32),
                 wp.from_torch(dt),
                 5,
-                129,
+                num_spheres,
                 int(speed_metric),
                 wp.from_torch(reference_cost.reshape(-1)),
                 wp.from_torch(reference_gradient.reshape(-1, 4), dtype=wp.vec4),

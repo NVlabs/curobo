@@ -1927,7 +1927,7 @@ def export_trajopt_kernels(
             if capacity <= 0:
                 continue
             collision_kernel = get_tiled_swept_collision_kernel(
-                capacity, True, horizon, num_spheres, block_dim
+                capacity, True, horizon, num_spheres, block_dim, cuboid=name == "cuboid"
             )
             overload = wp.overload(
                 collision_kernel,
