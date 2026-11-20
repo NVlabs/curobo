@@ -14,6 +14,7 @@ from typing import Any
 
 # Third Party
 import warp as wp
+from packaging.version import Version
 
 from curobo._src.geom.data.data_obstacle_query import (
     compute_local_sdf_with_grad,
@@ -185,10 +186,22 @@ def apply_speed_metric_to_contribution(
     prev_sphere = spheres[sph_flat_idx - num_spheres]
     current_sphere = spheres[sph_flat_idx]
     next_sphere = spheres[sph_flat_idx + num_spheres]
-    dt = wp.max(speed_dt[0], 1e-6)
     prev_pt = wp.vec3(prev_sphere[0], prev_sphere[1], prev_sphere[2])
     current_pt = wp.vec3(current_sphere[0], current_sphere[1], current_sphere[2])
     next_pt = wp.vec3(next_sphere[0], next_sphere[1], next_sphere[2])
+    return speed_metric_from_centers(contribution, prev_pt, current_pt, next_pt, speed_dt)
+
+
+@wp.func
+def speed_metric_from_centers(
+    contribution: wp.vec4,
+    prev_pt: wp.vec3,
+    current_pt: wp.vec3,
+    next_pt: wp.vec3,
+    speed_dt: wp.array(dtype=wp.float32),
+) -> wp.vec4:
+    """Apply the interior-pose speed metric using already loaded sphere centers."""
+    dt = wp.max(speed_dt[0], 1e-6)
     velocity = 0.5 / dt * (next_pt - prev_pt)
     sphere_speed = wp.length(velocity)
     if sphere_speed < 1e-3:
@@ -216,6 +229,8 @@ def get_tiled_swept_collision_kernel(
     horizon: int,
     num_spheres: int,
     block_dim: int,
+    *,
+    cuboid: bool = False,
 ) -> Any:
     """Return the tiled swept-collision kernel for any sphere count.
 
@@ -230,6 +245,13 @@ def get_tiled_swept_collision_kernel(
         raise ValueError("num_spheres must be positive")
     if block_dim not in _SUPPORTED_STATE_BLOCK_DIMS:
         raise ValueError("block_dim must be one of 32, 64, 128, 256, 512, or 1024")
+
+    if cuboid and block_dim <= 128 and Version(wp.__version__) >= Version("1.18.0"):
+        from curobo._src.geom.collision.wp_sweep_cuboid import get_swept_cuboid_kernel
+
+        return get_swept_cuboid_kernel(
+            max_n_obs, enable_speed_metric, horizon, num_spheres, block_dim
+        )
 
     max_obstacles = wp.constant(wp.int32(max_n_obs))
     use_speed_metric = wp.constant(wp.uint8(1 if enable_speed_metric else 0))
