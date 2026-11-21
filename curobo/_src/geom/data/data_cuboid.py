@@ -667,10 +667,18 @@ def compute_local_sdf_with_grad(
     """
     flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
 
-    # Load half-extents as scalars (avoid vec3 construction)
-    hx = obs_set.dims[flat_idx, 0] * 0.5
-    hy = obs_set.dims[flat_idx, 1] * 0.5
-    hz = obs_set.dims[flat_idx, 2] * 0.5
+    dims = wp.vec3(
+        obs_set.dims[flat_idx, 0], obs_set.dims[flat_idx, 1], obs_set.dims[flat_idx, 2]
+    )
+    return cuboid_sdf_with_grad(dims, local_pt)
+
+
+@wp.func
+def cuboid_sdf_with_grad(dims: wp.vec3, local_pt: wp.vec3) -> wp.vec4:
+    """Evaluate the signed distance and gradient using full cuboid dimensions."""
+    hx = dims[0] * 0.5
+    hy = dims[1] * 0.5
+    hz = dims[2] * 0.5
 
     # Signed distance components along each axis
     qx = wp.abs(local_pt[0]) - hx

@@ -28,6 +28,7 @@ from curobo._src.geom.collision.wp_sweep_collision_kernel import (
     get_tiled_swept_collision_kernel,
 )
 from curobo._src.geom.data.data_collision_layers import collision_layers_to_warp
+from curobo._src.geom.data.data_cuboid import CuboidData
 from curobo._src.util.warp import get_warp_device_stream
 
 if TYPE_CHECKING:
@@ -218,7 +219,8 @@ class SweptSphereObstacleCollision(torch.autograd.Function):
             block_dim = select_collision_block_dim(n)
             for data_idx, data in enumerate(valid_data):
                 kernel = get_tiled_swept_collision_kernel(
-                    data.max_n, enable_speed_metric, h, n, block_dim
+                    data.max_n, enable_speed_metric, h, n, block_dim,
+                    cuboid=isinstance(data, CuboidData),
                 )
                 wp.launch_tiled(
                     kernel,
