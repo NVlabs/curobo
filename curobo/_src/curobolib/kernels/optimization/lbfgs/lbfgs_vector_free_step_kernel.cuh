@@ -22,10 +22,9 @@
  *   view indexes valid pairs newest first, without moving the global ring.
  * - cross[batch, slot_s, slot_y] caches s_slot_s^T y_slot_y. Only products
  *   whose s pair is older than the y pair are needed by the recurrences.
- * - S remains in registers. SharedHistory stages Y and the scalar product
- *   matrix in shared memory to reduce register pressure; otherwise both stay
- *   in registers. The shared matrix has a padded 32x33 layout to avoid bank
- *   conflicts. LBFGSVectorFreeLaunchCfg selects storage for the target GPU;
+ * - S is thread-local. SharedHistory stages Y in shared memory; the other
+ *   path keeps Y thread-local. Both paths share the scalar product matrix, padded
+ *   to 32x33 to avoid bank conflicts. LBFGSVectorFreeLaunchCfg selects storage for the target GPU;
  *   the host dispatch uses the two-loop implementation outside these bounds.
  *
  * Step phases:
@@ -57,6 +56,7 @@
  * history shift must rebuild them before this kernel is used again.
  */
 #pragma once
+#include <cuda_pipeline.h>
 #include "optimization/lbfgs/lbfgs_candidates.cuh"
 #include "optimization/line_search/line_search_helpers.cuh"
 #include "common/math.cuh"
@@ -66,6 +66,14 @@ namespace optimization {
 namespace vector_free {
 
 constexpr unsigned MASK = 0xffffffff;
+
+// Valid logical ring offsets are smaller than History. A single correction
+// replaces integer remainder for those offsets; no physical history is moved.
+template <int History>
+__device__ __forceinline__ int ring_slot(int newest, int logical) {
+  const int slot = newest - logical;
+  return slot < 0 ? slot + History : slot;
+}
 
 // Assign adjacent product pairs to progressively larger lane groups. After
 // group g, lane l owns product l % (2*g) within each remaining product group.
@@ -117,23 +125,35 @@ __global__ void kernel_lbfgs_step_vector_free(
   __shared__ float scratch[128];
   const int old_count = counts[b], head = heads[b];
   float sr[History][Items], yr[SharedHistory ? 1 : History][Items];
-  __shared__ float shared_y[SharedHistory ? History : 1][Items][128];
-  float g[Items], s[Items], y[Items];
+  __shared__ float shared_y[SharedHistory ? History + 1 : 1][Items][128];
+  float g[Items], s[Items], y[Items], origin[Items], step_maximum[Items];
+  const float candidate_multiplier = beta[b];
+  // Candidate weights are shared across all variables of this trajectory.
+  // Reuse the first existing reduction barrier to publish a warp-sized tile.
+  __shared__ float candidate_weights[32];
+  if (t < 32 && t < candidate_count)
+    candidate_weights[t] = candidate_multiplier * scales[t];
 #pragma unroll
   for (int item = 0; item < Items; ++item) {
     const int variable = t + item * THREADS;
     const int index = b * dimension + variable;
     g[item] = variable < dimension ? gradient[index] : 0;
-    s[item] = variable < dimension ? position[index] - previous_position[index] : 0;
+    origin[item] = variable < dimension ? position[index] : 0;
+    s[item] = variable < dimension ? origin[item] - previous_position[index] : 0;
     y[item] = variable < dimension ? g[item] - previous_gradient[index] : 0;
+    step_maximum[item] = scale_step && variable < dimension ? maximum[variable] : 1;
 #pragma unroll
     for (int i = 0; i < History; ++i) {
-      const int slot = (head - 1 - i + 2 * History) % History;
+      const int slot = ring_slot<History>(head - 1, i);
       const int offset = (slot * batch_size + b) * dimension + variable;
       sr[i][item] = variable < dimension && i < old_count ? history_s[offset] : 0;
-      if constexpr (SharedHistory)
-        shared_y[i][item][t] = variable < dimension && i < old_count ? history_y[offset] : 0;
-      else
+      if constexpr (SharedHistory) {
+        if (variable < dimension && i < old_count)
+          __pipeline_memcpy_async(&shared_y[i + 1][item][t], history_y + offset, sizeof(float));
+        else
+          shared_y[i + 1][item][t] = 0;
+        if ((i & 7) == 7 || i + 1 == History) __pipeline_commit();
+      } else
         yr[i][item] = variable < dimension && i < old_count ? history_y[offset] : 0;
     }
   }
@@ -164,24 +184,30 @@ __global__ void kernel_lbfgs_step_vector_free(
   const bool insert =
       allowed[b] && ys > 0 && isfinite(ys) && inverse_curvature > 0 && isfinite(inverse_curvature);
   const int count = insert ? min(old_count + 1, History) : old_count;
-  const int newest = insert ? head : (head - 1 + History) % History;
-  float sg = 0, new_cross = 0;
-#pragma unroll
-  for (int i = 0; i < History; ++i) {
-    const int kg = 2 + i, kc = 2 + History + i;
-    const float gv = __shfl_sync(MASK, totals[kg / 32], kg % 32);
-    const float cv = __shfl_sync(MASK, totals[kc / 32], kc % 32);
-    if (lane == i) {
-      sg = gv;
-      new_cross = cv;
-    }
+  const int newest = insert ? head : (head == 0 ? History - 1 : head - 1);
+  // The reduction already gives lane k product k. Gather the two owned
+  // products directly instead of broadcasting every product to every lane.
+  const int kg = 2 + lane, kc = 2 + History + lane;
+  float sg = __shfl_sync(MASK, totals[0], kg & 31);
+  float new_cross = __shfl_sync(MASK, totals[0], kc & 31);
+  if constexpr (INITIAL_TILES > 1) {
+    const float sg_hi = __shfl_sync(MASK, totals[1], kg & 31);
+    const float cross_hi = __shfl_sync(MASK, totals[1], kc & 31);
+    sg = kg < 32 ? sg : sg_hi;
+    new_cross = kc < 32 ? new_cross : cross_hi;
   }
+  sg = lane < History ? sg : 0;
+  new_cross = lane < History ? new_cross : 0;
   if (insert) {
+    // A full ring overwrites the source of the dropped Y row. Complete our
+    // own copies before any thread overwrites its corresponding components.
+    if constexpr (SharedHistory)
+      if (old_count == History) __pipeline_wait_prior(0);
     const float old_sg = __shfl_up_sync(MASK, sg, 1);
     const float new_sg = __shfl_sync(MASK, totals[0], 1);
     sg = lane == 0 ? new_sg : old_sg;
     if (t < old_count && t < History - 1) {
-      const int slot = (head - 1 - t + 2 * History) % History;
+      const int slot = ring_slot<History>(head - 1, t);
       cross[(b * History + slot) * History + head] = new_cross;
     }
 #pragma unroll
@@ -194,9 +220,7 @@ __global__ void kernel_lbfgs_step_vector_free(
 #pragma unroll
       for (int j = History - 1; j > 0; --j) {
         sr[j][item] = sr[j - 1][item];
-        if constexpr (SharedHistory)
-          shared_y[j][item][t] = shared_y[j - 1][item][t];
-        else
+        if constexpr (!SharedHistory)
           yr[j][item] = yr[j - 1][item];
       }
       sr[0][item] = s[item];
@@ -207,7 +231,7 @@ __global__ void kernel_lbfgs_step_vector_free(
     }
     if (t == 0) {
       rho[head * batch_size + b] = inverse_curvature;
-      heads[b] = (head + 1) % History;
+      heads[b] = head + 1 == History ? 0 : head + 1;
       counts[b] = count;
     }
   }
@@ -216,57 +240,63 @@ __global__ void kernel_lbfgs_step_vector_free(
     const int variable = t + item * THREADS;
     const int index = b * dimension + variable;
     if (variable < dimension) {
-      previous_position[index] = position[index];
+      previous_position[index] = origin[item];
       previous_gradient[index] = g[item];
     }
   }
   __syncthreads();
-  const int own_slot = (newest - min(lane, History - 1) + 2 * History) % History;
+  const int own_slot = ring_slot<History>(newest, min(lane, History - 1));
   const float rh = lane < count ? rho[own_slot * batch_size + b] : 0;
   sg = lane < count ? sg : 0;
-  float row[SharedHistory ? 1 : History], column[SharedHistory ? 1 : History];
-  __shared__ float shared_cross[SharedHistory ? 32 : 1][SharedHistory ? 33 : 1];
-  if constexpr (SharedHistory) {
-    // Padding avoids bank conflicts for both row and column reads.
-    if (t < 32) {
+  // Cache scalar products once per block for either vector storage policy.
+  // Fourfold replicated row/column global loads are unnecessary.
+  __shared__ float shared_cross[32][33];
+  // Distribute rows over all four warps. Adjacent lanes now load adjacent
+  // physical columns, rather than loading a strided column with one warp.
 #pragma unroll
-      for (int j = 0; j < 32; ++j) {
-        const int slot = (newest - j + 2 * History) % History;
-        shared_cross[t][j] =
-            t < count && j < t ? cross[(b * History + own_slot) * History + slot] : 0;
-      }
-    }
-    __syncthreads();
-  } else {
-#pragma unroll
-    for (int j = 0; j < History; ++j) {
-      const int slot = (newest - j + 2 * History) % History;
-      row[j] = lane < count && j < lane ? cross[(b * History + own_slot) * History + slot] : 0;
-      column[j] = lane < count && j > lane && j < count
-                      ? cross[(b * History + slot) * History + own_slot]
-                      : 0;
-    }
+  for (int group = 0; group < 8; ++group) {
+    const int i = (t >> 5) + 4 * group;
+    const int row_slot = ring_slot<History>(newest, i);
+    const int col_slot = ring_slot<History>(newest, lane);
+    shared_cross[i][lane] =
+        i < count && lane < i ? cross[(b * History + row_slot) * History + col_slot] : 0;
   }
+  __syncthreads();
   float alpha[History];
 #pragma unroll
-  for (int i = 0; i < History; ++i) {
-    alpha[i] = __shfl_sync(MASK, rh * sg, i);
-    sg -= alpha[i] * (SharedHistory ? shared_cross[lane][i] : row[i]);
+  for (int pair = 0; pair < (History + 1) / 2; ++pair) {
+    const int i = pair * 2;
+    const float a0 = __shfl_sync(MASK, rh * sg, i);
+    float a1 = 0;
+    if (i + 1 < History) {
+      // Fetch the next pivot's unmodified right-hand side independently.
+      float next_sg = __shfl_sync(MASK, sg, i + 1);
+      const float next_rho = __shfl_sync(MASK, rh, i + 1);
+      next_sg -= a0 * shared_cross[i + 1][i];
+      a1 = next_rho * next_sg;
+    }
+    alpha[i] = a0;
+    if (i + 1 < History) alpha[i + 1] = a1;
+    sg -= a0 * shared_cross[lane][i];
+    if (i + 1 < History) sg -= a1 * shared_cross[lane][i + 1];
   }
   float q[Items];
+  const int y_base = insert ? 0 : 1;
+  // Y is thread-private by column, so a per-thread completion wait suffices.
+  if constexpr (SharedHistory) __pipeline_wait_prior(0);
   float dots[32] = {};
 #pragma unroll
   for (int item = 0; item < Items; ++item) {
     q[item] = g[item];
 #pragma unroll
     for (int i = 0; i < History; ++i)
-      q[item] -= alpha[i] * (SharedHistory ? shared_y[i][item][t] : yr[i][item]);
+      q[item] -= alpha[i] * (SharedHistory ? shared_y[i + y_base][item][t] : yr[i][item]);
 #pragma unroll
     for (int i = 0; i < History; ++i)
-      dots[i] += (SharedHistory ? shared_y[i][item][t] : yr[i][item]) * q[item];
+      dots[i] += (SharedHistory ? shared_y[i + y_base][item][t] : yr[i][item]) * q[item];
     dots[History] += Geometric ? sr[0][item] * sr[0][item]
-                               : sr[0][item] * (SharedHistory ? shared_y[0][item][t] : yr[0][item]);
-    const float newest_y = SharedHistory ? shared_y[0][item][t] : yr[0][item];
+                               : sr[0][item] * (SharedHistory ? shared_y[y_base][item][t] : yr[0][item]);
+    const float newest_y = SharedHistory ? shared_y[y_base][item][t] : yr[0][item];
     dots[History + 1] += newest_y * newest_y;
   }
   const float total = reduce_products(dots, scratch);
@@ -277,9 +307,21 @@ __global__ void kernel_lbfgs_step_vector_free(
   gamma = curobo::common::relu(gamma);
   float accumulation = 0, coefficient[History];
 #pragma unroll
-  for (int j = History - 1; j >= 0; --j) {
-    coefficient[j] = alpha[j] - __shfl_sync(MASK, rh * (gamma * total + accumulation), j);
-    accumulation += coefficient[j] * (SharedHistory ? shared_cross[j][lane] : column[j]);
+  for (int pair = 0; pair < (History + 1) / 2; ++pair) {
+    const int j = History - 1 - 2 * pair;
+    const float c0 = alpha[j] - __shfl_sync(MASK, rh * (gamma * total + accumulation), j);
+    float c1 = 0;
+    if (j > 0) {
+      float next_accumulation = __shfl_sync(MASK, accumulation, j - 1);
+      const float next_total = __shfl_sync(MASK, total, j - 1);
+      const float next_rho = __shfl_sync(MASK, rh, j - 1);
+      next_accumulation += c0 * shared_cross[j][j - 1];
+      c1 = alpha[j - 1] - next_rho * (gamma * next_total + next_accumulation);
+    }
+    coefficient[j] = c0;
+    if (j > 0) coefficient[j - 1] = c1;
+    accumulation += c0 * shared_cross[j][lane];
+    if (j > 0) accumulation += c1 * shared_cross[j - 1][lane];
   }
   float result[Items];
   float limit = 1, ratio = 0;
@@ -287,10 +329,11 @@ __global__ void kernel_lbfgs_step_vector_free(
   for (int item = 0; item < Items; ++item) {
     result[item] = gamma * q[item];
 #pragma unroll
-    for (int i = 0; i < History; ++i) result[item] += coefficient[i] * sr[i][item];
+    for (int i = 0; i < History; ++i)
+      result[item] += coefficient[i] * sr[i][item];
     const int variable = t + item * THREADS;
     if (scale_step && variable < dimension)
-      ratio = fmaxf(ratio, fabsf(result[item]) / maximum[variable]);
+      ratio = fmaxf(ratio, fabsf(result[item]) / step_maximum[item]);
   }
   if (scale_step) {
 #pragma unroll
@@ -308,10 +351,12 @@ __global__ void kernel_lbfgs_step_vector_free(
       const int index = b * dimension + variable;
       const float step = -result[item] / limit;
       direction[index] = step;
-#pragma unroll
-      for (int k = 0; k < candidate_count; ++k)
+      for (int k = 0; k < min(candidate_count, 32); ++k)
         candidates[(b * candidate_count + k) * dimension + variable] =
-            position[index] + beta[b] * scales[k] * step;
+            origin[item] + candidate_weights[k] * step;
+      for (int k = 32; k < candidate_count; ++k)
+        candidates[(b * candidate_count + k) * dimension + variable] =
+            origin[item] + candidate_multiplier * scales[k] * step;
     }
   }
 }
