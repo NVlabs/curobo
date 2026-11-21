@@ -105,16 +105,12 @@ def convert_xrdf_to_curobo(
     active_joints = return_value_if_exists(cspace_dict, "joint_names")
 
     default_joint_positions = return_value_if_exists(input_xrdf_dict, "default_joint_positions")
-    active_config = []
+    # Follow the cspace order, as the acceleration and jerk limits do.
+    active_config = [default_joint_positions.get(j, 0.0) for j in active_joints]
     locked_joints = {}
 
     for j in joint_names:
-        if j in active_joints:
-            if j in default_joint_positions:
-                active_config.append(default_joint_positions[j])
-            else:
-                active_config.append(0.0)
-        else:
+        if j not in active_joints:
             locked_joints[j] = 0.0
             if j in default_joint_positions:
                 locked_joints[j] = default_joint_positions[j]
