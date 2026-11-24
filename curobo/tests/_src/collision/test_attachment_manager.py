@@ -126,6 +126,26 @@ class TestUpdate:
 
         kparams.reset_link_spheres("attached_object")
 
+    def test_update_single_sphere_with_offset(
+        self, manager, grasp_joint_state, device_cfg
+    ):
+        """A single fitted sphere must not lose its batch dimension."""
+        sphere_tensor = torch.zeros((1, 4), **(device_cfg.as_torch_dict()))
+        sphere_tensor[0, 3] = 0.02
+        offset = Pose(
+            position=torch.tensor([[0.5, 0.0, 0.5]], **(device_cfg.as_torch_dict())),
+            quaternion=torch.tensor([[1.0, 0.0, 0.0, 0.0]], **(device_cfg.as_torch_dict())),
+        )
+        manager.update(sphere_tensor, grasp_joint_state, world_objects_pose_offset=offset)
+
+        kparams = manager.kinematics_params
+        sph_idx = kparams.get_sphere_index_from_link_name("attached_object")
+        written = kparams.link_spheres[0, sph_idx, :]
+        assert written[0, 3].item() == pytest.approx(0.02, abs=1e-5)
+        assert written[1, 3].item() == pytest.approx(-100.0)
+
+        kparams.reset_link_spheres("attached_object")
+
     def test_update_too_many_spheres_raises(
         self, manager, grasp_joint_state, device_cfg
     ):

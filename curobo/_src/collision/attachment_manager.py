@@ -166,7 +166,7 @@ class AttachmentManager:
                     position=obj_to_link_poses.position[i: i + 1],
                     quaternion=obj_to_link_poses.quaternion[i: i + 1],
                 )
-                transformed = env_pose.transform_points(centers).squeeze(0)
+                transformed = env_pose.transform_points(centers).reshape(-1, 3)
             else:
                 transformed = centers
 
