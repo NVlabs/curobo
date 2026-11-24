@@ -14,6 +14,7 @@
 
 ### Bug Fixes & Misc.
 
+- Fix `AttachmentManager.update` crashing when a single sphere is attached with a pose offset.
 - Honor `self_collision_check=False` during solver validation as well as optimization.
 - Preserve omitted URDF link inertials at configured locked positions and retain
   moving mimic branches in the dynamics model. Re-export affected C++ models.
