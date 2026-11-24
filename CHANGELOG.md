@@ -14,6 +14,8 @@
 
 ### Bug Fixes & Misc.
 
+- Fit attached-object spheres in the obstacle frame, so `world_objects_pose_offset`
+  places them at the object; `attach_from_scene` now defaults it to the scene pose.
 - Honor `self_collision_check=False` during solver validation as well as optimization.
 - Preserve omitted URDF link inertials at configured locked positions and retain
   moving mimic branches in the dynamics model. Re-export affected C++ models.
