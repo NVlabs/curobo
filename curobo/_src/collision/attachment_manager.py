@@ -247,6 +247,8 @@ class AttachmentManager:
             surface_radius: Radius for surface-sampled spheres.
             sphere_fit_type: Fitting algorithm.
             world_objects_pose_offset: Obstacle world pose(s) [num_envs] or [1] (broadcast).
+                None uses the scene pose of the first obstacle, i.e. the obstacles are
+                attached where they are in the scene.
         """
         if self._scene_collision is None:
             log_and_raise(
@@ -269,6 +271,13 @@ class AttachmentManager:
                     f"Obstacle '{name}' not found in scene_collision.scene_model."
                 )
             obstacles.append(obs)
+
+        if world_objects_pose_offset is None and obstacles[0].pose is not None:
+            # Spheres are fit in the frame of the first obstacle (see _obstacles_to_trimesh),
+            # so its scene pose places them where the obstacles are in the world.
+            world_objects_pose_offset = Pose.from_list(
+                obstacles[0].pose, device_cfg=self._device_cfg
+            )
 
         self.attach(
             joint_states,
@@ -322,17 +331,20 @@ class AttachmentManager:
             obstacles: Obstacle primitives to combine.
 
         Returns:
-            trimesh.Trimesh: Combined mesh in obstacle frame.
+            trimesh.Trimesh: Combined mesh in the frame of the first obstacle, so that
+            ``world_objects_pose_offset`` (the obstacle world pose) maps it to the world.
         """
+        import numpy as np
         import trimesh
 
-        meshes = []
-        for obs in obstacles:
-            mesh = obs.get_trimesh_mesh(transform_with_pose=True)
-            meshes.append(mesh)
-        if len(meshes) == 1:
-            return meshes[0]
-        return trimesh.util.concatenate(meshes)
+        meshes = [obs.get_trimesh_mesh(transform_with_pose=True) for obs in obstacles]
+        mesh = meshes[0] if len(meshes) == 1 else trimesh.util.concatenate(meshes)
+        ref_pose = obstacles[0].pose
+        if ref_pose is not None:
+            world_from_obstacle = trimesh.transformations.quaternion_matrix(ref_pose[3:7])
+            world_from_obstacle[:3, 3] = ref_pose[:3]
+            mesh.apply_transform(np.linalg.inv(world_from_obstacle))
+        return mesh
 
     @staticmethod
     def _get_num_envs(joint_states: JointState) -> int:

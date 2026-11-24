@@ -61,6 +61,18 @@ def cube_obstacle():
     )
 
 
+def _assert_attached_spheres_inside(manager, joint_state, cuboid, env_idx=0):
+    """At the grasp configuration, the attached spheres must lie inside the attached cuboid."""
+    n_fitted = manager._last_fit_result.num_spheres
+    kin = manager._kinematics.compute_kinematics(joint_state)
+    sph_idx = manager.kinematics_params.get_sphere_index_from_link_name("attached_object")
+    spheres = kin.robot_spheres.reshape(joint_state.position.shape[0], -1, 4)[env_idx]
+    centers = spheres[sph_idx[:n_fitted], :3]
+    center = torch.as_tensor(cuboid.pose[:3], device=centers.device, dtype=centers.dtype)
+    half = torch.as_tensor(cuboid.dims, device=centers.device, dtype=centers.dtype) / 2
+    assert ((centers - center).abs() <= half + 1e-3).all(), (centers, cuboid.pose)
+
+
 class TestFitSpheres:
     """Test fit_spheres method."""
 
@@ -301,6 +313,7 @@ class TestAttachDetach:
         sph_idx = kparams.get_sphere_index_from_link_name("attached_object")
         updated = kparams.link_spheres[0, sph_idx, :]
         assert (updated[:n_fitted, 3] > 0).all()
+        _assert_attached_spheres_inside(manager, grasp_joint_state, cube_obstacle)
 
         manager.detach()
 
@@ -410,6 +423,18 @@ class TestAttachFromScene:
         sph_idx = kparams.get_sphere_index_from_link_name("attached_object")
         updated = kparams.link_spheres[0, sph_idx, :]
         assert (updated[:n_fitted, 3] > 0).all()
+
+        manager_with_scene.detach()
+
+    def test_attach_from_scene_spheres_at_scene_pose(
+        self, manager_with_scene, scene_collision, grasp_joint_state,
+    ):
+        manager_with_scene.attach_from_scene(
+            grasp_joint_state, ["scene_cube"],
+            num_spheres=10, sphere_fit_type=SphereFitType.VOXEL,
+        )
+        cube = scene_collision.scene_model.get_obstacle("scene_cube")
+        _assert_attached_spheres_inside(manager_with_scene, grasp_joint_state, cube)
 
         manager_with_scene.detach()
 
