@@ -456,7 +456,7 @@ class TrajOptSolverResult(BaseSolverResult):
         mean_acc = torch.mean(torch.mean(abs_acc, dim=-1)[..., st_horizon:end_horizon], dim=-1)
         mean_jerk = mean_jerk.view(batch_size, num_seeds)
         mean_acc = mean_acc.view(batch_size, num_seeds)
-        smooth_cost = mean_jerk * 0.001 + mean_acc * 0.01 + dt_cost * 1000.0
+        smooth_cost = mean_jerk * 0.001 + mean_acc * 0.01 + dt_cost * 1.0
 
         # Note: Should probably use total time (dt * horizon) ? Or just dt? Original used dt.
         total_cost = seed_rollout_cost + smooth_cost  # Combine pose error and dt cost
