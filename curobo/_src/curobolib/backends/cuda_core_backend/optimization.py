@@ -15,6 +15,7 @@ from cuda.core import LaunchConfig
 
 # CuRobo
 from curobo._src.context import get_runtime
+from curobo._src.curobolib.backends.cuda_core_backend.geometry import get_device_max_shared_memory
 from curobo._src.curobolib.backends.cuda_core_backend.launch_helper import launch_kernel
 from curobo._src.curobolib.backends.cuda_core_backend.optimization_config import (
     LBFGSCompactLaunchCfg,
@@ -222,11 +223,7 @@ def launch_lbfgs_step(
     if batch_size * history_m * v_dim > np.iinfo(np.int32).max:
         log_and_raise("L-BFGS history must contain at most INT_MAX elements")
 
-    properties = torch.cuda.get_device_properties(step_vec.device)
-    device_max_shared_memory = int(
-        getattr(properties, "shared_memory_per_block_optin", 0)
-        or properties.shared_memory_per_block
-    )
+    device_max_shared_memory = get_device_max_shared_memory(step_vec.device)
     config, use_shared_buffers_actual, dynamic_shared_memory = LBFGSLaunchCfg.calculate_config(
         batch_size,
         v_dim,
@@ -489,11 +486,7 @@ def launch_lbfgs_compact_step(
     Returns:
         Mutated L-BFGS tensors, matching :func:`launch_lbfgs_step`.
     """
-    properties = torch.cuda.get_device_properties(step_vec.device)
-    device_max_shared_memory = int(
-        getattr(properties, "shared_memory_per_block_optin", 0)
-        or properties.shared_memory_per_block
-    )
+    device_max_shared_memory = get_device_max_shared_memory(step_vec.device)
     compact_config = LBFGSCompactLaunchCfg.calculate_config(
         batch_size,
         v_dim,

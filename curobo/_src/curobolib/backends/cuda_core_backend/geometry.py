@@ -48,10 +48,24 @@ def get_self_collision_shared_memory_size(
 
 
 def get_device_max_shared_memory(device: torch.device) -> int:
-    """Return the opt-in shared-memory limit per block for a CUDA device."""
+    """Return the opt-in shared-memory limit per block for a CUDA device.
+
+    PyTorch reports it from 2.7 on. Older releases (``torch>=2.5`` is supported) have
+    neither ``shared_memory_per_block_optin`` nor ``shared_memory_per_block`` on the device
+    properties, so the limit then comes from the driver through ``cuda.core``.
+    """
     properties = torch.cuda.get_device_properties(device)
     optin_limit = getattr(properties, "shared_memory_per_block_optin", 0)
-    return int(optin_limit or properties.shared_memory_per_block)
+    block_limit = getattr(properties, "shared_memory_per_block", 0)
+    if optin_limit or block_limit:
+        return int(optin_limit or block_limit)
+    from cuda.core import Device
+
+    index = torch.device(device).index
+    return int(
+        Device(torch.cuda.current_device() if index is None else index)
+        .properties.max_shared_memory_per_block_optin
+    )
 
 
 def _validate_and_configure_shared_memory(
