@@ -18,6 +18,7 @@ Getting Started
 - ``inverse_kinematics.py``: Solve inverse kinematics for end-effector poses.
 - ``motion_planning.py``: Plan collision-free trajectories.
 - ``cartesian_waypoints.py``: Follow Cartesian waypoints and preview a planned trajectory.
+- ``linear_track_planning.py``: Plan a UR10e on a linear track around obstacles in a Viser viewer.
 - ``reactive_control.py``: Run model-predictive control.
 - ``humanoid_retargeting.py``: Retarget humanoid motions with self-collision.
 - ``volumetric_mapping.py``: Build TSDF / ESDF maps for collision checking.
