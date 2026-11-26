@@ -13,6 +13,7 @@ Getting Started
    reactive_control
    humanoid_retargeting
    motion_planning
+   linear_track_planning
    cartesian_waypoints
    volumetric_mapping
    feature_mapping
